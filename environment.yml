@@ -1,0 +1,10 @@
+name: fvcom-mesh
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy>=1.23
+  - matplotlib>=3.8
+  - pytest>=7.4
+  - ruff>=0.5
+  - pip
