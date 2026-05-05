@@ -1,0 +1,140 @@
+"""Read ADCIRC/FVCOM ``fort.14`` unstructured-mesh files."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from io import TextIOBase
+from pathlib import Path
+
+import numpy as np
+
+
+@dataclass
+class Fort14Mesh:
+    """In-memory representation of a fort.14 mesh.
+
+    Coordinate columns are passed through unchanged (lon/lat or projected
+    metres, depending on the source file). Node and element IDs in the file
+    are 1-indexed; arrays returned by :func:`read_fort14` are 0-indexed so
+    they can be used directly to index into ``nodes`` / ``depths``.
+
+    Attributes
+    ----------
+    title:
+        First line of the file.
+    nodes:
+        ``(NP, 2)`` float array of ``(x, y)`` coordinates in file order.
+    depths:
+        ``(NP,)`` float array of the fourth-column "z" / depth values.
+    elements:
+        ``(NE, 3)`` int array of 0-indexed node indices for each triangular
+        element.
+    open_boundaries:
+        One int array per open-boundary segment, holding 0-indexed node
+        indices in along-boundary order.
+    land_boundaries:
+        One ``(ibtype, ids)`` tuple per land/normal-flow boundary segment,
+        where ``ibtype`` is the integer boundary-type code (0 = normal
+        coast in the ADCIRC convention) and ``ids`` is a 0-indexed int
+        array of node indices.
+    """
+
+    title: str
+    nodes: np.ndarray
+    depths: np.ndarray
+    elements: np.ndarray
+    open_boundaries: list[np.ndarray]
+    land_boundaries: list[tuple[int, np.ndarray]]
+
+    @property
+    def n_nodes(self) -> int:
+        return int(self.nodes.shape[0])
+
+    @property
+    def n_elements(self) -> int:
+        return int(self.elements.shape[0])
+
+    @property
+    def bbox(self) -> tuple[float, float, float, float]:
+        x = self.nodes[:, 0]
+        y = self.nodes[:, 1]
+        return float(x.min()), float(y.min()), float(x.max()), float(y.max())
+
+
+def _read_first_int(f: TextIOBase) -> int:
+    line = f.readline()
+    if not line:
+        raise ValueError("unexpected EOF while reading an integer")
+    return int(line.split()[0])
+
+
+def _read_two_ints(f: TextIOBase) -> tuple[int, int]:
+    line = f.readline()
+    if not line:
+        raise ValueError("unexpected EOF while reading a (count, ibtype) pair")
+    parts = line.split()
+    return int(parts[0]), int(parts[1])
+
+
+def _read_node_ids(f: TextIOBase, n: int) -> np.ndarray:
+    ids = np.empty(n, dtype=np.int64)
+    for j in range(n):
+        line = f.readline()
+        if not line:
+            raise ValueError(f"unexpected EOF while reading boundary node {j + 1}/{n}")
+        ids[j] = int(line.split()[0]) - 1
+    return ids
+
+
+def read_fort14(path: str | Path) -> Fort14Mesh:
+    """Parse a fort.14 file into a :class:`Fort14Mesh`.
+
+    The standard layout is assumed: header line, ``NE NP`` line, ``NP``
+    node rows ``id x y depth``, ``NE`` triangular-element rows
+    ``id 3 n1 n2 n3``, then the boundary block (open boundaries followed
+    by land/normal-flow boundaries). Node indices in the returned arrays
+    are 0-indexed.
+    """
+    path = Path(path).resolve()
+    with path.open("r") as f:
+        title = f.readline().rstrip("\n")
+        ne, np_ = _read_two_ints(f)
+
+        node_block = np.loadtxt(f, max_rows=np_, dtype=np.float64)
+        if node_block.shape != (np_, 4):
+            raise ValueError(
+                f"node block shape {node_block.shape} does not match expected ({np_}, 4); "
+                f"check whether the header is 'NE NP' (ADCIRC convention)"
+            )
+        nodes = node_block[:, 1:3].copy()
+        depths = node_block[:, 3].copy()
+
+        elem_block = np.loadtxt(f, max_rows=ne, dtype=np.int64)
+        if elem_block.shape != (ne, 5):
+            raise ValueError(
+                f"element block shape {elem_block.shape} does not match expected ({ne}, 5)"
+            )
+        elements = (elem_block[:, 2:5] - 1).copy()
+
+        nope = _read_first_int(f)
+        _ = f.readline()  # NETA: redundant total of open boundary nodes
+        open_boundaries: list[np.ndarray] = []
+        for _ in range(nope):
+            n = _read_first_int(f)
+            open_boundaries.append(_read_node_ids(f, n))
+
+        nbou = _read_first_int(f)
+        _ = f.readline()  # NVEL: redundant total of land boundary nodes
+        land_boundaries: list[tuple[int, np.ndarray]] = []
+        for _ in range(nbou):
+            n, ibtype = _read_two_ints(f)
+            land_boundaries.append((ibtype, _read_node_ids(f, n)))
+
+    return Fort14Mesh(
+        title=title,
+        nodes=nodes,
+        depths=depths,
+        elements=elements,
+        open_boundaries=open_boundaries,
+        land_boundaries=land_boundaries,
+    )
