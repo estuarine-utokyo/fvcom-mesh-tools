@@ -32,6 +32,9 @@ meshkernel = ["meshkernel"]
 gmsh = ["gmsh"]
 jigsaw = ["jigsawpy"]
 
+[project.scripts]
+fmesh-perpfix = "fvcom_mesh_tools.cli.perpfix:main"
+
 [project.urls]
 Homepage = "https://github.com/estuarine-utokyo/fvcom-mesh-tools"
 Issues = "https://github.com/estuarine-utokyo/fvcom-mesh-tools/issues"
