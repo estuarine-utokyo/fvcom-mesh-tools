@@ -87,6 +87,7 @@ Installed when `pip install -e .` is run.
 |-----|---------|
 | `fmesh-buildmesh DEM out.14` | Single-shot pipeline: DEM → OCSMesh/gmsh → depth interp → bbox-based open/land split → perpfix → fort.14. |
 | `fmesh-perpfix in.14 out.14`  | Stand-alone open-boundary first-ring perpendicularity correction. |
+| `fmesh-subset-dem SRC OUT --bbox MINLON MINLAT MAXLON MAXLAT [--src-var z]` | Clip a global DEM (SRTM15+, GEBCO, GeoTIFF, ...) to a lon/lat bbox and emit a CF-tagged GeoTIFF for `fmesh-buildmesh`. Two read paths: rasterio (CRS-tagged inputs) and netCDF4 (lon/lat NetCDF without CRS, selected by `--src-var`). |
 
 ## Status and scope
 

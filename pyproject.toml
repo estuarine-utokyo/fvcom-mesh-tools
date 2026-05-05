@@ -35,6 +35,7 @@ jigsaw = ["jigsawpy"]
 [project.scripts]
 fmesh-perpfix = "fvcom_mesh_tools.cli.perpfix:main"
 fmesh-buildmesh = "fvcom_mesh_tools.cli.buildmesh:main"
+fmesh-subset-dem = "fvcom_mesh_tools.cli.subset_dem:main"
 
 [project.urls]
 Homepage = "https://github.com/estuarine-utokyo/fvcom-mesh-tools"

@@ -193,9 +193,9 @@ and the GSHHS-f L1 global coastline. The same flag set as PoC #16
 Two operational notes from PoC #17:
 
 * SRTM15+ ships without an embedded CRS, so ocsmesh.Raster cannot
-  open it directly. The PoC subsets the bbox and writes a CF-tagged
-  EPSG:4326 GeoTIFF before passing it to ``fmesh-buildmesh``. A
-  reusable ``fmesh-subset-dem`` helper would be a natural follow-up.
+  open it directly. The bbox subset + CF tagging is now exposed as
+  the ``fmesh-subset-dem`` CLI (``src/fvcom_mesh_tools/cli/subset_dem.py``);
+  PoC #17 calls the underlying ``subset_dem_to_geotiff`` helper.
 * GSHHS-f L1 has far fewer line strings than MLIT C23 (8 vs. 571 in
   the bbox), so ``Hfun.add_feature`` runs in ~1 s and the resulting
   mesh is much sparser. Quality is *better* (fewer enforced kinks
@@ -261,5 +261,11 @@ In order of return-on-effort:
    inputs. Three open arcs (Akashi + Tomogashima + Awaji-south)
    are detected without merging; quality is good (alpha 0.90,
    ``frac<20deg`` 0.18 %).
-9. Item 2.7 (reproducibility) and a reusable DEM subset helper
-   (currently inlined in the PoC) are the remaining minor levers.
+9. **DEM subset helper** (DONE).
+   ``fmesh-subset-dem SRC OUT --bbox ... [--src-var z]`` clips a
+   global DEM (SRTM15+, GEBCO, GeoTIFF) to a lon/lat bounding box
+   and writes a CF-tagged GeoTIFF for ``fmesh-buildmesh``. Two read
+   paths cover the common cases: rasterio (for inputs that already
+   carry a CRS) and netCDF4 (for lon/lat NetCDFs without CRS,
+   selected by ``--src-var``).
+10. Item 2.7 (reproducibility) is the last remaining minor lever.

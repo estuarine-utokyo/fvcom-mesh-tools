@@ -8,9 +8,10 @@ basin with very different topology:
 * and a different river roster (Yodo, Yamato, Mukou, Kanzaki).
 
 The DEM source is the global SRTM15+ raster (no embedded CRS, so we
-subset and re-emit a CF-compliant GeoTIFF first); coastlines come from
-GSHHS-f L1 (continental + large-island full resolution); river-mouth
-points are in ``data/rivers/osaka_bay/osaka_bay_rivers.csv``. The same
+subset and re-emit a CF-compliant GeoTIFF first via
+``fmesh-subset-dem``); coastlines come from GSHHS-f L1 (continental +
+large-island full resolution); river-mouth points are in
+``data/rivers/osaka_bay/osaka_bay_rivers.csv``. The same
 ``fmesh-buildmesh`` flag set as PoC #16 is used; if Osaka Bay needs
 different parameters, the gap should surface here.
 
@@ -30,10 +31,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
-import netCDF4  # noqa: E402
 import numpy as np  # noqa: E402
-import rasterio  # noqa: E402
-from rasterio.transform import from_origin  # noqa: E402
 
 from fvcom_mesh_tools.algorithms import (  # noqa: E402
     alpha_quality,
@@ -41,7 +39,11 @@ from fvcom_mesh_tools.algorithms import (  # noqa: E402
     signed_areas,
 )
 from fvcom_mesh_tools.cli.buildmesh import main as buildmesh_main  # noqa: E402
-from fvcom_mesh_tools.io import load_river_points, read_fort14  # noqa: E402
+from fvcom_mesh_tools.io import (  # noqa: E402
+    load_river_points,
+    read_fort14,
+    subset_dem_to_geotiff,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRTM = REPO_ROOT / "data" / "bathymetry" / "SRTM15plus" / "SRTM15+.nc"
@@ -66,48 +68,6 @@ BBOX = (134.90, 34.20, 135.55, 34.85)
 
 HMIN_M = 200.0
 HMAX_M = 5000.0
-
-
-def subset_srtm15_to_geotiff(src: Path, dst: Path, bbox: tuple) -> None:
-    """Subset SRTM15+ to ``bbox`` and write a CF-compliant GeoTIFF.
-
-    SRTM15+ ships as a NetCDF with ``lon``/``lat``/``z`` variables and
-    no embedded CRS, which ocsmesh.Raster cannot open. We extract the
-    bbox sub-array, flip lat to north-down (the GeoTIFF convention),
-    and tag with EPSG:4326.
-    """
-    minlon, minlat, maxlon, maxlat = bbox
-    ds = netCDF4.Dataset(src)
-    lon = ds.variables["lon"][:]
-    lat = ds.variables["lat"][:]
-    ix = np.where((lon >= minlon) & (lon <= maxlon))[0]
-    iy = np.where((lat >= minlat) & (lat <= maxlat))[0]
-    z = ds.variables["z"][iy[0]: iy[-1] + 1, ix[0]: ix[-1] + 1]
-    sub_lon = lon[ix[0]: ix[-1] + 1]
-    sub_lat = lat[iy[0]: iy[-1] + 1]
-    ds.close()
-
-    z_north_down = z[::-1, :].astype("float32")
-    dx = float(sub_lon[1] - sub_lon[0])
-    dy = float(sub_lat[1] - sub_lat[0])
-    transform = from_origin(
-        sub_lon[0] - dx / 2.0,
-        sub_lat[-1] + dy / 2.0,
-        dx,
-        dy,
-    )
-    profile = {
-        "driver": "GTiff",
-        "height": z_north_down.shape[0],
-        "width": z_north_down.shape[1],
-        "count": 1,
-        "dtype": "float32",
-        "crs": "EPSG:4326",
-        "transform": transform,
-        "compress": "lzw",
-    }
-    with rasterio.open(dst, "w", **profile) as out:
-        out.write(z_north_down, 1)
 
 
 def plot_mesh(mesh, river_pts, png: Path) -> None:
@@ -165,7 +125,7 @@ def main() -> None:
     if not DEM_SUBSET.exists():
         print(f"[17] subsetting SRTM15+ to {BBOX} -> {DEM_SUBSET}")
         t0 = time.perf_counter()
-        subset_srtm15_to_geotiff(SRTM, DEM_SUBSET, BBOX)
+        subset_dem_to_geotiff(SRTM, DEM_SUBSET, BBOX, src_var="z")
         print(f"[17] subset: {time.perf_counter() - t0:.2f} s")
 
     args = [
