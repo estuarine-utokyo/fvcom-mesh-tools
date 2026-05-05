@@ -1,9 +1,8 @@
 """Read tb_futtsu20220311.14 and emit a summary + thumbnail plot.
 
-This is the first PoC for fvcom-mesh-tools' Python migration. It loads the
-reference Tokyo Bay mesh through the existing oceanmesh-tools parser
-(installed as a sibling editable package) and prints node/element/boundary
-statistics. A native loader will replace the sibling import in a later step.
+PoC #1 for the OceanMesh2D -> Python migration. Loads the reference Tokyo
+Bay mesh through fvcom-mesh-tools' native fort.14 reader and prints node /
+element / boundary statistics.
 
 Inputs:
     data/mesh/reference/tokyo_bay/tb_futtsu20220311.14   (symlink into $DATA_DIR)
@@ -15,17 +14,16 @@ Outputs:
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
-from statistics import mean
 
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
 
-from oceanmesh_tools.io.fort14 import parse_fort14
+import matplotlib.pyplot as plt  # noqa: E402
 
+from fvcom_mesh_tools.io import Fort14Mesh, read_fort14  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MESH_PATH = REPO_ROOT / "data" / "mesh" / "reference" / "tokyo_bay" / "tb_futtsu20220311.14"
@@ -34,53 +32,48 @@ SUMMARY_TXT = OUT_DIR / "01_tb_futtsu20220311_summary.txt"
 MESH_PNG = OUT_DIR / "01_tb_futtsu20220311_mesh.png"
 
 
-def summarize(mesh) -> str:
-    xs = [x for (_, x, _, _) in mesh.nodes]
-    ys = [y for (_, _, y, _) in mesh.nodes]
-    ds = [d for (_, _, _, d) in mesh.nodes]
-    xmin, xmax = min(xs), max(xs)
-    ymin, ymax = min(ys), max(ys)
-    dmin, dmax, dmean = min(ds), max(ds), mean(ds)
+def summarize(mesh: Fort14Mesh) -> str:
+    xmin, ymin, xmax, ymax = mesh.bbox
+    d = mesh.depths
+
+    n_open_nodes = sum(len(b) for b in mesh.open_boundaries)
+    n_land_nodes = sum(len(ids) for _, ids in mesh.land_boundaries)
+    ibtype_counter = Counter(ib for ib, _ in mesh.land_boundaries)
+    ibtype_str = ", ".join(f"{k}: {v}" for k, v in sorted(ibtype_counter.items()))
 
     lines = [
         f"file:               {MESH_PATH}",
-        f"title:              {mesh.title!r}",
+        f"title:              {mesh.title.strip()!r}",
         f"nodes (NP):         {mesh.n_nodes:,}",
         f"elements (NE):      {mesh.n_elements:,}",
         f"bbox (lon, lat):    [{xmin:.6f}, {ymin:.6f}] -> [{xmax:.6f}, {ymax:.6f}]",
         f"bbox extent:        dlon={xmax - xmin:.4f} deg   dlat={ymax - ymin:.4f} deg",
-        f"depth (file value): min={dmin:.4f}   max={dmax:.4f}   mean={dmean:.4f}",
-        f"open boundaries:    {len(mesh.open_boundaries)} segments,"
-        f"  total nodes={sum(len(b) for b in mesh.open_boundaries):,}",
-        f"land boundaries:    {len(mesh.land_boundaries)} segments,"
-        f"  total nodes={sum(len(b) for b in mesh.land_boundaries):,}",
+        f"depth (file value): min={d.min():.4f}   max={d.max():.4f}   mean={d.mean():.4f}",
+        f"open boundaries:    {len(mesh.open_boundaries)} segments / {n_open_nodes:,} nodes",
+        f"land boundaries:    {len(mesh.land_boundaries)} segments / {n_land_nodes:,} nodes",
+        f"land ibtype dist:   {{{ibtype_str}}}",
     ]
-    if mesh.open_boundaries:
-        sizes = [len(b) for b in mesh.open_boundaries]
-        lines.append(f"  open seg sizes:   min={min(sizes)}  max={max(sizes)}  mean={mean(sizes):.1f}")
     if mesh.land_boundaries:
-        sizes = [len(b) for b in mesh.land_boundaries]
-        lines.append(f"  land seg sizes:   min={min(sizes)}  max={max(sizes)}  mean={mean(sizes):.1f}")
+        sizes = sorted((len(ids) for _, ids in mesh.land_boundaries), reverse=True)
+        lines.append(f"land top-5 sizes:   {sizes[:5]}")
+        lines.append(f"land bottom-5:      {sizes[-5:]}")
     return "\n".join(lines)
 
 
-def thumbnail(mesh, png_path: Path) -> None:
-    """Quick coarse mesh sketch (no triangulation; just node scatter + boundaries)."""
-    xs = np.fromiter((x for (_, x, _, _) in mesh.nodes), dtype=np.float64, count=mesh.n_nodes)
-    ys = np.fromiter((y for (_, _, y, _) in mesh.nodes), dtype=np.float64, count=mesh.n_nodes)
-    node_xy_by_id = {nid: (x, y) for (nid, x, y, _d) in mesh.nodes}
-
+def thumbnail(mesh: Fort14Mesh, png_path: Path) -> None:
+    """Quick mesh sketch: node scatter + per-segment boundary polylines."""
     fig, ax = plt.subplots(figsize=(8, 7), dpi=120)
-    ax.scatter(xs, ys, s=0.2, color="0.6", linewidths=0, label=f"nodes (n={mesh.n_nodes})")
+    ax.scatter(
+        mesh.nodes[:, 0], mesh.nodes[:, 1],
+        s=0.2, color="0.6", linewidths=0,
+    )
 
     for seg in mesh.open_boundaries:
-        coords = np.array([node_xy_by_id[i] for i in seg if i in node_xy_by_id])
-        if len(coords):
-            ax.plot(coords[:, 0], coords[:, 1], "-", color="tab:blue", lw=1.5)
-    for seg in mesh.land_boundaries:
-        coords = np.array([node_xy_by_id[i] for i in seg if i in node_xy_by_id])
-        if len(coords):
-            ax.plot(coords[:, 0], coords[:, 1], "-", color="tab:red", lw=0.6)
+        coords = mesh.nodes[seg]
+        ax.plot(coords[:, 0], coords[:, 1], "-", color="tab:blue", lw=1.5)
+    for _ibtype, seg in mesh.land_boundaries:
+        coords = mesh.nodes[seg]
+        ax.plot(coords[:, 0], coords[:, 1], "-", color="tab:red", lw=0.6)
 
     ax.set_aspect("equal")
     ax.set_xlabel("lon (deg)")
@@ -101,7 +94,7 @@ def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"[01] reading {MESH_PATH}")
-    mesh = parse_fort14(MESH_PATH)
+    mesh = read_fort14(MESH_PATH)
 
     text = summarize(mesh)
     print(text)
