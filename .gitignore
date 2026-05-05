@@ -34,6 +34,11 @@ outputs/
 figures/
 *.html
 
+# HPC scheduler artifacts (PJM/Slurm: <jobname>.<jobid>.{out,err,stats})
+*.[0-9]*.out
+*.[0-9]*.err
+*.[0-9]*.stats
+
 # Mesh data — large; do not commit (allowed under tests/fixtures/)
 *.14
 *.nc
