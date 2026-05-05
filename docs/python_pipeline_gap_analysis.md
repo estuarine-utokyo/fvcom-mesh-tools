@@ -155,12 +155,20 @@ perpendicular requires geometry-side support: either inserting a
 ``fmesh-perpfix`` as a post-step. Recommended near-term: do the latter.
 That avoids modifying the mesher.
 
-### 2.6 Channel widening / river inflow nodes (M–L)
+### 2.6 Channel widening / river inflow nodes (DONE, PoC #16)
 
-Reference includes hand-edited refinement around river mouths (Sumida,
-Tama, Edo). The Python pipeline has nothing equivalent. Likely
-implementation: shapefile-driven local sizing + ``omesh14-edit-bdy``-
-style post-edits to mark ibtype=21 inflow nodes.
+Reference includes hand-edited ibtype=21 segments around river mouths
+(Edo, Ara, Sumida, Tama, Tsurumi). ``fmesh-buildmesh`` now reads a
+CSV/GeoJSON/shapefile of river-mouth points via
+``--river-inflow-points`` and snaps each point to the nearest
+land-boundary node (skipping nodes already inside any ibtype=21
+segment), then splits the parent land segment into prefix / river /
+suffix. Tunables: ``--river-segment-nodes`` (nodes per inflow
+segment, default 5), ``--river-ibtype`` (default 21),
+``--river-snap-tol-m`` (default unbounded). PoC #16 on Tokyo Bay
+snaps 5 rivers at 310-702 m and produces 5 ibtype=21 segments
+totalling 25 nodes, with no quality regression
+(``frac<20deg`` 1.13 %, ``alpha`` mean 0.847).
 
 ### 2.7 Mesh-generation determinism / reproducibility (S)
 
@@ -216,5 +224,11 @@ In order of return-on-effort:
    output goes from 165 to 23 land segments with no quality
    regression and a slight wall-time reduction (gmsh has fewer
    features to honour).
-7. Items 2.6 (river channels) and 2.7 (reproducibility) remain the
-   next major levers.
+7. **River-inflow segments** (DONE, PoC #16).
+   ``fmesh-buildmesh --river-inflow-points`` reads a points file
+   (CSV/GeoJSON/shapefile) and produces ibtype=21 land segments at
+   each river mouth. Nodes already inside an existing ibtype=21
+   segment are skipped, so re-running the pipeline is idempotent.
+   On Tokyo Bay this matches the reference structure (5 rivers, one
+   open arc, 26 ibtype=20 + 5 ibtype=21 land segments).
+8. Item 2.7 (reproducibility) is the remaining major lever.

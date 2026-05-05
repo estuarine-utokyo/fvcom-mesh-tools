@@ -146,9 +146,10 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
     The output is round-trip safe: ``read_fort14(write_fort14(m, p))`` recovers
     the same node coordinates, depths, element connectivity, and boundary
     structure as ``m``. The exact numeric formatting of the source file is not
-    preserved; coordinates are written with 13 decimal digits (full float64
-    precision) so that triangles with very small but positive signed area
-    survive the round-trip without being pancaked to zero by formatting.
+    preserved; coordinates are written with 15 decimal digits (which exceeds
+    float64's ~15-17 significant figures at coordinates ~140 deg) so that
+    every writable double round-trips exactly and triangles with very small
+    but positive signed area survive without being pancaked to zero.
     """
     path = Path(path).resolve()
     n_nodes = mesh.n_nodes
@@ -164,7 +165,7 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
 
         for i in range(n_nodes):
             x, y = mesh.nodes[i]
-            f.write(f"{i + 1:>10d}  {x:.13f}  {y:.13f}  {mesh.depths[i]:.10e}\n")
+            f.write(f"{i + 1:>10d}  {x:.15f}  {y:.15f}  {mesh.depths[i]:.10e}\n")
 
         for i in range(n_elements):
             n0, n1, n2 = mesh.elements[i]

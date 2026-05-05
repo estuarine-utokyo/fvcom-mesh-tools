@@ -20,9 +20,11 @@ from fvcom_mesh_tools.algorithms.quality import (
     min_interior_angle,
 )
 from fvcom_mesh_tools.algorithms.refine import refine_bad_triangles
+from fvcom_mesh_tools.algorithms.rivers import add_river_inflow_segments
 from fvcom_mesh_tools.algorithms.smoothing import laplacian_smooth
 
 __all__ = [
+    "add_river_inflow_segments",
     "align_open_boundary_first_ring",
     "alpha_quality",
     "boundary_edges_from_tris",

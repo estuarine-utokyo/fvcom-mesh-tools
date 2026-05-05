@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 
 from fvcom_mesh_tools.algorithms import (
+    add_river_inflow_segments,
     align_open_boundary_first_ring,
     alpha_quality,
     classify_boundaries_by_bbox,
@@ -41,10 +42,19 @@ from fvcom_mesh_tools.io import (
     Fort14Mesh,
     filter_multipolygon_by_area,
     load_coastline_as_lines,
+    load_river_points,
     write_fort14,
 )
 
 EARTH_R_M = 6_371_000.0
+
+# Threshold below which a positive signed area is treated as a flipped
+# triangle. Belt-and-suspenders with the writer's ``:.15f`` precision:
+# any triangle with ``sa <= EPSILON_SA`` is at risk of being pancaked
+# or flipped by FP rounding through any downstream writer/reader, so
+# we revert it before write. 1e-12 deg^2 at mid-latitudes is ~0.01 m^2
+# - a sliver, not a real element.
+EPSILON_SA = 1.0e-12
 
 
 def _deg_per_metre(lat_deg: float) -> float:
@@ -98,6 +108,29 @@ def build_parser() -> argparse.ArgumentParser:
             "ibtype to write for every land segment in fort.14 "
             "(default: 20, matching the Tokyo Bay reference)."
         ),
+    )
+    p.add_argument(
+        "--river-inflow-points", type=Path, action="append", default=[],
+        metavar="PATH",
+        help=(
+            "Vector / CSV file of river-mouth points (lon/lat). Each "
+            "point is snapped to the nearest land-boundary node and "
+            "the surrounding land segment is split so the river "
+            "occupies its own segment with --river-ibtype. May be "
+            "passed multiple times to combine sources."
+        ),
+    )
+    p.add_argument(
+        "--river-segment-nodes", type=int, default=5, metavar="N",
+        help="Land-boundary nodes per river segment, centred on the snap (default 5).",
+    )
+    p.add_argument(
+        "--river-ibtype", type=int, default=21,
+        help="ibtype for river segments in fort.14 (default 21 = FVCOM discharge).",
+    )
+    p.add_argument(
+        "--river-snap-tol-m", type=float, default=None, metavar="METRES",
+        help="Skip river points whose nearest land node is farther than this.",
     )
     p.add_argument(
         "--open-merge-coast-gap", type=int, default=0, metavar="NODES",
@@ -366,6 +399,38 @@ def main(argv: list[str] | None = None) -> int:
         f"({sum(s.size for _, s in land_bnds)} nodes)"
     )
 
+    if args.river_inflow_points:
+        river_pts = load_river_points(args.river_inflow_points)
+        log(
+            f"[buildmesh] river inflow: {river_pts.shape[0]} points; "
+            f"n_per_river={args.river_segment_nodes}, "
+            f"ibtype={args.river_ibtype}"
+        )
+        f14, river_info = add_river_inflow_segments(
+            f14,
+            river_pts,
+            n_nodes_per_river=args.river_segment_nodes,
+            river_ibtype=args.river_ibtype,
+            snap_tol_m=args.river_snap_tol_m,
+        )
+        for r in river_info["rivers"]:
+            log(
+                f"[buildmesh]   river @ ({r['point'][0]:.4f}, {r['point'][1]:.4f}) "
+                f"-> node {r['snapped_node']}, dist={r['dist_m']:.0f} m, "
+                f"river_n={r['river_n_nodes']}"
+            )
+        for s in river_info["skipped"]:
+            log(
+                f"[buildmesh]   river @ {s['point']} SKIPPED "
+                f"(dist={s['dist_m']:.0f} m > snap_tol)"
+            )
+        log(
+            f"[buildmesh] river inflow: now "
+            f"{len(f14.land_boundaries)} land segments "
+            f"({sum(1 for ib, _ in f14.land_boundaries if ib == args.river_ibtype)} "
+            f"with ibtype={args.river_ibtype})"
+        )
+
     if args.quality_pass > 0:
         log(
             f"[buildmesh] quality pass: rounds={args.quality_pass}, "
@@ -426,13 +491,17 @@ def main(argv: list[str] | None = None) -> int:
         log(f"[buildmesh] perpfix moved {info['moved']:,} interior nodes")
 
         # The length-preserving perpendicular projection may flip
-        # narrow triangles. Iterate the revert: each round undoes any
-        # moved node that participates in a flipped triangle, then re-
-        # checks signed areas. After the quality pass the surrounding
-        # geometry is tighter, so a single round can be insufficient.
+        # narrow triangles or pancake near-degenerate ones. Iterate
+        # the revert: each round undoes any moved node that
+        # participates in a flipped or near-degenerate triangle, then
+        # re-checks signed areas. After the quality pass the
+        # surrounding geometry is tighter, so a single round can be
+        # insufficient. We use ``EPSILON_SA`` (not 0) so we also catch
+        # triangles whose positive ``sa`` is small enough to round to
+        # zero through the fort.14 writer.
         n_revert_total = 0
         for _ in range(5):
-            bad_tris = signed_areas(f14) <= 0
+            bad_tris = signed_areas(f14) <= EPSILON_SA
             if not bool(bad_tris.any()):
                 break
             moved_mask = np.any(f14.nodes != nodes_before, axis=1)
@@ -445,14 +514,14 @@ def main(argv: list[str] | None = None) -> int:
             n_revert_total += int(revert.sum())
         if n_revert_total:
             log(f"[buildmesh] perpfix: reverted {n_revert_total} moves to avoid flips")
-        still_bad = int((signed_areas(f14) <= 0).sum())
+        still_bad = int((signed_areas(f14) <= EPSILON_SA).sum())
         if still_bad:
             # Safety net: if iterative revert cannot clear the flips,
             # roll back perpfix entirely. The mesh is then exactly as
             # the quality pass left it - which is at least valid.
             log(
-                f"[buildmesh] WARN: {still_bad} flipped triangles remain; "
-                f"undoing perpfix to keep the mesh valid."
+                f"[buildmesh] WARN: {still_bad} flipped or near-degenerate "
+                f"triangles remain; undoing perpfix to keep the mesh valid."
             )
             f14.nodes = nodes_before
 
