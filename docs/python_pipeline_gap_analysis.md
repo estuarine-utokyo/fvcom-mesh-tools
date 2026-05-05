@@ -170,14 +170,59 @@ snaps 5 rivers at 310-702 m and produces 5 ibtype=21 segments
 totalling 25 nodes, with no quality regression
 (``frac<20deg`` 1.13 %, ``alpha`` mean 0.847).
 
-### 2.7 Mesh-generation determinism / reproducibility (S)
+### 2.7 Mesh-generation determinism / reproducibility (DONE for oceanmesh)
 
-gmsh produces a different mesh every time unless seeded. OCSMesh does
-not currently expose the seed through ``MeshDriver``. Worth filing a
-follow-up to set ``Mesh.Algorithm`` / ``Mesh.RandomSeed`` explicitly
-once we move beyond PoCs.
+The ``oceanmesh`` engine path takes ``--om-seed`` (default 0) which
+is propagated to ``oceanmesh.generate_mesh``: the DistMesh PRNG is
+seeded explicitly, so re-runs on the same inputs are bit-identical.
+The OCSMesh / gmsh path remains non-deterministic between runs;
+fix would require passing ``Mesh.RandomSeed`` through
+OCSMesh's ``MeshDriver``, which it does not currently expose.
 
-### 2.8 Cross-basin portability (DONE, PoC #17)
+### 2.8 Mesh-engine choice: oceanmesh vs OCSMesh (DONE, PoCs #18-#19)
+
+The pipeline previously generated meshes only via OCSMesh + gmsh.
+That engine plateaus at alpha mean ~0.85 and ``frac<20deg`` ~1.1 %
+on Tokyo Bay - acceptable but visibly below the OceanMesh2D MATLAB
+reference (alpha 0.979, ``frac<20deg`` 0.00 %).
+
+**oceanmesh** (https://github.com/CHLNDDEV/oceanmesh, Roberts et al.,
+the Python port of OceanMesh2D - same author family) ships v1.0
+(2026-01) with the full OceanMesh2D recipe: distance-from-shoreline
+``feature_sizing_function``, ``bathymetric_gradient_sizing_function``,
+``enforce_mesh_gradation``, multiscale generation, and a deterministic
+DistMesh implementation. PoC #18 ran it on the same Tokyo Bay inputs
+(DEM, MLIT C23 coastline, hmin=200/hmax=5000):
+
+| metric              | OCSMesh+gmsh | oceanmesh |
+| ------------------- | ------------ | --------- |
+| alpha mean          | 0.847        | **0.961** |
+| ``frac<20deg``      | 1.13 %       | **0.034 %** (33x lower) |
+| min-angle p50       | 40.7°        | **51.2°** |
+| flipped             | 0            | 0         |
+| wall-clock          | **40 s**     | 1546 s (~26 min, 39x slower) |
+
+PoC #19 ran the full ``fmesh-buildmesh`` pipeline through the
+``oceanmesh`` engine - boundary classification, river inflow,
+perpfix, ``fort.14`` write all unmodified - confirming the
+post-processing chain is mesher-agnostic. Final Tokyo Bay numbers:
+alpha 0.9586, ``frac<20deg`` 0.10 %, 5 ibtype=21 segments matching
+the reference, ``flipped=0``. perpfix reverts dropped from 273 (on
+the OCSMesh-generated mesh) to 8 - DistMesh outputs are smooth
+enough that the perpendicularity step is nearly a no-op.
+
+Conclusion: ``oceanmesh`` is the new default engine. ``ocsmesh`` is
+retained behind ``fmesh-buildmesh --engine ocsmesh`` as a fast draft
+backend (~40x faster) and to keep the option open for OCSMesh's
+mesh-combination / topology utilities, which oceanmesh does not
+provide.
+
+License footprint widened: oceanmesh is GPL-3.0-or-later. We import
+it directly from the Apache-2.0 toolkit, which means anyone shipping
+``fmesh-buildmesh`` together with ``oceanmesh`` must respect GPL-3.0
+on the combined work. See ``THIRD_PARTY_NOTICES.md``.
+
+### 2.9 Cross-basin portability (DONE, PoC #17)
 
 Validated on Osaka Bay using the SRTM15+ global DEM (subset to bbox)
 and the GSHHS-f L1 global coastline. The same flag set as PoC #16
@@ -268,4 +313,13 @@ In order of return-on-effort:
    paths cover the common cases: rasterio (for inputs that already
    carry a CRS) and netCDF4 (for lon/lat NetCDFs without CRS,
    selected by ``--src-var``).
-10. Item 2.7 (reproducibility) is the last remaining minor lever.
+10. **Mesh-engine swap to oceanmesh** (DONE, PoCs #18-#19). Default
+    engine is now ``oceanmesh`` (DistMesh; alpha 0.96 / frac<20deg
+    0.10 % on Tokyo Bay). ``--engine ocsmesh`` remains available as
+    a ~40x-faster draft backend. Reproducibility (item 2.7) is also
+    addressed on the oceanmesh path via ``--om-seed``.
+11. **Multi-mesh combination** (open). oceanmesh does not provide
+    post-hoc mesh-combination utilities; OCSMesh has them. A future
+    ``fmesh-mesh-combine`` CLI could wrap OCSMesh's combiner so that
+    independently generated regional meshes (e.g. Tokyo + Osaka
+    Bays) can be stitched into one ``fort.14``.

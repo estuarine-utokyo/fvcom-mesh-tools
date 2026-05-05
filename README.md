@@ -75,6 +75,8 @@ End-to-end smoke tests under `notebooks/` (each ships with a matching
 | 15 | `15_refine_bad.py`       | Longest-edge bisection refinement; cuts bad-triangle fraction to **1.82 %**. |
 | 16 | `16_river_inflow.py`     | River-mouth ibtype=21 segments via `--river-inflow-points`; matches reference for Tokyo Bay (5 rivers). |
 | 17 | `17_osaka_bay_validation.py` | Second-basin sanity check: same flag set on Osaka Bay (SRTM15+ subset + GSHHS-f L1). Three independent open arcs detected, alpha 0.90, frac<20° 0.18 %. |
+| 18 | `18_oceanmesh_benchmark.py` | Head-to-head OCSMesh vs `oceanmesh` (DistMesh) on identical Tokyo Bay inputs. `oceanmesh` produces alpha 0.961 / frac<20° 0.034 % (vs 0.847 / 1.13 %); 39× slower. |
+| 19 | `19_oceanmesh_full_pipeline.py` | Full `fmesh-buildmesh --engine oceanmesh` end-to-end on Tokyo Bay: alpha 0.959, frac<20° 0.10 %, 5 ibtype=21 river segments, perpfix reverts 8 (vs 273). |
 
 `docs/python_pipeline_gap_analysis.md` summarises what the Python
 pipeline still has to gain to match the OceanMesh2D reference output.
@@ -85,7 +87,7 @@ Installed when `pip install -e .` is run.
 
 | CLI | Purpose |
 |-----|---------|
-| `fmesh-buildmesh DEM out.14` | Single-shot pipeline: DEM → OCSMesh/gmsh → depth interp → bbox-based open/land split → perpfix → fort.14. |
+| `fmesh-buildmesh DEM out.14 [--engine oceanmesh\|ocsmesh]` | Single-shot DEM → fort.14. Default engine `oceanmesh` (OceanMesh2D Python port; alpha~0.96, slow). Alternative engine `ocsmesh` (OCSMesh+gmsh; alpha~0.85, ~40× faster) for draft / iteration. Shared post-processing: depth interp, bbox-based open/land split, river inflow, perpfix. |
 | `fmesh-perpfix in.14 out.14`  | Stand-alone open-boundary first-ring perpendicularity correction. |
 | `fmesh-subset-dem SRC OUT --bbox MINLON MINLAT MAXLON MAXLAT [--src-var z]` | Clip a global DEM (SRTM15+, GEBCO, GeoTIFF, ...) to a lon/lat bbox and emit a CF-tagged GeoTIFF for `fmesh-buildmesh`. Two read paths: rasterio (CRS-tagged inputs) and netCDF4 (lon/lat NetCDF without CRS, selected by `--src-var`). |
 

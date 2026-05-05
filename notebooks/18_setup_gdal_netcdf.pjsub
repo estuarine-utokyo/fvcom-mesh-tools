@@ -1,0 +1,14 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:15:00
+#PJM -j
+#PJM -X
+#PJM -N omsh-gdal
+
+# Add GDAL netCDF driver to oceanmesh-bench so rasterio.open() can
+# read .nc DEMs (the bench's DEM is the Tokyo Bay CF NetCDF).
+
+set -euo pipefail
+"${HOME}/mambaforge/bin/mamba" install -y -n oceanmesh-bench -c conda-forge libgdal-netcdf

@@ -1,0 +1,53 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N omsh-env
+
+# PoC #18 setup: build a conda env with oceanmesh + deps so we can
+# benchmark it head-to-head against OCSMesh on the same Tokyo Bay
+# inputs. Dependencies come from conda-forge; oceanmesh itself is
+# installed editable from the local clone (it is not on conda-forge).
+
+set -euo pipefail
+
+ENV_NAME=oceanmesh-bench
+OMSH_SRC="${HOME}/Github/oceanmesh"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+source "${HOME}/mambaforge/etc/profile.d/mamba.sh"
+
+if conda env list | awk '{print $1}' | grep -q "^${ENV_NAME}$"; then
+    echo "[setup] env ${ENV_NAME} already exists - skipping create"
+else
+    echo "[setup] creating ${ENV_NAME} from conda-forge"
+    "${HOME}/mambaforge/bin/mamba" create -y -n "${ENV_NAME}" -c conda-forge \
+        python=3.12 \
+        numpy scipy shapely geopandas rasterio rioxarray \
+        scikit-image scikit-fmm meshio fiona matplotlib pyproj \
+        netcdf4 cgal cython pybind11 \
+        setuptools wheel pip pytest
+fi
+
+conda activate "${ENV_NAME}"
+
+echo "[setup] installing oceanmesh editable from ${OMSH_SRC}"
+# Build isolation must stay ON so pip can pull build-only deps
+# (versioneer-518, pybind11, Cython, ...) from PyPI - they're only
+# needed for the build, not at runtime. We only suppress runtime deps
+# via --no-deps because conda-forge already provided those.
+"${HOME}/mambaforge/envs/${ENV_NAME}/bin/pip" install --no-deps -e "${OMSH_SRC}"
+
+echo "[setup] smoke test"
+python - <<'PY'
+import oceanmesh as om
+print("oceanmesh:", om.__version__)
+print("has bathymetric_gradient_sizing_function:",
+      hasattr(om, "bathymetric_gradient_sizing_function"))
+print("has feature_sizing_function:", hasattr(om, "feature_sizing_function"))
+print("has wavelength_sizing_function:", hasattr(om, "wavelength_sizing_function"))
+print("has generate_mesh:", hasattr(om, "generate_mesh"))
+PY

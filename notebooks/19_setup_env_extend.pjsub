@@ -1,0 +1,28 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:15:00
+#PJM -j
+#PJM -X
+#PJM -N omsh-extend
+
+# Extend oceanmesh-bench so it can run our fmesh CLIs end-to-end.
+
+set -euo pipefail
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+# fvcom-mesh-tools editable install (re-runs idempotently)
+pip install --no-deps -e "${HOME}/Github/fvcom-mesh-tools"
+
+# Smoke test
+python - <<'PY'
+import oceanmesh as om
+print("oceanmesh:", om.__version__)
+import fvcom_mesh_tools
+from fvcom_mesh_tools.io import read_fort14, write_fort14, Fort14Mesh
+from fvcom_mesh_tools.algorithms import alpha_quality, min_interior_angle, signed_areas
+print("fvcom_mesh_tools imports OK")
+PY
