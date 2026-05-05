@@ -1,0 +1,28 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc03
+
+# PoC #3: effect of MeshKernel orthogonalization on the FVCOM open-boundary
+# perpendicularity metric.
+#
+# Submit from the repo root:
+#   pjsub notebooks/03_mk_orthogonalize_effect.pjsub
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+: "${HOME:?HOME not set}"
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+PY="${HOME}/mambaforge/envs/py312test/bin/python"
+[[ -x "${PY}" ]] || { echo "python not found at ${PY}" >&2; exit 1; }
+
+"${PY}" notebooks/03_mk_orthogonalize_effect.py
