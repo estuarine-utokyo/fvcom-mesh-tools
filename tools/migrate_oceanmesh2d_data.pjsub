@@ -1,0 +1,164 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=1
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N migrate-om2d-data
+
+# Phase 1 of the OceanMesh2D -> $DATA_DIR migration.
+#
+# What this script does (non-destructive):
+#   - Creates the bathymetry / coastline / mesh layout under $DATA_DIR.
+#   - rsyncs all OceanMesh2D-related data from $HOME/Github/OceanMesh2D
+#     into $DATA_DIR.
+#   - Verifies copies via `diff -rq` and md5sum on large NetCDFs.
+#
+# What this script does NOT do:
+#   - It does not delete or modify any source files.
+#   - Replacement of the OceanMesh2D source paths with symlinks into
+#     $DATA_DIR is a separate, destructive step. See
+#     tools/replace_oceanmesh2d_with_symlinks.sh.
+#
+# Submit:
+#   pjsub tools/migrate_oceanmesh2d_data.pjsub
+#
+# After completion, inspect the job stdout/stderr for any "differ" or
+# md5 mismatch lines, then proceed to the symlink-replacement step.
+
+set -euo pipefail
+
+# Single-thread BLAS (matches the global HPC convention; harmless for rsync).
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+# Required env vars (inherited via #PJM -X).
+: "${HOME:?HOME not set}"
+: "${DATA_DIR:?DATA_DIR not set}"
+
+OM2D="${HOME}/Github/OceanMesh2D"
+[[ -d "${OM2D}" ]] || { echo "[migrate] ERROR: ${OM2D} not found" >&2; exit 1; }
+
+cd "${OM2D}"
+echo "[migrate] HOME      = ${HOME}"
+echo "[migrate] DATA_DIR  = ${DATA_DIR}"
+echo "[migrate] OM2D root = ${OM2D}"
+df -h "${DATA_DIR}" || true
+echo
+
+# -----------------------------------------------------------------------------
+# Phase 0: create destination layout
+# -----------------------------------------------------------------------------
+echo "[migrate] === Phase 0: mkdir destinations ==="
+mkdir -p "${DATA_DIR}"/bathymetry/{GEBCO,SRTM15plus,CUDEM,tokyo_bay}
+mkdir -p "${DATA_DIR}"/coastline/{GSHHS,tokyo_bay/{MLIT_C23,Futtsu,SMS,Wang,misc}}
+mkdir -p "${DATA_DIR}"/mesh/{reference/tokyo_bay/source,fvcom/tokyo_bay}
+echo "[migrate] destinations ready."
+echo
+
+# -----------------------------------------------------------------------------
+# Phase 1: rsync (idempotent; safe to re-run)
+# -----------------------------------------------------------------------------
+RS=(rsync -avh --info=progress2 --no-perms --omit-dir-times)
+
+echo "[migrate] === Phase 1a: bathymetry ==="
+"${RS[@]}" "${OM2D}/datasets/GEBCO_2024.nc"  "${DATA_DIR}/bathymetry/GEBCO/"
+"${RS[@]}" "${OM2D}/datasets/SRTM15+.nc"     "${DATA_DIR}/bathymetry/SRTM15plus/"
+"${RS[@]}" "${OM2D}/datasets/CUDEMS/"        "${DATA_DIR}/bathymetry/CUDEM/"
+"${RS[@]}" "${OM2D}/datasets/TokyoBay/dem/"  "${DATA_DIR}/bathymetry/tokyo_bay/"
+
+echo "[migrate] === Phase 1b: coastline ==="
+"${RS[@]}" "${OM2D}/datasets/GSHHS_shp/"     "${DATA_DIR}/coastline/GSHHS/"
+
+# MLIT C23 shapefiles (3 layers: main + INNER + OUTER), flat layout in source.
+for stem in C23-06_TOKYOBAY C23-06_TOKYOBAY_INNER C23-06_TOKYOBAY_OUTER; do
+  "${RS[@]}" "${OM2D}/Tokyo_Bay/data/${stem}".* \
+             "${DATA_DIR}/coastline/tokyo_bay/MLIT_C23/"
+done
+
+# Futtsu coastline: two source dirs are byte-identical (verified). Either OK.
+"${RS[@]}" "${OM2D}/Tokyo_Bay/data/Futtsu_coastline/"  "${DATA_DIR}/coastline/tokyo_bay/Futtsu/"
+
+# SMS, Wang_coastline (both under datasets/TokyoBay/shp/)
+"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/SMS/"             "${DATA_DIR}/coastline/tokyo_bay/SMS/"
+"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/Wang_coastline/"  "${DATA_DIR}/coastline/tokyo_bay/Wang/"
+
+# Loose .nc files in shp/ (not shapefiles, but include for completeness)
+"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/tokyo.nc"       "${DATA_DIR}/coastline/tokyo_bay/misc/"
+"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/tokyo_0001.nc"  "${DATA_DIR}/coastline/tokyo_bay/misc/"
+
+echo "[migrate] === Phase 1c: mesh references ==="
+# fort.14 + .mat artifacts (the extension-less tokyobay_futtsu5.0 is a MATLAB v5 mat file)
+"${RS[@]}" "${OM2D}/tb_mesh/tb_futtsu.14"             "${DATA_DIR}/mesh/reference/tokyo_bay/"
+"${RS[@]}" "${OM2D}/tb_mesh/tb_futtsu.mat"            "${DATA_DIR}/mesh/reference/tokyo_bay/"
+"${RS[@]}" "${OM2D}/tb_mesh/tb_futtsu20220311.14"     "${DATA_DIR}/mesh/reference/tokyo_bay/"
+"${RS[@]}" "${OM2D}/tb_mesh/tokyobay_futtsu5.0"       "${DATA_DIR}/mesh/reference/tokyo_bay/"
+"${RS[@]}" "${OM2D}/tb_mesh/tokyobay_futtsu5.0.14"    "${DATA_DIR}/mesh/reference/tokyo_bay/"
+"${RS[@]}" "${OM2D}"/tb_mesh/genMesh_*.m              "${DATA_DIR}/mesh/reference/tokyo_bay/source/"
+
+echo
+echo "[migrate] === Phase 1 done ==="
+df -h "${DATA_DIR}" || true
+echo
+
+# -----------------------------------------------------------------------------
+# Phase 2: verification
+# -----------------------------------------------------------------------------
+fail=0
+diff_check () {
+  local src="$1" dst="$2"
+  if [[ -e "${src}" ]]; then
+    if diff -rq "${src}" "${dst}" >/dev/null 2>&1; then
+      echo "[verify] OK   ${src}  ==  ${dst}"
+    else
+      echo "[verify] FAIL ${src}  !=  ${dst}"
+      diff -rq "${src}" "${dst}" || true
+      fail=1
+    fi
+  else
+    echo "[verify] SKIP (source missing) ${src}"
+  fi
+}
+
+md5_check () {
+  local src="$1" dst="$2"
+  if [[ -f "${src}" && -f "${dst}" ]]; then
+    a=$(md5sum "${src}" | awk '{print $1}')
+    b=$(md5sum "${dst}" | awk '{print $1}')
+    if [[ "${a}" == "${b}" ]]; then
+      echo "[verify] OK   md5 ${src##*/}  ${a}"
+    else
+      echo "[verify] FAIL md5 ${src##*/}  src=${a}  dst=${b}"
+      fail=1
+    fi
+  fi
+}
+
+echo "[migrate] === Phase 2: verification ==="
+
+# Tree-level diffs
+diff_check "${OM2D}/datasets/CUDEMS"                      "${DATA_DIR}/bathymetry/CUDEM"
+diff_check "${OM2D}/datasets/TokyoBay/dem"                "${DATA_DIR}/bathymetry/tokyo_bay"
+diff_check "${OM2D}/datasets/GSHHS_shp"                   "${DATA_DIR}/coastline/GSHHS"
+diff_check "${OM2D}/Tokyo_Bay/data/Futtsu_coastline"      "${DATA_DIR}/coastline/tokyo_bay/Futtsu"
+diff_check "${OM2D}/datasets/TokyoBay/shp/SMS"            "${DATA_DIR}/coastline/tokyo_bay/SMS"
+diff_check "${OM2D}/datasets/TokyoBay/shp/Wang_coastline" "${DATA_DIR}/coastline/tokyo_bay/Wang"
+
+# md5 checks for large single files
+md5_check "${OM2D}/datasets/GEBCO_2024.nc"          "${DATA_DIR}/bathymetry/GEBCO/GEBCO_2024.nc"
+md5_check "${OM2D}/datasets/SRTM15+.nc"             "${DATA_DIR}/bathymetry/SRTM15plus/SRTM15+.nc"
+md5_check "${OM2D}/tb_mesh/tb_futtsu20220311.14"    "${DATA_DIR}/mesh/reference/tokyo_bay/tb_futtsu20220311.14"
+md5_check "${OM2D}/tb_mesh/tb_futtsu.14"            "${DATA_DIR}/mesh/reference/tokyo_bay/tb_futtsu.14"
+md5_check "${OM2D}/tb_mesh/tokyobay_futtsu5.0.14"   "${DATA_DIR}/mesh/reference/tokyo_bay/tokyobay_futtsu5.0.14"
+md5_check "${OM2D}/tb_mesh/tokyobay_futtsu5.0"      "${DATA_DIR}/mesh/reference/tokyo_bay/tokyobay_futtsu5.0"
+md5_check "${OM2D}/tb_mesh/tb_futtsu.mat"           "${DATA_DIR}/mesh/reference/tokyo_bay/tb_futtsu.mat"
+
+echo
+if (( fail )); then
+  echo "[migrate] VERIFICATION FAILED — DO NOT proceed to symlink replacement."
+  exit 2
+fi
+echo "[migrate] All checks passed. Next step:"
+echo "          bash tools/replace_oceanmesh2d_with_symlinks.sh"
