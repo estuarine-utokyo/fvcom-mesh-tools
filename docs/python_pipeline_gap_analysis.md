@@ -117,19 +117,34 @@ The combo loop is exposed as ``fmesh-buildmesh --quality-pass N``;
 default 0 (off) since the user usually wants the option to inspect
 the raw output first.
 
-### 2.4 Coastline-aware sizing (M)
+### 2.4 Coastline-aware sizing (DONE, PoC #12)
 
 The reference uses graded sizing driven by both DEM gradient and
-distance-to-shoreline (typical OceanMesh2D recipe). Our minimal Hfun is
-just ``Hfun(raster, hmin=200, hmax=5000)`` — no shoreline shapefile
-input, no ``add_feature_size`` calls.
+distance-to-shoreline (typical OceanMesh2D recipe). The minimal
+``Hfun(raster, hmin=200, hmax=5000)`` was the dominant residual error
+source: even after a 6-round swap+smooth quality pass, ~17 % of
+triangles stayed below the 20-degree min-angle threshold.
 
-OCSMesh has ``Hfun.add_feature_size`` and ``Hfun.add_courant_size``;
-plumbing the existing
-``data/coastline/tokyo_bay/coastline.shp`` (or whatever resolved by
-``oceanmesh-tools scan``) into Hfun is straightforward but needs a small
-glue layer because OCSMesh's API is geometry-first while OceanMesh2D's
-is raster-first.
+PoC #12 plumbs ``Hfun.add_feature`` with the MLIT C23 Tokyo Bay
+coastline shapefile (1,325 LineStrings clipped to the DEM bbox -> 571
+features). Results on the same DEM / hmin / hmax:
+
+| Config            | NP     | NE     | alpha mean | frac<20° | wall |
+| ----------------- | ------ | ------ | ---------- | -------- | ---- |
+| baseline (no coast) | 15,757 | 19,711 | 0.718      | 20.75 %  | 40 s |
+| coast only          | 18,953 | 26,103 | 0.825      | **3.03 %** | 32 s |
+| coast + 6-round qp  | 18,953 | 26,103 | **0.848**  | **2.70 %** | 33 s |
+| reference           | 95,551 | 182,603| 0.979      | 0.00 %   | -    |
+
+So coastline-aware sizing alone cuts ``frac<20deg`` by **86 %**
+(20.75 -> 3.03 %); the combined pipeline gets to **2.70 %**. Mesh size
+grows by ~20 % (15.7k -> 18.9k nodes) - a cheap cost for the gain.
+
+CLI surface:
+``fmesh-buildmesh DEM out.14 --coastline coast.shp --coast-target-size METRES --coast-expansion-rate RATE``.
+
+Multiple ``--coastline`` flags can be combined; inputs are reprojected
+to EPSG:4326 and clipped to the DEM bbox before being fed to OCSMesh.
 
 ### 2.5 Open-boundary perpendicularity (DONE for fixes, partial for generation)
 
@@ -175,15 +190,21 @@ In order of return-on-effort:
    one shot; ``fmesh-perpfix`` runs automatically as a post-step.
 2. **Quality post-processing loop** (PARTIAL, PoCs #8-#10). Edge-swap
    plus damped Laplacian smoothing is wired in as
-   ``fmesh-buildmesh --quality-pass N``. It cuts ``frac<20deg`` from
-   20.75 % to 17.12 % but plateaus there because the residual is set
-   by the initial size function rather than by topology / metric.
-3. **Coastline-aware sizing**. Next big lever - Hfun driven by
-   distance-to-coastline as well as bathy gradient. Expected to drive
-   the bad-element fraction substantially closer to zero, especially
-   along the bay edge where slivers are concentrated.
+   ``fmesh-buildmesh --quality-pass N``. On the baseline mesh it cuts
+   ``frac<20deg`` from 20.75 % to 17.12 % (plateau set by sizing).
+3. **Coastline-aware sizing** (DONE, PoC #12). Driving Hfun with the
+   MLIT C23 coastline shapefile slashes ``frac<20deg`` to 3.03 %
+   alone, or 2.70 % with the quality pass on top. Available as
+   ``fmesh-buildmesh --coastline path.shp ...``.
 4. **Local refinement of bad-quality regions**. Cheaper than a full
    re-mesh: split every triangle below threshold and retriangulate
-   the local cavity. Closes whatever the sizing function leaves.
-5. Items 2.6 (river channels) and 2.7 (reproducibility) deferred until
-   3-4 are stable.
+   the local cavity. Should close the residual ~3 % bad fraction.
+5. **Open-segment merging** (small but visible). The minimal
+   classifier emits 3 open segments where 1 would suffice; FVCOM
+   tolerates this but the typical convention is 1 contiguous open arc.
+6. **Island merging / sliver-island filtering**. The Tokyo Bay output
+   has 165 land segments (mostly tiny islands); the reference has
+   54. A min-island-area filter on the wet-domain polygon would
+   bring counts in line.
+7. Items 2.6 (river channels) and 2.7 (reproducibility) deferred until
+   4-6 are stable.

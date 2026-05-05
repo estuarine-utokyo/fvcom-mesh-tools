@@ -36,7 +36,7 @@ from fvcom_mesh_tools.algorithms import (
     signed_areas,
     swap_edges_for_quality,
 )
-from fvcom_mesh_tools.io import Fort14Mesh, write_fort14
+from fvcom_mesh_tools.io import Fort14Mesh, load_coastline_as_lines, write_fort14
 
 EARTH_R_M = 6_371_000.0
 
@@ -91,6 +91,32 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "ibtype to write for every land segment in fort.14 "
             "(default: 20, matching the Tokyo Bay reference)."
+        ),
+    )
+    p.add_argument(
+        "--coastline", type=Path, action="append", default=[], metavar="PATH",
+        help=(
+            "Shapefile / GeoJSON of coastline polylines (or polygons; "
+            "rings will be flattened) to drive Hfun.add_feature for "
+            "coastline-aware sizing. Pass multiple times to combine "
+            "sources. Inputs are reprojected to EPSG:4326 and clipped "
+            "to the DEM bbox before use."
+        ),
+    )
+    p.add_argument(
+        "--coast-target-size", type=float, default=None, metavar="METRES",
+        help=(
+            "Target element size on the coastline polylines (default: "
+            "--hmin). Sizing expands away from the coast at "
+            "--coast-expansion-rate."
+        ),
+    )
+    p.add_argument(
+        "--coast-expansion-rate", type=float, default=0.005, metavar="RATE",
+        help=(
+            "Expansion rate passed to OCSMesh's Hfun.add_feature. "
+            "Larger -> sizing relaxes faster away from the coast "
+            "(default: 0.005)."
         ),
     )
     p.add_argument(
@@ -157,6 +183,31 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.perf_counter()
     geom = Geom(raster, zmax=args.zmax)
     hfun = Hfun(raster, hmin=args.hmin, hmax=args.hmax)
+
+    if args.coastline:
+        coast = load_coastline_as_lines(
+            args.coastline, bbox=(xmin, ymin, xmax, ymax),
+        )
+        n_lines = len(coast.geoms)
+        if n_lines == 0:
+            log(
+                "[buildmesh] coastline: no features inside DEM bbox; "
+                "skipping add_feature."
+            )
+        else:
+            target = args.coast_target_size or args.hmin
+            log(
+                f"[buildmesh] coastline: {n_lines} line strings; "
+                f"target_size={target:g} m  expansion_rate={args.coast_expansion_rate:g}"
+            )
+            t_feat = time.perf_counter()
+            hfun.add_feature(
+                feature=coast,
+                expansion_rate=args.coast_expansion_rate,
+                target_size=target,
+            )
+            log(f"[buildmesh] coastline: add_feature took {time.perf_counter() - t_feat:.2f} s")
+
     driver = MeshDriver(geom, hfun=hfun, engine_name=args.engine)
     mesh = driver.run()
     t_gen = time.perf_counter() - t0
