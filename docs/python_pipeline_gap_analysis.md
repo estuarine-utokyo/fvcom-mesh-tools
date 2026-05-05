@@ -177,6 +177,31 @@ not currently expose the seed through ``MeshDriver``. Worth filing a
 follow-up to set ``Mesh.Algorithm`` / ``Mesh.RandomSeed`` explicitly
 once we move beyond PoCs.
 
+### 2.8 Cross-basin portability (DONE, PoC #17)
+
+Validated on Osaka Bay using the SRTM15+ global DEM (subset to bbox)
+and the GSHHS-f L1 global coastline. The same flag set as PoC #16
+(no Tokyo-Bay-specific tuning) produced a clean fort.14:
+
+* NP=3,412, NE=5,451, ``flipped=0``,
+* alpha mean 0.898, ``frac<20deg`` 0.18 %,
+* 3 independent open arcs detected (Akashi Strait + Tomogashima
+  + a small Awaji-south passage) - the bbox classifier handles
+  multi-strait geometries without merging unrelated arcs,
+* 4 ibtype=21 river segments (Yodo, Yamato, Mukou, Kanzaki).
+
+Two operational notes from PoC #17:
+
+* SRTM15+ ships without an embedded CRS, so ocsmesh.Raster cannot
+  open it directly. The PoC subsets the bbox and writes a CF-tagged
+  EPSG:4326 GeoTIFF before passing it to ``fmesh-buildmesh``. A
+  reusable ``fmesh-subset-dem`` helper would be a natural follow-up.
+* GSHHS-f L1 has far fewer line strings than MLIT C23 (8 vs. 571 in
+  the bbox), so ``Hfun.add_feature`` runs in ~1 s and the resulting
+  mesh is much sparser. Quality is *better* (fewer enforced kinks
+  to honour); fidelity is lower (no fine-scale Tokyo-Bay-style
+  estuary detail).
+
 ## 3. License & dependency notes
 
 - ``ocsmesh`` itself is CC0-1.0; importing it from Apache-2.0 code is
@@ -231,4 +256,10 @@ In order of return-on-effort:
    segment are skipped, so re-running the pipeline is idempotent.
    On Tokyo Bay this matches the reference structure (5 rivers, one
    open arc, 26 ibtype=20 + 5 ibtype=21 land segments).
-8. Item 2.7 (reproducibility) is the remaining major lever.
+8. **Cross-basin validation** (DONE, PoC #17). Same flag set as
+   PoC #16 ports cleanly to Osaka Bay using SRTM15+ + GSHHS-f L1
+   inputs. Three open arcs (Akashi + Tomogashima + Awaji-south)
+   are detected without merging; quality is good (alpha 0.90,
+   ``frac<20deg`` 0.18 %).
+9. Item 2.7 (reproducibility) and a reusable DEM subset helper
+   (currently inlined in the PoC) are the remaining minor levers.
