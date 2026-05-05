@@ -199,12 +199,16 @@ In order of return-on-effort:
 4. **Local refinement of bad-quality regions**. Cheaper than a full
    re-mesh: split every triangle below threshold and retriangulate
    the local cavity. Should close the residual ~3 % bad fraction.
-5. **Open-segment merging** (small but visible). The minimal
-   classifier emits 3 open segments where 1 would suffice; FVCOM
-   tolerates this but the typical convention is 1 contiguous open arc.
-6. **Island merging / sliver-island filtering**. The Tokyo Bay output
-   has 165 land segments (mostly tiny islands); the reference has
-   54. A min-island-area filter on the wet-domain polygon would
-   bring counts in line.
-7. Items 2.6 (river channels) and 2.7 (reproducibility) deferred until
-   4-6 are stable.
+5. **Open-segment merging** (DONE, PoC #14).
+   ``--open-merge-coast-gap NODES`` bridges short coast intrusions
+   between two open arcs. With ``gap=50`` the Tokyo Bay output
+   collapses from 3 open segments to 1 contiguous arc of 778 nodes.
+6. **Island merging / sliver-island filtering** (DONE, PoCs #13-#14).
+   ``--min-polygon-area-m2`` drops detached single-pixel water
+   bodies; ``--min-island-area-m2`` fills holes (islands) below a
+   metric area threshold. With ``min_island=1e5`` the Tokyo Bay
+   output goes from 165 to 23 land segments with no quality
+   regression and a slight wall-time reduction (gmsh has fewer
+   features to honour).
+7. Items 2.6 (river channels) and 2.7 (reproducibility) remain the
+   next major levers.

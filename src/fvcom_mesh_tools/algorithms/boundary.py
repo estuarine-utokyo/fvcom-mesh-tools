@@ -147,11 +147,41 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int, bool]]:
     return out
 
 
+def _bridge_short_coast_gaps(is_open: np.ndarray, max_gap: int) -> np.ndarray:
+    """Reclassify any "land" run shorter than ``max_gap`` as "open" if it
+    sits between two open runs (cyclic).
+
+    Operates on a 1-D bool mask whose True entries mean "open". Returns a
+    copy with the bridging applied. ``max_gap=0`` returns the input
+    unchanged.
+    """
+    if max_gap <= 0 or is_open.size == 0:
+        return is_open.copy()
+    if bool(is_open.all()) or not bool(is_open.any()):
+        return is_open.copy()
+    out = is_open.copy()
+    runs = _runs(out)
+    n = len(runs)
+    for k, (i, j, v) in enumerate(runs):
+        if v:
+            continue
+        run_len = j - i + 1
+        if run_len > max_gap:
+            continue
+        prev_v = runs[(k - 1) % n][2]
+        next_v = runs[(k + 1) % n][2]
+        if prev_v and next_v:
+            out[i : j + 1] = True
+    return out
+
+
 def classify_outer_loop_by_bbox(
     outer: np.ndarray,
     nodes: np.ndarray,
     bbox: tuple[float, float, float, float],
     tol: float,
+    *,
+    open_merge_coast_gap: int = 0,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """Split a closed outer loop into open- and land-boundary segments.
 
@@ -160,6 +190,12 @@ def classify_outer_loop_by_bbox(
     class nodes form one segment; the loop is rotated so the first
     segment starts at a class transition (so segments do not span the
     arbitrary closing index).
+
+    With ``open_merge_coast_gap > 0``, any *land* run shorter than this
+    threshold (in nodes) sandwiched between two open runs is reclassified
+    as open. This collapses what is geometrically one open arc broken by
+    a small coast intrusion into one segment, matching the convention
+    used by typical FVCOM regional meshes.
 
     Returns
     -------
@@ -172,6 +208,9 @@ def classify_outer_loop_by_bbox(
     ring = outer[:-1]  # drop closing duplicate
     pts = nodes[ring]
     is_open = _on_bbox(pts, bbox, tol)
+
+    if open_merge_coast_gap > 0:
+        is_open = _bridge_short_coast_gaps(is_open, open_merge_coast_gap)
 
     if bool(is_open.all()):
         return [ring.copy()], []
@@ -211,6 +250,8 @@ def classify_boundaries_by_bbox(
     bbox: tuple[float, float, float, float],
     tol: float,
     land_ibtype: int = 0,
+    *,
+    open_merge_coast_gap: int = 0,
 ) -> tuple[list[np.ndarray], list[tuple[int, np.ndarray]]]:
     """Compute open- and land-boundary segments for ``mesh``.
 
@@ -244,7 +285,10 @@ def classify_boundaries_by_bbox(
         return [], []
 
     outer = outer_loop(loops, mesh.nodes)
-    open_segs, land_segs = classify_outer_loop_by_bbox(outer, mesh.nodes, bbox, tol)
+    open_segs, land_segs = classify_outer_loop_by_bbox(
+        outer, mesh.nodes, bbox, tol,
+        open_merge_coast_gap=open_merge_coast_gap,
+    )
 
     # Hole loops (islands) are always coast.
     for loop in loops:

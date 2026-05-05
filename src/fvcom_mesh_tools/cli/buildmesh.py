@@ -36,7 +36,12 @@ from fvcom_mesh_tools.algorithms import (
     signed_areas,
     swap_edges_for_quality,
 )
-from fvcom_mesh_tools.io import Fort14Mesh, load_coastline_as_lines, write_fort14
+from fvcom_mesh_tools.io import (
+    Fort14Mesh,
+    filter_multipolygon_by_area,
+    load_coastline_as_lines,
+    write_fort14,
+)
 
 EARTH_R_M = 6_371_000.0
 
@@ -91,6 +96,33 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "ibtype to write for every land segment in fort.14 "
             "(default: 20, matching the Tokyo Bay reference)."
+        ),
+    )
+    p.add_argument(
+        "--open-merge-coast-gap", type=int, default=0, metavar="NODES",
+        help=(
+            "Bridge short coast intrusions between two open arcs into "
+            "one open segment when the intrusion is shorter than NODES "
+            "(default 0 = no merging). Useful when the DEM bbox is "
+            "rectangular but the coastline pokes into the bbox in a "
+            "few places, splitting one geometric open arc into many."
+        ),
+    )
+    p.add_argument(
+        "--min-polygon-area-m2", type=float, default=0.0, metavar="M2",
+        help=(
+            "Drop wet-domain polygons whose metric area is below this "
+            "threshold before meshing. Useful for stripping isolated "
+            "single-pixel water bodies. 0 = keep everything (default)."
+        ),
+    )
+    p.add_argument(
+        "--min-island-area-m2", type=float, default=0.0, metavar="M2",
+        help=(
+            "Drop holes (islands) inside the wet-domain polygons whose "
+            "metric area is below this threshold. 0 = keep everything "
+            "(default). Typical: 10000-100000 m^2 to keep islands "
+            "smaller than a few mesh cells."
         ),
     )
     p.add_argument(
@@ -182,6 +214,42 @@ def main(argv: list[str] | None = None) -> int:
 
     t0 = time.perf_counter()
     geom = Geom(raster, zmax=args.zmax)
+
+    if args.min_polygon_area_m2 > 0 or args.min_island_area_m2 > 0:
+        log(
+            f"[buildmesh] geom filter: min_polygon={args.min_polygon_area_m2:g} m^2, "
+            f"min_island={args.min_island_area_m2:g} m^2"
+        )
+        t_filter = time.perf_counter()
+        mp = geom.get_multipolygon()
+        n_polys_before = len(mp.geoms)
+        n_holes_before = sum(len(list(p.interiors)) for p in mp.geoms)
+        mp_filt = filter_multipolygon_by_area(
+            mp,
+            src_crs=raster.crs,
+            min_polygon_area_m2=args.min_polygon_area_m2,
+            min_island_area_m2=args.min_island_area_m2,
+        )
+        n_polys_after = len(mp_filt.geoms)
+        n_holes_after = sum(len(list(p.interiors)) for p in mp_filt.geoms)
+        log(
+            f"[buildmesh] geom filter: polygons {n_polys_before} -> {n_polys_after}, "
+            f"holes {n_holes_before} -> {n_holes_after} "
+            f"({time.perf_counter() - t_filter:.2f} s)"
+        )
+        if n_polys_after == 0:
+            print(
+                "Geom filter dropped every polygon; "
+                "loosen --min-polygon-area-m2.",
+                file=sys.stderr,
+            )
+            return 4
+        # Replace the raster geom with a polygon-backed one driven by
+        # the filtered multipolygon. Mesher uses this for the wet
+        # domain; Hfun keeps the raster for sizing. OCSMesh requires
+        # an explicit CRS for the polygon variant.
+        geom = Geom(mp_filt, crs=raster.crs)
+
     hfun = Hfun(raster, hmin=args.hmin, hmax=args.hmax)
 
     if args.coastline:
@@ -274,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         bbox=(xmin, ymin, xmax, ymax),
         tol=tol_deg,
         land_ibtype=args.land_ibtype,
+        open_merge_coast_gap=args.open_merge_coast_gap,
     )
     f14.open_boundaries = open_segs
     f14.land_boundaries = land_bnds

@@ -142,6 +142,41 @@ def test_classify_boundaries_by_bbox_flags_island_as_land() -> None:
     assert any(set(seg.tolist()).issubset(inner) for _, seg in land_bnds)
 
 
+def test_classify_outer_loop_merges_short_coast_gap() -> None:
+    """An open-open-land-open-open ring with a 1-node land run between two
+    open runs should merge into a single open segment when
+    open_merge_coast_gap >= 1."""
+    # 6-node ring: 5 nodes near the bbox top edge, 1 node intruding.
+    nodes = np.array(
+        [
+            [-1.0, 1.0],   # 0 open
+            [-0.5, 1.0],   # 1 open
+            [0.0, 0.5],    # 2 land (intrusion)
+            [0.5, 1.0],    # 3 open
+            [1.0, 1.0],    # 4 open
+            [0.0, -1.0],   # 5 land (south)
+        ],
+        dtype=np.float64,
+    )
+    outer = np.array([0, 1, 2, 3, 4, 5, 0], dtype=np.int64)
+    bbox = (-1.5, 1.0, 1.5, 1.0)
+
+    # Without merging: 2 open segments.
+    open_no_merge, _ = classify_outer_loop_by_bbox(
+        outer, nodes, bbox=bbox, tol=0.05,
+    )
+    assert len(open_no_merge) == 2
+
+    # With merging gap >= 1: a single open segment containing all five
+    # bbox-touching nodes plus the bridged intrusion.
+    open_merged, _ = classify_outer_loop_by_bbox(
+        outer, nodes, bbox=bbox, tol=0.05, open_merge_coast_gap=1,
+    )
+    assert len(open_merged) == 1
+    bridged_set = set(open_merged[0].tolist())
+    assert {0, 1, 2, 3, 4}.issubset(bridged_set)
+
+
 def test_classify_boundaries_by_bbox_no_loops_returns_empty() -> None:
     """Degenerate single-triangle mesh: every edge is a boundary edge,
     forming exactly one loop. The bbox covers the whole triangle, so we
