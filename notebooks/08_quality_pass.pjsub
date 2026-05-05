@@ -1,0 +1,34 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=00:15:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc08
+
+# PoC #8: Laplacian quality pass on the fmesh-buildmesh Tokyo Bay output.
+#
+# Submit from the repo root:
+#   pjsub notebooks/08_quality_pass.pjsub
+#
+# Outputs:
+#   outputs/08_tokyo_bay_smoothed.14
+#   outputs/08_quality_pass_summary.txt
+#   outputs/08_quality_pass_alpha_hist.png
+#   outputs/08_quality_pass_min_angle_hist.png
+#   outputs/08_quality_pass_mesh.png
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+: "${HOME:?HOME not set}"
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+PY="${HOME}/mambaforge/envs/py312test/bin/python"
+[[ -x "${PY}" ]] || { echo "python not found at ${PY}" >&2; exit 1; }
+
+"${PY}" notebooks/08_quality_pass.py

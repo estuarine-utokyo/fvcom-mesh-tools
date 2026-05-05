@@ -7,12 +7,15 @@ Pipeline (single command, no MATLAB intermediate):
                           -> MeshDriver(engine="gmsh").run()
                           -> mesh.interpolate(raster) for depth
                           -> classify boundaries by DEM bbox proximity
+                          -> (optional) edge-swap + Laplacian quality pass
                           -> (optional) align_open_boundary_first_ring
                           -> fort.14 (FVCOM/ADCIRC convention, depth +down)
 
 The intent is "give us a fort.14 the FVCOM harness can actually load".
-Quality post-processing is not in scope here; ``docs/python_pipeline_gap_analysis.md``
-tracks what is still missing.
+Quality post-processing is best-effort: it monotonically improves mean
+alpha-quality but plateaus at a level that depends on the initial size
+function (PoC #10). Driving the bad-element fraction to zero requires
+adaptive sizing, which ``docs/python_pipeline_gap_analysis.md`` tracks.
 """
 
 from __future__ import annotations
@@ -26,8 +29,12 @@ import numpy as np
 
 from fvcom_mesh_tools.algorithms import (
     align_open_boundary_first_ring,
+    alpha_quality,
     classify_boundaries_by_bbox,
+    laplacian_smooth,
+    min_interior_angle,
     signed_areas,
+    swap_edges_for_quality,
 )
 from fvcom_mesh_tools.io import Fort14Mesh, write_fort14
 
@@ -85,6 +92,22 @@ def build_parser() -> argparse.ArgumentParser:
             "ibtype to write for every land segment in fort.14 "
             "(default: 20, matching the Tokyo Bay reference)."
         ),
+    )
+    p.add_argument(
+        "--quality-pass", type=int, default=0, metavar="ROUNDS",
+        help=(
+            "Run ROUNDS alternating edge-swap + Laplacian-smooth passes "
+            "before perpfix. 0 disables (default). 6 is a good upper "
+            "bound (PoC #10); returns plateau quickly."
+        ),
+    )
+    p.add_argument(
+        "--smooth-iters", type=int, default=5,
+        help="Smoothing iterations per --quality-pass round (default: 5).",
+    )
+    p.add_argument(
+        "--smooth-alpha", type=float, default=0.5,
+        help="Damping factor for the per-round smoothing pass (default: 0.5).",
     )
     p.add_argument(
         "--no-perpfix", action="store_true",
@@ -210,6 +233,32 @@ def main(argv: list[str] | None = None) -> int:
         f"({sum(s.size for _, s in land_bnds)} nodes)"
     )
 
+    if args.quality_pass > 0:
+        log(
+            f"[buildmesh] quality pass: rounds={args.quality_pass}, "
+            f"smooth_iters={args.smooth_iters}, smooth_alpha={args.smooth_alpha}"
+        )
+        q_before = float(alpha_quality(f14).mean())
+        bad_before = float((min_interior_angle(f14) < 20).mean()) * 100
+        for r in range(args.quality_pass):
+            f14, swap_info = swap_edges_for_quality(f14, max_iters=10)
+            f14, smooth_info = laplacian_smooth(
+                f14,
+                n_iters=args.smooth_iters,
+                alpha=args.smooth_alpha,
+                prevent_flips=True,
+            )
+            log(
+                f"[buildmesh]   round {r + 1}: swaps={swap_info['total_swaps']:,}  "
+                f"smooth_reverts={int(sum(smooth_info['reverts'])):,}"
+            )
+        q_after = float(alpha_quality(f14).mean())
+        bad_after = float((min_interior_angle(f14) < 20).mean()) * 100
+        log(
+            f"[buildmesh] quality pass: alpha {q_before:.4f} -> {q_after:.4f}, "
+            f"frac<20deg {bad_before:.2f}% -> {bad_after:.2f}%"
+        )
+
     if not args.no_perpfix and open_segs:
         log(f"[buildmesh] perpfix: aligning first-ring (iters={args.perpfix_iters})")
         nodes_before = f14.nodes.copy()
@@ -223,21 +272,35 @@ def main(argv: list[str] | None = None) -> int:
         log(f"[buildmesh] perpfix moved {info['moved']:,} interior nodes")
 
         # The length-preserving perpendicular projection may flip
-        # narrow triangles. Revert any moved node that participates
-        # in a flipped triangle so we leave the mesh strictly valid.
-        bad_tris = signed_areas(f14) <= 0
-        if bool(bad_tris.any()):
+        # narrow triangles. Iterate the revert: each round undoes any
+        # moved node that participates in a flipped triangle, then re-
+        # checks signed areas. After the quality pass the surrounding
+        # geometry is tighter, so a single round can be insufficient.
+        n_revert_total = 0
+        for _ in range(5):
+            bad_tris = signed_areas(f14) <= 0
+            if not bool(bad_tris.any()):
+                break
             moved_mask = np.any(f14.nodes != nodes_before, axis=1)
             bad_nodes = np.zeros(f14.n_nodes, dtype=bool)
             bad_nodes[np.unique(f14.elements[bad_tris].ravel())] = True
             revert = bad_nodes & moved_mask
-            n_revert = int(revert.sum())
-            if n_revert:
-                f14.nodes[revert] = nodes_before[revert]
-                log(f"[buildmesh] perpfix: reverted {n_revert} moves to avoid flips")
-            still_bad = int((signed_areas(f14) <= 0).sum())
-            if still_bad:
-                log(f"[buildmesh] WARN: {still_bad} flipped triangles remain after revert")
+            if not bool(revert.any()):
+                break
+            f14.nodes[revert] = nodes_before[revert]
+            n_revert_total += int(revert.sum())
+        if n_revert_total:
+            log(f"[buildmesh] perpfix: reverted {n_revert_total} moves to avoid flips")
+        still_bad = int((signed_areas(f14) <= 0).sum())
+        if still_bad:
+            # Safety net: if iterative revert cannot clear the flips,
+            # roll back perpfix entirely. The mesh is then exactly as
+            # the quality pass left it - which is at least valid.
+            log(
+                f"[buildmesh] WARN: {still_bad} flipped triangles remain; "
+                f"undoing perpfix to keep the mesh valid."
+            )
+            f14.nodes = nodes_before
 
     write_fort14(f14, args.output)
     log(f"[buildmesh] wrote {args.output}")

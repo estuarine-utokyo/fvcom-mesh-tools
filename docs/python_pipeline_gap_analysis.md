@@ -77,24 +77,45 @@ Fix: call ``mesh.interpolate(raster_collection, method=...)`` after
 ``driver.run()`` and before ``mesh.write(...)``. Single line; only listed
 here so it is not forgotten when the pipeline matures.
 
-### 2.3 Mesh quality (M)
+### 2.3 Mesh quality (M, partially closed)
 
 The OceanMesh2D reference has 0.00 % triangles below the 20-degree
 min-angle threshold and a mean alpha of 0.979. The raw gmsh output has
-19.59 % below 20 degrees and mean alpha 0.725. OceanMesh2D applies
-several iterations of:
+20.75 % below 20 degrees and mean alpha 0.718.
 
-- bound-preserving Laplacian smoothing,
-- edge swapping ("flip"), and
-- removing slivers / collapsed triangles.
+PoCs #8 / #9 / #10 closed part of this gap; the rest is sizing-driven.
 
-OCSMesh exposes some quality post-processing under ``ocsmesh.utils`` and
-``MeshDriver`` has ``cleanup_isolates`` / ``cleanup_duplicates`` but no
-full equivalent. Closing this gap means either (a) calling
-``meshkernel`` orthogonalize + smoothing (PoC #3 showed this *worsens*
-the open-boundary perpendicularity but improves global quality), (b)
-porting the OceanMesh2D quality loop, or (c) integrating ``triangle``
-or another smoother. **Largest single block of work** on the roadmap.
+| Pass on PoC #7 mesh             | mean alpha | frac<20° |
+| ------------------------------- | ---------- | -------- |
+| raw gmsh + buildmesh            | 0.7180     | 20.75 %  |
+| Laplacian only (PoC #8)         | 0.7169     | 21.44 %  |
+| Edge-swap only (PoC #9)         | 0.7367     | 17.74 %  |
+| Swap + smooth combo (PoC #10)   | **0.7498** | **17.12 %** |
+| Reference                       | 0.979      | 0.00 %   |
+
+Findings:
+
+- Pure Laplacian smoothing barely moves the metric on this mesh -
+  slivers are *topologically* trapped; node moves alone cannot fix
+  three-near-collinear vertices.
+- Edge swap (Lawson / min-angle flip) is monotonically helpful and
+  cheap (0.45 s on 19 k triangles).
+- The swap+smooth combination plateaus at ~17 % bad triangles after
+  3-4 rounds. The plateau is set by the *initial size function*: with
+  a coarse uniform Hfun(hmin=200, hmax=5000) the bay edge nodes are
+  forced into thin triangles that no in-place rearrangement can fix.
+
+Closing the residual gap requires either:
+
+1. Adaptive sizing during generation (coastline-distance Hfun, see 2.4
+   below).
+2. Local refinement of bad-quality regions (split + retriangulate any
+   triangle below threshold). Not implemented.
+3. Constrained Delaunay with explicit feature edges. Not implemented.
+
+The combo loop is exposed as ``fmesh-buildmesh --quality-pass N``;
+default 0 (off) since the user usually wants the option to inspect
+the raw output first.
 
 ### 2.4 Coastline-aware sizing (M)
 
@@ -149,14 +170,20 @@ once we move beyond PoCs.
 
 In order of return-on-effort:
 
-1. **Boundary classification + depth interpolation** (small wins,
-   prerequisite for everything else). Output a fort.14 the FVCOM
-   harness can actually run.
-2. **Quality post-processing loop** (port OceanMesh2D's
-   smooth + swap + sliver-removal, or chain MeshKernel). Without this,
-   the Python output will not pass FVCOM stability checks.
-3. **Coastline-aware sizing** (close the resolution-distribution gap).
-4. **Run ``fmesh-perpfix`` automatically** as a post-step in any wrapper
-   we publish.
+1. **Boundary classification + depth interpolation** (DONE, PoCs #5-#7).
+   ``fmesh-buildmesh`` produces a parseable, FVCOM-shaped fort.14 in
+   one shot; ``fmesh-perpfix`` runs automatically as a post-step.
+2. **Quality post-processing loop** (PARTIAL, PoCs #8-#10). Edge-swap
+   plus damped Laplacian smoothing is wired in as
+   ``fmesh-buildmesh --quality-pass N``. It cuts ``frac<20deg`` from
+   20.75 % to 17.12 % but plateaus there because the residual is set
+   by the initial size function rather than by topology / metric.
+3. **Coastline-aware sizing**. Next big lever - Hfun driven by
+   distance-to-coastline as well as bathy gradient. Expected to drive
+   the bad-element fraction substantially closer to zero, especially
+   along the bay edge where slivers are concentrated.
+4. **Local refinement of bad-quality regions**. Cheaper than a full
+   re-mesh: split every triangle below threshold and retriangulate
+   the local cavity. Closes whatever the sizing function leaves.
 5. Items 2.6 (river channels) and 2.7 (reproducibility) deferred until
-   1–4 are stable.
+   3-4 are stable.
