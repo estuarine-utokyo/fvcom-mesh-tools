@@ -39,6 +39,10 @@ figures/
 *.[0-9]*.err
 *.[0-9]*.stats
 
+# Core dumps (e.g. from third-party native libraries)
+core
+core.*
+
 # Mesh data — large; do not commit (allowed under tests/fixtures/)
 *.14
 *.nc
