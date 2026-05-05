@@ -1,0 +1,32 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc07
+
+# PoC #7: end-to-end fmesh-buildmesh validation on Tokyo Bay.
+#
+# Submit from the repo root:
+#   pjsub notebooks/07_buildmesh_e2e.pjsub
+#
+# Outputs:
+#   outputs/07_tokyo_bay_buildmesh.14
+#   outputs/07_buildmesh_summary.txt
+#   outputs/07_buildmesh_mesh.png
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+
+: "${HOME:?HOME not set}"
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+PY="${HOME}/mambaforge/envs/py312test/bin/python"
+[[ -x "${PY}" ]] || { echo "python not found at ${PY}" >&2; exit 1; }
+
+"${PY}" notebooks/07_buildmesh_e2e.py

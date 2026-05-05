@@ -1,0 +1,33 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=00:15:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc06
+
+# PoC #6: parity comparison between OCSMesh-minimal output and reference.
+#
+# Submit from the repo root:
+#   pjsub notebooks/06_parity_compare.pjsub
+#
+# Outputs:
+#   outputs/06_parity_summary.txt
+#   outputs/06_parity_meshes_side_by_side.png
+#   outputs/06_parity_edge_length_hist.png
+#   outputs/06_parity_quality_hist.png
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+: "${HOME:?HOME not set}"
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+PY="${HOME}/mambaforge/envs/py312test/bin/python"
+[[ -x "${PY}" ]] || { echo "python not found at ${PY}" >&2; exit 1; }
+
+"${PY}" notebooks/06_parity_compare.py
