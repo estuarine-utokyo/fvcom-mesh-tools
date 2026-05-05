@@ -3,9 +3,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from fvcom_mesh_tools.io import Fort14Mesh, read_fort14
+from fvcom_mesh_tools.io import Fort14Mesh, read_fort14, write_fort14
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tiny.fort14"
+REFERENCE_MESH = (
+    Path(__file__).parent.parent
+    / "data"
+    / "mesh"
+    / "reference"
+    / "tokyo_bay"
+    / "tb_futtsu20220311.14"
+)
 
 
 @pytest.fixture(scope="module")
@@ -59,6 +67,36 @@ def test_land_boundaries_preserve_ibtype(tiny: Fort14Mesh) -> None:
 def test_bbox(tiny: Fort14Mesh) -> None:
     xmin, ymin, xmax, ymax = tiny.bbox
     assert (xmin, ymin, xmax, ymax) == (0.0, 0.0, 2.0, 1.0)
+
+
+def _meshes_equal(a: Fort14Mesh, b: Fort14Mesh) -> None:
+    np.testing.assert_allclose(a.nodes, b.nodes, atol=0, rtol=1e-12)
+    np.testing.assert_allclose(a.depths, b.depths, atol=0, rtol=1e-9)
+    np.testing.assert_array_equal(a.elements, b.elements)
+    assert len(a.open_boundaries) == len(b.open_boundaries)
+    for x, y in zip(a.open_boundaries, b.open_boundaries):
+        np.testing.assert_array_equal(x, y)
+    assert len(a.land_boundaries) == len(b.land_boundaries)
+    for (ia, idsa), (ib, idsb) in zip(a.land_boundaries, b.land_boundaries):
+        assert ia == ib
+        np.testing.assert_array_equal(idsa, idsb)
+
+
+def test_round_trip_tiny(tmp_path: Path, tiny: Fort14Mesh) -> None:
+    out = tmp_path / "tiny_out.fort14"
+    write_fort14(tiny, out)
+    reread = read_fort14(out)
+    _meshes_equal(tiny, reread)
+
+
+@pytest.mark.skipif(not REFERENCE_MESH.exists(), reason="reference mesh symlink not in place")
+def test_round_trip_reference_mesh(tmp_path: Path) -> None:
+    """Round-trip the real Tokyo Bay reference mesh (95k nodes / 183k elements)."""
+    src = read_fort14(REFERENCE_MESH)
+    out = tmp_path / "tb_round_trip.fort14"
+    write_fort14(src, out)
+    reread = read_fort14(out)
+    _meshes_equal(src, reread)
 
 
 def test_node_count_mismatch_raises(tmp_path: Path) -> None:

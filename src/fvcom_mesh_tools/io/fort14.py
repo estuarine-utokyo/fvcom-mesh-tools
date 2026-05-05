@@ -138,3 +138,47 @@ def read_fort14(path: str | Path) -> Fort14Mesh:
         open_boundaries=open_boundaries,
         land_boundaries=land_boundaries,
     )
+
+
+def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
+    """Write a :class:`Fort14Mesh` to ``path`` in standard ADCIRC fort.14 layout.
+
+    The output is round-trip safe: ``read_fort14(write_fort14(m, p))`` recovers
+    the same node coordinates, depths, element connectivity, and boundary
+    structure as ``m``. The exact numeric formatting of the source file is not
+    preserved; coordinates and depths are written with 10 decimal digits which
+    is sufficient for double-precision round-trip.
+    """
+    path = Path(path).resolve()
+    n_nodes = mesh.n_nodes
+    n_elements = mesh.n_elements
+    n_open_segs = len(mesh.open_boundaries)
+    n_open_nodes = sum(len(b) for b in mesh.open_boundaries)
+    n_land_segs = len(mesh.land_boundaries)
+    n_land_nodes = sum(len(ids) for _, ids in mesh.land_boundaries)
+
+    with path.open("w") as f:
+        f.write(f"{mesh.title}\n")
+        f.write(f"{n_elements} {n_nodes}\n")
+
+        for i in range(n_nodes):
+            x, y = mesh.nodes[i]
+            f.write(f"{i + 1:>10d}  {x:.10f}  {y:.10f}  {mesh.depths[i]:.10e}\n")
+
+        for i in range(n_elements):
+            n0, n1, n2 = mesh.elements[i]
+            f.write(f"{i + 1:>10d}  3  {n0 + 1:>10d}  {n1 + 1:>10d}  {n2 + 1:>10d}\n")
+
+        f.write(f"{n_open_segs} = Number of open boundaries\n")
+        f.write(f"{n_open_nodes} = Total number of open boundary nodes\n")
+        for k, ids in enumerate(mesh.open_boundaries, start=1):
+            f.write(f"{len(ids)} = Number of nodes for open boundary {k}\n")
+            for node in ids:
+                f.write(f"{int(node) + 1}\n")
+
+        f.write(f"{n_land_segs} = Number of normal flow boundaries\n")
+        f.write(f"{n_land_nodes} = Total number of land boundary nodes\n")
+        for k, (ibtype, ids) in enumerate(mesh.land_boundaries, start=1):
+            f.write(f"{len(ids)} {ibtype} = Number of nodes for land boundary {k}\n")
+            for node in ids:
+                f.write(f"{int(node) + 1}\n")
