@@ -196,9 +196,15 @@ In order of return-on-effort:
    MLIT C23 coastline shapefile slashes ``frac<20deg`` to 3.03 %
    alone, or 2.70 % with the quality pass on top. Available as
    ``fmesh-buildmesh --coastline path.shp ...``.
-4. **Local refinement of bad-quality regions**. Cheaper than a full
-   re-mesh: split every triangle below threshold and retriangulate
-   the local cavity. Should close the residual ~3 % bad fraction.
+4. **Local refinement of bad-quality regions** (DONE, PoC #15).
+   Longest-edge bisection (Rivara-style) for triangles below the
+   user-supplied min-angle threshold. Available as
+   ``fmesh-buildmesh --refine-min-angle DEG``. Cuts ``frac<20deg``
+   from 2.84 % to 1.82 % at +6.7 % mesh-size cost, no quality
+   regression. Centroid insertion was tried first but empirically
+   *increased* sliver count (it splits a sliver into one wedge that
+   keeps the long base). Iteration includes regression-rollback so
+   the worst-case is "no change", not "worse than before".
 5. **Open-segment merging** (DONE, PoC #14).
    ``--open-merge-coast-gap NODES`` bridges short coast intrusions
    between two open arcs. With ``gap=50`` the Tokyo Bay output

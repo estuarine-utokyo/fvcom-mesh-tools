@@ -19,6 +19,7 @@ from fvcom_mesh_tools.algorithms.quality import (
     edge_lengths_planar,
     min_interior_angle,
 )
+from fvcom_mesh_tools.algorithms.refine import refine_bad_triangles
 from fvcom_mesh_tools.algorithms.smoothing import laplacian_smooth
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "min_interior_angle",
     "open_bdy_perpendicularity",
     "outer_loop",
+    "refine_bad_triangles",
     "signed_areas",
     "swap_edges_for_quality",
     "unique_edges",

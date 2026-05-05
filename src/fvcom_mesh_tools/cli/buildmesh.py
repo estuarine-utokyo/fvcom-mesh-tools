@@ -33,6 +33,7 @@ from fvcom_mesh_tools.algorithms import (
     classify_boundaries_by_bbox,
     laplacian_smooth,
     min_interior_angle,
+    refine_bad_triangles,
     signed_areas,
     swap_edges_for_quality,
 )
@@ -166,6 +167,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--smooth-alpha", type=float, default=0.5,
         help="Damping factor for the per-round smoothing pass (default: 0.5).",
+    )
+    p.add_argument(
+        "--refine-min-angle", type=float, default=0.0, metavar="DEG",
+        help=(
+            "After --quality-pass, run longest-edge bisection on every "
+            "triangle whose minimum interior angle is below this "
+            "threshold. 0 disables (default). Typical: 15-20 deg."
+        ),
+    )
+    p.add_argument(
+        "--refine-max-passes", type=int, default=5,
+        help="Cap on refine passes (default 5; early-stops on regression).",
     )
     p.add_argument(
         "--no-perpfix", action="store_true",
@@ -377,6 +390,27 @@ def main(argv: list[str] | None = None) -> int:
         log(
             f"[buildmesh] quality pass: alpha {q_before:.4f} -> {q_after:.4f}, "
             f"frac<20deg {bad_before:.2f}% -> {bad_after:.2f}%"
+        )
+
+    if args.refine_min_angle > 0:
+        log(
+            f"[buildmesh] refine: min-angle threshold {args.refine_min_angle:g} deg, "
+            f"max_passes={args.refine_max_passes}"
+        )
+        bad_pre = float((min_interior_angle(f14) < args.refine_min_angle).mean()) * 100
+        np_pre = f14.n_nodes
+        f14, refine_info = refine_bad_triangles(
+            f14,
+            min_angle_threshold=args.refine_min_angle,
+            max_passes=args.refine_max_passes,
+        )
+        bad_post = float((min_interior_angle(f14) < args.refine_min_angle).mean()) * 100
+        log(
+            f"[buildmesh] refine: passes={refine_info['passes']} "
+            f"({refine_info['stop_reason']}); "
+            f"frac<{args.refine_min_angle:g}deg {bad_pre:.2f}% -> {bad_post:.2f}%; "
+            f"NP {np_pre:,} -> {f14.n_nodes:,} "
+            f"(+{refine_info['total_nodes_inserted']:,} nodes)"
         )
 
     if not args.no_perpfix and open_segs:

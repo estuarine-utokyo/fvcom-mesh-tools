@@ -72,6 +72,7 @@ End-to-end smoke tests under `notebooks/` (each ships with a matching
 | 12 | `12_coastline_aware.py`  | Coastline-aware sizing (`Hfun.add_feature`); cuts bad-triangle fraction to **2.7 %**. |
 | 13 | `13_island_filter.py`    | Island / polygon area filters; cuts 166 land segments → 23. |
 | 14 | `14_boundary_cleanup.py` | Open-segment merge collapses 3 open segments → 1 contiguous arc. |
+| 15 | `15_refine_bad.py`       | Longest-edge bisection refinement; cuts bad-triangle fraction to **1.82 %**. |
 
 `docs/python_pipeline_gap_analysis.md` summarises what the Python
 pipeline still has to gain to match the OceanMesh2D reference output.
