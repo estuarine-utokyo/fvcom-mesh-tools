@@ -211,6 +211,14 @@ the reference, ``flipped=0``. perpfix reverts dropped from 273 (on
 the OCSMesh-generated mesh) to 8 - DistMesh outputs are smooth
 enough that the perpendicularity step is nearly a no-op.
 
+PoC #20 repeated the run on Osaka Bay (different basin, two
+straits, large internal island, GSHHS-f L1 coastline instead of
+MLIT C23) with the *same* flag set: alpha 0.9662, ``frac<20deg``
+0.08 %, 3 independent open arcs, 4 ibtype=21 segments, ``flipped=0``.
+Wall-clock was 69 s (vs 1717 s on Tokyo Bay) because GSHHS-f L1
+imposes far fewer feature-size constraints than MLIT C23. The
+oceanmesh engine ports across basins without retuning.
+
 Conclusion: ``oceanmesh`` is the new default engine. ``ocsmesh`` is
 retained behind ``fmesh-buildmesh --engine ocsmesh`` as a fast draft
 backend (~40x faster) and to keep the option open for OCSMesh's
