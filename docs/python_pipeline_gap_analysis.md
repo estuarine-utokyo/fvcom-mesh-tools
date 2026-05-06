@@ -248,7 +248,7 @@ Two operational notes from PoC #17:
 * SRTM15+ ships without an embedded CRS, so ocsmesh.Raster cannot
   open it directly. The bbox subset + CF tagging is now exposed as
   the ``fmesh-subset-dem`` CLI (``src/fvcom_mesh_tools/cli/subset_dem.py``);
-  PoC #17 calls the underlying ``subset_dem_to_geotiff`` helper.
+  PoC #17 calls the underlying ``dem.subset.to_geotiff`` helper.
 * GSHHS-f L1 has far fewer line strings than MLIT C23 (8 vs. 571 in
   the bbox), so ``Hfun.add_feature`` runs in ~1 s and the resulting
   mesh is much sparser. Quality is *better* (fewer enforced kinks

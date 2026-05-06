@@ -236,17 +236,18 @@ src/fvcom_mesh_tools/
 |                       # ``import fvcom_mesh_tools.io`` is stdlib +
 |                       # numpy only.
 +-- dem/                # rasterio-bound DEM I/O, isolated so the
-|   +-- __init__.py     # rest of the package can be imported
-|   +-- bbox.py         # without rasterio installed.
-|   +-- subset.py       #   - dem.bbox.read(path)
-|   `-- interp.py       #   - dem.subset.to_geotiff(...)
-|                       #   - dem.interp.at_points(...)
-+-- mesh_engine/        # generation backends (lazy-import their own
-|   +-- __init__.py     # heavyweight deps).
-|   +-- oceanmesh.py    # build(engine=...) dispatcher
-|   `-- ocsmesh.py      # primary  - DistMesh; alt - OCSMesh+gmsh.
-|                       # Both honour the (points, cells) -> EPSG:4326
-|                       # contract; depth interp is the caller's job.
+|                       # rest of the package imports cleanly
+|                       # without rasterio installed.
+|   +-- bbox.py         #   bbox.read(path) -> (minx, miny, maxx, maxy)
+|   +-- subset.py       #   subset.to_geotiff(src, dst, bbox, ...)
+|   `-- interp.py       #   interp.at_points(dem, points, method=...)
++-- mesh_engine/        # generation backends. Each module lazy-
+|                       # imports its own heavyweight deps; both
+|                       # emit (points, cells) in EPSG:4326,
+|                       # leaving depth interp to the caller.
+|   +-- __init__.py     #   build(engine=...) dispatcher
+|   +-- oceanmesh.py    #   primary - DistMesh
+|   `-- ocsmesh.py      #   alt     - OCSMesh+gmsh
 +-- mesh_compose/       # multi-mesh stitching
 |   +-- __init__.py     # combine(strategy=...) dispatcher
 |   +-- disjoint.py     # numpy concat with index offsets
@@ -255,10 +256,12 @@ src/fvcom_mesh_tools/
 +-- vis/, plot/         # visualization helpers
 +-- scan/, mesh/        # legacy oceanmesh-tools features
 `-- cli/                # console entry points (thin: parse args,
-    +-- buildmesh.py    # call mesh_engine.build, run mesher-agnostic
-    +-- perpfix.py      # post-pipeline, write fort.14)
-    +-- subset_dem.py
-    `-- meshcombine.py
+                        # call mesh_engine.build, run mesher-agnostic
+                        # post-pipeline, write fort.14).
+    +-- buildmesh.py    #   fmesh-buildmesh
+    +-- perpfix.py      #   fmesh-perpfix
+    +-- subset_dem.py   #   fmesh-subset-dem
+    `-- meshcombine.py  #   fmesh-mesh-combine
 ```
 
 ## 6. Environment model

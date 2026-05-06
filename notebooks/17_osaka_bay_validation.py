@@ -39,11 +39,8 @@ from fvcom_mesh_tools.algorithms import (  # noqa: E402
     signed_areas,
 )
 from fvcom_mesh_tools.cli.buildmesh import main as buildmesh_main  # noqa: E402
-from fvcom_mesh_tools.io import (  # noqa: E402
-    load_river_points,
-    read_fort14,
-    subset_dem_to_geotiff,
-)
+from fvcom_mesh_tools.dem.subset import to_geotiff  # noqa: E402
+from fvcom_mesh_tools.io import load_river_points, read_fort14  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRTM = REPO_ROOT / "data" / "bathymetry" / "SRTM15plus" / "SRTM15+.nc"
@@ -125,7 +122,7 @@ def main() -> None:
     if not DEM_SUBSET.exists():
         print(f"[17] subsetting SRTM15+ to {BBOX} -> {DEM_SUBSET}")
         t0 = time.perf_counter()
-        subset_dem_to_geotiff(SRTM, DEM_SUBSET, BBOX, src_var="z")
+        to_geotiff(SRTM, DEM_SUBSET, BBOX, src_var="z")
         print(f"[17] subset: {time.perf_counter() - t0:.2f} s")
 
     args = [
