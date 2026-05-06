@@ -31,8 +31,10 @@ for the full rationale.
 
 ## Installation
 
-Python ≥3.12. The recommended setup is a conda env from `environment.yml`
-plus a `pip install` of `oceanmesh` (which is not on conda-forge):
+Python ≥3.12. Two install modes, depending on whether you want the
+compiled scientific stack from conda-forge or a pip-only setup.
+
+### Conda (recommended for full functionality)
 
 ```bash
 mamba env create -f environment.yml
@@ -54,6 +56,25 @@ setup used to validate PoCs #18-#22:
 If you only need the OCSMesh path, the lighter `py312test` env (already
 on GENKAI) works - oceanmesh is then unavailable and the default engine
 must be flipped via `--engine ocsmesh`.
+
+### Pip (modular extras)
+
+Dependencies are layered by concern so pure-fort.14 callers do not pull
+the compiled raster stack:
+
+| Install | Pulls | Enables |
+|---------|-------|---------|
+| `pip install -e .` | numpy only | `algorithms.*`, `io.fort14`, `mesh_compose.disjoint`, `fmesh-perpfix`, `fmesh-mesh-combine --strategy disjoint` |
+| `pip install -e ".[io-vector]"` | + shapely / geopandas / fiona | coastline / river-point / multipolygon-area helpers |
+| `pip install -e ".[dem]"` | + rasterio / netCDF4 / pyproj | `dem.subset` / `dem.interp` / `dem.bbox`, `fmesh-subset-dem` |
+| `pip install -e ".[oceanmesh]"` | + oceanmesh and the above | `fmesh-buildmesh --engine oceanmesh` (default) |
+| `pip install -e ".[ocsmesh]"` | + ocsmesh, gmsh, and the above | `fmesh-buildmesh --engine ocsmesh`, `fmesh-mesh-combine --strategy {overlap,neighbor}` |
+| `pip install -e ".[all]"` | superset of the above plus `viz` | every CLI and helper |
+
+Note: `oceanmesh` on PyPI lists deps that conflict with conda-forge
+versions; under `[oceanmesh]` pip will pull the PyPI variant. Under
+the conda workflow we install `oceanmesh --no-deps` and rely on the
+conda-forge stack instead.
 
 ## Quick start
 

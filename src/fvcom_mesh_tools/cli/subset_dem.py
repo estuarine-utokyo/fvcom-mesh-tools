@@ -20,7 +20,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from fvcom_mesh_tools.io import subset_dem_to_geotiff
+from fvcom_mesh_tools.dem.subset import to_geotiff
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    info = subset_dem_to_geotiff(
+    info = to_geotiff(
         args.src,
         args.dst,
         (minlon, minlat, maxlon, maxlat),

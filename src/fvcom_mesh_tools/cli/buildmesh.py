@@ -1,21 +1,24 @@
-"""``fmesh-buildmesh`` CLI: DEM -> OCSMesh -> classified, perp-fixed fort.14.
+"""``fmesh-buildmesh`` CLI: DEM -> mesh engine -> classified, perp-fixed fort.14.
 
 Pipeline (single command, no MATLAB intermediate):
 
-    DEM (NetCDF/GeoTIFF) -> ocsmesh.Geom(zmax)
-                          -> ocsmesh.Hfun(hmin, hmax)
-                          -> MeshDriver(engine="gmsh").run()
-                          -> mesh.interpolate(raster) for depth
-                          -> classify boundaries by DEM bbox proximity
-                          -> (optional) edge-swap + Laplacian quality pass
-                          -> (optional) align_open_boundary_first_ring
-                          -> fort.14 (FVCOM/ADCIRC convention, depth +down)
+    DEM (NetCDF/GeoTIFF)
+        -> dem.bbox.read              (lon/lat extent for boundary classify)
+        -> mesh_engine.build(engine)  (oceanmesh DistMesh or ocsmesh+gmsh)
+        -> dem.interp.at_points       (per-node depth, mesher-agnostic)
+        -> classify boundaries by DEM bbox proximity
+        -> (optional) edge-swap + Laplacian quality pass
+        -> (optional) longest-edge bisection refine
+        -> align_open_boundary_first_ring (perpfix)
+        -> fort.14 (FVCOM/ADCIRC convention, depth +down)
 
-The intent is "give us a fort.14 the FVCOM harness can actually load".
-Quality post-processing is best-effort: it monotonically improves mean
-alpha-quality but plateaus at a level that depends on the initial size
-function (PoC #10). Driving the bad-element fraction to zero requires
-adaptive sizing, which ``docs/python_pipeline_gap_analysis.md`` tracks.
+Both mesh engines emit ``(points, cells)`` in EPSG:4326 lon/lat; everything
+downstream is mesher-agnostic. The intent is "give us a fort.14 the FVCOM
+harness can actually load". Quality post-processing is best-effort: it
+monotonically improves mean alpha-quality but plateaus at a level that
+depends on the initial size function (PoC #10). Driving the bad-element
+fraction to zero requires adaptive sizing, which
+``docs/python_pipeline_gap_analysis.md`` tracks.
 """
 
 from __future__ import annotations
@@ -40,8 +43,6 @@ from fvcom_mesh_tools.algorithms import (
 )
 from fvcom_mesh_tools.io import (
     Fort14Mesh,
-    filter_multipolygon_by_area,
-    load_coastline_as_lines,
     load_river_points,
     write_fort14,
 )
@@ -67,10 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
         prog="fmesh-buildmesh",
         description=(
             "Generate a FVCOM-ready fort.14 from a single DEM. "
-            "Mesh is produced by OCSMesh + gmsh; depths are interpolated "
-            "from the same DEM; the outer ring is split into open and "
-            "land segments by proximity to the DEM bounding box; an "
-            "optional first-ring perpendicularity fix is applied."
+            "Mesh is produced by the selected --engine "
+            "(oceanmesh DistMesh by default, ocsmesh+gmsh for fast "
+            "drafts); depths are interpolated from the same DEM; the "
+            "outer ring is split into open and land segments by "
+            "proximity to the DEM bounding box; an optional first-ring "
+            "perpendicularity fix is applied."
         ),
     )
     p.add_argument("dem", type=Path, help="DEM raster (GeoTIFF / NetCDF / etc).")
@@ -98,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--interp-method", choices=["spline", "linear", "nearest"], default="linear",
+        "--interp-method", choices=["linear", "nearest"], default="linear",
         help="Depth-interpolation method (default: linear).",
     )
     p.add_argument(
@@ -297,154 +300,30 @@ def main(argv: list[str] | None = None) -> int:
         f"hmin={args.hmin:g} m  hmax={args.hmax:g} m  zmax={args.zmax:g}"
     )
 
-    # The DEM bounding box is needed by both engines for boundary
-    # classification, regardless of which one generates the mesh.
-    import rasterio
+    # DEM bbox drives boundary classification regardless of engine
+    # choice. Reading it through the dem subpackage keeps rasterio
+    # confined to one entry point.
+    from fvcom_mesh_tools.dem.bbox import read as read_dem_bbox
 
-    with rasterio.open(args.dem) as r:
-        xmin, ymin, xmax, ymax = r.bounds.left, r.bounds.bottom, r.bounds.right, r.bounds.top
+    xmin, ymin, xmax, ymax = read_dem_bbox(args.dem)
     log(f"[buildmesh] DEM bbox: x[{xmin:.6f}, {xmax:.6f}]  y[{ymin:.6f}, {ymax:.6f}]")
 
-    t0 = time.perf_counter()
-
-    if args.engine == "ocsmesh":
-        # OCSMesh / pyproj imports are deferred so the rest of the
-        # package stays importable in environments without OCSMesh /
-        # gmsh installed.
-        from ocsmesh import Geom, Hfun, MeshDriver, Raster
-        from pyproj import CRS, Transformer
-
-        raster = Raster(str(args.dem))
-
-        geom = Geom(raster, zmax=args.zmax)
-
-        if args.min_polygon_area_m2 > 0 or args.min_island_area_m2 > 0:
-            log(
-                f"[buildmesh] geom filter: min_polygon={args.min_polygon_area_m2:g} m^2, "
-                f"min_island={args.min_island_area_m2:g} m^2"
-            )
-            t_filter = time.perf_counter()
-            mp = geom.get_multipolygon()
-            n_polys_before = len(mp.geoms)
-            n_holes_before = sum(len(list(p.interiors)) for p in mp.geoms)
-            mp_filt = filter_multipolygon_by_area(
-                mp,
-                src_crs=raster.crs,
-                min_polygon_area_m2=args.min_polygon_area_m2,
-                min_island_area_m2=args.min_island_area_m2,
-            )
-            n_polys_after = len(mp_filt.geoms)
-            n_holes_after = sum(len(list(p.interiors)) for p in mp_filt.geoms)
-            log(
-                f"[buildmesh] geom filter: polygons {n_polys_before} -> {n_polys_after}, "
-                f"holes {n_holes_before} -> {n_holes_after} "
-                f"({time.perf_counter() - t_filter:.2f} s)"
-            )
-            if n_polys_after == 0:
-                print(
-                    "Geom filter dropped every polygon; "
-                    "loosen --min-polygon-area-m2.",
-                    file=sys.stderr,
-                )
-                return 4
-            # Replace the raster geom with a polygon-backed one driven
-            # by the filtered multipolygon. Mesher uses this for the
-            # wet domain; Hfun keeps the raster for sizing. OCSMesh
-            # requires an explicit CRS for the polygon variant.
-            geom = Geom(mp_filt, crs=raster.crs)
-
-        hfun = Hfun(raster, hmin=args.hmin, hmax=args.hmax)
-
-        if args.coastline:
-            coast = load_coastline_as_lines(
-                args.coastline, bbox=(xmin, ymin, xmax, ymax),
-            )
-            n_lines = len(coast.geoms)
-            if n_lines == 0:
-                log(
-                    "[buildmesh] coastline: no features inside DEM bbox; "
-                    "skipping add_feature."
-                )
-            else:
-                target = args.coast_target_size or args.hmin
-                log(
-                    f"[buildmesh] coastline: {n_lines} line strings; "
-                    f"target_size={target:g} m  expansion_rate={args.coast_expansion_rate:g}"
-                )
-                t_feat = time.perf_counter()
-                hfun.add_feature(
-                    feature=coast,
-                    expansion_rate=args.coast_expansion_rate,
-                    target_size=target,
-                )
-                log(
-                    f"[buildmesh] coastline: add_feature took "
-                    f"{time.perf_counter() - t_feat:.2f} s"
-                )
-
-        driver = MeshDriver(geom, hfun=hfun, engine_name="gmsh")
-        mesh = driver.run()
-        t_gen = time.perf_counter() - t0
-        log(f"[buildmesh] mesh generation (gmsh): {t_gen:.2f} s")
-
-        log(f"[buildmesh] interpolating depths (method={args.interp_method}) ...")
-        t1 = time.perf_counter()
-        mesh.interpolate(raster, method=args.interp_method)
-        log(f"[buildmesh] depth interpolation: {time.perf_counter() - t1:.2f} s")
-
-        coords = np.asarray(mesh.coord, dtype=np.float64)
-        elements = np.asarray(mesh.triangles, dtype=np.int64)
-        if elements.size == 0:
-            print("OCSMesh produced zero triangles; aborting.", file=sys.stderr)
-            return 3
-        raw_values = np.asarray(mesh.value, dtype=np.float64).ravel()
-        if raw_values.size != coords.shape[0]:
-            depths = np.zeros(coords.shape[0], dtype=np.float64)
-        else:
-            # OCSMesh's GRD writer writes -value, which corresponds to
-            # ADCIRC's positive-down convention when DEM elevation is
-            # +up. Replicate that here so our writer sees the same sign.
-            depths = -raw_values
-
-        # OCSMesh internally meshes in a metric CRS (UTM by default)
-        # and exposes coords there, even when the input DEM is
-        # geographic. Project back to EPSG:4326 so our fort.14 matches
-        # the legacy reference's lon/lat convention.
-        src_crs = mesh.crs
-        if src_crs is not None and not CRS(src_crs).equals(CRS.from_epsg(4326)):
-            log(f"[buildmesh] projecting coords {src_crs} -> EPSG:4326")
-            transformer = Transformer.from_crs(
-                src_crs, CRS.from_epsg(4326), always_xy=True,
-            )
-            lon, lat = transformer.transform(coords[:, 0], coords[:, 1])
-            coords = np.column_stack([lon, lat])
-
-    elif args.engine == "oceanmesh":
-        if args.min_polygon_area_m2 > 0 or args.min_island_area_m2 > 0:
-            log(
-                "[buildmesh] note: --min-polygon-area-m2 / "
-                "--min-island-area-m2 are OCSMesh-specific and ignored "
-                "by the oceanmesh engine."
-            )
+    # Engine-specific kwargs. The dispatcher forwards these as
+    # **engine_kwargs to the per-engine adapter.
+    if args.engine == "oceanmesh":
         if not args.coastline:
             print(
                 "oceanmesh engine requires at least one --coastline.",
                 file=sys.stderr,
             )
             return 5
-
-        from fvcom_mesh_tools.mesh_engine import build as build_engine
-        from fvcom_mesh_tools.mesh_engine.depth import (
-            interpolate_dem_at_points,
-        )
-
-        points, cells = build_engine(
-            "oceanmesh",
-            dem_path=args.dem,
-            coastline_paths=list(args.coastline),
-            bbox=(xmin, ymin, xmax, ymax),
-            hmin_m=args.hmin,
-            hmax_m=args.hmax,
+        if args.min_polygon_area_m2 > 0 or args.min_island_area_m2 > 0:
+            log(
+                "[buildmesh] note: --min-polygon-area-m2 / "
+                "--min-island-area-m2 are ocsmesh-only and ignored "
+                "by the oceanmesh engine."
+            )
+        engine_kwargs = dict(
             zmax=args.zmax,
             slope_parameter=args.om_slope_parameter,
             gradation=args.om_gradation,
@@ -452,24 +331,49 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.om_seed,
             use_bathymetric_gradient=not args.om_no_bathymetric_gradient,
             minimum_area_mult=args.om_minimum_area_mult,
+        )
+    else:  # ocsmesh; argparse choices guard the value space
+        engine_kwargs = dict(
+            zmax=args.zmax,
+            min_polygon_area_m2=args.min_polygon_area_m2,
+            min_island_area_m2=args.min_island_area_m2,
+            coast_target_size=args.coast_target_size,
+            coast_expansion_rate=args.coast_expansion_rate,
+        )
+
+    from fvcom_mesh_tools.dem.interp import at_points as interp_dem_at_points
+    from fvcom_mesh_tools.mesh_engine import build as build_engine
+
+    t0 = time.perf_counter()
+    try:
+        points, cells = build_engine(
+            args.engine,
+            dem_path=args.dem,
+            coastline_paths=list(args.coastline),
+            bbox=(xmin, ymin, xmax, ymax),
+            hmin_m=args.hmin,
+            hmax_m=args.hmax,
             log=log,
+            **engine_kwargs,
         )
-        t_gen = time.perf_counter() - t0
-        log(f"[buildmesh] mesh generation (oceanmesh): {t_gen:.2f} s")
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 4
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 3
+    log(
+        f"[buildmesh] mesh generation ({args.engine}): "
+        f"{time.perf_counter() - t0:.2f} s"
+    )
 
-        log(f"[buildmesh] interpolating depths (method={args.interp_method}) ...")
-        t1 = time.perf_counter()
-        depths = interpolate_dem_at_points(
-            args.dem, points,
-            method="nearest" if args.interp_method == "nearest" else "linear",
-        )
-        log(f"[buildmesh] depth interpolation: {time.perf_counter() - t1:.2f} s")
+    log(f"[buildmesh] interpolating depths (method={args.interp_method}) ...")
+    t1 = time.perf_counter()
+    depths = interp_dem_at_points(args.dem, points, method=args.interp_method)
+    log(f"[buildmesh] depth interpolation: {time.perf_counter() - t1:.2f} s")
 
-        coords = points
-        elements = cells
-
-    else:  # defensive: argparse choices guard this
-        raise AssertionError(f"unhandled engine: {args.engine!r}")
+    coords = points
+    elements = cells
 
     title = args.title or f"fmesh-buildmesh {args.dem.name}"
     f14 = Fort14Mesh(

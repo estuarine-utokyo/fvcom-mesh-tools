@@ -1,11 +1,11 @@
-"""Depth interpolation: sample a DEM raster at mesh node coordinates.
+"""DEM sampling at mesh-node coordinates.
 
-The OCSMesh engine has its own ``mesh.interpolate(raster_collection, ...)``
-method, so this helper is only invoked from the oceanmesh engine path
-(or any future engine that returns just ``points, cells`` without
-depths). The output convention is positive-down (depth in metres),
-matching ``fort.14``: water columns where the DEM elevation is
-``-z`` get depth ``+z``.
+Mesh engines emit ``(points, cells)`` only; depth interpolation is
+the caller's job (``fmesh-buildmesh``). :func:`at_points` samples a
+DEM raster at the lon/lat rows of a points array and returns
+*depth* in metres, positive-down (``fort.14`` convention): water
+columns where the DEM elevation is ``-z`` get depth ``+z``; land
+(elevation ``> 0``) becomes ``0`` m.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import rasterio
 from rasterio.warp import transform as warp_transform
 
 
-def interpolate_dem_at_points(
+def at_points(
     dem_path: Path,
     points: np.ndarray,
     *,

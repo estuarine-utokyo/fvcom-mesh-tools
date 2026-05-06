@@ -20,17 +20,24 @@ classifiers = [
 
 dependencies = [
   "numpy>=1.23",
-  "matplotlib>=3.8",
 ]
 
+# Optional extras layered by concern. Pure-fort.14 callers
+# (algorithms, mesh_compose, fmesh-perpfix, fmesh-mesh-combine
+# --strategy disjoint) need only the base install. DEM I/O and
+# vector I/O are isolated so a minimal install does not pull the
+# compiled raster stack.
 [project.optional-dependencies]
+io-vector = ["shapely>=2.0", "geopandas>=0.14", "fiona>=1.9"]
+dem = ["rasterio>=1.3", "netCDF4>=1.6", "pyproj>=3.6"]
+oceanmesh = ["oceanmesh", "fvcom-mesh-tools[dem,io-vector]"]
+ocsmesh = ["ocsmesh", "gmsh", "fvcom-mesh-tools[dem,io-vector]"]
+meshkernel = ["meshkernel"]
+jigsaw = ["jigsawpy"]
+viz = ["matplotlib>=3.8", "plotly>=5.15"]
 test = ["pytest>=7.4"]
 dev = ["ruff>=0.5", "pytest>=7.4"]
-viz = ["plotly>=5.15"]
-ocsmesh = ["ocsmesh"]
-meshkernel = ["meshkernel"]
-gmsh = ["gmsh"]
-jigsaw = ["jigsawpy"]
+all = ["fvcom-mesh-tools[oceanmesh,ocsmesh,viz]"]
 
 [project.scripts]
 fmesh-perpfix = "fvcom_mesh_tools.cli.perpfix:main"

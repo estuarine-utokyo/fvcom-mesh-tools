@@ -5,17 +5,20 @@ Two backends are exposed via the ``fmesh-buildmesh --engine`` flag:
 * ``oceanmesh`` -- DistMesh via :mod:`oceanmesh` (Roberts et al.). The
   Python port of OceanMesh2D; produces near-equilateral meshes
   (alpha mean ~0.96, ``frac<20deg`` ~0.03 % on Tokyo Bay) but is
-  slower (PoC #18: ~26 min on Tokyo Bay).
+  slower (PoC #18: ~26 min on Tokyo Bay). See
+  :mod:`fvcom_mesh_tools.mesh_engine.oceanmesh`.
 * ``ocsmesh`` -- OCSMesh + gmsh. Faster (~40 s on Tokyo Bay) but
   lower quality (alpha ~0.85, ``frac<20deg`` ~1.13 %); useful for
-  draft / iteration.
+  draft / iteration. See :mod:`fvcom_mesh_tools.mesh_engine.ocsmesh`.
 
 Both engines emit ``(points, cells)`` in EPSG:4326 lon/lat. The
-caller (``fmesh-buildmesh``) is responsible for depth interpolation,
-boundary classification, river inflow injection, perpfix, and
+caller (``fmesh-buildmesh``) is responsible for depth interpolation
+(via :mod:`fvcom_mesh_tools.dem.interp`), boundary classification,
+river inflow injection, quality / refine passes, perpfix, and
 ``fort.14`` writing - all mesher-agnostic.
 
-Lazy imports keep the heavyweight dependencies optional: importing
+Lazy imports keep the heavyweight engine dependencies (``oceanmesh``,
+``ocsmesh``, ``gmsh``) optional: importing
 :mod:`fvcom_mesh_tools.mesh_engine` does *not* import either engine
 module.
 """

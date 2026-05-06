@@ -1,13 +1,13 @@
-"""DEM subsetting helper for ``fmesh-buildmesh``.
+"""DEM subsetting: clip a raster to a lon/lat bbox.
 
 The ``fmesh-buildmesh`` pipeline consumes a single, CRS-tagged raster.
 Global DEMs (SRTM15+, GEBCO 2024, ...) are too big to feed in directly,
 and several of them ship without an embedded CRS so they cannot be
 opened by ``ocsmesh.Raster`` / ``rasterio`` as-is.
 
-:func:`subset_dem_to_geotiff` clips a source DEM to a lon/lat bounding
-box and writes a CF-tagged GeoTIFF that the downstream pipeline can
-ingest. Two source families are supported:
+:func:`to_geotiff` clips a source DEM to a lon/lat bounding box and
+writes a CF-tagged GeoTIFF that the downstream pipeline can ingest.
+Two source families are supported:
 
 1. **Rasters that rasterio can open with an embedded CRS** (GeoTIFF,
    CF-compliant NetCDF). We do a windowed read in source pixel space
@@ -15,7 +15,7 @@ ingest. Two source families are supported:
 2. **lon/lat NetCDF without CRS** (the SRTM15+ / GEBCO style). We
    read the named scalar variable plus 1-D ``lon`` and ``lat``
    coordinates via netCDF4 directly, slice in lon/lat space, and
-   tag the output with ``--src-crs`` (default ``EPSG:4326``).
+   tag the output with ``src_crs`` (default ``EPSG:4326``).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _subset_via_rasterio(
     with rasterio.open(src_path) as src:
         if src.crs is None:
             raise ValueError(
-                f"{src_path}: no embedded CRS; pass --src-var to use the "
+                f"{src_path}: no embedded CRS; pass src_var to use the "
                 "lon/lat NetCDF path instead."
             )
         window = from_bounds(minx, miny, maxx, maxy, transform=src.transform)
@@ -135,7 +135,7 @@ def _subset_via_netcdf(
     }
 
 
-def subset_dem_to_geotiff(
+def to_geotiff(
     src: str | Path,
     dst: str | Path,
     bbox: tuple[float, float, float, float],

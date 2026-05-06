@@ -36,7 +36,7 @@ Everything else is mesher-agnostic.
                   |
                   v
    +------------------------------+
-   |  mesh_engine.build(engine,..)|  (dispatch)
+   |  mesh_engine.build(engine,..)|  (dispatch; lazy-import backend)
    +------------------------------+
         |               |
         v               v
@@ -46,9 +46,10 @@ Everything else is mesher-agnostic.
         |               |
         +-------+-------+
                 |
-                v   (points, cells, lon/lat)
+                v   (points, cells, lon/lat EPSG:4326)
        +-----------------+
-       | depth interp    |  rasterio + scipy bilinear
+       | dem.interp      |  bilinear / nearest, rasterio
+       |   .at_points    |
        | CCW fix         |
        | bbox classify   |
        | river inflow    |
@@ -225,17 +226,27 @@ Boundaries are dropped, like `overlap`.
 
 ```
 src/fvcom_mesh_tools/
-+-- algorithms/         # mesher-agnostic: quality, edge_swap,
-|                       # smoothing, refine, perpfix, boundary,
-|                       # rivers, signed_areas, ...
-+-- io/                 # fort.14 read/write, DEM subset,
-|                       # coastline loader, geom filter,
-|                       # river-points loader
-+-- mesh_engine/        # generation backends
-|   +-- __init__.py     # build(engine=...) dispatcher
-|   +-- oceanmesh.py    # primary - DistMesh
-|   +-- depth.py        # bilinear DEM sampling for non-OCSMesh path
-|   `-- (ocsmesh path inline in cli/buildmesh.py for now)
++-- algorithms/         # PURE NumPy: quality, edge_swap, smoothing,
+|                       # refine, perpfix, boundary, rivers,
+|                       # signed_areas, ... (no rasterio / shapely)
++-- io/                 # fort.14 read/write, coastline loader, geom
+|                       # filter, river-points loader. shapely /
+|                       # geopandas / pyproj are imported lazily
+|                       # inside the helpers, so a bare
+|                       # ``import fvcom_mesh_tools.io`` is stdlib +
+|                       # numpy only.
++-- dem/                # rasterio-bound DEM I/O, isolated so the
+|   +-- __init__.py     # rest of the package can be imported
+|   +-- bbox.py         # without rasterio installed.
+|   +-- subset.py       #   - dem.bbox.read(path)
+|   `-- interp.py       #   - dem.subset.to_geotiff(...)
+|                       #   - dem.interp.at_points(...)
++-- mesh_engine/        # generation backends (lazy-import their own
+|   +-- __init__.py     # heavyweight deps).
+|   +-- oceanmesh.py    # build(engine=...) dispatcher
+|   `-- ocsmesh.py      # primary  - DistMesh; alt - OCSMesh+gmsh.
+|                       # Both honour the (points, cells) -> EPSG:4326
+|                       # contract; depth interp is the caller's job.
 +-- mesh_compose/       # multi-mesh stitching
 |   +-- __init__.py     # combine(strategy=...) dispatcher
 |   +-- disjoint.py     # numpy concat with index offsets
@@ -243,11 +254,11 @@ src/fvcom_mesh_tools/
 |   `-- overlap.py      # OCSMesh-backed merge_overlapping/neighboring
 +-- vis/, plot/         # visualization helpers
 +-- scan/, mesh/        # legacy oceanmesh-tools features
-`-- cli/                # console entry points
-    +-- buildmesh.py        - fmesh-buildmesh
-    +-- perpfix.py          - fmesh-perpfix
-    +-- subset_dem.py       - fmesh-subset-dem
-    `-- meshcombine.py      - fmesh-mesh-combine
+`-- cli/                # console entry points (thin: parse args,
+    +-- buildmesh.py    # call mesh_engine.build, run mesher-agnostic
+    +-- perpfix.py      # post-pipeline, write fort.14)
+    +-- subset_dem.py
+    `-- meshcombine.py
 ```
 
 ## 6. Environment model

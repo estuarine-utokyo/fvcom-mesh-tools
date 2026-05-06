@@ -1,4 +1,4 @@
-"""Tests for ``subset_dem_to_geotiff`` and the ``fmesh-subset-dem`` CLI."""
+"""Tests for ``dem.subset.to_geotiff`` and the ``fmesh-subset-dem`` CLI."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ rasterio = pytest.importorskip("rasterio")
 netCDF4 = pytest.importorskip("netCDF4")
 
 from fvcom_mesh_tools.cli.subset_dem import main as cli_main  # noqa: E402
-from fvcom_mesh_tools.io import subset_dem_to_geotiff  # noqa: E402
+from fvcom_mesh_tools.dem.subset import to_geotiff  # noqa: E402
 
 
 def _write_nc_lonlat_z(path: Path, lon, lat, z, var_name: str = "z") -> None:
@@ -56,7 +56,7 @@ def test_subset_via_netcdf_roundtrip(tmp_path: Path) -> None:
     dst = tmp_path / "out.tif"
     _write_nc_lonlat_z(src, lon, lat, z)
 
-    info = subset_dem_to_geotiff(
+    info = to_geotiff(
         src, dst, (135.20, 34.30, 135.60, 34.70), src_var="z"
     )
 
@@ -96,7 +96,7 @@ def test_subset_via_rasterio_roundtrip(tmp_path: Path) -> None:
     dst = tmp_path / "out.tif"
     _write_geotiff(src, data, transform)
 
-    info = subset_dem_to_geotiff(src, dst, (135.20, 34.30, 135.60, 34.70))
+    info = to_geotiff(src, dst, (135.20, 34.30, 135.60, 34.70))
 
     assert info["path_dependent"] == "rasterio"
     with rasterio.open(dst) as out:
@@ -116,7 +116,7 @@ def test_bbox_outside_raster_raises(tmp_path: Path) -> None:
     _write_nc_lonlat_z(src, lon, lat, z)
 
     with pytest.raises(ValueError, match="does not intersect"):
-        subset_dem_to_geotiff(
+        to_geotiff(
             src, tmp_path / "x.tif", (140.0, 30.0, 141.0, 31.0), src_var="z"
         )
 
@@ -129,7 +129,7 @@ def test_missing_variable_raises(tmp_path: Path) -> None:
     _write_nc_lonlat_z(src, lon, lat, z, var_name="z")
 
     with pytest.raises(ValueError, match="not found"):
-        subset_dem_to_geotiff(
+        to_geotiff(
             src, tmp_path / "x.tif", (135.2, 34.2, 135.8, 34.8),
             src_var="elevation",
         )
