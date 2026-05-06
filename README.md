@@ -18,30 +18,85 @@ rather than reimplementing meshing algorithms from scratch.
 
 | Role | Backend | License | How used |
 |------|---------|---------|----------|
-| Mesh generation (preferred) | [OCSMesh](https://github.com/noaa-ocs-modeling/OCSMesh) | CC0-1.0 | imported |
-| Orthogonalization / smoothing | [MeshKernelPy](https://github.com/Deltares/MeshKernelPy) | MIT | imported |
-| Grid utilities | [stompy](https://github.com/rustychris/stompy) | MIT | imported |
-| Geometry-aware sizing (optional) | [JIGSAW](https://github.com/dengwirda/jigsaw-python) | custom (non-OSI) | imported, optional extra |
-| External mesher | [gmsh](https://gmsh.info/) | GPL-2.0+ | invoked as subprocess |
+| Mesh generation (default) | [oceanmesh](https://github.com/CHLNDDEV/oceanmesh) (DistMesh) | GPL-3.0-or-later | imported |
+| Mesh generation (alt / draft) | [OCSMesh](https://github.com/noaa-ocs-modeling/OCSMesh) + [gmsh](https://gmsh.info/) | CC0-1.0 + GPL-2.0+ runtime | imported (OCSMesh); gmsh called via OCSMesh |
+| Multi-mesh stitching | [OCSMesh](https://github.com/noaa-ocs-modeling/OCSMesh) (`ops.combine_mesh`) | CC0-1.0 | imported |
+| Auxiliary mesh utilities (legacy) | [MeshKernelPy](https://github.com/Deltares/MeshKernelPy), [stompy](https://github.com/rustychris/stompy) | MIT | optional, imported |
 
-GPL-licensed backends are deliberately invoked as subprocesses to keep this
-project's distribution under Apache-2.0. See `THIRD_PARTY_NOTICES.md`.
+`oceanmesh` is GPL-3.0; the combined work, when redistributed together
+with this toolkit, must respect GPL-3.0. The `--engine ocsmesh` path is
+GPL-only-runtime (gmsh is invoked as an external tool through OCSMesh,
+not linked). See `THIRD_PARTY_NOTICES.md` and `docs/architecture.md`
+for the full rationale.
 
 ## Installation
 
-Python ≥3.12. conda-forge is the recommended channel for the scientific stack:
+Python ≥3.12. The recommended setup is a conda env from `environment.yml`
+plus a `pip install` of `oceanmesh` (which is not on conda-forge):
 
 ```bash
 mamba env create -f environment.yml
 mamba activate fvcom-mesh
-pip install -e .
+pip install --no-deps oceanmesh        # GPL-3.0-or-later
+pip install --no-deps -e .             # this package, editable
 ```
 
-Optional backends are pulled in via extras:
+Two pre-built env scripts under `notebooks/` reproduce the exact GENKAI
+setup used to validate PoCs #18-#22:
+
+| Script | Purpose |
+|--------|---------|
+| `notebooks/18_setup_oceanmesh_env.pjsub` | initial env (`oceanmesh-bench`) creation |
+| `notebooks/18_setup_gdal_netcdf.pjsub`  | adds `libgdal-netcdf` so rasterio reads CF NetCDF |
+| `notebooks/19_setup_env_extend.pjsub`   | editable install of this package |
+| `notebooks/21_setup_ocsmesh_in_omsh.pjsub` | adds OCSMesh on top for `fmesh-mesh-combine` |
+
+If you only need the OCSMesh path, the lighter `py312test` env (already
+on GENKAI) works - oceanmesh is then unavailable and the default engine
+must be flipped via `--engine ocsmesh`.
+
+## Quick start
+
+Mesh Tokyo Bay end-to-end with the default oceanmesh engine:
 
 ```bash
-pip install -e ".[ocsmesh,meshkernel,test]"
+# 1. (Optional) Clip a global DEM to a regional bounding box
+fmesh-subset-dem data/SRTM15+.nc /tmp/tb.tif \
+    --bbox 139.5 35.1 140.2 35.9 \
+    --src-var z
+
+# 2. Generate the mesh (DistMesh + post-processing chain)
+fmesh-buildmesh /tmp/tb.tif /tmp/tokyo_bay.14 \
+    --engine oceanmesh \
+    --hmin 200 --hmax 5000 \
+    --coastline data/coastline/MLIT_C23/C23-06_TOKYOBAY.shp \
+    --river-inflow-points data/rivers/tokyo_bay/tokyo_bay_rivers.csv \
+    --om-seed 0 \
+    --perpfix-iters 1
 ```
+
+To iterate fast, swap to the OCSMesh + gmsh backend (~40x faster, lower
+quality). For draft work the same flag set works:
+
+```bash
+fmesh-buildmesh /tmp/tb.tif /tmp/tokyo_draft.14 --engine ocsmesh \
+    --hmin 200 --hmax 5000 \
+    --coastline data/coastline/MLIT_C23/C23-06_TOKYOBAY.shp \
+    --coast-target-size 200 --coast-expansion-rate 0.005 \
+    --min-island-area-m2 100000 \
+    --quality-pass 6 --refine-min-angle 20
+```
+
+To stitch independently generated meshes:
+
+```bash
+fmesh-mesh-combine tokyo_bay.14 osaka_bay.14 kanto_kansai.14 \
+    --strategy disjoint
+```
+
+`docs/architecture.md` is the full decision tree for engine choice and
+combine strategy; `docs/python_pipeline_gap_analysis.md` has the
+quality / runtime numbers vs. the OceanMesh2D MATLAB reference.
 
 ## Development
 

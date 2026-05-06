@@ -1,10 +1,36 @@
 name: fvcom-mesh
 channels:
   - conda-forge
+  - nodefaults
 dependencies:
   - python=3.12
-  - numpy>=1.23
-  - matplotlib>=3.8
-  - pytest>=7.4
-  - ruff>=0.5
+  # Scientific stack
+  - numpy
+  - scipy
+  - matplotlib
+  - shapely
+  - geopandas
+  - rasterio
+  - rioxarray
+  - netcdf4
+  - libgdal-netcdf  # GDAL netCDF driver - lets rasterio.open() handle .nc DEMs
+  - scikit-image
+  - scikit-fmm
+  - meshio
+  - fiona
+  - pyproj
+  # Mesh-generation backends
+  - ocsmesh   # CC0-1.0; primary for the --engine ocsmesh path and mesh-combine
+  - jigsawpy  # alternate OCSMesh backend
+  # C++ headers needed when building oceanmesh from source
+  - cgal
+  - cython
+  - pybind11
+  # Dev tooling
+  - pytest
+  - ruff
   - pip
+  # oceanmesh is GPL-3.0-or-later and is not on conda-forge - install
+  # from PyPI (or a local clone) after env creation:
+  #   pip install --no-deps oceanmesh
+  #   pip install --no-deps -e .
