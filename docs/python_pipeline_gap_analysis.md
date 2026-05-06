@@ -326,8 +326,26 @@ In order of return-on-effort:
     0.10 % on Tokyo Bay). ``--engine ocsmesh`` remains available as
     a ~40x-faster draft backend. Reproducibility (item 2.7) is also
     addressed on the oceanmesh path via ``--om-seed``.
-11. **Multi-mesh combination** (open). oceanmesh does not provide
-    post-hoc mesh-combination utilities; OCSMesh has them. A future
-    ``fmesh-mesh-combine`` CLI could wrap OCSMesh's combiner so that
-    independently generated regional meshes (e.g. Tokyo + Osaka
-    Bays) can be stitched into one ``fort.14``.
+11. **Multi-mesh combination** (DONE, PoC #21). New CLI
+    ``fmesh-mesh-combine`` with three strategies:
+
+    * ``disjoint`` (pure numpy): concat non-overlapping inputs with
+      index renumbering; boundaries (open + land + ibtype=21 rivers)
+      are carried forward verbatim.
+    * ``overlap`` (wraps ``ocsmesh.ops.merge_overlapping_meshes``):
+      carve foreground meshes into a coarser background and remesh
+      the seam.
+    * ``neighbor`` (wraps ``merge_neighboring_meshes``): snap meshes
+      whose edges already coincide.
+
+    PoC #21 used ``disjoint`` to stitch Tokyo Bay (PoC #19) +
+    Osaka Bay (PoC #20) into a single ``45,582``-node /
+    ``77,479``-element fort.14, preserving all 4 open arcs, 138
+    land segments, and 9 ibtype=21 river segments. The OCSMesh-backed
+    strategies have CLI hooks but do not have an in-tree integration
+    PoC yet (a synthetic two-resolution Tokyo Bay run would be the
+    natural follow-up).
+
+    The CLI lives in ``src/fvcom_mesh_tools/cli/meshcombine.py``;
+    the dispatcher and per-strategy implementations live under
+    ``src/fvcom_mesh_tools/mesh_compose/``.

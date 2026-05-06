@@ -144,7 +144,7 @@ def main() -> None:
         f"DEM:       {DEM}",
         f"coastline: {COASTLINE}",
         f"rivers:    {RIVERS}",
-        f"engine:    oceanmesh",
+        "engine:    oceanmesh",
         f"wall:      {wall:.2f} s",
         "",
         f"NP={mesh.n_nodes:,}  NE={mesh.n_elements:,}  flipped={flipped}",

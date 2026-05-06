@@ -1,0 +1,31 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N omsh-ocsmesh
+
+# Add OCSMesh to oceanmesh-bench so fmesh-mesh-combine (PoC #21) can
+# use ocsmesh.ops.combine_mesh from the same env that already runs
+# fmesh-buildmesh / fmesh-subset-dem / oceanmesh.
+
+set -euo pipefail
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+source "${HOME}/mambaforge/etc/profile.d/mamba.sh"
+
+"${HOME}/mambaforge/bin/mamba" install -y -n oceanmesh-bench -c conda-forge \
+    ocsmesh jigsawpy
+
+conda activate oceanmesh-bench
+python - <<'PY'
+import ocsmesh
+import oceanmesh as om
+from ocsmesh.ops.combine_mesh import merge_overlapping_meshes, merge_neighboring_meshes
+from ocsmesh.internal import MeshData
+print("ocsmesh import OK")
+print("oceanmesh:", om.__version__)
+print("combine_mesh helpers OK")
+PY

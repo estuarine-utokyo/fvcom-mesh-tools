@@ -78,6 +78,7 @@ End-to-end smoke tests under `notebooks/` (each ships with a matching
 | 18 | `18_oceanmesh_benchmark.py` | Head-to-head OCSMesh vs `oceanmesh` (DistMesh) on identical Tokyo Bay inputs. `oceanmesh` produces alpha 0.961 / frac<20° 0.034 % (vs 0.847 / 1.13 %); 39× slower. |
 | 19 | `19_oceanmesh_full_pipeline.py` | Full `fmesh-buildmesh --engine oceanmesh` end-to-end on Tokyo Bay: alpha 0.959, frac<20° 0.10 %, 5 ibtype=21 river segments, perpfix reverts 8 (vs 273). |
 | 20 | `20_osaka_bay_oceanmesh.py` | Second-basin de-risk of `--engine oceanmesh`: Osaka Bay end-to-end → alpha 0.966 / frac<20° 0.08 %, 3 open arcs, 4 ibtype=21 segments, no parameter changes from Tokyo Bay. |
+| 21 | `21_mesh_combine_kanto_kansai.py` | `fmesh-mesh-combine --strategy disjoint`: stitch Tokyo Bay (PoC #19) + Osaka Bay (PoC #20) into one fort.14 with all boundaries (4 open + 138 land + 9 ibtype=21 river) preserved. |
 
 `docs/python_pipeline_gap_analysis.md` summarises what the Python
 pipeline still has to gain to match the OceanMesh2D reference output.
@@ -91,6 +92,7 @@ Installed when `pip install -e .` is run.
 | `fmesh-buildmesh DEM out.14 [--engine oceanmesh\|ocsmesh]` | Single-shot DEM → fort.14. Default engine `oceanmesh` (OceanMesh2D Python port; alpha~0.96, slow). Alternative engine `ocsmesh` (OCSMesh+gmsh; alpha~0.85, ~40× faster) for draft / iteration. Shared post-processing: depth interp, bbox-based open/land split, river inflow, perpfix. |
 | `fmesh-perpfix in.14 out.14`  | Stand-alone open-boundary first-ring perpendicularity correction. |
 | `fmesh-subset-dem SRC OUT --bbox MINLON MINLAT MAXLON MAXLAT [--src-var z]` | Clip a global DEM (SRTM15+, GEBCO, GeoTIFF, ...) to a lon/lat bbox and emit a CF-tagged GeoTIFF for `fmesh-buildmesh`. Two read paths: rasterio (CRS-tagged inputs) and netCDF4 (lon/lat NetCDF without CRS, selected by `--src-var`). |
+| `fmesh-mesh-combine in1.14 in2.14 [...] out.14 --strategy {disjoint,overlap,neighbor}` | Combine multiple fort.14 meshes. `disjoint` is pure-numpy concat with full boundary preservation (best for non-overlapping basins). `overlap` and `neighbor` wrap `ocsmesh.ops.combine_mesh` for nested-resolution and edge-snap scenarios respectively. |
 
 ## Status and scope
 
