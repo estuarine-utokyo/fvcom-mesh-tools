@@ -83,6 +83,10 @@ End-to-end smoke tests under `notebooks/` (each ships with a matching
 `docs/python_pipeline_gap_analysis.md` summarises what the Python
 pipeline still has to gain to match the OceanMesh2D reference output.
 
+`docs/architecture.md` is the user-facing decision tree: when to use
+`--engine oceanmesh` vs. `--engine ocsmesh`, when to use which
+`fmesh-mesh-combine --strategy`, and where the modules live.
+
 ## Command-line tools
 
 Installed when `pip install -e .` is run.
