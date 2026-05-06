@@ -73,6 +73,7 @@ def build(
     seed: int = 0,
     min_qual: float = 0.15,
     use_bathymetric_gradient: bool = True,
+    minimum_area_mult: float = 4.0,
     log: Callable[[str], None] = print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a mesh with oceanmesh + DistMesh.
@@ -108,6 +109,12 @@ def build(
         Skip the bathymetric-gradient sizing function and rely solely
         on coastline feature sizing. Useful when the DEM is too coarse
         for meaningful slope information.
+    minimum_area_mult
+        Forwarded to ``om.Shoreline``. Inner-shoreline features
+        smaller than ``minimum_area_mult * h0**2`` (with ``h0`` being
+        the per-CRS minimum edge length) are dropped. Default 4.0
+        matches oceanmesh; raise it to filter out more islets when the
+        coastline shapefile is over-detailed.
     log
         Logging hook; defaults to ``print``.
     """
@@ -136,8 +143,14 @@ def build(
                 "merge upstream if multiple sources are needed."
             )
         coast_staged = _stage_shapefile(Path(coastline_paths[0]), td_path)
-        log(f"[oceanmesh] reading shoreline {coast_staged.name} ...")
-        shore = om.Shoreline(str(coast_staged), region, hmin_deg)
+        log(
+            f"[oceanmesh] reading shoreline {coast_staged.name}  "
+            f"minimum_area_mult={minimum_area_mult:g} ..."
+        )
+        shore = om.Shoreline(
+            str(coast_staged), region, hmin_deg,
+            minimum_area_mult=minimum_area_mult,
+        )
         sdf = om.signed_distance_function(shore)
 
         log(f"[oceanmesh] reading DEM {Path(dem_path).name} ...")

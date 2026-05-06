@@ -132,6 +132,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--om-minimum-area-mult", type=float, default=4.0,
+        help=(
+            "[oceanmesh] minimum_area_mult forwarded to om.Shoreline "
+            "(default: 4.0). Inner-shoreline features smaller than "
+            "minimum_area_mult * h0^2 are dropped; raise to coalesce "
+            "small islets."
+        ),
+    )
+    p.add_argument(
         "--bbox-tol-m", type=float, default=None,
         help=(
             "Distance tolerance for 'on the DEM bbox' open-boundary "
@@ -442,6 +451,7 @@ def main(argv: list[str] | None = None) -> int:
             max_iter=args.om_max_iter,
             seed=args.om_seed,
             use_bathymetric_gradient=not args.om_no_bathymetric_gradient,
+            minimum_area_mult=args.om_minimum_area_mult,
             log=log,
         )
         t_gen = time.perf_counter() - t0

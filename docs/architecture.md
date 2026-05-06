@@ -124,6 +124,11 @@ MLIT C23.
   inputs → bit-identical mesh.
 - `--om-no-bathymetric-gradient` — fall back to feature-only sizing
   if the DEM is too coarse for slope-driven size to be meaningful.
+- `--om-minimum-area-mult` (default 4.0) — drop inner-shoreline
+  features (islands) below `mult * h0**2`. Raise to coalesce noisy
+  islets; PoC #22 sweep on Tokyo Bay shows mult=25 brings the
+  retained inner count from 39 down to 27 (matching the `--engine
+  ocsmesh` path's `--min-island-area-m2 100000` behaviour).
 
 `--engine ocsmesh` accepts the legacy OCSMesh-driven flags:
 

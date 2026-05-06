@@ -121,7 +121,7 @@ def main() -> None:
     summary_lines = [
         f"input A: {TOKYO}  (NP={tokyo.n_nodes:,} NE={tokyo.n_elements:,})",
         f"input B: {OSAKA}  (NP={osaka.n_nodes:,} NE={osaka.n_elements:,})",
-        f"strategy: disjoint",
+        "strategy: disjoint",
         f"wall:    {wall:.2f} s",
         "",
         f"NP={combined.n_nodes:,}  NE={combined.n_elements:,}  flipped={flipped}",

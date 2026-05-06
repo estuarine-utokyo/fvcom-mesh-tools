@@ -1,0 +1,25 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=00:15:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc22
+
+# PoC #22: minimum_area_mult sweep on Tokyo Bay shoreline (no mesh).
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python notebooks/22_minimum_area_mult_sweep.py

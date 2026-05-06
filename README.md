@@ -79,6 +79,7 @@ End-to-end smoke tests under `notebooks/` (each ships with a matching
 | 19 | `19_oceanmesh_full_pipeline.py` | Full `fmesh-buildmesh --engine oceanmesh` end-to-end on Tokyo Bay: alpha 0.959, frac<20° 0.10 %, 5 ibtype=21 river segments, perpfix reverts 8 (vs 273). |
 | 20 | `20_osaka_bay_oceanmesh.py` | Second-basin de-risk of `--engine oceanmesh`: Osaka Bay end-to-end → alpha 0.966 / frac<20° 0.08 %, 3 open arcs, 4 ibtype=21 segments, no parameter changes from Tokyo Bay. |
 | 21 | `21_mesh_combine_kanto_kansai.py` | `fmesh-mesh-combine --strategy disjoint`: stitch Tokyo Bay (PoC #19) + Osaka Bay (PoC #20) into one fort.14 with all boundaries (4 open + 138 land + 9 ibtype=21 river) preserved. |
+| 22 | `22_minimum_area_mult_sweep.py` | Sweep `--om-minimum-area-mult` 1.0→2000.0 on Tokyo Bay; `om.Shoreline` inner-polygon count drops 53→39→27→19→5→0, confirming the new flag governs island filtering at the source. |
 
 `docs/python_pipeline_gap_analysis.md` summarises what the Python
 pipeline still has to gain to match the OceanMesh2D reference output.
