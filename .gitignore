@@ -60,3 +60,6 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Session-local handover notes (per-session briefing, not part of project history)
+HANDOVER.md
