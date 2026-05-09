@@ -266,6 +266,12 @@ src/fvcom_mesh_tools/
 
 ## 6. Environment model
 
+The package supports two install modes: a conda env (recommended for
+full functionality, since several scientific deps are easier on
+conda-forge) and a pure-pip install with layered extras.
+
+### 6.1 Conda envs (GENKAI reproducible)
+
 Two reproducible conda environments cover the toolkit:
 
 * `py312test` -- the original env. Has OCSMesh + gmsh; lacks
@@ -279,6 +285,28 @@ creation, `notebooks/18_setup_gdal_netcdf.pjsub` for the GDAL netCDF
 driver, `notebooks/19_setup_env_extend.pjsub` for fvcom-mesh-tools
 editable install, `notebooks/21_setup_ocsmesh_in_omsh.pjsub` for the
 OCSMesh top-up.
+
+### 6.2 Pip extras (modular install)
+
+`pyproject.toml` layers dependencies by concern so callers that only
+need fort.14 manipulation skip the compiled raster stack:
+
+| Extra              | Adds (on top of base)                       | Enables                                                              |
+| ------------------ | ------------------------------------------- | -------------------------------------------------------------------- |
+| (base) `pip install .` | `numpy` only                            | `algorithms.*`, `io.fort14`, `mesh_compose.disjoint`, `fmesh-perpfix`, `fmesh-mesh-combine --strategy disjoint` |
+| `[io-vector]`      | `shapely`, `geopandas`, `fiona`             | coastline, river-points, multipolygon-area helpers                   |
+| `[dem]`            | `rasterio`, `netCDF4`, `pyproj`             | `dem.subset`, `dem.interp`, `dem.bbox`, `fmesh-subset-dem`           |
+| `[oceanmesh]`      | `oceanmesh` + `[dem,io-vector]`             | `fmesh-buildmesh --engine oceanmesh` (default)                       |
+| `[ocsmesh]`        | `ocsmesh`, `gmsh` + `[dem,io-vector]`       | `fmesh-buildmesh --engine ocsmesh`, `fmesh-mesh-combine --strategy {overlap,neighbor}` |
+| `[viz]`            | `matplotlib`, `plotly`                      | visualization helpers                                                |
+| `[all]`            | superset of `[oceanmesh,ocsmesh,viz]`       | every CLI and helper                                                 |
+
+The `[oceanmesh]` and `[ocsmesh]` extras self-reference
+`[dem,io-vector]` so a single `pip install -e .[oceanmesh]` provides
+the full mesh-generation pipeline. The conda workflow in §6.1 instead
+sources the heavy deps from conda-forge and adds oceanmesh via
+`pip install --no-deps oceanmesh` to avoid pip / conda-forge
+solver clashes on libraries like `numpy` / `netCDF4` / `hdf5`.
 
 ## 7. Licensing
 

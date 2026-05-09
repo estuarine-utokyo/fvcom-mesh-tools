@@ -6,11 +6,15 @@ relative to the legacy OceanMesh2D (MATLAB) workflow used to produce
 the PoC #5 / PoC #6 runs; see ``outputs/05_*`` and ``outputs/06_*``.
 
 The reference workflow is OceanMesh2D + manual post-edits in MATLAB.
-The Python pipeline currently exercised is:
+The current Python pipeline (``fmesh-buildmesh`` with the default
+``oceanmesh`` engine plus the post-pipeline) is documented in
+``docs/architecture.md``; this note tracks the gap-closing iterations
+that took the toolkit from the **PoC #5 baseline** below to that
+current state.
 
 ```
-DEM (NetCDF) -> ocsmesh.Geom(zmax=0)
-              -> ocsmesh.Hfun(hmin, hmax)
+DEM (NetCDF) -> ocsmesh.Geom(zmax=0)             # PoC #5 baseline
+              -> ocsmesh.Hfun(hmin, hmax)        # benchmarked in §1
               -> ocsmesh.MeshDriver(engine="gmsh").run()
               -> ocsmesh.EuclideanMesh2D.write(format="grd")
 ```
@@ -257,6 +261,12 @@ Two operational notes from PoC #17:
 
 ## 3. License & dependency notes
 
+- ``oceanmesh`` is GPL-3.0-or-later. Importing it from this Apache-2.0
+  package makes the **combined work** GPL-3.0 when redistributed
+  alongside; source distributions of ``fvcom-mesh-tools`` itself remain
+  Apache-2.0. The dependency is gated behind the ``[oceanmesh]`` extra
+  and ``mesh_engine.oceanmesh`` lazy-imports the package, so the base
+  install and ``--engine ocsmesh`` paths stay GPL-3-free.
 - ``ocsmesh`` itself is CC0-1.0; importing it from Apache-2.0 code is
   fine.
 - ``ocsmesh`` pulls ``gmsh`` (GPL-2.0+) at runtime when the gmsh engine
