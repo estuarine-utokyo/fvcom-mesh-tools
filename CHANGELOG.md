@@ -10,6 +10,15 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- PoC #23 (`notebooks/23_mesh_combine_overlap.py`) validates
+  `fmesh-mesh-combine --strategy overlap` on real Tokyo Bay data:
+  a coarse outer (hmin=1000 m, NP=4,224) and a fine northern-bay
+  inner (hmin=200 m, NP=6,008) merge via
+  `ocsmesh.ops.merge_overlapping_meshes` into a single fort.14
+  with NP=8,227, NE=13,923, alpha 0.954, frac<20° 0.09 %, no
+  flipped triangles. The CLI hooks for `overlap` and `neighbor`
+  have existed since PoC #21 but had no end-to-end real-data
+  exercise; `overlap` is now covered, `neighbor` still pending.
 - `dem/` subpackage isolates rasterio / netCDF4 / pyproj helpers
   behind the `[dem]` extra:
   - `dem.bbox.read(path) -> (minx, miny, maxx, maxy)` for raster

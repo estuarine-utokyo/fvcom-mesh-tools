@@ -277,7 +277,7 @@ Two reproducible conda environments cover the toolkit:
 * `py312test` -- the original env. Has OCSMesh + gmsh; lacks
   oceanmesh. Sufficient for `--engine ocsmesh` and unit tests.
 * `oceanmesh-bench` -- the unified env. Has both oceanmesh and
-  OCSMesh, plus all CLIs. Recommended for running PoCs #18-#21 and
+  OCSMesh, plus all CLIs. Recommended for running PoCs #18-#23 and
   any production builds.
 
 Setup scripts: `notebooks/18_setup_oceanmesh_env.pjsub` for initial

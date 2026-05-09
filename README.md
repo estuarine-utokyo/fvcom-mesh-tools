@@ -44,7 +44,7 @@ pip install --no-deps -e .             # this package, editable
 ```
 
 Two pre-built env scripts under `notebooks/` reproduce the exact GENKAI
-setup used to validate PoCs #18-#22:
+setup used to validate PoCs #18-#23:
 
 | Script | Purpose |
 |--------|---------|
@@ -156,6 +156,7 @@ End-to-end smoke tests under `notebooks/` (each ships with a matching
 | 20 | `20_osaka_bay_oceanmesh.py` | Second-basin de-risk of `--engine oceanmesh`: Osaka Bay end-to-end → alpha 0.966 / frac<20° 0.08 %, 3 open arcs, 4 ibtype=21 segments, no parameter changes from Tokyo Bay. |
 | 21 | `21_mesh_combine_kanto_kansai.py` | `fmesh-mesh-combine --strategy disjoint`: stitch Tokyo Bay (PoC #19) + Osaka Bay (PoC #20) into one fort.14 with all boundaries (4 open + 138 land + 9 ibtype=21 river) preserved. |
 | 22 | `22_minimum_area_mult_sweep.py` | Sweep `--om-minimum-area-mult` 1.0→2000.0 on Tokyo Bay; `om.Shoreline` inner-polygon count drops 53→39→27→19→5→0, confirming the new flag governs island filtering at the source. |
+| 23 | `23_mesh_combine_overlap.py` | `fmesh-mesh-combine --strategy overlap` real-data validation: stitch a coarse Tokyo Bay outer (hmin=1000 m, NP=4,224) with a fine northern-bay inner (hmin=200 m, bbox 139.78–140.0 × 35.55–35.75, NP=6,008) via `ocsmesh.ops.merge_overlapping_meshes`. Combined NP=8,227 NE=13,923, alpha 0.954, frac<20° 0.09 %, no flipped triangles; edge length p50/p95 grades from ~393/1187 m (outer) through ~175/986 m (combined) to ~66/447 m (inner). |
 
 `docs/python_pipeline_gap_analysis.md` summarises what the Python
 pipeline still has to gain to match the OceanMesh2D reference output.

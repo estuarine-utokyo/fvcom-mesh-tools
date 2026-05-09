@@ -352,9 +352,25 @@ In order of return-on-effort:
     Osaka Bay (PoC #20) into a single ``45,582``-node /
     ``77,479``-element fort.14, preserving all 4 open arcs, 138
     land segments, and 9 ibtype=21 river segments. The OCSMesh-backed
-    strategies have CLI hooks but do not have an in-tree integration
-    PoC yet (a synthetic two-resolution Tokyo Bay run would be the
-    natural follow-up).
+    ``overlap`` strategy is exercised end-to-end on real Tokyo Bay
+    data in item 12 below (PoC #23); ``neighbor`` remains untested
+    in-tree.
+
+12. **Multi-mesh overlap combine, real data** (DONE, PoC #23).
+    Stitches a coarse Tokyo Bay outer (hmin=1000 m, NP=4,224) and a
+    fine northern-bay inner (hmin=200 m, bbox (139.78, 35.55, 140.0,
+    35.75), NP=6,008) into a single fort.14 via
+    ``ocsmesh.ops.merge_overlapping_meshes``. Combined output:
+    NP=8,227, NE=13,923, alpha mean 0.954, frac<20° 0.09 %, no
+    flipped triangles, combine wall 18.3 s with default tunables
+    (``buffer_size=0.0075``, ``buffer_domain=0.002``,
+    ``min_int_ang=30``, ``adjacent_layers=0``). Edge length
+    p50 / p95 grades cleanly between the two resolutions: outer
+    393 / 1187 m, combined 175 / 986 m, inner 66 / 447 m. Boundaries
+    are dropped on the way through OCSMesh ``MeshData`` (no
+    open / land structure); re-classification with a
+    ``fmesh-buildmesh``-style bbox classifier is required if FVCOM
+    ingestion needs them.
 
     The CLI lives in ``src/fvcom_mesh_tools/cli/meshcombine.py``;
     the dispatcher and per-strategy implementations live under
