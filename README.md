@@ -8,7 +8,7 @@ Python toolkit for FVCOM unstructured mesh generation, repair, and visualization
 high-quality FVCOM-ready unstructured meshes (`fort.14`), with a focus on:
 
 - **Open-boundary edge orthogonalization** — enforce edges perpendicular to open boundaries
-- **Mesh defect detection** — `fmesh-mesh-check` flags disjoint wet pools, dead-ends, 1-cell-wide channels, over-connected nodes, and open-boundary-unreachable elements (no repair, JSON + map output)
+- **Mesh defect detection** — `fmesh-mesh-check` flags disjoint wet pools, dead-ends, 1-cell-wide channels (`thin_chain`), under-resolved 2-3 cell channels (medial-axis-style `w/h` ratio), over-connected nodes, and open-boundary-unreachable elements (no repair, JSON + map output)
 - **Safe automated repair** — `fmesh-mesh-clean` prunes disjoint pools, trims dead-end "spits", and widens 1-cell channels to 2 cells via centroid insertion
 - **Mesh quality inspection and visualization** — element quality, boundary classification, fort.14 plots
 
@@ -118,15 +118,26 @@ fmesh-mesh-combine tokyo_bay.14 osaka_bay.14 kanto_kansai.14 \
 
 ### Diagnose and repair an existing mesh
 
-`fmesh-mesh-check` runs six detectors over a `fort.14` and emits a
+`fmesh-mesh-check` runs seven detectors over a `fort.14` and emits a
 summary, a JSON dump of every flagged element / node (with
 coordinates), and a map PNG. Exit code is non-zero when anything is
 flagged so it works as a CI gate:
 
 ```bash
 fmesh-mesh-check tokyo_bay.14 \
-    --max-nbr-elem 8        # FVCOM MAX_NBR_ELEM cap (set to your build)
+    --max-nbr-elem 8 \           # FVCOM MAX_NBR_ELEM cap (set to your build)
+    --min-w-h 3.0                # min cells across an under-resolved channel
 ```
+
+The detectors are: (1) disjoint dual-graph components, (2) dead-end
+elements, (3) thin elements, (3b) thin chains (1-cell channels), (4)
+over-connected nodes, (5) open-boundary-unreachable elements, and
+(6) under-resolved channels — elements whose local channel width
+(sum of distances to the two nearest non-adjacent boundary samples,
+detected per polyline with an along-arc separation filter and an
+opposite-bank direction check) divided by the median edge length is
+below `--min-w-h`. Detector 6 catches 2- and 3-cell channels that
+detector 3b misses.
 
 `fmesh-mesh-clean` repairs the safe-to-fix subset that
 `fmesh-mesh-check` surfaces — disjoint pools, dead-end "spits", and
@@ -221,7 +232,7 @@ Installed when `pip install -e .` is run.
 | `fmesh-perpfix in.14 out.14`  | Stand-alone open-boundary first-ring perpendicularity correction. |
 | `fmesh-subset-dem SRC OUT --bbox MINLON MINLAT MAXLON MAXLAT [--src-var z]` | Clip a global DEM (SRTM15+, GEBCO, GeoTIFF, ...) to a lon/lat bbox and emit a CF-tagged GeoTIFF for `fmesh-buildmesh`. Two read paths: rasterio (CRS-tagged inputs) and netCDF4 (lon/lat NetCDF without CRS, selected by `--src-var`). |
 | `fmesh-mesh-combine in1.14 in2.14 [...] out.14 --strategy {disjoint,overlap,neighbor}` | Combine multiple fort.14 meshes. `disjoint` is pure-numpy concat with full boundary preservation (best for non-overlapping basins). `overlap` and `neighbor` wrap `ocsmesh.ops.combine_mesh` for nested-resolution and edge-snap scenarios respectively. |
-| `fmesh-mesh-check fort.14 [--max-nbr-elem N] [--min-thin-chain N]` | Detect inadequate FVCOM meshes. Flags disjoint wet-domain components, dead-end elements, thin / thin-chain (1-cell channel) elements, over-connected nodes, and open-boundary-unreachable elements. Emits `*_summary.txt`, `*_diag.json` (per-id records with coordinates), and `*_map.png`. No repair. Exit code is non-zero when anything is flagged so the command is usable as a CI gate. |
+| `fmesh-mesh-check fort.14 [--max-nbr-elem N] [--min-thin-chain N] [--min-w-h F]` | Detect inadequate FVCOM meshes via seven detectors: disjoint wet-domain components, dead-end elements, thin / thin-chain (1-cell channel) elements, over-connected nodes, open-boundary-unreachable elements, and medial-axis-style under-resolved channels (`width / h < --min-w-h`, default 3). Emits `*_summary.txt`, `*_diag.json` (per-id records with coordinates), and `*_map.png`. No repair. Exit code is non-zero when anything is flagged so the command is usable as a CI gate. |
 | `fmesh-mesh-clean in.14 out.14 [--bbox] [--open-merge-coast-gap N] [--thin-chain-mode {widen,delete,none}] [--repair-overconnected-iters N]` | Repair the safe-to-fix subset of the `fmesh-mesh-check` flags. Phase A prunes disjoint dual-graph components; Phase B iteratively trims degree-1 elements with no open-boundary edge; Phase C (default `widen`) inserts a centroid into every thin-chain element so 1-cell channels become 2-cell, or removes the chain entirely with `--thin-chain-mode delete`; Phase D (off by default) runs valence-balancing edge swaps that drive every node valence to at most `--max-nbr-elem`. Boundaries are re-derived via DEM-bbox proximity, matching `fmesh-buildmesh`. |
 
 ## Changelog
