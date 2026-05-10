@@ -1,7 +1,7 @@
 """Detection of inadequate FVCOM meshes.
 
-Six detectors flag elements / nodes that are likely to cause problems
-for FVCOM, especially in narrow water bodies (rivers, canals,
+Seven detectors flag elements / nodes that are likely to cause
+problems for FVCOM, especially in narrow water bodies (rivers, canals,
 harbours):
 
     1. ``disjoint_components_flag`` — elements not in the largest
@@ -20,6 +20,11 @@ harbours):
     6. ``unreachable_elements_flag`` — elements in dual-graph components
        that contain no open-boundary node; such regions cannot be driven
        from the open boundary and are de facto dead pools in FVCOM.
+    7. ``under_resolved_channels_flag`` — elements whose local channel
+       width (sum of distances to the two nearest non-adjacent boundary
+       samples) divided by the local mesh size is below ``min_w_h``;
+       catches 2- to 3-cell channels that the 1-cell ``thin`` detector
+       misses.
 
 The module exposes per-detector functions plus a single high-level
 :func:`run_diagnostics` that returns a :class:`DiagnosticReport` with
@@ -36,6 +41,7 @@ from typing import Any
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.csgraph import connected_components
+from scipy.spatial import cKDTree
 
 from fvcom_mesh_tools.io import Fort14Mesh
 
@@ -49,6 +55,38 @@ DEFAULT_MAX_NBR_ELEM: int = 8
 # corner artefact; a chain is strongly indicative of an under-resolved
 # channel.
 DEFAULT_MIN_THIN_CHAIN: int = 3
+
+# Minimum cells across a channel that FVCOM users typically require for
+# flow to be representable. A ratio below this is flagged as
+# under-resolved.
+DEFAULT_MIN_W_H: float = 3.0
+
+# Boundary-sample spacing in metres for the channel-width detector.
+# Smaller = more accurate but more memory / time.
+DEFAULT_CHANNEL_SAMPLE_DS_M: float = 50.0
+
+# Along-polyline arc separation factor used to filter out adjacent
+# samples on the same polyline. Two boundary samples on the same
+# polyline are considered "different banks" only if their along-polyline
+# arc separation exceeds ``factor * d1`` where ``d1`` is the distance
+# from the query point to the nearest sample. 4.0 is empirically
+# sufficient to distinguish a narrow inlet (along-polyline distance
+# >> straight-line distance across the inlet) from adjacent samples on
+# a smooth coast (along-polyline distance comparable to straight-line).
+DEFAULT_ARC_SEPARATION_FACTOR: float = 4.0
+
+# Maximum allowed cos(angle) between (centroid → nearest sample) and
+# (centroid → far-arc sample) on the same polyline; the same-polyline
+# narrow-inlet candidate is accepted only when this cosine is below
+# the threshold (i.e., the two vectors point in roughly opposite
+# directions). The default ``-0.8`` requires an angle > 143°, which
+# rejects coastal-corner false positives where the same polyline
+# wraps around a peninsula tip.
+DEFAULT_OPPOSITE_BANK_COS_MAX: float = -0.8
+
+# Earth radius used for the lon/lat → metric projection in the
+# channel-width detector.
+_EARTH_R_M: float = 6_371_000.0
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +301,230 @@ def unreachable_elements_flag(
 
 
 # ---------------------------------------------------------------------------
+# Detector 7: under-resolved channels (medial-axis-style w/h ratio)
+# ---------------------------------------------------------------------------
+
+
+def _to_metric(
+    nodes_lonlat: np.ndarray, *, lat0: float, lon0: float,
+) -> np.ndarray:
+    """Flat-earth lon/lat → metric (x_m, y_m) projection about
+    ``(lon0, lat0)``. Accurate enough for distance metrics over a
+    single coastal basin.
+    """
+    cos_lat0 = np.cos(np.deg2rad(lat0))
+    x = (nodes_lonlat[:, 0] - lon0) * np.deg2rad(1.0) * _EARTH_R_M * cos_lat0
+    y = (nodes_lonlat[:, 1] - lat0) * np.deg2rad(1.0) * _EARTH_R_M
+    return np.column_stack([x, y])
+
+
+def _sample_polyline_with_arc(
+    nodes_m: np.ndarray, seg_ids: np.ndarray, ds: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample a polyline at ~``ds`` spacing in metres.
+
+    Returns ``(samples_xy, arc_pos)`` where ``arc_pos[i]`` is the
+    cumulative arc length (in metres) from the polyline's first node
+    to ``samples_xy[i]``. Always emits at least 2 samples per edge.
+    """
+    seg_ids = np.asarray(seg_ids, dtype=np.int64)
+    if seg_ids.size < 2:
+        return np.empty((0, 2), dtype=np.float64), np.empty((0,), dtype=np.float64)
+    pts: list[np.ndarray] = []
+    arcs: list[np.ndarray] = []
+    cum_arc = 0.0
+    for i in range(len(seg_ids) - 1):
+        p0 = nodes_m[seg_ids[i]]
+        p1 = nodes_m[seg_ids[i + 1]]
+        L = float(np.linalg.norm(p1 - p0))
+        n = max(2, int(np.ceil(L / ds)) + 1)
+        # Emit n samples along this edge; drop the last to avoid
+        # duplicating the next edge's first sample (we add the polyline
+        # endpoint at the very end).
+        t = np.linspace(0.0, 1.0, n, endpoint=False)
+        pts.append(p0 + t[:, None] * (p1 - p0))
+        arcs.append(cum_arc + t * L)
+        cum_arc += L
+    # Append the final endpoint.
+    pts.append(nodes_m[seg_ids[-1:]].astype(np.float64))
+    arcs.append(np.array([cum_arc], dtype=np.float64))
+    return np.vstack(pts), np.concatenate(arcs)
+
+
+def _median_edge_length_m(
+    nodes_m: np.ndarray, elements: np.ndarray,
+) -> np.ndarray:
+    """Per-element median of the 3 edge lengths in metres."""
+    p0 = nodes_m[elements[:, 0]]
+    p1 = nodes_m[elements[:, 1]]
+    p2 = nodes_m[elements[:, 2]]
+    e01 = np.linalg.norm(p1 - p0, axis=1)
+    e12 = np.linalg.norm(p2 - p1, axis=1)
+    e20 = np.linalg.norm(p0 - p2, axis=1)
+    return np.median(np.column_stack([e01, e12, e20]), axis=1)
+
+
+def channel_width_metric(
+    mesh: Fort14Mesh,
+    *,
+    sample_ds_m: float = DEFAULT_CHANNEL_SAMPLE_DS_M,
+    arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
+    opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
+    k_far: int = 50,
+) -> dict[str, np.ndarray]:
+    """Per-element channel width (m), local h (m), and the w/h ratio.
+
+    The channel width estimate at an element centroid is the smaller of
+    two candidates:
+
+        1. *Cross-polyline*: ``d(P, polyline_A) + d(P, polyline_B)``
+           where ``A`` and ``B`` are the two distinct polylines whose
+           nearest samples to ``P`` are smallest. Catches the "channel
+           between mainland and an island" case.
+        2. *Same-polyline narrow inlet*: ``min over p of
+           (d(P, polyline_p) + d_far_arc(P, polyline_p))`` where
+           ``d_far_arc`` is the distance from ``P`` to the nearest
+           sample on ``polyline_p`` whose along-polyline arc separation
+           from the absolute-nearest sample is at least
+           ``arc_separation_factor * d(P, polyline_p)``. Catches a
+           narrow inlet whose two banks lie on the same continuous
+           coastline polyline.
+
+    A separate ``cKDTree`` is built per polyline, so cross-polyline
+    distance is exact and same-polyline arc-filtered probing is local
+    to each polyline (the previous combined-tree implementation could
+    miss the "other" polyline when the nearest one was densely
+    sampled).
+
+    Returns a dict with keys ``"channel_width_m"``, ``"h_local_m"``,
+    ``"w_h_ratio"``, and ``"sample_count"`` (total boundary samples).
+    The ratio is set to ``+inf`` when the mesh has no boundary at all.
+    """
+    if mesh.n_elements == 0:
+        return {
+            "channel_width_m": np.zeros(0),
+            "h_local_m": np.zeros(0),
+            "w_h_ratio": np.zeros(0),
+            "sample_count": 0,
+        }
+    if not mesh.open_boundaries and not mesh.land_boundaries:
+        return {
+            "channel_width_m": np.full(mesh.n_elements, np.inf),
+            "h_local_m": np.zeros(mesh.n_elements),
+            "w_h_ratio": np.full(mesh.n_elements, np.inf),
+            "sample_count": 0,
+        }
+
+    lat0 = float(mesh.nodes[:, 1].mean())
+    lon0 = float(mesh.nodes[:, 0].mean())
+    nodes_m = _to_metric(mesh.nodes, lat0=lat0, lon0=lon0)
+
+    polylines: list[tuple[np.ndarray, np.ndarray]] = []
+    for seg in mesh.open_boundaries:
+        pts, arc = _sample_polyline_with_arc(nodes_m, seg, sample_ds_m)
+        if pts.size:
+            polylines.append((pts, arc))
+    for _ib, seg in mesh.land_boundaries:
+        pts, arc = _sample_polyline_with_arc(nodes_m, seg, sample_ds_m)
+        if pts.size:
+            polylines.append((pts, arc))
+
+    n_poly = len(polylines)
+    sample_count = int(sum(len(pts) for pts, _ in polylines))
+    if n_poly == 0:
+        return {
+            "channel_width_m": np.full(mesh.n_elements, np.inf),
+            "h_local_m": np.zeros(mesh.n_elements),
+            "w_h_ratio": np.full(mesh.n_elements, np.inf),
+            "sample_count": 0,
+        }
+
+    centroids = nodes_m[mesh.elements].mean(axis=1)
+    NE = mesh.n_elements
+    rows = np.arange(NE)
+    d_per_poly = np.empty((NE, n_poly), dtype=np.float64)
+    d_far_per_poly = np.full((NE, n_poly), np.inf, dtype=np.float64)
+
+    for p, (pts, arcs) in enumerate(polylines):
+        tree = cKDTree(pts)
+        d1, idx1 = tree.query(centroids, k=1)
+        d_per_poly[:, p] = d1
+        arc_at_nearest = arcs[idx1]
+        K = min(k_far, len(pts))
+        if K < 2:
+            continue
+        dK, idxK = tree.query(centroids, k=K)
+        arc_K = arcs[idxK]
+        arc_diff = np.abs(arc_K - arc_at_nearest[:, None])
+        threshold = arc_separation_factor * d1[:, None]
+        far_enough = arc_diff >= threshold
+        far_enough[:, 0] = False
+        has_far = far_enough.any(axis=1)
+        first_far_k = np.argmax(far_enough, axis=1)
+        d_far_p = dK[rows, first_far_k]
+        far_arc_idx = idxK[rows, first_far_k]
+
+        # Direction filter: only accept the far-arc sample as the "other
+        # bank" if it sits on the opposite side of the centroid from the
+        # nearest sample. cos(angle) between (centroid -> nearest) and
+        # (centroid -> far-arc) must be below -0.5 (angle > 120°). This
+        # rejects coastal-corner false positives where the same polyline
+        # wraps around a peninsula tip — both samples point in roughly
+        # the same direction from the centroid, so cos(angle) is positive.
+        s1 = pts[idx1]
+        s_far = pts[far_arc_idx]
+        v1 = s1 - centroids
+        v2 = s_far - centroids
+        dot = (v1 * v2).sum(axis=1)
+        norm_prod = d1 * d_far_p
+        cos_angle = dot / np.where(norm_prod > 1e-9, norm_prod, 1e-9)
+        direction_ok = cos_angle < opposite_bank_cos_max
+
+        accepted = has_far & direction_ok
+        d_far_per_poly[:, p] = np.where(accepted, d_far_p, np.inf)
+
+    if n_poly >= 2:
+        sorted_d = np.sort(d_per_poly, axis=1)
+        cross_w = sorted_d[:, 0] + sorted_d[:, 1]
+    else:
+        cross_w = np.full(NE, np.inf)
+    same_w = np.min(d_per_poly + d_far_per_poly, axis=1)
+    channel_width = np.minimum(cross_w, same_w)
+
+    h_local = _median_edge_length_m(nodes_m, mesh.elements)
+    ratio = channel_width / np.where(h_local > 0, h_local, 1.0)
+    return {
+        "channel_width_m": channel_width,
+        "h_local_m": h_local,
+        "w_h_ratio": ratio,
+        "sample_count": sample_count,
+    }
+
+
+def under_resolved_channels_flag(
+    mesh: Fort14Mesh,
+    *,
+    min_w_h: float = DEFAULT_MIN_W_H,
+    sample_ds_m: float = DEFAULT_CHANNEL_SAMPLE_DS_M,
+    arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
+    opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Element-level flag: True if ``w_h_ratio < min_w_h``.
+
+    Returns ``(flag, metric_info)`` where ``metric_info`` is the dict
+    returned by :func:`channel_width_metric`.
+    """
+    info = channel_width_metric(
+        mesh,
+        sample_ds_m=sample_ds_m,
+        arc_separation_factor=arc_separation_factor,
+        opposite_bank_cos_max=opposite_bank_cos_max,
+    )
+    flag = info["w_h_ratio"] < min_w_h
+    return flag, info
+
+
+# ---------------------------------------------------------------------------
 # High-level driver
 # ---------------------------------------------------------------------------
 
@@ -291,6 +553,7 @@ class DiagnosticReport:
     thin_flag: np.ndarray
     thin_chain_flag: np.ndarray
     unreachable_flag: np.ndarray
+    under_resolved_channels_flag: np.ndarray
 
     # Node-level flag (shape (NP,))
     overconnected_flag: np.ndarray
@@ -299,10 +562,14 @@ class DiagnosticReport:
     component_labels: np.ndarray
     component_sizes: np.ndarray
     valence: np.ndarray
+    channel_width_m: np.ndarray
+    h_local_m: np.ndarray
+    w_h_ratio: np.ndarray
 
     # Configuration
     max_nbr_elem: int
     min_thin_chain: int
+    min_w_h: float
 
     # Cached coordinates so JSON / plotting consumers do not need the
     # original mesh again.
@@ -316,7 +583,7 @@ class DiagnosticReport:
             for arr in (
                 self.disjoint_flag, self.dead_end_flag, self.thin_flag,
                 self.thin_chain_flag, self.unreachable_flag,
-                self.overconnected_flag,
+                self.overconnected_flag, self.under_resolved_channels_flag,
             )
         )
 
@@ -328,8 +595,12 @@ def run_diagnostics(
     path: Path | None = None,
     max_nbr_elem: int = DEFAULT_MAX_NBR_ELEM,
     min_thin_chain: int = DEFAULT_MIN_THIN_CHAIN,
+    min_w_h: float = DEFAULT_MIN_W_H,
+    channel_sample_ds_m: float = DEFAULT_CHANNEL_SAMPLE_DS_M,
+    channel_arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
+    channel_opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
 ) -> DiagnosticReport:
-    """Apply all six detectors to ``mesh`` and return a
+    """Apply all seven detectors to ``mesh`` and return a
     :class:`DiagnosticReport`.
 
     Repair is out of scope; the report carries the per-element /
@@ -346,6 +617,13 @@ def run_diagnostics(
         mesh.elements, mesh.n_nodes, max_nbr=max_nbr_elem,
     )
     unreach_flag = unreachable_elements_flag(adj, mesh, component_labels=labels)
+    under_flag, ch_info = under_resolved_channels_flag(
+        mesh,
+        min_w_h=min_w_h,
+        sample_ds_m=channel_sample_ds_m,
+        arc_separation_factor=channel_arc_separation_factor,
+        opposite_bank_cos_max=channel_opposite_bank_cos_max,
+    )
 
     return DiagnosticReport(
         mesh_name=name or (path.name if path else "mesh"),
@@ -359,12 +637,17 @@ def run_diagnostics(
         thin_flag=thin_flag,
         thin_chain_flag=thin_chain_flag,
         unreachable_flag=unreach_flag,
+        under_resolved_channels_flag=under_flag,
         overconnected_flag=overconn_flag,
         component_labels=labels,
         component_sizes=sizes,
         valence=valence,
+        channel_width_m=ch_info["channel_width_m"],
+        h_local_m=ch_info["h_local_m"],
+        w_h_ratio=ch_info["w_h_ratio"],
         max_nbr_elem=max_nbr_elem,
         min_thin_chain=min_thin_chain,
+        min_w_h=float(min_w_h),
         nodes=mesh.nodes,
         elements=mesh.elements,
         centroids=element_centroids(mesh),
@@ -403,6 +686,28 @@ def _node_records(
             "lon": float(nodes[i, 0]),
             "lat": float(nodes[i, 1]),
             "valence": int(valence[i]),
+        }
+        for i in idx
+    ]
+
+
+def _under_resolved_records(
+    flag: np.ndarray,
+    centroids: np.ndarray,
+    *,
+    channel_width_m: np.ndarray,
+    h_local_m: np.ndarray,
+    w_h_ratio: np.ndarray,
+) -> list[dict[str, Any]]:
+    idx = np.where(flag)[0]
+    return [
+        {
+            "id": int(i),
+            "centroid_lon": float(centroids[i, 0]),
+            "centroid_lat": float(centroids[i, 1]),
+            "channel_width_m": float(channel_width_m[i]),
+            "h_local_m": float(h_local_m[i]),
+            "w_h_ratio": float(w_h_ratio[i]),
         }
         for i in idx
     ]
@@ -486,6 +791,27 @@ def report_to_dict(report: DiagnosticReport) -> dict[str, Any]:
                     report.unreachable_flag, report.centroids,
                 ),
             },
+            "under_resolved_channels": {
+                "description": (
+                    "Elements whose local channel width (sum of distances "
+                    "to the two nearest non-adjacent boundary samples) "
+                    "divided by the median edge length is below "
+                    f"min_w_h={report.min_w_h:.1f}. Catches 2- and 3-cell "
+                    "narrow channels that the 1-cell thin-chain detector "
+                    "misses."
+                ),
+                "min_w_h": float(report.min_w_h),
+                "n_flagged": int(report.under_resolved_channels_flag.sum()),
+                "w_h_ratio_p50": float(np.percentile(report.w_h_ratio, 50))
+                if report.w_h_ratio.size else 0.0,
+                "elements": _under_resolved_records(
+                    report.under_resolved_channels_flag,
+                    report.centroids,
+                    channel_width_m=report.channel_width_m,
+                    h_local_m=report.h_local_m,
+                    w_h_ratio=report.w_h_ratio,
+                ),
+            },
         },
     }
 
@@ -505,7 +831,8 @@ def report_to_summary_text(report: DiagnosticReport) -> str:
         f"NP={report.n_nodes:,}  NE={report.n_elements:,}  "
         f"open={report.n_open_boundaries}  land={report.n_land_boundaries}",
         f"config:  max_nbr_elem={report.max_nbr_elem}  "
-        f"min_thin_chain={report.min_thin_chain}",
+        f"min_thin_chain={report.min_thin_chain}  "
+        f"min_w_h={report.min_w_h:.1f}",
         "",
         f"  1. disjoint comp:    n_components={len(sizes)}  "
         f"sizes={sizes_str}  flagged_elems={int(report.disjoint_flag.sum()):,}",
@@ -517,6 +844,12 @@ def report_to_summary_text(report: DiagnosticReport) -> str:
         f"  4. over-conn nodes:  {int(report.overconnected_flag.sum()):,}  "
         f"max_valence={max_v}",
         f"  5. unreachable:      {int(report.unreachable_flag.sum()):,}",
+        f"  6. under-resolved channels (w/h < {report.min_w_h:.1f}): "
+        f"{int(report.under_resolved_channels_flag.sum()):,}  "
+        f"w_h p50="
+        f"{float(np.percentile(report.w_h_ratio, 50)):.1f}"
+        if report.w_h_ratio.size else
+        f"  6. under-resolved channels (w/h < {report.min_w_h:.1f}): 0",
         "",
         f"any flagged: {report.any_flagged()}",
     ]
@@ -528,6 +861,7 @@ _OVERLAY_STYLE: list[tuple[str, str]] = [
     ("dead-end", "tab:orange"),
     ("thin chain", "tab:cyan"),
     ("unreachable", "tab:red"),
+    ("under-resolved", "tab:olive"),
 ]
 
 
@@ -563,6 +897,7 @@ def plot_report(report: DiagnosticReport, png: Path, *, dpi: int | None = None) 
         "dead-end": report.dead_end_flag,
         "thin chain": report.thin_chain_flag,
         "unreachable": report.unreachable_flag,
+        "under-resolved": report.under_resolved_channels_flag,
     }
     proxies = []
     for label, color in _OVERLAY_STYLE:
@@ -608,10 +943,15 @@ def plot_report(report: DiagnosticReport, png: Path, *, dpi: int | None = None) 
 
 
 __all__ = [
+    "DEFAULT_ARC_SEPARATION_FACTOR",
+    "DEFAULT_CHANNEL_SAMPLE_DS_M",
     "DEFAULT_MAX_NBR_ELEM",
     "DEFAULT_MIN_THIN_CHAIN",
+    "DEFAULT_MIN_W_H",
+    "DEFAULT_OPPOSITE_BANK_COS_MAX",
     "DiagnosticReport",
     "boundary_node_mask",
+    "channel_width_metric",
     "dead_end_elements_flag",
     "disjoint_components_flag",
     "element_centroids",
@@ -625,5 +965,6 @@ __all__ = [
     "run_diagnostics",
     "thin_chain_elements_flag",
     "thin_elements_flag",
+    "under_resolved_channels_flag",
     "unreachable_elements_flag",
 ]

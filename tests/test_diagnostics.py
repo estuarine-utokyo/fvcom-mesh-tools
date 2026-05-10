@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from fvcom_mesh_tools.diagnostics import (
+    channel_width_metric,
     dead_end_elements_flag,
     disjoint_components_flag,
     face_face_adjacency,
@@ -18,6 +19,7 @@ from fvcom_mesh_tools.diagnostics import (
     run_diagnostics,
     thin_chain_elements_flag,
     thin_elements_flag,
+    under_resolved_channels_flag,
     unreachable_elements_flag,
 )
 from fvcom_mesh_tools.io import Fort14Mesh
@@ -349,8 +351,12 @@ def test_unreachable_quiet_when_disjoint_component_touches_ob() -> None:
 
 
 def test_run_diagnostics_clean_mesh_reports_no_flags() -> None:
+    """The 4-element square mesh is too coarse for the medial-axis
+    detector (its single 'channel' is one cell across), so we disable
+    detector 7 by setting min_w_h=0 in this test of the other six.
+    """
     mesh = _square_around_centre()
-    report = run_diagnostics(mesh, name="clean")
+    report = run_diagnostics(mesh, name="clean", min_w_h=0.0)
     assert not report.any_flagged()
     assert report.n_nodes == 5
     assert report.n_elements == 4
@@ -367,3 +373,106 @@ def test_run_diagnostics_with_overconnected_threshold() -> None:
     rep_relaxed = run_diagnostics(mesh, max_nbr_elem=12)
     assert rep_default.overconnected_flag.any()
     assert not rep_relaxed.overconnected_flag.any()
+
+
+# ---------------------------------------------------------------------------
+# Detector 7: channel-width / h ratio (medial-axis-style)
+# ---------------------------------------------------------------------------
+
+
+def _strip_mesh_n_rows(
+    *, length_deg: float, width_deg: float, n_x: int, n_rows: int,
+) -> Fort14Mesh:
+    """A rectangular ``length_deg × width_deg`` strip in lon/lat space,
+    triangulated as ``n_rows`` rows × ``n_x`` columns of quads (each quad
+    split into two triangles). Top and bottom long edges are land; the
+    two short edges are open.
+
+    With more rows the cross-channel resolution increases and the local
+    h shrinks, so the channel-width / h ratio scales roughly linearly
+    with ``n_rows``.
+    """
+    n_pts_x = n_x + 1
+    n_pts_y = n_rows + 1
+    nodes_rows: list[np.ndarray] = []
+    for j in range(n_pts_y):
+        y = (j / (n_pts_y - 1)) * width_deg
+        nodes_rows.append(np.column_stack([
+            np.linspace(0.0, length_deg, n_pts_x),
+            np.full(n_pts_x, y),
+        ]))
+    nodes = np.vstack(nodes_rows)
+    elems: list[list[int]] = []
+    for j in range(n_rows):
+        for i in range(n_x):
+            i00 = j * n_pts_x + i
+            i01 = j * n_pts_x + (i + 1)
+            i10 = (j + 1) * n_pts_x + i
+            i11 = (j + 1) * n_pts_x + (i + 1)
+            elems.append([i00, i01, i11])
+            elems.append([i00, i11, i10])
+    elements = np.asarray(elems, dtype=np.int64)
+    bot_seg = np.arange(n_pts_x, dtype=np.int64)
+    top_seg = np.arange(n_pts_x, dtype=np.int64) + n_rows * n_pts_x
+    left_seg = np.array(
+        [j * n_pts_x for j in range(n_pts_y)], dtype=np.int64,
+    )
+    right_seg = np.array(
+        [j * n_pts_x + (n_pts_x - 1) for j in range(n_pts_y)], dtype=np.int64,
+    )
+    return _mesh(
+        nodes, elements,
+        open_boundaries=[left_seg, right_seg],
+        land_boundaries=[(0, bot_seg), (0, top_seg)],
+    )
+
+
+def test_channel_width_metric_one_row_strip_flagged() -> None:
+    """A 1-row strip is one cell across the channel; w/h ≈ 1 < 3."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    flag, info = under_resolved_channels_flag(mesh, min_w_h=3.0)
+    assert flag.all()
+    assert (info["w_h_ratio"] < 3.0).all()
+
+
+def test_channel_width_metric_six_row_strip_partially_unflagged() -> None:
+    """A 6-row strip has ~6 cells across the channel; w/h is well above
+    3 in the interior even though boundary-adjacent rows can be lower.
+    """
+    mesh = _strip_mesh_n_rows(
+        length_deg=0.5, width_deg=0.10, n_x=20, n_rows=6,
+    )
+    flag, info = under_resolved_channels_flag(mesh, min_w_h=3.0)
+    # The middle-row elements are away from both banks, so most of them
+    # should NOT be flagged.
+    assert (~flag).any()
+    # Median ratio should be comfortably above 3.
+    assert float(np.median(info["w_h_ratio"])) > 3.0
+
+
+def test_channel_width_metric_handles_no_boundary() -> None:
+    """A mesh with no boundary lists returns inf-ratio (no flags)."""
+    mesh = _square_around_centre()
+    mesh.open_boundaries.clear()
+    mesh.land_boundaries.clear()
+    flag, info = under_resolved_channels_flag(mesh, min_w_h=3.0)
+    assert not flag.any()
+    assert np.isinf(info["w_h_ratio"]).all()
+
+
+def test_run_diagnostics_includes_under_resolved_channels() -> None:
+    """The 7th detector is wired into the high-level driver and the
+    summary text mentions the channel ratio."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    rep = run_diagnostics(mesh, min_w_h=3.0)
+    assert rep.under_resolved_channels_flag.any()
+    assert rep.min_w_h == 3.0
+    # The ratio array is populated.
+    assert rep.w_h_ratio.shape == (mesh.n_elements,)
+
+
+def test_channel_width_metric_metric_keys_present() -> None:
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    info = channel_width_metric(mesh)
+    for key in ("channel_width_m", "h_local_m", "w_h_ratio", "sample_count"):
+        assert key in info

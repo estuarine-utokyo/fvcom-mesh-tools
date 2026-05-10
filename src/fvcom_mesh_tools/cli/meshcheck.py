@@ -20,9 +20,15 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+
 from fvcom_mesh_tools.diagnostics import (
+    DEFAULT_ARC_SEPARATION_FACTOR,
+    DEFAULT_CHANNEL_SAMPLE_DS_M,
     DEFAULT_MAX_NBR_ELEM,
     DEFAULT_MIN_THIN_CHAIN,
+    DEFAULT_MIN_W_H,
+    DEFAULT_OPPOSITE_BANK_COS_MAX,
     plot_report,
     report_to_dict,
     report_to_summary_text,
@@ -70,6 +76,46 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--min-w-h", type=float, default=DEFAULT_MIN_W_H,
+        help=(
+            "Minimum cells across a channel for the medial-axis "
+            "detector. An element is flagged when its local channel "
+            "width divided by the median edge length is below this "
+            f"value. Default {DEFAULT_MIN_W_H:g}."
+        ),
+    )
+    p.add_argument(
+        "--channel-sample-ds-m", type=float,
+        default=DEFAULT_CHANNEL_SAMPLE_DS_M,
+        help=(
+            "Boundary-sample spacing in metres used by the channel-width "
+            f"detector. Default {DEFAULT_CHANNEL_SAMPLE_DS_M:g} m."
+        ),
+    )
+    p.add_argument(
+        "--channel-arc-separation-factor", type=float,
+        default=DEFAULT_ARC_SEPARATION_FACTOR,
+        help=(
+            "Two boundary samples on the same polyline are treated as "
+            "different banks only if their along-polyline arc "
+            "separation exceeds this factor times the distance from "
+            "the query point to the nearest sample. Default "
+            f"{DEFAULT_ARC_SEPARATION_FACTOR:g}."
+        ),
+    )
+    p.add_argument(
+        "--channel-opposite-bank-cos-max", type=float,
+        default=DEFAULT_OPPOSITE_BANK_COS_MAX,
+        help=(
+            "Maximum cosine of the angle between (centroid -> nearest "
+            "sample) and (centroid -> far-arc sample) on the same "
+            "polyline; only accept the far-arc sample as the 'other "
+            "bank' when this cosine is below the threshold. Default "
+            f"{DEFAULT_OPPOSITE_BANK_COS_MAX:g} (angle > "
+            f"{180.0 / 3.14159 * np.arccos(DEFAULT_OPPOSITE_BANK_COS_MAX):.0f}°)."
+        ),
+    )
+    p.add_argument(
         "--no-plot", action="store_true",
         help="Skip writing the *_map.png overlay.",
     )
@@ -106,6 +152,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.min_thin_chain < 1:
         print("--min-thin-chain must be >= 1.", file=sys.stderr)
         return 2
+    if args.min_w_h <= 0:
+        print("--min-w-h must be > 0.", file=sys.stderr)
+        return 2
+    if args.channel_sample_ds_m <= 0:
+        print("--channel-sample-ds-m must be > 0.", file=sys.stderr)
+        return 2
+    if args.channel_arc_separation_factor <= 0:
+        print("--channel-arc-separation-factor must be > 0.", file=sys.stderr)
+        return 2
+    if not (-1.0 <= args.channel_opposite_bank_cos_max <= 1.0):
+        print("--channel-opposite-bank-cos-max must be in [-1, 1].", file=sys.stderr)
+        return 2
 
     prefix = _resolve_prefix(args.input, args.out_prefix)
     summary_path = prefix.with_name(prefix.name + "_summary.txt")
@@ -119,6 +177,10 @@ def main(argv: list[str] | None = None) -> int:
         path=args.input.resolve(),
         max_nbr_elem=args.max_nbr_elem,
         min_thin_chain=args.min_thin_chain,
+        min_w_h=args.min_w_h,
+        channel_sample_ds_m=args.channel_sample_ds_m,
+        channel_arc_separation_factor=args.channel_arc_separation_factor,
+        channel_opposite_bank_cos_max=args.channel_opposite_bank_cos_max,
     )
 
     summary = report_to_summary_text(report)

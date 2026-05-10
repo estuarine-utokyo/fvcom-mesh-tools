@@ -52,6 +52,37 @@ will only ship with a major bump (Semantic Versioning).
   0.16 → 0.17 % — essentially zero quality cost. Severe gmsh-fan
   cases (PoC #16, max valence 26) are only partially fixable by edge
   swap alone; mitigation there is engine choice.
+- 7th detector `under_resolved_channels_flag` graduates from PoC #28
+  into `fvcom_mesh_tools.diagnostics`. The metric is the smaller of
+  two channel-width candidates divided by the median element edge
+  length:
+    1. **cross-polyline**: distance from the centroid to the two
+       nearest distinct boundary polylines, summed (catches the
+       "channel between mainland and an island" case);
+    2. **same-polyline narrow inlet**: distance to the nearest
+       sample on a polyline plus the distance to the nearest sample
+       on that same polyline whose along-polyline arc separation is
+       large (catches an inlet whose two banks lie on a single
+       continuous coastline). The same-polyline candidate is
+       accepted only when the two vectors (centroid → nearest
+       sample, centroid → far-arc sample) point in roughly opposite
+       directions (cos angle < `--channel-opposite-bank-cos-max`,
+       default −0.8 = angle > 143°), which rejects coastal-corner
+       false positives where the polyline wraps around a peninsula
+       tip.
+  Built per-polyline `cKDTree`s rather than a single combined tree,
+  so cross-polyline distance is exact even on densely-sampled
+  coasts. The CLI gains `--min-w-h` (default 3.0),
+  `--channel-sample-ds-m` (default 50 m),
+  `--channel-arc-separation-factor` (default 4.0), and
+  `--channel-opposite-bank-cos-max` (default −0.8). Validated on the
+  PoC #19 cleaned Tokyo Bay mesh: 3,178 elements (6.7 % of NE) are
+  flagged, concentrated at the northern Tokyo Bay river mouths and
+  along narrow coastal jetties / breakwaters. PoC #28's prototype
+  underflagged (618) by missing same-polyline inlets; the
+  productionised version's same-polyline + direction filter catches
+  them while keeping the median ratio above 26 for the bay
+  interior.
 - PoC #28 (`notebooks/28_channel_width_poc.py`) prototypes a
   medial-axis-style channel-width / h ratio detector for
   under-resolved channels (2- to 3-cell wide) that the existing
