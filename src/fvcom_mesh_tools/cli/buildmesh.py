@@ -157,6 +157,36 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--om-wavelength-sizing", action="store_true",
+        help=(
+            "[oceanmesh] Add wavelength_sizing_function (CFL / shallow-"
+            "water celerity) to the size composition: "
+            "dx ∝ T·sqrt(g·h)/wl. Off by default. Useful when the "
+            "gradient-based sizing under-resolves shoaling regions where "
+            "∇h is small but h is too — typical in inner bays / harbours "
+            "where the FVCOM CFL condition would otherwise force a "
+            "small dt."
+        ),
+    )
+    p.add_argument(
+        "--om-wavelength-period", type=float, default=44712.0,
+        help=(
+            "[oceanmesh] Reference period in seconds for "
+            "--om-wavelength-sizing. Default 44712.0 ≈ M2 (12.42 h). "
+            "Halve to require a finer mesh / shorter dt."
+        ),
+    )
+    p.add_argument(
+        "--om-wavelength-grid-spacing", type=int, default=100,
+        help=(
+            "[oceanmesh] wl parameter (cells per wavelength) for "
+            "--om-wavelength-sizing. Default 100; corresponds to "
+            "dt = T/wl ≈ 7.5 min for M2 — a comfortable FVCOM time "
+            "step. Raise for finer meshes / shorter dt; lower for "
+            "draft work."
+        ),
+    )
+    p.add_argument(
         "--bbox-tol-m", type=float, default=None,
         help=(
             "Distance tolerance for 'on the DEM bbox' open-boundary "
@@ -330,6 +360,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.hmin <= 0 or args.hmax < args.hmin:
         print("--hmin must be > 0 and --hmax must be >= --hmin.", file=sys.stderr)
         return 2
+    if args.om_wavelength_sizing:
+        if args.om_wavelength_period <= 0:
+            print("--om-wavelength-period must be > 0.", file=sys.stderr)
+            return 2
+        if args.om_wavelength_grid_spacing < 1:
+            print("--om-wavelength-grid-spacing must be >= 1.", file=sys.stderr)
+            return 2
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -372,6 +409,9 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.om_seed,
             use_bathymetric_gradient=not args.om_no_bathymetric_gradient,
             minimum_area_mult=args.om_minimum_area_mult,
+            use_wavelength_sizing=args.om_wavelength_sizing,
+            wavelength_period_s=args.om_wavelength_period,
+            wavelength_grid_spacing=args.om_wavelength_grid_spacing,
         )
     else:  # ocsmesh; argparse choices guard the value space
         engine_kwargs = dict(

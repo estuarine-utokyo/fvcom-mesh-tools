@@ -149,6 +149,14 @@ MLIT C23.
   islets; PoC #22 sweep on Tokyo Bay shows mult=25 brings the
   retained inner count from 39 down to 27 (matching the `--engine
   ocsmesh` path's `--min-island-area-m2 100000` behaviour).
+- `--om-wavelength-sizing` — opt-in CFL/celerity sizing via
+  `oceanmesh.wavelength_sizing_function`. The composed size is the
+  cell-wise minimum of feature, gradient, and wavelength
+  contributions. Tunable with `--om-wavelength-period` (seconds,
+  default 44712 ≈ M2) and `--om-wavelength-grid-spacing` (cells per
+  wavelength, default 100 — implies dt ≈ T/wl ≈ 7.5 min for M2).
+  PoC #34 quantifies the alpha / NP / NE / shallow-cell / minimum
+  CFL-feasible-dt trade against the gradient-only baseline.
 
 `--engine ocsmesh` accepts the legacy OCSMesh-driven flags:
 

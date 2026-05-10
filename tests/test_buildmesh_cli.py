@@ -82,3 +82,32 @@ def test_engine_invalid_value_rejected() -> None:
     argv = ["nonexistent.nc", "out.14", "--engine", "jigsaw"]
     with pytest.raises(SystemExit):
         buildmesh.main(argv)
+
+
+def test_wavelength_period_must_be_positive(tmp_path) -> None:
+    """``--om-wavelength-sizing`` with an invalid period is rejected
+    before the mesh-engine import."""
+    rc = buildmesh.main([
+        "nonexistent.nc", str(tmp_path / "out.14"),
+        "--om-wavelength-sizing",
+        "--om-wavelength-period", "0",
+    ])
+    assert rc == 2
+
+
+def test_wavelength_grid_spacing_must_be_at_least_1(tmp_path) -> None:
+    rc = buildmesh.main([
+        "nonexistent.nc", str(tmp_path / "out.14"),
+        "--om-wavelength-sizing",
+        "--om-wavelength-grid-spacing", "0",
+    ])
+    assert rc == 2
+
+
+def test_wavelength_sizing_default_is_off() -> None:
+    """The default arg surface should not enable wavelength sizing."""
+    args = buildmesh.build_parser().parse_args(["dem.nc", "out.14"])
+    assert args.om_wavelength_sizing is False
+    # Defaults match docstring claims.
+    assert args.om_wavelength_period == 44712.0
+    assert args.om_wavelength_grid_spacing == 100

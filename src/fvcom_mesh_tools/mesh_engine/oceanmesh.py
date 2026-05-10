@@ -1,9 +1,17 @@
 """``oceanmesh`` engine adapter for ``fmesh-buildmesh``.
 
-The OceanMesh2D Python port. Combines :func:`oceanmesh.feature_sizing_function`
-(coastline-aware sizing) with :func:`oceanmesh.bathymetric_gradient_sizing_function`
-(depth-gradient sizing), ties them together with
-:func:`oceanmesh.enforce_mesh_gradation`, then runs DistMesh via
+The OceanMesh2D Python port. Combines up to three sizing functions
+via :func:`oceanmesh.compute_minimum`:
+
+  * :func:`oceanmesh.feature_sizing_function` — coastline-aware sizing
+    (always on).
+  * :func:`oceanmesh.bathymetric_gradient_sizing_function` —
+    depth-gradient sizing (on by default).
+  * :func:`oceanmesh.wavelength_sizing_function` — CFL/celerity
+    sizing ``dx ∝ T·√(g·h)/wl`` (off by default).
+
+The composed sizing is then smoothed by
+:func:`oceanmesh.enforce_mesh_gradation` and fed to DistMesh via
 :func:`oceanmesh.generate_mesh`. Output is cleaned up with the standard
 ``make_mesh_boundaries_traversable`` / ``delete_boundary_faces`` /
 ``laplacian2`` post-processing chain.
@@ -74,6 +82,9 @@ def build(
     min_qual: float = 0.15,
     use_bathymetric_gradient: bool = True,
     minimum_area_mult: float = 4.0,
+    use_wavelength_sizing: bool = False,
+    wavelength_period_s: float = 44712.0,   # M2 ≈ 12.42 h
+    wavelength_grid_spacing: int = 100,
     log: Callable[[str], None] = print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a mesh with oceanmesh + DistMesh.
@@ -109,6 +120,21 @@ def build(
         Skip the bathymetric-gradient sizing function and rely solely
         on coastline feature sizing. Useful when the DEM is too coarse
         for meaningful slope information.
+    use_wavelength_sizing
+        Add a CFL/celerity-based sizing function via
+        ``oceanmesh.wavelength_sizing_function``: ``dx ∝ T·√(g·h) / wl``.
+        Off by default. Useful when the gradient-based sizing under-
+        resolves shoaling regions where ``∇h`` is small but ``h`` is
+        too — typical in inner bays / harbours where the FVCOM CFL
+        condition would otherwise force a small dt.
+    wavelength_period_s
+        Reference period in seconds for ``wavelength_sizing_function``
+        (only used when ``use_wavelength_sizing`` is True). Default
+        44712.0 s ≈ M2 (12.42 h).
+    wavelength_grid_spacing
+        ``wl`` parameter (number of cells per wavelength) for
+        ``wavelength_sizing_function``. Default 100 — corresponds to
+        ``dt = T/wl`` ≈ 7.5 min for M2, a comfortable FVCOM time step.
     minimum_area_mult
         Forwarded to ``om.Shoreline``. Inner-shoreline features
         smaller than ``minimum_area_mult * h0**2`` (with ``h0`` being
@@ -160,6 +186,7 @@ def build(
         edge_feat = om.feature_sizing_function(
             shore, sdf, max_edge_length=hmax_deg, crs=4326,
         )
+        edge_components = [edge_feat]
         if use_bathymetric_gradient:
             log("[oceanmesh] bathymetric_gradient_sizing_function ...")
             edge_grad = om.bathymetric_gradient_sizing_function(
@@ -170,11 +197,28 @@ def build(
                 max_edge_length=hmax_deg,
                 crs=4326,
             )
-            edge = om.enforce_mesh_gradation(
-                om.compute_minimum([edge_feat, edge_grad]), gradation=gradation,
+            edge_components.append(edge_grad)
+        if use_wavelength_sizing:
+            log(
+                f"[oceanmesh] wavelength_sizing_function "
+                f"(period={wavelength_period_s:g} s, "
+                f"wl={wavelength_grid_spacing}) ..."
             )
-        else:
+            edge_wave = om.wavelength_sizing_function(
+                dem,
+                wl=int(wavelength_grid_spacing),
+                period=float(wavelength_period_s),
+                min_edgelength=hmin_deg,
+                max_edge_length=hmax_deg,
+                crs=4326,
+            )
+            edge_components.append(edge_wave)
+        if len(edge_components) == 1:
             edge = om.enforce_mesh_gradation(edge_feat, gradation=gradation)
+        else:
+            edge = om.enforce_mesh_gradation(
+                om.compute_minimum(edge_components), gradation=gradation,
+            )
 
         log(f"[oceanmesh] generate_mesh (max_iter={max_iter}, seed={seed}) ...")
         points, cells = om.generate_mesh(sdf, edge, max_iter=max_iter, seed=seed)

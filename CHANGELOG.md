@@ -27,6 +27,19 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `fmesh-buildmesh --om-wavelength-sizing` adds
+  `oceanmesh.wavelength_sizing_function` to the size composition in
+  the oceanmesh engine path, alongside the existing
+  ``feature_sizing_function`` and ``bathymetric_gradient_sizing_function``.
+  The wavelength function returns ``dx ∝ T·√(g·h) / wl``, so
+  shoaling regions get refined to satisfy the FVCOM CFL condition
+  even where ``∇h`` is small. Off by default; tune the period
+  (``--om-wavelength-period``, default 44712 s ≈ M2) and grid
+  spacing (``--om-wavelength-grid-spacing``, default 100 — implies
+  dt = T/wl ≈ 7.5 min, a comfortable FVCOM time step). The three
+  size functions are merged via ``om.compute_minimum`` so the
+  smallest-required size wins per cell. Validated against PoC #19
+  in PoC #34 (`notebooks/34_wavelength_sizing_poc.py`).
 - `fmesh-mesh-pipeline` CLI: progressive `clean → quality → repeat`
   loop. Applies three cumulative *rungs* of `fmesh-mesh-clean`
   phases — rung 0 (A+B+C), rung 1 (+D+F+G), rung 2 (+E) — and
