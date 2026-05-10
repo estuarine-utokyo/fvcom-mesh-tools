@@ -1,4 +1,4 @@
-"""``fmesh-mesh-clean`` CLI: clean an FVCOM mesh in five composable phases.
+"""``fmesh-mesh-clean`` CLI: clean an FVCOM mesh in six composable phases.
 
 Phase A removes dual-graph connected components by size and / or
 open-boundary touch (default keeps only the largest component). Phase B
@@ -9,9 +9,12 @@ vertices sit on a boundary). Phase D drives node valences down via
 Lawson edge-flips. Phase E widens or deletes elements flagged as
 under-resolved by the medial-axis channel-width detector
 (``w/h < min_w_h``), catching 2- and 3-cell-wide channels Phase C does
-not flag. Boundaries are re-derived against a DEM-bbox classifier
-matching ``fmesh-buildmesh``. Phases D and E are off by default —
-enable deliberately.
+not flag. Phase F deletes triangles whose minimum or maximum interior
+angle exceeds the configured thresholds (wraps
+``ocsmesh.utils.cleanup_skewed_el``; ocsmesh used as a library only,
+no gmsh dependency). Boundaries are re-derived against a DEM-bbox
+classifier matching ``fmesh-buildmesh``. Phases D, E, and F are off
+by default — enable deliberately.
 """
 
 from __future__ import annotations
@@ -30,7 +33,12 @@ from fvcom_mesh_tools.diagnostics import (
     DEFAULT_OPPOSITE_BANK_COS_MAX,
 )
 from fvcom_mesh_tools.io import Fort14Mesh, read_fort14, write_fort14
-from fvcom_mesh_tools.mesh_clean import DEFAULT_BBOX_TOL_M, clean_mesh
+from fvcom_mesh_tools.mesh_clean import (
+    DEFAULT_BBOX_TOL_M,
+    DEFAULT_SKEWED_MAX_ANGLE_DEG,
+    DEFAULT_SKEWED_MIN_ANGLE_DEG,
+    clean_mesh,
+)
 
 
 def _infer_bbox(mesh: Fort14Mesh) -> tuple[tuple[float, float, float, float], str]:
@@ -60,15 +68,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="fmesh-mesh-clean",
         description=(
-            "Clean an FVCOM mesh in five composable phases. Phase A: "
+            "Clean an FVCOM mesh in six composable phases. Phase A: "
             "drop dual-graph components by size / open-boundary touch. "
             "Phase B: trim degree-1 dead-end elements iteratively. "
             "Phase C: widen or delete 1-cell-wide channels. Phase D: "
             "Lawson edge-flips to drive valence below MAX_NBR_ELEM. "
             "Phase E: widen or delete medial-axis-detected "
-            "under-resolved channels (2- and 3-cell-wide). Boundaries "
-            "are re-derived via DEM-bbox proximity. Phases D and E are "
-            "off by default."
+            "under-resolved channels (2- and 3-cell-wide). Phase F: "
+            "delete skewed triangles by angle thresholds (wraps "
+            "ocsmesh.utils.cleanup_skewed_el). Boundaries are "
+            "re-derived via DEM-bbox proximity. Phases D, E, and F "
+            "are off by default."
         ),
     )
     p.add_argument("input", type=Path, help="Input fort.14.")
@@ -225,6 +235,34 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--repair-skewed-elements", action="store_true",
+        help=(
+            "Phase F switch (off by default). Delete triangles whose "
+            "minimum interior angle is below "
+            "--repair-skewed-min-angle-deg or whose maximum is at or "
+            "above --repair-skewed-max-angle-deg. Wraps "
+            "ocsmesh.utils.cleanup_skewed_el (gmsh-free)."
+        ),
+    )
+    p.add_argument(
+        "--repair-skewed-min-angle-deg", type=float,
+        default=DEFAULT_SKEWED_MIN_ANGLE_DEG,
+        help=(
+            "Phase F: minimum interior angle a triangle is allowed to "
+            f"have. Default {DEFAULT_SKEWED_MIN_ANGLE_DEG:g}° (matches "
+            "ocsmesh)."
+        ),
+    )
+    p.add_argument(
+        "--repair-skewed-max-angle-deg", type=float,
+        default=DEFAULT_SKEWED_MAX_ANGLE_DEG,
+        help=(
+            "Phase F: maximum interior angle a triangle is allowed to "
+            f"have. Default {DEFAULT_SKEWED_MAX_ANGLE_DEG:g}° (matches "
+            "ocsmesh)."
+        ),
+    )
+    p.add_argument(
         "--summary", type=Path, default=None,
         help=(
             "Optional path for the JSON summary. Default: "
@@ -275,6 +313,16 @@ def main(argv: list[str] | None = None) -> int:
         print("--under-resolved-opposite-bank-cos-max must be in [-1, 1].",
               file=sys.stderr)
         return 2
+    if args.repair_skewed_min_angle_deg < 0:
+        print("--repair-skewed-min-angle-deg must be >= 0.", file=sys.stderr)
+        return 2
+    if args.repair_skewed_max_angle_deg > 180:
+        print("--repair-skewed-max-angle-deg must be <= 180.", file=sys.stderr)
+        return 2
+    if args.repair_skewed_min_angle_deg >= args.repair_skewed_max_angle_deg:
+        print("--repair-skewed-min-angle-deg must be < --repair-skewed-max-angle-deg.",
+              file=sys.stderr)
+        return 2
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     mesh = read_fort14(args.input)
@@ -304,6 +352,9 @@ def main(argv: list[str] | None = None) -> int:
         under_resolved_sample_ds_m=args.under_resolved_sample_ds_m,
         under_resolved_arc_separation_factor=args.under_resolved_arc_separation_factor,
         under_resolved_opposite_bank_cos_max=args.under_resolved_opposite_bank_cos_max,
+        repair_skewed=args.repair_skewed_elements,
+        repair_skewed_min_angle_deg=args.repair_skewed_min_angle_deg,
+        repair_skewed_max_angle_deg=args.repair_skewed_max_angle_deg,
     )
     write_fort14(cleaned, args.output)
 

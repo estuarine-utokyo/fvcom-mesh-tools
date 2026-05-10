@@ -11,6 +11,7 @@ from fvcom_mesh_tools.mesh_clean import (
     rebuild_boundaries,
     remove_elements,
     repair_overconnected_nodes,
+    repair_skewed_elements,
     repair_thin_chains,
     repair_under_resolved_channels,
     trim_dead_ends,
@@ -632,3 +633,118 @@ def test_clean_mesh_phase_e_invalid_mode_raises() -> None:
             bbox=(0.0, 0.0, 0.08, 0.01), bbox_tol_m=1.0,
             under_resolved_mode="bogus",  # type: ignore[arg-type]
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase F: angle-based skewed-element removal (wraps ocsmesh)
+# ---------------------------------------------------------------------------
+
+
+def _mesh_with_one_sliver() -> Fort14Mesh:
+    """Two unit triangles + one extreme sliver attached to the strip.
+
+    The sliver has interior angles of approximately (179.7°, 0.15°,
+    0.15°) — well outside the default Phase F bounds [1°, 175°]. The
+    other two triangles are 45-45-90 right triangles, well inside the
+    default bounds.
+    """
+    nodes = np.array([
+        [0.0, 0.0],     # 0
+        [1.0, 0.0],     # 1
+        [1.0, 1.0],     # 2
+        [0.0, 1.0],     # 3
+        [2.0, 0.0],     # 4 — sliver tip far off
+        [2.0, 0.001],   # 5 — sliver tip very close to 4
+    ], dtype=float)
+    elements = np.array([
+        [0, 1, 2],     # right tri (good)
+        [0, 2, 3],     # right tri (good)
+        [1, 4, 5],     # sliver: max angle ~179.7°
+    ], dtype=np.int64)
+    return _mesh(
+        nodes, elements,
+        open_boundaries=[np.array([0, 3])],
+        land_boundaries=[(0, np.array([3, 2, 1, 4, 5]))],
+    )
+
+
+def test_repair_skewed_elements_removes_sliver() -> None:
+    mesh = _mesh_with_one_sliver()
+    out, info = repair_skewed_elements(
+        mesh,
+        min_angle_deg=1.0,
+        max_angle_deg=175.0,
+        bbox=(0.0, 0.0, 2.0, 1.0),
+        tol_deg=1e-3,
+        land_ibtype=0,
+    )
+    assert info["n_elements_removed"] == 1
+    assert out.n_elements == mesh.n_elements - 1
+
+
+def test_repair_skewed_elements_noop_preserves_boundaries() -> None:
+    """A clean mesh: no element removed, original boundary lists kept."""
+    mesh = _mesh_with_one_sliver()
+    # Drop the sliver up front so the input has none.
+    mesh = Fort14Mesh(
+        title=mesh.title,
+        nodes=mesh.nodes,
+        depths=mesh.depths,
+        elements=mesh.elements[:2].copy(),
+        open_boundaries=mesh.open_boundaries,
+        land_boundaries=mesh.land_boundaries,
+    )
+    out, info = repair_skewed_elements(
+        mesh, min_angle_deg=1.0, max_angle_deg=175.0,
+    )
+    assert info["n_elements_removed"] == 0
+    assert info.get("skipped") is True
+    assert len(out.open_boundaries) == len(mesh.open_boundaries)
+    assert len(out.land_boundaries) == len(mesh.land_boundaries)
+
+
+def test_repair_skewed_elements_requires_bbox_when_deletes() -> None:
+    """If a deletion happens, bbox/tol_deg must have been supplied."""
+    mesh = _mesh_with_one_sliver()
+    import pytest
+
+    with pytest.raises(ValueError, match="Phase F removed elements"):
+        repair_skewed_elements(
+            mesh, min_angle_deg=1.0, max_angle_deg=175.0,
+        )
+
+
+def test_repair_skewed_elements_rejects_inverted_thresholds() -> None:
+    mesh = _mesh_with_one_sliver()
+    import pytest
+
+    with pytest.raises(ValueError, match="min_angle_deg"):
+        repair_skewed_elements(mesh, min_angle_deg=10.0, max_angle_deg=5.0)
+
+
+def test_clean_mesh_phase_f_default_off() -> None:
+    """Phase F is off by default; the sliver triangle survives."""
+    mesh = _mesh_with_one_sliver()
+    cleaned, info = clean_mesh(
+        mesh,
+        bbox=(0.0, 0.0, 2.0, 1.0), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        thin_chain_mode="none",
+    )
+    assert all(p["name"] != "repair_skewed_elements" for p in info["phases"])
+    assert info["output"]["n_elements"] == mesh.n_elements
+
+
+def test_clean_mesh_phase_f_explicit_removes_sliver() -> None:
+    mesh = _mesh_with_one_sliver()
+    cleaned, info = clean_mesh(
+        mesh,
+        bbox=(0.0, 0.0, 2.0, 1.0), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        thin_chain_mode="none",
+        repair_skewed=True,
+    )
+    phase_f = next(p for p in info["phases"]
+                   if p["name"] == "repair_skewed_elements")
+    assert phase_f["n_elements_removed"] == 1
+    assert info["output"]["n_elements"] == mesh.n_elements - 1

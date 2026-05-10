@@ -27,6 +27,25 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `fmesh-mesh-clean` Phase F: angle-based skewed-element removal. New
+  function `fvcom_mesh_tools.mesh_clean.repair_skewed_elements` wraps
+  `ocsmesh.utils.cleanup_skewed_el` (gmsh-free; ocsmesh used as a
+  library only — see `docs/engine_complementarity.md` §3.2.3) and
+  deletes triangles whose minimum interior angle is below
+  `--repair-skewed-min-angle-deg` (default 1°) or whose maximum is
+  at or above `--repair-skewed-max-angle-deg` (default 175°). The
+  CLI gains `--repair-skewed-elements` (off by default) plus the
+  two threshold flags. Boundaries are re-derived via DEM-bbox
+  proximity after deletion (skipped when the run is a no-op).
+  Validated by PoC #31 (`notebooks/31_phase_f_skewed_clean_poc.py`)
+  on the PoC #19 cleaned Tokyo-Bay mesh across three threshold
+  presets: at ocsmesh defaults `[1°, 175°]` the cleaned mesh has zero
+  flagged elements (the prior 4-phase pipeline already left no
+  degenerate slivers); at `[5°, 170°]` 3 of 47,409 elements (0.006 %)
+  are removed; at `[10°, 160°]` 9 are removed (0.019 %). Phase F's
+  real leverage is therefore on raw / unclean meshes where slivers
+  survive — particularly the OCSMesh+gmsh path (alpha 0.85,
+  frac<20°=1.13 %) — rather than on already-cleaned oceanmesh output.
 - `docs/engine_complementarity.md` consolidates the empirical and
   source-level investigation of `oceanmesh` and `ocsmesh`: which
   capabilities each library has, which are exclusive (a long list on

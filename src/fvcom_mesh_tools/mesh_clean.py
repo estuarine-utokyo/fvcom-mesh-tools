@@ -1,8 +1,8 @@
 """Mesh-clean operations: prune disjoint pools, trim dead-end elements,
 repair 1-cell-wide channels, balance over-connected node valence,
-and widen under-resolved channels.
+widen under-resolved channels, and remove skewed elements.
 
-Five phases, applied in order:
+Six phases, applied in order:
 
     Phase A — :func:`keep_components`
         Drop dual-graph connected components by size and / or whether
@@ -40,8 +40,16 @@ Five phases, applied in order:
         flag. Off by default — detector 6 typically flags thousands
         of elements on real meshes, so enable it deliberately.
 
-After every Phase A / B / C-delete / D deletion or topology change
-the boundaries are re-derived via
+    Phase F — :func:`repair_skewed_elements`
+        Delete triangles whose minimum interior angle is below
+        ``min_angle_deg`` or whose maximum is at or above
+        ``max_angle_deg``. Wraps ``ocsmesh.utils.cleanup_skewed_el``;
+        no element is improved, only removed. Off by default — slivers
+        are sometimes load-bearing near the boundary, and removing
+        them silently can introduce holes the user didn't expect.
+
+After every Phase A / B / C-delete / D / F deletion or topology
+change the boundaries are re-derived via
 :func:`fvcom_mesh_tools.algorithms.classify_boundaries_by_bbox`, so
 the output mesh has a consistent open / land segmentation in the
 same style as ``fmesh-buildmesh``. Phase C-widen, Phase D, and
@@ -560,6 +568,106 @@ def repair_under_resolved_channels(
 
 
 # ---------------------------------------------------------------------------
+# Phase F: angle-based skewed-element removal (wraps ocsmesh.utils)
+# ---------------------------------------------------------------------------
+
+
+# Defaults match ``ocsmesh.utils.cleanup_skewed_el``'s triangle thresholds.
+DEFAULT_SKEWED_MIN_ANGLE_DEG: float = 1.0
+DEFAULT_SKEWED_MAX_ANGLE_DEG: float = 175.0
+
+
+def repair_skewed_elements(
+    mesh: Fort14Mesh,
+    *,
+    min_angle_deg: float = DEFAULT_SKEWED_MIN_ANGLE_DEG,
+    max_angle_deg: float = DEFAULT_SKEWED_MAX_ANGLE_DEG,
+    bbox: tuple[float, float, float, float] | None = None,
+    tol_deg: float | None = None,
+    land_ibtype: int = 0,
+    open_merge_coast_gap: int = 0,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Phase F: delete triangles whose minimum interior angle is below
+    ``min_angle_deg`` or whose maximum is at or above ``max_angle_deg``.
+
+    Wraps :func:`ocsmesh.utils.cleanup_skewed_el`. ocsmesh is a
+    library-only dependency here (no gmsh involved); see
+    ``docs/engine_complementarity.md`` for the rationale.
+
+    Boundaries are re-derived via bbox proximity if any element is
+    removed; the caller therefore must provide ``bbox`` and
+    ``tol_deg`` whenever Phase F may delete. (If you know in advance
+    that no triangle will be skewed, you can pass ``bbox=None`` and
+    skip the rebuild — the function detects the no-op case.)
+
+    Returns ``(new_mesh, info)`` where ``info`` includes the angle
+    thresholds used, the count of deleted elements, and the count of
+    nodes dropped.
+    """
+    if min_angle_deg < 0 or max_angle_deg > 180 or min_angle_deg >= max_angle_deg:
+        raise ValueError(
+            "expected 0 <= min_angle_deg < max_angle_deg <= 180, "
+            f"got [{min_angle_deg}, {max_angle_deg}]"
+        )
+    if mesh.n_elements == 0:
+        return mesh, {
+            "min_angle_deg": float(min_angle_deg),
+            "max_angle_deg": float(max_angle_deg),
+            "n_elements_removed": 0,
+            "n_nodes_removed": 0,
+            "skipped": True,
+        }
+
+    from ocsmesh import utils as ocsmesh_utils
+
+    from fvcom_mesh_tools.mesh_compose.convert import (
+        fort14_to_meshdata,
+        meshdata_to_fort14,
+    )
+
+    md_in = fort14_to_meshdata(mesh)
+    md_out = ocsmesh_utils.cleanup_skewed_el(
+        md_in,
+        lw_bound_tri=float(min_angle_deg),
+        up_bound_tri=float(max_angle_deg),
+    )
+    cleaned = meshdata_to_fort14(md_out, title=mesh.title)
+
+    n_removed = int(mesh.n_elements - cleaned.n_elements)
+    info: dict[str, Any] = {
+        "min_angle_deg": float(min_angle_deg),
+        "max_angle_deg": float(max_angle_deg),
+        "n_elements_removed": n_removed,
+        "n_nodes_removed": int(mesh.n_nodes - cleaned.n_nodes),
+    }
+    if n_removed == 0:
+        # Topology unchanged — preserve the input's boundary lists so
+        # the no-op stays a no-op even when bbox isn't supplied.
+        info["skipped"] = True
+        return Fort14Mesh(
+            title=mesh.title,
+            nodes=cleaned.nodes,
+            depths=cleaned.depths,
+            elements=cleaned.elements,
+            open_boundaries=[np.asarray(s).copy() for s in mesh.open_boundaries],
+            land_boundaries=[(int(ib), np.asarray(s).copy())
+                             for ib, s in mesh.land_boundaries],
+        ), info
+
+    if bbox is None or tol_deg is None:
+        raise ValueError(
+            "Phase F removed elements but bbox / tol_deg are missing for "
+            "the boundary rebuild. Pass them when enabling Phase F."
+        )
+    cleaned = rebuild_boundaries(
+        cleaned, bbox=bbox, tol_deg=tol_deg,
+        land_ibtype=land_ibtype,
+        open_merge_coast_gap=open_merge_coast_gap,
+    )
+    return cleaned, info
+
+
+# ---------------------------------------------------------------------------
 # Driver: clean_mesh
 # ---------------------------------------------------------------------------
 
@@ -585,6 +693,9 @@ def clean_mesh(
     under_resolved_sample_ds_m: float = DEFAULT_CHANNEL_SAMPLE_DS_M,
     under_resolved_arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
     under_resolved_opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
+    repair_skewed: bool = False,
+    repair_skewed_min_angle_deg: float = DEFAULT_SKEWED_MIN_ANGLE_DEG,
+    repair_skewed_max_angle_deg: float = DEFAULT_SKEWED_MAX_ANGLE_DEG,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Run Phase A (component pruning) and Phase B (dead-end trimming).
 
@@ -650,6 +761,18 @@ def clean_mesh(
     under_resolved_opposite_bank_cos_max:
         Medial-axis detector parameters. See
         :func:`channel_width_metric`.
+    repair_skewed:
+        Phase F switch (off by default). When True, delete triangles
+        whose minimum interior angle is below
+        ``repair_skewed_min_angle_deg`` or whose maximum is at or
+        above ``repair_skewed_max_angle_deg`` via
+        :func:`repair_skewed_elements` (a wrapper around
+        :func:`ocsmesh.utils.cleanup_skewed_el`).
+    repair_skewed_min_angle_deg, repair_skewed_max_angle_deg:
+        Phase F thresholds in degrees. Defaults match
+        ``ocsmesh.utils.cleanup_skewed_el``: ``[1.0, 175.0]``. Tighten
+        (e.g. raise to 5° / lower to 170°) to remove milder skews at
+        the cost of more aggressive deletion.
     """
     if thin_chain_mode not in ("widen", "delete", "none"):
         raise ValueError(
@@ -688,6 +811,9 @@ def clean_mesh(
                 float(under_resolved_arc_separation_factor),
             "under_resolved_opposite_bank_cos_max":
                 float(under_resolved_opposite_bank_cos_max),
+            "repair_skewed": bool(repair_skewed),
+            "repair_skewed_min_angle_deg": float(repair_skewed_min_angle_deg),
+            "repair_skewed_max_angle_deg": float(repair_skewed_max_angle_deg),
         },
         "phases": [],
     }
@@ -768,6 +894,18 @@ def clean_mesh(
         )
         info["phases"].append({"name": "repair_under_resolved_channels", **e_info})
 
+    if repair_skewed:
+        cur, f_info = repair_skewed_elements(
+            cur,
+            min_angle_deg=repair_skewed_min_angle_deg,
+            max_angle_deg=repair_skewed_max_angle_deg,
+            bbox=bbox,
+            tol_deg=_tol_deg(cur),
+            land_ibtype=land_ibtype,
+            open_merge_coast_gap=open_merge_coast_gap,
+        )
+        info["phases"].append({"name": "repair_skewed_elements", **f_info})
+
     if not info["phases"]:
         # Every phase disabled — still re-derive boundaries so the
         # output is a normalised pass-through.
@@ -790,6 +928,8 @@ def clean_mesh(
 
 __all__ = [
     "DEFAULT_BBOX_TOL_M",
+    "DEFAULT_SKEWED_MAX_ANGLE_DEG",
+    "DEFAULT_SKEWED_MIN_ANGLE_DEG",
     "ThinChainMode",
     "UnderResolvedMode",
     "clean_mesh",
@@ -797,6 +937,7 @@ __all__ = [
     "rebuild_boundaries",
     "remove_elements",
     "repair_overconnected_nodes",
+    "repair_skewed_elements",
     "repair_thin_chains",
     "repair_under_resolved_channels",
     "trim_dead_ends",
