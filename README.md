@@ -8,7 +8,8 @@ Python toolkit for FVCOM unstructured mesh generation, repair, and visualization
 high-quality FVCOM-ready unstructured meshes (`fort.14`), with a focus on:
 
 - **Open-boundary edge orthogonalization** — enforce edges perpendicular to open boundaries
-- **River-channel connectivity repair** — fix narrow channels where flow does not connect
+- **Mesh defect detection** — `fmesh-mesh-check` flags disjoint wet pools, dead-ends, 1-cell-wide channels, over-connected nodes, and open-boundary-unreachable elements (no repair, JSON + map output)
+- **Safe automated repair** — `fmesh-mesh-clean` prunes disjoint pools, trims dead-end "spits", and widens 1-cell channels to 2 cells via centroid insertion
 - **Mesh quality inspection and visualization** — element quality, boundary classification, fort.14 plots
 
 The package wraps several mature mesh tools behind a common backend interface
@@ -115,6 +116,41 @@ fmesh-mesh-combine tokyo_bay.14 osaka_bay.14 kanto_kansai.14 \
     --strategy disjoint
 ```
 
+### Diagnose and repair an existing mesh
+
+`fmesh-mesh-check` runs six detectors over a `fort.14` and emits a
+summary, a JSON dump of every flagged element / node (with
+coordinates), and a map PNG. Exit code is non-zero when anything is
+flagged so it works as a CI gate:
+
+```bash
+fmesh-mesh-check tokyo_bay.14 \
+    --max-nbr-elem 8        # FVCOM MAX_NBR_ELEM cap (set to your build)
+```
+
+`fmesh-mesh-clean` repairs the safe-to-fix subset that
+`fmesh-mesh-check` surfaces — disjoint pools, dead-end "spits", and
+1-cell-wide channels. Pass the original DEM bbox (and the same
+`--open-merge-coast-gap` you used at build time) so the re-derived
+boundaries match `fmesh-buildmesh`:
+
+```bash
+fmesh-mesh-clean tokyo_bay.14 tokyo_bay_clean.14 \
+    --bbox 139.565 35.102 140.171 35.856 \
+    --open-merge-coast-gap 50 \
+    --thin-chain-mode widen        # default; alternative: 'delete' or 'none'
+```
+
+Phase A keeps only the largest dual-graph component (or, with
+`--require-open-boundary` / `--min-component-elements N`, a
+configurable subset). Phase B trims degree-1 elements that have no
+open-boundary edge, iterating until convergence. Phase C
+(`--thin-chain-mode widen`, default) inserts a centroid into every
+thin-chain element so each 1-cell channel becomes 2-cell;
+`--thin-chain-mode delete` removes the chain instead, and
+`--thin-chain-mode none` skips Phase C. Over-connected-node repair is
+**not** done yet.
+
 `docs/architecture.md` is the full decision tree for engine choice and
 combine strategy; `docs/python_pipeline_gap_analysis.md` has the
 quality / runtime numbers vs. the OceanMesh2D MATLAB reference.
@@ -157,6 +193,9 @@ End-to-end smoke tests under `notebooks/` (each ships with a matching
 | 21 | `21_mesh_combine_kanto_kansai.py` | `fmesh-mesh-combine --strategy disjoint`: stitch Tokyo Bay (PoC #19) + Osaka Bay (PoC #20) into one fort.14 with all boundaries (4 open + 138 land + 9 ibtype=21 river) preserved. |
 | 22 | `22_minimum_area_mult_sweep.py` | Sweep `--om-minimum-area-mult` 1.0→2000.0 on Tokyo Bay; `om.Shoreline` inner-polygon count drops 53→39→27→19→5→0, confirming the new flag governs island filtering at the source. |
 | 23 | `23_mesh_combine_overlap.py` | `fmesh-mesh-combine --strategy overlap` real-data validation: stitch a coarse Tokyo Bay outer (hmin=1000 m, NP=4,224) with a fine northern-bay inner (hmin=200 m, bbox 139.78–140.0 × 35.55–35.75, NP=6,008) via `ocsmesh.ops.merge_overlapping_meshes`. Combined NP=8,227 NE=13,923, alpha 0.954, frac<20° 0.09 %, no flipped triangles; edge length p50/p95 grades from ~393/1187 m (outer) through ~175/986 m (combined) to ~66/447 m (inner). |
+| 24 | `24_mesh_check_poc.py` | Initial validation of the six `fmesh-mesh-check` detectors on the existing PoC #19 / #16 / #20 outputs: 144 disjoint components and 5,496 unreachable elements on the Tokyo Bay oceanmesh mesh, 440 over-connected nodes (max valence 26) on the OCSMesh+rivers mesh. |
+| 25 | `25_overconnected_investigate.py` | Characterises the 440 over-connected nodes from PoC #24: 94.5 % are interior, 0 % are river-segment nodes, the worst clusters sit on the south open boundary or in tortuous coastal features. |
+| 26 | `26_ocsmesh_overconn_ablation.py` | Post-processing ablation on Tokyo Bay+rivers (OCSMesh engine fixed): turning off `--refine-min-angle` drops over-connected nodes 440 → 313 (max valence 26 → 21). gmsh itself accounts for ~380 of them; the gap with the oceanmesh engine (3 over-connected, max v=9) cannot be closed by post-processing alone. |
 
 `docs/python_pipeline_gap_analysis.md` summarises what the Python
 pipeline still has to gain to match the OceanMesh2D reference output.
@@ -175,6 +214,8 @@ Installed when `pip install -e .` is run.
 | `fmesh-perpfix in.14 out.14`  | Stand-alone open-boundary first-ring perpendicularity correction. |
 | `fmesh-subset-dem SRC OUT --bbox MINLON MINLAT MAXLON MAXLAT [--src-var z]` | Clip a global DEM (SRTM15+, GEBCO, GeoTIFF, ...) to a lon/lat bbox and emit a CF-tagged GeoTIFF for `fmesh-buildmesh`. Two read paths: rasterio (CRS-tagged inputs) and netCDF4 (lon/lat NetCDF without CRS, selected by `--src-var`). |
 | `fmesh-mesh-combine in1.14 in2.14 [...] out.14 --strategy {disjoint,overlap,neighbor}` | Combine multiple fort.14 meshes. `disjoint` is pure-numpy concat with full boundary preservation (best for non-overlapping basins). `overlap` and `neighbor` wrap `ocsmesh.ops.combine_mesh` for nested-resolution and edge-snap scenarios respectively. |
+| `fmesh-mesh-check fort.14 [--max-nbr-elem N] [--min-thin-chain N]` | Detect inadequate FVCOM meshes. Flags disjoint wet-domain components, dead-end elements, thin / thin-chain (1-cell channel) elements, over-connected nodes, and open-boundary-unreachable elements. Emits `*_summary.txt`, `*_diag.json` (per-id records with coordinates), and `*_map.png`. No repair. Exit code is non-zero when anything is flagged so the command is usable as a CI gate. |
+| `fmesh-mesh-clean in.14 out.14 [--bbox] [--open-merge-coast-gap N] [--thin-chain-mode {widen,delete,none}]` | Repair the safe-to-fix subset of the `fmesh-mesh-check` flags. Phase A prunes disjoint dual-graph components; Phase B iteratively trims degree-1 elements with no open-boundary edge; Phase C (default `widen`) inserts a centroid into every thin-chain element so 1-cell channels become 2-cell, or removes the chain entirely with `--thin-chain-mode delete`. Boundaries are re-derived via DEM-bbox proximity, matching `fmesh-buildmesh`. Over-connected-node repair is not yet implemented. |
 
 ## Changelog
 
