@@ -94,7 +94,7 @@ from fvcom_mesh_tools.diagnostics import (
 from fvcom_mesh_tools.io import Fort14Mesh
 
 ThinChainMode = Literal["widen", "delete", "none"]
-UnderResolvedMode = Literal["widen", "delete", "none"]
+UnderResolvedMode = Literal["widen", "delete", "medial", "none"]
 
 EARTH_R_M: float = 6_371_000.0
 
@@ -505,8 +505,11 @@ def repair_under_resolved_channels(
     tol_deg: float | None = None,
     land_ibtype: int = 0,
     open_merge_coast_gap: int = 0,
+    repair_flipped: bool = True,
+    max_repair_passes: int = 5,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
-    """Apply Phase E: widen or delete under-resolved channel elements.
+    """Apply Phase E: widen, delete, or medial-axis-remesh
+    under-resolved channel elements.
 
     The target flag is :func:`under_resolved_channels_flag` (detector 6)
     with the supplied ``min_w_h`` threshold and same medial-axis
@@ -514,26 +517,48 @@ def repair_under_resolved_channels(
     inserts a centroid in every flagged element; boundaries are
     preserved. ``mode='delete'`` removes the flagged elements and
     re-derives boundaries via bbox proximity (``bbox`` and ``tol_deg``
-    must be provided). ``mode='none'`` is a no-op.
+    must be provided). ``mode='medial'`` rebuilds each face-face-
+    connected channel of at least ``min_channel_elements`` flagged
+    members by sampling its diameter spine through the channel's
+    face-face graph at ``h_local_median`` spacing and re-triangulating
+    the patch (rim ∪ existing-interior ∪ new-spine) via Delaunay
+    pruned by the rim polygon. ``mode='none'`` is a no-op.
 
-    Centroid insertion shrinks each new sub-triangle's median edge
-    length to ~0.577 × the parent's, while the geometric channel
-    width (set by the bank polylines) is unchanged. So the post-widen
-    w/h ratio is ~1.73 × the pre-widen ratio: borderline-flagged
-    elements (ratio just below ``min_w_h``) cross the threshold, but
-    very narrow channels (ratio well below) stay flagged. Phase E is
-    therefore best read as "lift local resolution one step" rather
+    Centroid insertion (``widen``) shrinks each new sub-triangle's
+    median edge length to ~0.577 × the parent's, while the geometric
+    channel width (set by the bank polylines) is unchanged. So the
+    post-widen w/h ratio is ~1.73 × the pre-widen ratio:
+    borderline-flagged elements (ratio just below ``min_w_h``) cross
+    the threshold, but very narrow channels (ratio well below) stay
+    flagged. Read ``widen`` as "lift local resolution one step" rather
     than "guarantee 3 cells across every narrow channel"; the latter
-    needs medial-axis insertion which is outside this driver.
-    Empirically on the PoC #19 cleaned Tokyo-Bay mesh: 3,178 → 3,032
-    flagged (4.6 % reduction); 6.7 % → 5.6 % per-mesh flagged
-    fraction.
+    is what ``medial`` does.
+
+    Empirically on the PoC #19 cleaned Tokyo-Bay mesh, ``widen`` cuts
+    3,178 → 3,032 flagged (4.6 % reduction). PoC #37 quantifies the
+    cost / quality story for ``medial``: with
+    ``min_channel_elements=10`` the medial-axis cost is 0.66× the
+    centroid-widen cost on the same input — and the surviving
+    components have mean ``long_axis_m / h_local_median ≈ 6.5``
+    (genuinely ribbon-like channels where centroid widen cannot
+    deliver "3 cells across" no matter how many times it is run).
 
     Detector 6 typically flags thousands of elements on real meshes,
     so ``widen`` adds one interior node and two net elements per
     flagged element — the output mesh size grows proportionally.
     ``delete`` is useful for stripping cosmetic narrow inlets but is
-    destructive on meshes where the inlets matter.
+    destructive on meshes where the inlets matter. ``medial`` only
+    operates on components above the ``min_channel_elements`` filter,
+    so it skips the small isolated clusters that dominate detector
+    6's raw count and concentrates the cost where it actually
+    improves cross-channel resolution.
+
+    The ``repair_flipped=True`` (default) flag wraps the assembled
+    output with the same flipped-element rollback safety net Phase G
+    uses (``repair_flipped_elements``). It applies only to ``medial``
+    where re-triangulation can in principle invert a sliver near the
+    rim; for ``widen`` / ``delete`` no inversion is possible by
+    construction.
     """
     if mode == "none":
         return mesh, {"mode": "none", "n_flagged": 0, "skipped": True}
@@ -546,6 +571,7 @@ def repair_under_resolved_channels(
         opposite_bank_cos_max=opposite_bank_cos_max,
         min_channel_elements=int(min_channel_elements),
     )
+    h_local = np.asarray(_metric["h_local_m"], dtype=float)
     n_flagged = int(flag.sum())
     info: dict[str, Any] = {
         "mode": mode,
@@ -576,6 +602,18 @@ def repair_under_resolved_channels(
         )
         info["n_elements_removed"] = n_flagged
         info["n_nodes_removed"] = int(mesh.n_nodes - new_mesh.n_nodes)
+        return new_mesh, info
+
+    if mode == "medial":
+        new_mesh, m_info = _repair_under_resolved_channels_medial(
+            mesh, flag, h_local,
+            bbox=bbox, tol_deg=tol_deg,
+            land_ibtype=land_ibtype,
+            open_merge_coast_gap=open_merge_coast_gap,
+            repair_flipped=repair_flipped,
+            max_repair_passes=int(max_repair_passes),
+        )
+        info.update(m_info)
         return new_mesh, info
 
     raise ValueError(f"unknown under_resolved_mode: {mode!r}")
@@ -754,6 +792,458 @@ def analyze_under_resolved_channels(
     info["medial_axis_new_nodes_estimate"] = int(medial_total)
     info["delta_nodes_vs_current"] = int(medial_total - cur_total)
     return info
+
+
+# ---------------------------------------------------------------------------
+# Phase E Stage 2: medial-axis CDT re-meshing
+# ---------------------------------------------------------------------------
+
+
+def _patch_rim_polygon(
+    elements: np.ndarray, comp_elem_idx: np.ndarray,
+) -> np.ndarray | None:
+    """Walk the boundary of the face-face-component formed by
+    ``comp_elem_idx`` and return its rim node IDs in CCW order.
+
+    Returns ``None`` if the patch is not simply connected (multiple
+    boundary loops) or if a node has odd degree on the boundary
+    (degenerate topology). Identifies rim edges as those used by
+    exactly one element in the patch.
+    """
+    if comp_elem_idx.size == 0:
+        return None
+    patch = elements[comp_elem_idx]
+    edges = np.vstack([
+        patch[:, [0, 1]],
+        patch[:, [1, 2]],
+        patch[:, [2, 0]],
+    ])
+    edges_sorted = np.sort(edges, axis=1)
+    # An edge appears once if rim, twice if interior.
+    edge_keys = (
+        edges_sorted[:, 0].astype(np.int64) << 32
+    ) | edges_sorted[:, 1].astype(np.int64)
+    uniq, counts = np.unique(edge_keys, return_counts=True)
+    rim_keys = uniq[counts == 1]
+    if rim_keys.size == 0:
+        return None
+    rim_a = (rim_keys >> 32).astype(np.int64)
+    rim_b = (rim_keys & 0xFFFFFFFF).astype(np.int64)
+    rim_pairs = np.column_stack([rim_a, rim_b])
+
+    # Build node → adjacent rim-node list (each rim node has degree 2
+    # for a simply connected patch).
+    adj: dict[int, list[int]] = {}
+    for a, b in rim_pairs:
+        adj.setdefault(int(a), []).append(int(b))
+        adj.setdefault(int(b), []).append(int(a))
+    if any(len(v) != 2 for v in adj.values()):
+        # Pinch points or branching rim — not simply connected.
+        return None
+
+    # Walk the loop. Pick the lex-smallest node as start, and pick the
+    # next node so that the walk is uniquely determined.
+    start = min(adj.keys())
+    walk = [start]
+    prev = -1
+    cur = start
+    while True:
+        nbrs = adj[cur]
+        nxt = nbrs[0] if nbrs[0] != prev else nbrs[1]
+        if nxt == start:
+            break
+        walk.append(nxt)
+        prev = cur
+        cur = nxt
+        if len(walk) > rim_pairs.shape[0]:
+            return None  # safety: walk longer than rim → not simple
+    if len(walk) != rim_pairs.shape[0]:
+        return None  # multi-loop rim (more than one connected boundary)
+    return np.asarray(walk, dtype=np.int64)
+
+
+def _ccw_orient(rim_xy: np.ndarray, rim_ids: np.ndarray) -> np.ndarray:
+    """Reverse ``rim_ids`` if the polygon ``rim_xy`` is CW."""
+    x = rim_xy[:, 0]
+    y = rim_xy[:, 1]
+    signed_area = 0.5 * float(np.sum(
+        x * np.roll(y, -1) - np.roll(x, -1) * y,
+    ))
+    if signed_area < 0:
+        return rim_ids[::-1].copy()
+    return rim_ids
+
+
+def _diameter_path(
+    comp_elem_idx: np.ndarray, full_adj: Any,
+) -> np.ndarray:
+    """Two-BFS diameter path through the face-face subgraph restricted
+    to ``comp_elem_idx``. Returns global element indices in path order.
+    """
+    if comp_elem_idx.size == 1:
+        return comp_elem_idx.copy()
+    # Build a local adjacency dict.
+    member_set = set(int(i) for i in comp_elem_idx)
+    sub_adj: dict[int, list[int]] = {i: [] for i in member_set}
+    sub = full_adj[comp_elem_idx][:, comp_elem_idx]
+    coo = sub.tocoo()
+    for r, c in zip(coo.row, coo.col):
+        if r >= c:
+            continue
+        a = int(comp_elem_idx[r])
+        b = int(comp_elem_idx[c])
+        sub_adj[a].append(b)
+        sub_adj[b].append(a)
+
+    def _bfs_farthest(start: int) -> tuple[int, dict[int, int]]:
+        visited = {start: -1}
+        queue = [start]
+        order = []
+        while queue:
+            nxt: list[int] = []
+            for node in queue:
+                order.append(node)
+                for nb in sub_adj[node]:
+                    if nb not in visited:
+                        visited[nb] = node
+                        nxt.append(nb)
+            queue = nxt
+        return order[-1], visited
+
+    s = int(comp_elem_idx[0])
+    far1, _ = _bfs_farthest(s)
+    far2, parents = _bfs_farthest(far1)
+    path: list[int] = []
+    node = far2
+    while node != -1:
+        path.append(node)
+        node = parents[node]
+    path.reverse()
+    return np.asarray(path, dtype=np.int64)
+
+
+def _resample_polyline(
+    xy: np.ndarray, depths: np.ndarray, target_spacing_m: float,
+    *, lat_centre_deg: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Place samples uniformly along the polyline ``xy`` at
+    approximately ``target_spacing_m`` spacing in metres. ``depths``
+    travels with each polyline vertex and is linearly interpolated to
+    each sample. Endpoints are dropped (a small offset of one spacing
+    is left at each end so the spine does not collide with the rim).
+    """
+    if xy.shape[0] < 2:
+        return np.empty((0, 2)), np.empty((0,))
+    deg_per_m_lat = 1.0 / (EARTH_R_M * np.pi / 180.0)
+    deg_per_m_lon = deg_per_m_lat / max(np.cos(np.deg2rad(lat_centre_deg)), 1e-6)
+    seg_dx_m = (xy[1:, 0] - xy[:-1, 0]) / deg_per_m_lon
+    seg_dy_m = (xy[1:, 1] - xy[:-1, 1]) / deg_per_m_lat
+    seg_len_m = np.hypot(seg_dx_m, seg_dy_m)
+    arc_m = np.concatenate([[0.0], np.cumsum(seg_len_m)])
+    total_m = float(arc_m[-1])
+    if total_m < 2.0 * target_spacing_m:
+        return np.empty((0, 2)), np.empty((0,))
+    # Skip the first and last spacing (endpoints near rim).
+    s_first = target_spacing_m
+    s_last = total_m - target_spacing_m
+    if s_last <= s_first:
+        return np.empty((0, 2)), np.empty((0,))
+    n_samples = int(np.floor((s_last - s_first) / target_spacing_m)) + 1
+    if n_samples < 1:
+        return np.empty((0, 2)), np.empty((0,))
+    sample_s = np.linspace(s_first, s_last, n_samples)
+    out_xy = np.empty((n_samples, 2), dtype=float)
+    out_depth = np.empty(n_samples, dtype=float)
+    for k, s in enumerate(sample_s):
+        # Locate the segment.
+        j = int(np.searchsorted(arc_m, s, side="right")) - 1
+        j = min(max(j, 0), xy.shape[0] - 2)
+        seg_start = arc_m[j]
+        seg_end = arc_m[j + 1]
+        t = (s - seg_start) / max(seg_end - seg_start, 1e-12)
+        out_xy[k] = xy[j] + t * (xy[j + 1] - xy[j])
+        out_depth[k] = depths[j] + t * (depths[j + 1] - depths[j])
+    return out_xy, out_depth
+
+
+def _retriangulate_patch(
+    rim_xy: np.ndarray, spine_xy: np.ndarray, n_rim: int,
+) -> tuple[np.ndarray | None, str]:
+    """Delaunay-triangulate ``(rim ∪ spine)`` and prune triangles whose
+    centroid falls outside the rim polygon. Returns ``(triangles,
+    reason)``. ``triangles`` is the (T, 3) index array into the
+    combined ``[rim_xy; spine_xy]`` ordering, or ``None`` if the patch
+    is rejected; ``reason`` is the rejection bucket label or "ok".
+    Triangles are oriented CCW (positive signed area).
+    """
+    from scipy.spatial import Delaunay
+    from shapely import contains_xy
+    from shapely.geometry import Polygon
+
+    points = np.vstack([rim_xy, spine_xy])
+    if points.shape[0] < 3:
+        return None, "delaunay_failed"
+    try:
+        tri = Delaunay(points)
+    except Exception:  # noqa: BLE001 — scipy raises QhullError variants
+        return None, "delaunay_failed"
+    triangles = tri.simplices
+    if triangles.size == 0:
+        return None, "delaunay_failed"
+
+    poly = Polygon(rim_xy)
+    if not poly.is_valid:
+        return None, "rim_polygon_invalid"
+
+    centroids = points[triangles].mean(axis=1)
+    inside = contains_xy(poly, centroids[:, 0], centroids[:, 1])
+    triangles = triangles[inside]
+    if triangles.size == 0:
+        return None, "all_triangles_pruned"
+
+    # Re-orient any retained triangle so its signed area is positive
+    # (Delaunay output may be CW after the prune mask reordering on
+    # certain numpy versions; cheap to enforce explicitly).
+    p0 = points[triangles[:, 0]]
+    p1 = points[triangles[:, 1]]
+    p2 = points[triangles[:, 2]]
+    cross = (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1]) - (
+        p1[:, 1] - p0[:, 1]
+    ) * (p2[:, 0] - p0[:, 0])
+    cw = cross < 0
+    if cw.any():
+        triangles = triangles.copy()
+        triangles[cw] = triangles[cw][:, [0, 2, 1]]
+        # Recompute and abort if any triangle is degenerate.
+        cross = (
+            (points[triangles[:, 1], 0] - points[triangles[:, 0], 0])
+            * (points[triangles[:, 2], 1] - points[triangles[:, 0], 1])
+            - (points[triangles[:, 1], 1] - points[triangles[:, 0], 1])
+            * (points[triangles[:, 2], 0] - points[triangles[:, 0], 0])
+        )
+    if (cross <= 0).any():
+        return None, "degenerate_triangle"
+
+    # Verify rim edges all appear.
+    edges = set()
+    for tri_ in triangles:
+        a, b, c = int(tri_[0]), int(tri_[1]), int(tri_[2])
+        edges.add((min(a, b), max(a, b)))
+        edges.add((min(b, c), max(b, c)))
+        edges.add((min(c, a), max(c, a)))
+    rim_edges = set()
+    for i in range(n_rim):
+        a, b = i, (i + 1) % n_rim
+        rim_edges.add((min(a, b), max(a, b)))
+    if not rim_edges.issubset(edges):
+        return None, "non_convex_rim_unsolved"
+    return triangles, "ok"
+
+
+def _repair_under_resolved_channels_medial(
+    mesh: Fort14Mesh,
+    flag: np.ndarray,
+    h_local: np.ndarray,
+    *,
+    bbox: tuple[float, float, float, float] | None,
+    tol_deg: float | None,
+    land_ibtype: int,
+    open_merge_coast_gap: int,
+    repair_flipped: bool,
+    max_repair_passes: int,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Stage 2 driver: medial-axis CDT re-meshing of every face-face
+    component of ``flag``. Components for which CDT fails are left in
+    place; their original triangulation survives. The CDT routine
+    returns CCW-oriented triangles only — components whose retriangu-
+    lation would yield a degenerate or inverted triangle are rejected
+    rather than committed, so the final mesh is flip-free by
+    construction. ``repair_flipped`` / ``max_repair_passes`` are
+    accepted for symmetry with Phase G but are no-ops here.
+    """
+    del repair_flipped, max_repair_passes  # accepted for symmetry, unused.
+    flag = np.asarray(flag, dtype=bool)
+    flagged_idx = np.where(flag)[0]
+    info: dict[str, Any] = {
+        "n_components": 0,
+        "n_components_replaced": 0,
+        "n_components_skipped": 0,
+        "n_nodes_inserted": 0,
+        "n_elements_removed": 0,
+        "n_elements_inserted": 0,
+        "skip_reasons": {
+            "rim_walk_failed": 0,
+            "spine_too_short": 0,
+            "delaunay_failed": 0,
+            "non_convex_rim_unsolved": 0,
+            "rim_polygon_invalid": 0,
+            "all_triangles_pruned": 0,
+            "degenerate_triangle": 0,
+        },
+    }
+    if flagged_idx.size == 0:
+        info["skipped"] = True
+        return mesh, info
+
+    full_adj = face_face_adjacency(mesh.elements)
+    sub = full_adj[flagged_idx][:, flagged_idx]
+    n_comp, labels = connected_components(sub, directed=False, return_labels=True)
+    info["n_components"] = int(n_comp)
+
+    lat_centre = float(np.mean(mesh.nodes[:, 1]))
+    deg_per_m_lat = 1.0 / (EARTH_R_M * np.pi / 180.0)
+    deg_per_m_lon = deg_per_m_lat / max(np.cos(np.deg2rad(lat_centre)), 1e-6)
+
+    centroids_all = mesh.nodes[mesh.elements].mean(axis=1)
+    centroid_depths_all = mesh.depths[mesh.elements].mean(axis=1)
+
+    # Per-component records used in the assembly pass.
+    replace_records: list[dict[str, Any]] = []
+
+    for c in range(int(n_comp)):
+        comp_local = np.where(labels == c)[0]
+        comp_elems = flagged_idx[comp_local]
+
+        rim_node_ids = _patch_rim_polygon(mesh.elements, comp_elems)
+        if rim_node_ids is None:
+            info["skip_reasons"]["rim_walk_failed"] += 1
+            info["n_components_skipped"] += 1
+            continue
+        rim_xy = mesh.nodes[rim_node_ids]
+        rim_node_ids = _ccw_orient(rim_xy, rim_node_ids)
+        rim_xy = mesh.nodes[rim_node_ids]
+        n_rim = rim_node_ids.size
+
+        # Spine through the component's centroids.
+        diam_elems = _diameter_path(comp_elems, full_adj)
+        spine_xy = centroids_all[diam_elems]
+        spine_depths = centroid_depths_all[diam_elems]
+        h_local_comp = h_local[comp_elems]
+        positive_h = h_local_comp[h_local_comp > 0]
+        h_med = float(np.median(positive_h)) if positive_h.size else 0.0
+        if h_med <= 0:
+            info["skip_reasons"]["spine_too_short"] += 1
+            info["n_components_skipped"] += 1
+            continue
+        # Need spine longer than 2*h_med to have any interior sample.
+        new_spine_xy, new_spine_depths = _resample_polyline(
+            spine_xy, spine_depths, h_med, lat_centre_deg=lat_centre,
+        )
+        if new_spine_xy.shape[0] == 0:
+            info["skip_reasons"]["spine_too_short"] += 1
+            info["n_components_skipped"] += 1
+            continue
+
+        # Build the (rim + spine) point set in metres-equivalent coords.
+        rim_xy_m = np.column_stack([
+            (rim_xy[:, 0] - rim_xy[0, 0]) / deg_per_m_lon,
+            (rim_xy[:, 1] - rim_xy[0, 1]) / deg_per_m_lat,
+        ])
+        spine_xy_m = np.column_stack([
+            (new_spine_xy[:, 0] - rim_xy[0, 0]) / deg_per_m_lon,
+            (new_spine_xy[:, 1] - rim_xy[0, 1]) / deg_per_m_lat,
+        ])
+        triangles, reason = _retriangulate_patch(rim_xy_m, spine_xy_m, n_rim)
+        if triangles is None:
+            info["skip_reasons"][reason] = (
+                info["skip_reasons"].get(reason, 0) + 1
+            )
+            info["n_components_skipped"] += 1
+            continue
+
+        replace_records.append({
+            "comp_elems": comp_elems,
+            "rim_node_ids": rim_node_ids,
+            "new_spine_xy": new_spine_xy,
+            "new_spine_depths": new_spine_depths,
+            "local_triangles": triangles,  # indices into [0..n_rim) ∪
+                                            # [n_rim..n_rim+S)
+            "n_rim": int(n_rim),
+        })
+        info["n_components_replaced"] += 1
+
+    if not replace_records:
+        info["skipped_all"] = True
+        return mesh, info
+
+    # Assembly: drop replaced elements, append new spine nodes, append
+    # new triangles using global node IDs.
+    elements_to_drop = np.concatenate(
+        [r["comp_elems"] for r in replace_records]
+    )
+    keep_elem_mask = np.ones(mesh.n_elements, dtype=bool)
+    keep_elem_mask[elements_to_drop] = False
+    info["n_elements_removed"] = int(elements_to_drop.size)
+
+    new_nodes_chunks: list[np.ndarray] = []
+    new_depths_chunks: list[np.ndarray] = []
+    new_elements_chunks: list[np.ndarray] = []
+    new_node_offset = mesh.n_nodes
+    for rec in replace_records:
+        n_rim = rec["n_rim"]
+        spine_xy = rec["new_spine_xy"]
+        spine_depths = rec["new_spine_depths"]
+        new_nodes_chunks.append(spine_xy)
+        new_depths_chunks.append(spine_depths)
+        # Map local indices: 0..n_rim-1 → rim_node_ids[i],
+        # n_rim..n_rim+S-1 → new_node_offset + (k - n_rim).
+        loc2global = np.empty(n_rim + spine_xy.shape[0], dtype=np.int64)
+        loc2global[:n_rim] = rec["rim_node_ids"]
+        loc2global[n_rim:] = (
+            new_node_offset + np.arange(spine_xy.shape[0], dtype=np.int64)
+        )
+        new_elements_chunks.append(loc2global[rec["local_triangles"]])
+        new_node_offset += spine_xy.shape[0]
+
+    n_new_nodes = sum(c.shape[0] for c in new_nodes_chunks)
+    info["n_nodes_inserted"] = int(n_new_nodes)
+    info["n_elements_inserted"] = int(
+        sum(c.shape[0] for c in new_elements_chunks)
+    )
+
+    new_nodes = np.vstack([mesh.nodes, *new_nodes_chunks])
+    new_depths = np.concatenate([mesh.depths, *new_depths_chunks])
+    surviving_elements = mesh.elements[keep_elem_mask]
+    inserted_elements = np.vstack(new_elements_chunks).astype(
+        mesh.elements.dtype,
+    )
+    new_elements = np.vstack([surviving_elements, inserted_elements])
+
+    # Rim nodes' IDs are unchanged, so previously-stored boundary
+    # segments remain pointwise valid. If ``bbox`` is supplied,
+    # re-derive open / land segments from scratch (the cleanest
+    # behaviour when the patch touched a boundary, since the new
+    # triangulation may have fewer / more boundary edges per node).
+    if bbox is not None and tol_deg is not None:
+        new_mesh = Fort14Mesh(
+            title=mesh.title,
+            nodes=new_nodes,
+            depths=new_depths,
+            elements=new_elements,
+            open_boundaries=[],
+            land_boundaries=[],
+        )
+        new_mesh = rebuild_boundaries(
+            new_mesh, bbox=bbox, tol_deg=tol_deg,
+            land_ibtype=land_ibtype,
+            open_merge_coast_gap=open_merge_coast_gap,
+        )
+    else:
+        new_mesh = Fort14Mesh(
+            title=mesh.title,
+            nodes=new_nodes,
+            depths=new_depths,
+            elements=new_elements,
+            open_boundaries=[
+                np.asarray(s).copy() for s in mesh.open_boundaries
+            ],
+            land_boundaries=[
+                (int(ib), np.asarray(s).copy())
+                for ib, s in mesh.land_boundaries
+            ],
+        )
+
+    return new_mesh, info
 
 
 # ---------------------------------------------------------------------------
@@ -1247,10 +1737,10 @@ def clean_mesh(
         raise ValueError(
             f"thin_chain_mode must be one of widen / delete / none, got {thin_chain_mode!r}"
         )
-    if under_resolved_mode not in ("widen", "delete", "none"):
+    if under_resolved_mode not in ("widen", "delete", "medial", "none"):
         raise ValueError(
-            "under_resolved_mode must be one of widen / delete / none, "
-            f"got {under_resolved_mode!r}"
+            "under_resolved_mode must be one of widen / delete / medial / "
+            f"none, got {under_resolved_mode!r}"
         )
     info: dict[str, Any] = {
         "input": {

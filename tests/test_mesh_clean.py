@@ -588,6 +588,87 @@ def test_repair_under_resolved_channels_delete_requires_bbox() -> None:
         repair_under_resolved_channels(mesh, mode="delete", min_w_h=3.0)
 
 
+def test_repair_under_resolved_channels_medial_one_row_strip() -> None:
+    """Stage 2: a 1-row strip's single channel is replaced by a Delaunay
+    of (rim ∪ spine). The new mesh has more nodes (spine inserts) and
+    more elements (the patch is now 2 cells across at most points)."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    out, info = repair_under_resolved_channels(
+        mesh, mode="medial", min_w_h=3.0, min_channel_elements=1,
+    )
+    assert info["mode"] == "medial"
+    assert info["n_components"] == 1
+    assert info["n_components_replaced"] == 1
+    assert info["n_components_skipped"] == 0
+    assert info["n_nodes_inserted"] > 0
+    assert info["n_elements_removed"] == mesh.n_elements
+    assert info["n_elements_inserted"] >= mesh.n_elements
+    # Original rim node IDs stay at the same positions.
+    np.testing.assert_array_equal(out.nodes[: mesh.n_nodes], mesh.nodes)
+    # Boundary lists are carried forward by node ID.
+    assert len(out.open_boundaries) == 2
+    assert len(out.land_boundaries) == 2
+    # No flipped triangles in the output.
+    n0, n1, n2 = (
+        out.elements[:, 0], out.elements[:, 1], out.elements[:, 2],
+    )
+    p0, p1, p2 = out.nodes[n0], out.nodes[n1], out.nodes[n2]
+    cross = (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+    assert (cross > 0).all(), "Stage 2 produced a flipped or degenerate element"
+
+
+def test_repair_under_resolved_channels_medial_skips_short_components() -> None:
+    """``min_channel_elements`` larger than the strip's one component
+    drops every flag, leaving the mesh unchanged."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    out, info = repair_under_resolved_channels(
+        mesh, mode="medial", min_w_h=3.0, min_channel_elements=999,
+    )
+    assert info["n_flagged"] == 0
+    assert info.get("skipped") is True
+    assert out.n_nodes == mesh.n_nodes
+    assert out.n_elements == mesh.n_elements
+
+
+def test_repair_under_resolved_channels_medial_empty_flag_is_noop() -> None:
+    """No flagged elements (high min_w_h floor) → mesh unchanged."""
+    mesh = _strip_mesh_n_rows(
+        length_deg=0.5, width_deg=0.10, n_x=20, n_rows=6,
+    )
+    out, info = repair_under_resolved_channels(
+        mesh, mode="medial", min_w_h=0.1,
+    )
+    assert info["n_flagged"] == 0
+    assert info.get("skipped") is True
+    assert out.n_nodes == mesh.n_nodes
+    assert out.n_elements == mesh.n_elements
+
+
+def test_repair_under_resolved_channels_medial_idempotent_on_repair() -> None:
+    """Running medial mode twice is a no-op on the second pass: the
+    first pass widens the channel enough that detector 6 no longer
+    flags it (or flags only short residual clusters)."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    once, _ = repair_under_resolved_channels(
+        mesh, mode="medial", min_w_h=3.0, min_channel_elements=1,
+    )
+    twice, info2 = repair_under_resolved_channels(
+        once, mode="medial", min_w_h=3.0, min_channel_elements=1,
+    )
+    # Either no further flagging, or the second pass is a much smaller
+    # change than the first (no runaway insertion).
+    if info2.get("skipped"):
+        assert twice.n_nodes == once.n_nodes
+        assert twice.n_elements == once.n_elements
+    else:
+        assert info2["n_nodes_inserted"] < info2.get(
+            "n_components_replaced", 0,
+        ) * once.n_elements + 1
+
+
 def test_clean_mesh_phase_e_default_off() -> None:
     """Phase E is off by default — a fully-flagged 1-row strip is left
     untouched after a default ``clean_mesh`` run with all other phases

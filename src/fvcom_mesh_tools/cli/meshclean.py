@@ -194,15 +194,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--under-resolved-mode", choices=["widen", "delete", "none"],
+        "--under-resolved-mode",
+        choices=["widen", "delete", "medial", "none"],
         default="none",
         help=(
             "Phase E policy for under-resolved channel elements "
             "(detector 6). 'widen' inserts a centroid in every flagged "
             "element so 2-cell channels become 3-cell. 'delete' removes "
-            "the flagged elements. 'none' (default) skips Phase E. "
-            "Detector 6 typically flags thousands of elements on real "
-            "meshes — enable deliberately."
+            "the flagged elements. 'medial' replaces each face-face-"
+            "connected channel of >= --under-resolved-min-channel-"
+            "elements members with a Delaunay triangulation of (rim "
+            "polygon ∪ centroid-spine sampled at h_local_median spacing) "
+            "— the Stage 2 medial-axis CDT path; PoC #37 production "
+            "sweet spot is min-channel-elements 10. 'none' (default) "
+            "skips Phase E. Detector 6 typically flags thousands of "
+            "elements on real meshes — enable deliberately."
         ),
     )
     p.add_argument(

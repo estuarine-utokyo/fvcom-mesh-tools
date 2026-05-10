@@ -93,7 +93,7 @@ def _build_rung_overlays(args: argparse.Namespace) -> list[tuple[str, dict]]:
         (
             "rung2:+E",
             {
-                "under_resolved_mode": "widen",
+                "under_resolved_mode": args.under_resolved_mode,
                 "under_resolved_min_w_h": float(args.under_resolved_min_w_h),
                 "under_resolved_min_channel_elements":
                     int(args.under_resolved_min_channel_elements),
@@ -199,6 +199,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     g_rung2 = p.add_argument_group("rung 2 tuning (Phase E)")
     g_rung2.add_argument(
+        "--under-resolved-mode",
+        choices=["widen", "medial"], default="widen",
+        help=(
+            "Phase E policy in rung 2. 'widen' (default) inserts a "
+            "centroid in every flagged element (cheap, lifts w/h to "
+            "~1.73× the original). 'medial' replaces each face-face "
+            "channel of >= --under-resolved-min-channel-elements "
+            "members with the Stage 2 medial-axis CDT path (PoC #37 "
+            "production sweet spot is min-channel-elements 10)."
+        ),
+    )
+    g_rung2.add_argument(
         "--under-resolved-min-w-h", type=float, default=DEFAULT_MIN_W_H,
         help=f"Phase E w/h threshold. Default {DEFAULT_MIN_W_H:g}.",
     )
@@ -208,7 +220,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Phase E: ignore detector-6 flags whose channel component "
             "has fewer than N flagged elements. Default 1 (no filter); "
             "raise to skip the small isolated clusters PoC #35 "
-            "characterised."
+            "characterised. Particularly relevant for "
+            "--under-resolved-mode medial — PoC #37 recommends 10."
         ),
     )
 

@@ -74,16 +74,30 @@ together close the case); ocsmesh remains a library dependency for
   greedy Lawson edge swap that drives valence ≤ `--max-nbr-elem`.
   Graduated from PoC #27.
 - **Phase E** `repair_under_resolved_channels` (off by default) —
-  centroid widen of detector-6-flagged elements. The new
+  three modes: `widen` / `delete` / `medial`. The new
   `--under-resolved-min-channel-elements N` filter (default 1 = no
   filter) drops flagged elements whose face-face-connected
-  component is smaller than N — see PoC #35 motivation below.
-  Phase E centroid widen lifts h_local by ~0.577× without changing
-  the geometric channel width, so the post-widen w/h ratio is
-  ~1.73× the original — borderline-flagged elements cross the
-  threshold but very narrow channels stay flagged. PoC #29
-  validated 4.6 % reduction on PoC #19; the upper-bound is
-  characterised by PoC #35.
+  component is smaller than N — see PoC #35 / #37 motivation
+  below.
+    * `widen` (centroid insert) lifts h_local by ~0.577× without
+      changing the geometric channel width, so the post-widen w/h
+      ratio is ~1.73× the original — borderline-flagged elements
+      cross the threshold but very narrow channels stay flagged.
+      PoC #29 validated 4.6 % reduction on PoC #19; the upper bound
+      is characterised by PoC #35.
+    * `medial` (Stage 2) replaces each face-face-connected channel
+      of >= `min_channel_elements` flagged members with a Delaunay
+      triangulation of (rim polygon ∪ centroid-spine sampled at
+      `h_local_median` spacing). Skips components whose rim is
+      branching or pathologically non-convex, leaving their original
+      triangulation untouched. PoC #38 on the cleaned PoC #19 mesh
+      with `min_channel_elements=10`: 40/51 components replaced,
+      NP +206 / NE +274, alpha 0.9576 → 0.9551, frac<20° 0.17 % →
+      0.33 % — 5-8× fewer new nodes / elements and 8× less alpha
+      damage than `widen` at the same filter, with only modest
+      growth in frac<20°. Public alias
+      `fvcom_mesh_tools.mesh_clean.repair_under_resolved_channels`
+      with `mode='medial'`.
 - **Phase F** `repair_skewed_elements` (off by default) — wraps
   `ocsmesh.utils.cleanup_skewed_el` (gmsh-free). Deletes triangles
   whose interior angles fall outside
@@ -240,6 +254,20 @@ Each links to a notebook in `notebooks/`.
   centroid widen, since centroid only lifts ``w/h`` to ~1.73× and
   cannot guarantee ``target_cells_across`` cells) are real and
   worth re-meshing.
+- **PoC #38** — Stage 2 implementation validated end-to-end on the
+  same cleaned PoC #19 input at `min_channel_elements=10`:
+
+      mode      ΔNP    ΔNE   alpha     frac<20°  comps replaced
+      ------    ----   ----  --------  --------  -----------------
+      widen    +1070  +2140  0.9576→0.9332  0.17→1.42 %    51 / 51
+      medial    +206   +274  0.9576→0.9551  0.17→0.33 %    40 / 51
+
+  Stage 2 (``mode='medial'``) uses 5-8× fewer new nodes and
+  elements, damages alpha 8× less, and limits frac<20° growth to
+  +0.16 pp instead of +1.25 pp. Conservative skip rate on the 11
+  rejected components: 8 non-convex rim, 3 branching rim — those
+  patches keep their original triangulation as a safe fallback.
+  Wall-clock identical (~2.6 s) on the 47 k-element mesh.
 - **PoC #36** — `--om-max-iter` sweep on Tokyo Bay (50 → 25 → 10 → 5):
 
       iters   wall    alpha   frac<20°   max_v   n_overconn

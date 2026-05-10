@@ -63,3 +63,6 @@ Thumbs.db
 
 # Session-local handover notes (per-session briefing, not part of project history)
 HANDOVER.md
+
+# Claude Code per-session runtime state
+.claude/
