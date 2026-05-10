@@ -52,6 +52,37 @@ will only ship with a major bump (Semantic Versioning).
   0.16 → 0.17 % — essentially zero quality cost. Severe gmsh-fan
   cases (PoC #16, max valence 26) are only partially fixable by edge
   swap alone; mitigation there is engine choice.
+- PoC #28 (`notebooks/28_channel_width_poc.py`) prototypes a
+  medial-axis-style channel-width / h ratio detector for
+  under-resolved channels (2- to 3-cell wide) that the existing
+  `thin_chain_elements_flag` (1-cell only) misses. Per element, the
+  metric is `(d(centroid, polyline_A) + d(centroid, polyline_B)) /
+  median_edge_length`, where `polyline_A`, `polyline_B` are the two
+  closest *distinct* boundary polylines. Flag when the ratio is below
+  3.
+
+  Validated on the PoC #19 mesh (uncleaned and after Phase A+B+C+D
+  cleaning):
+
+    * On the raw mesh, the detector catches 1,145 elements at
+      threshold 3, of which 1,009 are not flagged by `thin_chain` —
+      these include the genuinely-under-resolved 2-cell channels
+      around the Edogawa / Arakawa / Sumida river mouths in the
+      northern bay, exactly the case the user originally raised.
+    * On the cleaned mesh, 618 elements remain flagged — Phase C
+      widened the 1-cell chains but the channels are still only
+      ~2 cells wide.
+    * Limitation: 691 thin-chain elements are *not* caught because
+      the metric requires two distinct polylines. Where a continuous
+      coastline carves a narrow inlet against itself (both banks on
+      the same polyline), the second-nearest polyline is far away
+      and the ratio inflates. Productionising this detector needs
+      (i) splitting polylines at concave corners, (ii) Voronoi-based
+      true medial axis, or (iii) a "K-nearest with along-polyline
+      separation" filter.
+
+  The PoC stays as a research notebook; productionising into a
+  diagnostics-module flag is left for follow-up.
 - PoC #27 (`notebooks/27_overconn_repair_poc.py`) explores
   edge-swap-based repair of over-connected nodes. A greedy
   Lawson-style flip scored by reduction of per-edge "valence excess"
