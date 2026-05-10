@@ -10,7 +10,9 @@ from fvcom_mesh_tools.mesh_clean import (
     keep_components,
     rebuild_boundaries,
     remove_elements,
+    repair_thin_chains,
     trim_dead_ends,
+    widen_thin_elements_at_centroid,
 )
 
 
@@ -246,7 +248,7 @@ def test_clean_mesh_removes_disjoint_and_rebuilds_boundaries() -> None:
     assert info["phases"][0]["n_elements_removed"] == 1
 
 
-def test_clean_mesh_pass_through_when_both_phases_disabled() -> None:
+def test_clean_mesh_pass_through_when_all_phases_disabled() -> None:
     mesh = _square_around_centre()
     cleaned, info = clean_mesh(
         mesh,
@@ -254,7 +256,123 @@ def test_clean_mesh_pass_through_when_both_phases_disabled() -> None:
         bbox_tol_m=1.0,
         remove_disjoint=False,
         trim_dead_ends_iters=0,
+        thin_chain_mode="none",
     )
     # No element deletion, but boundaries are normalised.
     assert info["output"]["n_elements"] == info["input"]["n_elements"]
     assert info["phases"] == []
+
+
+# ---------------------------------------------------------------------------
+# Phase C: widen / delete thin chains
+# ---------------------------------------------------------------------------
+
+
+def _thin_chain_strip(chain_length: int) -> Fort14Mesh:
+    """``chain_length`` quads forming a 1-cell-wide channel; every node
+    on the top or bottom polyline is on a land-boundary segment, so all
+    triangles in the strip are thin.
+    """
+    n = chain_length + 1
+    bot = np.column_stack([np.arange(n, dtype=np.float64), np.zeros(n)])
+    top = np.column_stack([np.arange(n, dtype=np.float64), np.ones(n)])
+    nodes = np.vstack([bot, top])
+    elems = []
+    for i in range(chain_length):
+        elems.append([i, i + 1, n + i])
+        elems.append([i + 1, n + i + 1, n + i])
+    elements = np.asarray(elems, dtype=np.int64)
+    bot_seg = np.arange(n, dtype=np.int64)
+    top_seg = np.arange(n, dtype=np.int64) + n
+    return _mesh(
+        nodes, elements,
+        land_boundaries=[(0, bot_seg), (0, top_seg)],
+    )
+
+
+def test_widen_thin_elements_inserts_centroid_per_target() -> None:
+    """A single thin triangle: widening adds 1 node + 2 net elements."""
+    mesh = _thin_chain_strip(chain_length=1)   # 1 quad, 2 thin triangles
+    flag = np.array([True, False])             # widen only the first
+    out, info = widen_thin_elements_at_centroid(mesh, flag)
+    assert info["n_widened"] == 1
+    assert info["n_new_nodes"] == 1
+    assert info["n_new_elements"] == 2
+    assert out.n_nodes == mesh.n_nodes + 1
+    assert out.n_elements == mesh.n_elements + 2
+    # The new node is the centroid of the original first triangle.
+    centroid = mesh.nodes[mesh.elements[0]].mean(axis=0)
+    np.testing.assert_allclose(out.nodes[-1], centroid, atol=1e-12)
+    # Boundary lists preserved (centroid is interior).
+    assert len(out.land_boundaries) == len(mesh.land_boundaries)
+
+
+def test_repair_thin_chains_widen_replaces_every_chain_element() -> None:
+    """Strip of 8 thin elements (chain length=4 quads), all in one chain."""
+    mesh = _thin_chain_strip(chain_length=4)   # 8 thin triangles
+    out, info = repair_thin_chains(mesh, mode="widen", min_chain_length=3)
+    assert info["mode"] == "widen"
+    assert info["n_chain_elements"] == 8
+    assert info["n_widened"] == 8
+    assert out.n_nodes == mesh.n_nodes + 8
+    # 8 thin triangles -> 24 sub-triangles + 0 originals = NE+16
+    assert out.n_elements == mesh.n_elements + 16
+
+
+def test_repair_thin_chains_delete_removes_every_chain_element() -> None:
+    mesh = _thin_chain_strip(chain_length=4)
+    out, info = repair_thin_chains(
+        mesh, mode="delete", min_chain_length=3,
+        bbox=(0.0, 0.0, 4.0, 0.0), tol_deg=1e-6, land_ibtype=0,
+    )
+    assert info["mode"] == "delete"
+    assert info["n_chain_elements"] == 8
+    assert info["n_elements_removed"] == 8
+    assert out.n_elements == 0       # nothing left
+
+
+def test_repair_thin_chains_none_is_noop() -> None:
+    mesh = _thin_chain_strip(chain_length=4)
+    out, info = repair_thin_chains(mesh, mode="none")
+    assert info["mode"] == "none"
+    assert out.n_elements == mesh.n_elements
+    assert out.n_nodes == mesh.n_nodes
+
+
+def test_repair_thin_chains_skips_short_chains() -> None:
+    """A chain of length 2 (4 thin triangles) below threshold 5 → noop."""
+    mesh = _thin_chain_strip(chain_length=2)   # 4 thin triangles
+    out, info = repair_thin_chains(mesh, mode="widen", min_chain_length=5)
+    assert info["n_chain_elements"] == 0
+    assert info["skipped"] is True
+    assert out.n_elements == mesh.n_elements
+
+
+def test_clean_mesh_phase_c_widen_default() -> None:
+    """Full pipeline default mode is 'widen'; thin chain in input gets widened."""
+    mesh = _thin_chain_strip(chain_length=4)
+    out, info = clean_mesh(
+        mesh,
+        bbox=(0.0, 0.0, 4.0, 0.0), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        # thin_chain_mode defaults to widen
+        min_thin_chain=3,
+    )
+    phase_c = next(p for p in info["phases"] if p["name"] == "repair_thin_chains")
+    assert phase_c["mode"] == "widen"
+    assert phase_c["n_widened"] == 8
+    assert info["output"]["n_nodes"] > info["input"]["n_nodes"]
+
+
+def test_clean_mesh_phase_c_delete_explicit() -> None:
+    mesh = _thin_chain_strip(chain_length=4)
+    out, info = clean_mesh(
+        mesh,
+        bbox=(0.0, 0.0, 4.0, 0.0), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        thin_chain_mode="delete", min_thin_chain=3,
+    )
+    phase_c = next(p for p in info["phases"] if p["name"] == "repair_thin_chains")
+    assert phase_c["mode"] == "delete"
+    assert phase_c["n_elements_removed"] == 8
+    assert info["output"]["n_elements"] == 0

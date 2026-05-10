@@ -120,6 +120,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--thin-chain-mode", choices=["widen", "delete", "none"],
+        default="widen",
+        help=(
+            "Phase C policy for 1-cell-wide channels. 'widen' (default) "
+            "inserts a centroid in every thin-chain element so each "
+            "1-cell channel gains an interior node and becomes 2-cell. "
+            "'delete' removes the chain entirely. 'none' skips Phase C."
+        ),
+    )
+    p.add_argument(
+        "--min-thin-chain", type=int, default=3,
+        help=(
+            "Phase C: minimum length of a connected thin-element run "
+            "to treat as a 1-cell channel. Default 3 (matches "
+            "fmesh-mesh-check)."
+        ),
+    )
+    p.add_argument(
         "--summary", type=Path, default=None,
         help=(
             "Optional path for the JSON summary. Default: "
@@ -144,6 +162,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.trim_dead_ends_iters < 0:
         print("--trim-dead-ends-iters must be >= 0.", file=sys.stderr)
         return 2
+    if args.min_thin_chain < 1:
+        print("--min-thin-chain must be >= 1.", file=sys.stderr)
+        return 2
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     mesh = read_fort14(args.input)
@@ -163,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
         min_component_elements=args.min_component_elements,
         require_open_boundary=args.require_open_boundary,
         trim_dead_ends_iters=args.trim_dead_ends_iters,
+        thin_chain_mode=args.thin_chain_mode,
+        min_thin_chain=args.min_thin_chain,
     )
     write_fort14(cleaned, args.output)
 

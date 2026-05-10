@@ -1,7 +1,7 @@
-"""Mesh-clean operations: prune disjoint pools and trim dead-end elements.
+"""Mesh-clean operations: prune disjoint pools, trim dead-end elements,
+and repair 1-cell-wide channels.
 
-Two phases, both safe (single-policy, topology-preserving for the rest
-of the mesh):
+Three phases, applied in order:
 
     Phase A — :func:`keep_components`
         Drop dual-graph connected components by size and / or whether
@@ -13,17 +13,27 @@ of the mesh):
         open-boundary edge. Each round can expose new dead-ends;
         ``max_iters`` caps the loop.
 
-After every deletion the boundaries are re-derived via
+    Phase C — :func:`repair_thin_chains`
+        Detect chains of "thin" elements (triangles whose three
+        vertices are all on a boundary) of at least
+        ``min_thin_chain`` length — the 1-cell-wide-channel
+        signature — and either widen each member by inserting a
+        centroid (default), turning every thin triangle into 3
+        sub-triangles with one interior vertex, or delete the whole
+        chain.
+
+After every Phase A / B / C-delete deletion the boundaries are
+re-derived via
 :func:`fvcom_mesh_tools.algorithms.classify_boundaries_by_bbox`, so the
-output mesh has a consistent open / land segmentation in the same style
-as ``fmesh-buildmesh``. Repair of thin elements, thin chains, or
-over-connected nodes is **not** implemented here; those need
-topology-changing operations whose policy is still under design.
+output mesh has a consistent open / land segmentation in the same
+style as ``fmesh-buildmesh``. Phase C-widen preserves boundaries
+unchanged because centroid insertion only introduces interior nodes /
+edges. Repair of over-connected nodes is **not** implemented here.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from scipy.sparse.csgraph import connected_components
@@ -33,8 +43,12 @@ from fvcom_mesh_tools.diagnostics import (
     dead_end_elements_flag,
     face_face_adjacency,
     open_boundary_node_mask,
+    thin_chain_elements_flag,
+    thin_elements_flag,
 )
 from fvcom_mesh_tools.io import Fort14Mesh
+
+ThinChainMode = Literal["widen", "delete", "none"]
 
 EARTH_R_M: float = 6_371_000.0
 
@@ -254,6 +268,149 @@ def trim_dead_ends(
 
 
 # ---------------------------------------------------------------------------
+# Phase C: repair thin chains (widen via centroid insert, or delete)
+# ---------------------------------------------------------------------------
+
+
+def _detect_thin_chain_flag(
+    mesh: Fort14Mesh, *, min_chain_length: int,
+) -> np.ndarray:
+    """Element-level mask: thin elements that are part of a connected
+    run of at least ``min_chain_length`` adjacent thin elements.
+
+    Same definition as :func:`fvcom_mesh_tools.diagnostics.thin_chain_elements_flag`.
+    """
+    thin = thin_elements_flag(mesh)
+    if not thin.any() or min_chain_length <= 1:
+        return thin
+    adj = face_face_adjacency(mesh.elements)
+    return thin_chain_elements_flag(adj, thin, min_chain_length=min_chain_length)
+
+
+def widen_thin_elements_at_centroid(
+    mesh: Fort14Mesh, target_flag: np.ndarray,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Replace each flagged element with three sub-triangles fanning out
+    from its centroid.
+
+    For each flagged triangle ``(P0, P1, P2)`` we add a new node ``C``
+    at the triangle centroid (depth = mean of the 3 vertex depths) and
+    emit three sub-triangles ``(P0, P1, C)``, ``(P1, P2, C)``,
+    ``(P2, P0, C)``. This widens any "all-3-vertices-on-boundary"
+    element into a fan with a strictly interior centroid, giving
+    cross-channel resolution of two cells where there was previously
+    one.
+
+    Boundary lists are preserved unchanged: centroid insertion only
+    adds interior nodes and edges; the existing boundary edge set is
+    not modified, and previously-stored boundary node IDs remain
+    valid because the new node IDs are appended.
+    """
+    target_flag = np.asarray(target_flag, dtype=bool)
+    if target_flag.shape != (mesh.n_elements,):
+        raise ValueError(
+            f"target_flag shape {target_flag.shape} != ({mesh.n_elements},)"
+        )
+    n_widen = int(target_flag.sum())
+    info: dict[str, Any] = {
+        "n_widened": n_widen,
+        "n_new_nodes": 0,
+        "n_new_elements": 0,
+    }
+    if n_widen == 0:
+        return mesh, info
+
+    target_idx = np.where(target_flag)[0]
+    target_elems = mesh.elements[target_idx]
+    centroids = mesh.nodes[target_elems].mean(axis=1)
+    centroid_depths = mesh.depths[target_elems].mean(axis=1)
+
+    new_node_ids = np.arange(
+        mesh.n_nodes, mesh.n_nodes + n_widen, dtype=mesh.elements.dtype,
+    )
+    e0 = target_elems[:, 0]
+    e1 = target_elems[:, 1]
+    e2 = target_elems[:, 2]
+    sub_a = np.column_stack([e0, e1, new_node_ids])
+    sub_b = np.column_stack([e1, e2, new_node_ids])
+    sub_c = np.column_stack([e2, e0, new_node_ids])
+    new_subtris = np.vstack([sub_a, sub_b, sub_c]).astype(mesh.elements.dtype)
+
+    keep_mask = ~target_flag
+    new_elements = np.vstack([mesh.elements[keep_mask], new_subtris])
+    new_nodes = np.vstack([mesh.nodes, centroids])
+    new_depths = np.concatenate([mesh.depths, centroid_depths])
+
+    info["n_new_nodes"] = n_widen
+    info["n_new_elements"] = int(new_elements.shape[0] - mesh.n_elements)
+
+    return Fort14Mesh(
+        title=mesh.title,
+        nodes=new_nodes,
+        depths=new_depths,
+        elements=new_elements,
+        open_boundaries=[np.asarray(s).copy() for s in mesh.open_boundaries],
+        land_boundaries=[(int(ib), np.asarray(s).copy())
+                         for ib, s in mesh.land_boundaries],
+    ), info
+
+
+def repair_thin_chains(
+    mesh: Fort14Mesh,
+    *,
+    mode: ThinChainMode = "widen",
+    min_chain_length: int = 3,
+    bbox: tuple[float, float, float, float] | None = None,
+    tol_deg: float | None = None,
+    land_ibtype: int = 0,
+    open_merge_coast_gap: int = 0,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Apply Phase C: widen or delete 1-cell-wide channels.
+
+    ``mode='widen'`` (default) inserts a centroid in every thin-chain
+    element; boundaries are preserved. ``mode='delete'`` removes every
+    thin-chain element and re-derives boundaries via bbox proximity
+    (``bbox`` and ``tol_deg`` must be provided). ``mode='none'`` is a
+    no-op apart from emitting a small info dict.
+    """
+    if mode == "none":
+        return mesh, {"mode": "none", "n_chain_elements": 0, "skipped": True}
+
+    chain_flag = _detect_thin_chain_flag(mesh, min_chain_length=min_chain_length)
+    n_chain = int(chain_flag.sum())
+    info: dict[str, Any] = {
+        "mode": mode,
+        "min_chain_length": int(min_chain_length),
+        "n_chain_elements": n_chain,
+    }
+    if n_chain == 0:
+        info["skipped"] = True
+        return mesh, info
+
+    if mode == "widen":
+        new_mesh, w_info = widen_thin_elements_at_centroid(mesh, chain_flag)
+        info.update(w_info)
+        return new_mesh, info
+
+    if mode == "delete":
+        if bbox is None or tol_deg is None:
+            raise ValueError(
+                "delete mode requires bbox and tol_deg for boundary rebuild"
+            )
+        new_mesh = remove_elements(mesh, ~chain_flag)
+        new_mesh = rebuild_boundaries(
+            new_mesh, bbox=bbox, tol_deg=tol_deg,
+            land_ibtype=land_ibtype,
+            open_merge_coast_gap=open_merge_coast_gap,
+        )
+        info["n_elements_removed"] = n_chain
+        info["n_nodes_removed"] = int(mesh.n_nodes - new_mesh.n_nodes)
+        return new_mesh, info
+
+    raise ValueError(f"unknown thin_chain_mode: {mode!r}")
+
+
+# ---------------------------------------------------------------------------
 # Driver: clean_mesh
 # ---------------------------------------------------------------------------
 
@@ -269,6 +426,8 @@ def clean_mesh(
     min_component_elements: int | None = None,
     require_open_boundary: bool = False,
     trim_dead_ends_iters: int = 10,
+    thin_chain_mode: ThinChainMode = "widen",
+    min_thin_chain: int = 3,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Run Phase A (component pruning) and Phase B (dead-end trimming).
 
@@ -298,7 +457,20 @@ def clean_mesh(
         component.
     trim_dead_ends_iters:
         Phase B iteration cap. Set to 0 to skip Phase B.
+    thin_chain_mode:
+        Phase C policy. ``"widen"`` (default) inserts centroids into
+        every thin-chain element so 1-cell channels become 2-cell;
+        ``"delete"`` removes the chain entirely and re-derives
+        boundaries; ``"none"`` skips Phase C.
+    min_thin_chain:
+        Minimum length of a connected thin-element run that we treat
+        as a 1-cell-wide channel run for Phase C. Default 3, matching
+        ``fmesh-mesh-check``.
     """
+    if thin_chain_mode not in ("widen", "delete", "none"):
+        raise ValueError(
+            f"thin_chain_mode must be one of widen / delete / none, got {thin_chain_mode!r}"
+        )
     info: dict[str, Any] = {
         "input": {
             "n_nodes": int(mesh.n_nodes),
@@ -315,6 +487,8 @@ def clean_mesh(
             "min_component_elements": min_component_elements,
             "require_open_boundary": bool(require_open_boundary),
             "trim_dead_ends_iters": int(trim_dead_ends_iters),
+            "thin_chain_mode": thin_chain_mode,
+            "min_thin_chain": int(min_thin_chain),
         },
         "phases": [],
     }
@@ -359,9 +533,21 @@ def clean_mesh(
         )
         info["phases"].append({"name": "trim_dead_ends", **t_info})
 
+    if thin_chain_mode != "none":
+        cur, c_info = repair_thin_chains(
+            cur,
+            mode=thin_chain_mode,
+            min_chain_length=min_thin_chain,
+            bbox=bbox,
+            tol_deg=_tol_deg(cur),
+            land_ibtype=land_ibtype,
+            open_merge_coast_gap=open_merge_coast_gap,
+        )
+        info["phases"].append({"name": "repair_thin_chains", **c_info})
+
     if not info["phases"]:
-        # Both phases disabled — still re-derive boundaries so the output
-        # is a normalised pass-through.
+        # Every phase disabled — still re-derive boundaries so the
+        # output is a normalised pass-through.
         cur = rebuild_boundaries(
             cur,
             bbox=bbox,
@@ -381,9 +567,12 @@ def clean_mesh(
 
 __all__ = [
     "DEFAULT_BBOX_TOL_M",
+    "ThinChainMode",
     "clean_mesh",
     "keep_components",
     "rebuild_boundaries",
     "remove_elements",
+    "repair_thin_chains",
     "trim_dead_ends",
+    "widen_thin_elements_at_centroid",
 ]

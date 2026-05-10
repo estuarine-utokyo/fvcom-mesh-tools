@@ -40,16 +40,25 @@ will only ship with a major bump (Semantic Versioning).
 - `fvcom_mesh_tools.mesh_clean` module + `fmesh-mesh-clean` CLI for
   the safe-repair subset of the diagnostics surfaced by PoC #24-#26.
   Phase A keeps dual-graph connected components by size and / or
-  open-boundary touch (default: only the largest); Phase B
+  open-boundary touch (default: only the largest). Phase B
   iteratively trims degree-1 elements that have no open-boundary edge
-  ("spit" terminations of 1-cell channels). Boundaries are re-derived
-  via DEM-bbox proximity, matching the `fmesh-buildmesh` convention,
-  so the cleaned fort.14 is FVCOM-ingestible. Validated on PoC #19's
-  Tokyo Bay output: 5,496 disjoint elements + 628 dead-ends removed,
+  ("spit" terminations of 1-cell channels). Phase C repairs
+  1-cell-wide channels: by default (`--thin-chain-mode widen`) it
+  inserts a centroid into every thin-chain element so each thin
+  triangle becomes three sub-triangles fanning out from a strictly
+  interior point, giving two cells across the channel; with
+  `--thin-chain-mode delete` the chain is removed entirely. Phase A
+  / B / C-delete deletions re-derive boundaries via DEM-bbox
+  proximity (matching `fmesh-buildmesh`); Phase C-widen leaves
+  boundary topology untouched because the centroid is interior.
+  Validated on PoC #19's Tokyo Bay output: 5,496 disjoint elements
+  + 628 dead-end elements removed (Phase A + B), 165 thin-chain
+  elements widened with 165 interior nodes added (Phase C). The
   cleaned mesh has 1 connected component, 0 dead-ends, 0 unreachable
-  elements, and a single open-boundary segment. Thin / 1-cell-channel
-  / over-connected-node repair is **not** done here; those need
-  topology-changing policies that are still under design.
+  elements, 0 thin chains, alpha mean 0.96, min-angle p50 51 deg,
+  frac<20° = 0.16%, and a single open-boundary segment.
+  Over-connected-node repair is **not** done here; that needs an
+  additional structural policy that is still under design.
 - `MESH_PNG_DPI = 600` shared default in `fvcom_mesh_tools.plotting`;
   every notebook that writes a mesh visualisation now passes
   `dpi=MESH_PNG_DPI` to `fig.savefig`. Histograms keep the matplotlib
