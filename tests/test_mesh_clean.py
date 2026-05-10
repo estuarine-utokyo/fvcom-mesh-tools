@@ -6,6 +6,7 @@ import numpy as np
 
 from fvcom_mesh_tools.io import Fort14Mesh
 from fvcom_mesh_tools.mesh_clean import (
+    analyze_under_resolved_channels,
     clean_mesh,
     keep_components,
     rebuild_boundaries,
@@ -982,3 +983,86 @@ def test_smooth_mesh_laplacian_rejects_negative_max_repair_passes() -> None:
 
     with pytest.raises(ValueError, match="max_repair_passes"):
         smooth_mesh_laplacian(mesh, max_repair_passes=-1)
+
+
+# ---------------------------------------------------------------------------
+# Phase E Stage 1: medial-axis potential analysis (no re-meshing)
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_under_resolved_channels_clean_mesh_returns_zero() -> None:
+    """A wide 6-row strip has no flagged elements at min_w_h=3, so the
+    analysis returns an empty report."""
+    mesh = _strip_mesh_n_rows(
+        length_deg=0.5, width_deg=0.10, n_x=20, n_rows=6,
+    )
+    report = analyze_under_resolved_channels(mesh, min_w_h=0.1)
+    assert report["total_flagged_elements"] == 0
+    assert report["n_components"] == 0
+    assert report["components"] == []
+    assert report["current_phase_e_new_nodes"] == 0
+    assert report["medial_axis_new_nodes_estimate"] == 0
+
+
+def test_analyze_under_resolved_channels_one_row_strip_one_component() -> None:
+    """A 1-row strip is fully flagged at min_w_h=3 and forms a single
+    face-face-adjacent component."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    report = analyze_under_resolved_channels(
+        mesh, min_w_h=3.0, target_cells_across=3,
+    )
+    assert report["total_flagged_elements"] == mesh.n_elements
+    assert report["n_components"] == 1
+    comp = report["components"][0]
+    assert comp["n_elements"] == mesh.n_elements
+    # All 18 nodes (2 rows x 9 columns) belong to the strip.
+    assert comp["n_nodes"] == mesh.n_nodes
+    # h_local_median should be in metres (lon/lat strip ≈ 1 km in 0.01°).
+    assert 100.0 < comp["h_local_median_m"] < 1.5e4
+    assert comp["long_axis_m"] > comp["h_local_median_m"]
+    # Current Phase E cost = one centroid per flagged element.
+    assert comp["current_phase_e_new_nodes"] == mesh.n_elements
+
+
+def test_analyze_under_resolved_channels_aggregates() -> None:
+    """The aggregate dict equals the sum of per-component contributions."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    report = analyze_under_resolved_channels(mesh, min_w_h=3.0)
+    assert report["current_phase_e_new_nodes"] == sum(
+        c["current_phase_e_new_nodes"] for c in report["components"]
+    )
+    assert report["medial_axis_new_nodes_estimate"] == sum(
+        c["medial_axis_new_nodes_estimate"] for c in report["components"]
+    )
+    assert report["delta_nodes_vs_current"] == (
+        report["medial_axis_new_nodes_estimate"]
+        - report["current_phase_e_new_nodes"]
+    )
+
+
+def test_analyze_under_resolved_channels_target_cells_must_be_at_least_2() -> None:
+    """The medial-axis interior rows = target_cells_across - 1 must be
+    at least 1."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    import pytest
+
+    with pytest.raises(ValueError, match="target_cells_across"):
+        analyze_under_resolved_channels(mesh, target_cells_across=1)
+
+
+def test_analyze_under_resolved_channels_target_4_cells_doubles_estimate() -> None:
+    """target_cells_across=4 gives 3 interior rows; the estimate should
+    be 3/2 = 1.5× the target_cells_across=3 case (target_cells - 1
+    rows, same nodes_per_row)."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    r3 = analyze_under_resolved_channels(mesh, min_w_h=3.0, target_cells_across=3)
+    r4 = analyze_under_resolved_channels(mesh, min_w_h=3.0, target_cells_across=4)
+    # target_cells - 1 rows of nodes_per_row each.
+    assert r3["medial_axis_new_nodes_estimate"] > 0
+    assert r4["medial_axis_new_nodes_estimate"] > r3["medial_axis_new_nodes_estimate"]
+    # The ratio should be 3/2 (3 rows / 2 rows).
+    np.testing.assert_allclose(
+        r4["medial_axis_new_nodes_estimate"]
+        / r3["medial_axis_new_nodes_estimate"],
+        3.0 / 2.0, atol=0.5,  # rounding in nodes-per-row
+    )

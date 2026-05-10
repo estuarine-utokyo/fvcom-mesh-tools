@@ -27,6 +27,40 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `fvcom_mesh_tools.mesh_clean.analyze_under_resolved_channels` —
+  Stage 1 of the planned "true medial-axis Phase E" project.
+  Splits detector-6-flagged elements into face-face-adjacent
+  connected channel components and reports per-channel
+  ``n_elements``, ``n_nodes``, ``h_local_median_m``,
+  ``long_axis_m`` (PCA principal-axis extent), the existing
+  centroid-widen new-node cost, and the medial-axis estimate of
+  new nodes required for ``target_cells_across`` cells across
+  (default 3). Aggregate dict gives ``n_components``,
+  ``current_phase_e_new_nodes``,
+  ``medial_axis_new_nodes_estimate``, and the implied
+  ``delta_nodes_vs_current``. The function is *measurement only*;
+  it does not modify the mesh. PoC #35
+  (`notebooks/35_phase_e_potential_poc.py`) runs it on the PoC #19
+  cleaned Tokyo-Bay mesh and on the centroid-widen output of
+  PoC #29:
+
+      cleaned_pre_E         : 3,178 flagged → 1,010 components,
+                              centroid 3,178 vs medial-axis 4,714
+                              new nodes (+48 %).
+      after_centroid_widen  : 3,032 flagged → 807 components,
+                              centroid 3,032 vs medial-axis 3,844
+                              new nodes (+27 %).
+
+  **Stage 2 (real medial-axis insertion + local CDT re-meshing)
+  is deferred** based on this evidence: the 1,010 channels split
+  with mean ~3 elements / component, i.e. they are predominantly
+  small isolated clusters at river-mouth corners / jetty tips,
+  not the long ribbon-like narrow inlets the strategy targets.
+  +48 % extra node insertion for marginal real-world benefit on
+  this geography is hard to justify; the more useful follow-up
+  is a min-component-size filter on detector 6 (or a
+  "top-N largest channel" Stage 2 MVP) that would isolate the
+  cases where medial-axis insertion actually wins.
 - `fmesh-mesh-pipeline --best-rung` mode. Disables the default
   first-passing-rung early-stop and runs every rung up to
   `--max-iters`, then writes the rung that maximises ``alpha_mean``

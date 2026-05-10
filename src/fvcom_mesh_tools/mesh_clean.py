@@ -579,6 +579,172 @@ def repair_under_resolved_channels(
 
 
 # ---------------------------------------------------------------------------
+# Phase E Stage 1: medial-axis potential analysis (no re-meshing)
+# ---------------------------------------------------------------------------
+
+
+_EARTH_R_M_FOR_ANALYSIS: float = 6_371_000.0
+
+
+def _analysis_xy_metric(nodes: np.ndarray) -> np.ndarray:
+    """Convert ``(NP, 2)`` lon/lat to a local equirectangular metric
+    frame (x in metres east, y in metres north) for in-plane distance
+    work. Cheap; uncertainty in the projection is far below the
+    accuracy this analysis cares about.
+    """
+    if nodes.size == 0:
+        return nodes.astype(float).copy()
+    lon = nodes[:, 0]
+    lat = nodes[:, 1]
+    lat0 = float(lat.mean())
+    lon0 = float(lon.mean())
+    dy = (lat - lat0) * (np.pi / 180.0) * _EARTH_R_M_FOR_ANALYSIS
+    dx = (
+        (lon - lon0) * (np.pi / 180.0) * _EARTH_R_M_FOR_ANALYSIS
+        * float(np.cos(np.deg2rad(lat0)))
+    )
+    return np.column_stack([dx, dy])
+
+
+def _component_long_axis_m(xy_m: np.ndarray) -> float:
+    """Length of the longest principal axis of ``xy_m``'s point cloud
+    in metres (PCA-based). Used as a cheap "channel length" proxy
+    for a connected channel component.
+    """
+    if xy_m.shape[0] < 2:
+        return 0.0
+    centre = xy_m.mean(axis=0)
+    centred = xy_m - centre
+    # 2x2 covariance, closed-form principal direction.
+    cov = centred.T @ centred / max(xy_m.shape[0] - 1, 1)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    # Largest eigvec → principal axis. Project points onto it and
+    # take the range as the long-axis extent (a tighter envelope
+    # than 2*sqrt(eigval), which is just a Gaussian σ).
+    principal = eigvecs[:, -1]
+    proj = centred @ principal
+    return float(proj.max() - proj.min())
+
+
+def analyze_under_resolved_channels(
+    mesh: Fort14Mesh,
+    *,
+    min_w_h: float = DEFAULT_MIN_W_H,
+    sample_ds_m: float = 50.0,
+    arc_separation_factor: float = 4.0,
+    opposite_bank_cos_max: float = -0.8,
+    target_cells_across: int = 3,
+) -> dict[str, Any]:
+    """Stage 1 of the "true medial-axis Phase E" project.
+
+    Runs detector 6 (``under_resolved_channels_flag``), splits the
+    flagged elements into face-face-adjacent connected components
+    ("channels"), and reports per-channel statistics that quantify
+    the gap between the existing centroid-widen Phase E and the
+    medial-axis-based Stage 2 not yet implemented.
+
+    Per-channel record:
+
+    * ``n_elements`` — flagged elements in the component.
+    * ``n_nodes`` — distinct nodes touched.
+    * ``h_local_median_m`` — median cell-edge length in metres.
+    * ``long_axis_m`` — PCA principal-axis extent of the component's
+      node cloud (a "channel length" proxy).
+    * ``current_phase_e_new_nodes`` — node count if the existing
+      centroid-widen Phase E ran on this component (= ``n_elements``).
+    * ``medial_axis_new_nodes_estimate`` — node count required to
+      lift the channel to ``target_cells_across`` cells across,
+      assuming the medial axis sits along ``long_axis`` and the new
+      nodes are placed at ``h_local_median_m`` spacing along
+      ``(target_cells_across - 1)`` interior rows. **Estimate only**;
+      the real number depends on the local channel-width profile
+      and is computed in Stage 2.
+
+    The aggregate dict includes ``n_components``,
+    ``total_flagged_elements``, the existing-Phase-E vs medial-axis
+    new-node counts summed across channels, and the implied
+    "extra-nodes-vs-current" delta — the *upper bound* on how many
+    nodes Stage 2 would have to insert beyond what Phase E
+    centroid-widen already adds.
+    """
+    if target_cells_across < 2:
+        raise ValueError(
+            f"target_cells_across must be >= 2, got {target_cells_across}"
+        )
+
+    flag, metric_info = under_resolved_channels_flag(
+        mesh,
+        min_w_h=float(min_w_h),
+        sample_ds_m=float(sample_ds_m),
+        arc_separation_factor=float(arc_separation_factor),
+        opposite_bank_cos_max=float(opposite_bank_cos_max),
+    )
+    n_flagged = int(flag.sum())
+    info: dict[str, Any] = {
+        "min_w_h": float(min_w_h),
+        "target_cells_across": int(target_cells_across),
+        "total_flagged_elements": n_flagged,
+        "n_components": 0,
+        "components": [],
+        "current_phase_e_new_nodes": 0,
+        "medial_axis_new_nodes_estimate": 0,
+        "delta_nodes_vs_current": 0,
+    }
+    if n_flagged == 0:
+        return info
+
+    # Subgraph adjacency restricted to flagged elements.
+    flagged_idx = np.where(flag)[0]
+    full_adj = face_face_adjacency(mesh.elements)
+    sub = full_adj[flagged_idx][:, flagged_idx]
+    n_comp, labels = connected_components(sub, directed=False, return_labels=True)
+    info["n_components"] = int(n_comp)
+
+    nodes_m = _analysis_xy_metric(np.asarray(mesh.nodes, dtype=float))
+    h_local = np.asarray(metric_info["h_local_m"], dtype=float)
+    interior_rows = int(target_cells_across) - 1
+
+    cur_total = 0
+    medial_total = 0
+    for c in range(int(n_comp)):
+        member_local = np.where(labels == c)[0]
+        member_global = flagged_idx[member_local]
+        if member_global.size == 0:
+            continue
+        elem_block = mesh.elements[member_global]
+        node_ids = np.unique(elem_block.ravel())
+        comp_xy = nodes_m[node_ids]
+        long_axis_m = _component_long_axis_m(comp_xy)
+        comp_h = h_local[member_global]
+        comp_h_pos = comp_h[comp_h > 0]
+        h_med = float(np.median(comp_h_pos)) if comp_h_pos.size else 0.0
+
+        cur_phase_e = int(member_global.size)  # one centroid each
+        if h_med > 0 and long_axis_m > 0:
+            nodes_per_row = max(int(np.ceil(long_axis_m / h_med)), 1)
+            medial_estimate = int(interior_rows * nodes_per_row)
+        else:
+            medial_estimate = 0
+
+        info["components"].append({
+            "component_id": int(c),
+            "n_elements": int(member_global.size),
+            "n_nodes": int(node_ids.size),
+            "h_local_median_m": h_med,
+            "long_axis_m": float(long_axis_m),
+            "current_phase_e_new_nodes": cur_phase_e,
+            "medial_axis_new_nodes_estimate": medial_estimate,
+        })
+        cur_total += cur_phase_e
+        medial_total += medial_estimate
+
+    info["current_phase_e_new_nodes"] = int(cur_total)
+    info["medial_axis_new_nodes_estimate"] = int(medial_total)
+    info["delta_nodes_vs_current"] = int(medial_total - cur_total)
+    return info
+
+
+# ---------------------------------------------------------------------------
 # Phase F: angle-based skewed-element removal (wraps ocsmesh.utils)
 # ---------------------------------------------------------------------------
 
@@ -1233,6 +1399,7 @@ __all__ = [
     "DEFAULT_SMOOTH_REPAIR_PASSES",
     "ThinChainMode",
     "UnderResolvedMode",
+    "analyze_under_resolved_channels",
     "clean_mesh",
     "keep_components",
     "rebuild_boundaries",
