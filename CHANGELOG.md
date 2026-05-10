@@ -27,6 +27,21 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `mesh_engine/oceanmesh.py` build pipeline now wraps the post-DistMesh
+  ``om.laplacian2`` cleanup call with the same flip-rollback safety
+  net used by Phase G in ``fmesh-mesh-clean``, fixing the regression
+  PoC #34 surfaced (1 inverted triangle on Tokyo Bay when wavelength
+  sizing was on). The build-time call no longer relies on the
+  upstream perpfix to clean up after ``laplacian2``; any negative-
+  signed-area triangle the smoother leaves behind is detected and
+  rolled back to its pre-smoothing state, with a log line reporting
+  how many nodes were rolled back. ``repair_flipped_elements`` is
+  now a public name in ``mesh_clean`` for cross-module reuse (alias
+  of the existing ``_repair_flipped_elements``); `__all__` exports
+  it. New unit tests in ``tests/test_mesh_engine_oceanmesh_safety.py``
+  drive the wrapper inline using a monkey-patched
+  ``oceanmesh.laplacian2`` that returns hand-crafted flipping
+  vertices and assert the output is flip-free.
 - `docs/detector_repair_matrix.md` consolidates the detector → phase →
   metric → pipeline-rung mapping into one lookup table. Each row pairs
   a defect (`disjoint_components_flag`, `over-connected nodes`, …)

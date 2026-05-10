@@ -801,6 +801,12 @@ def _repair_flipped_elements(
     }
 
 
+# Public alias for callers outside this module who need the same
+# flip-rollback algorithm (e.g. ``mesh_engine/oceanmesh.py`` when it
+# wraps ``om.laplacian2`` in the build-time cleanup chain).
+repair_flipped_elements = _repair_flipped_elements
+
+
 def smooth_mesh_laplacian(
     mesh: Fort14Mesh,
     *,
@@ -1231,6 +1237,7 @@ __all__ = [
     "keep_components",
     "rebuild_boundaries",
     "remove_elements",
+    "repair_flipped_elements",
     "repair_overconnected_nodes",
     "repair_skewed_elements",
     "repair_thin_chains",

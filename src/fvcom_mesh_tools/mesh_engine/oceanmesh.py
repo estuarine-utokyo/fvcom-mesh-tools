@@ -14,7 +14,12 @@ The composed sizing is then smoothed by
 :func:`oceanmesh.enforce_mesh_gradation` and fed to DistMesh via
 :func:`oceanmesh.generate_mesh`. Output is cleaned up with the standard
 ``make_mesh_boundaries_traversable`` / ``delete_boundary_faces`` /
-``laplacian2`` post-processing chain.
+``laplacian2`` post-processing chain. The build-time ``laplacian2``
+call is wrapped with
+:func:`fvcom_mesh_tools.mesh_clean.repair_flipped_elements` so any
+inverted triangle that the unsupervised smoother might leave behind
+(PoC #34 found 1 such triangle on Tokyo Bay when wavelength sizing
+was on) is rolled back to its pre-smoothing state.
 
 Used as the *primary* engine because PoC #18 showed alpha mean 0.96 and
 ``frac<20deg`` 0.03 % on Tokyo Bay vs. 0.85 / 1.13 % for OCSMesh+gmsh.
@@ -228,6 +233,26 @@ def build(
         points, cells = om.make_mesh_boundaries_traversable(points, cells)
         points, cells = om.delete_faces_connected_to_one_face(points, cells)
         points, cells = om.delete_boundary_faces(points, cells, min_qual=min_qual)
-        points, cells = om.laplacian2(points, cells)
+
+        # ``om.laplacian2`` converges on edge-length stability but does
+        # not check signed area, so it can leave a few inverted
+        # triangles behind (PoC #34 surfaced 1 such triangle when
+        # wavelength sizing was on). Wrap with the same flip-rollback
+        # used by Phase G in mesh_clean.
+        from fvcom_mesh_tools.mesh_clean import repair_flipped_elements
+
+        pre = np.asarray(points, dtype=float).copy()
+        smoothed, cells = om.laplacian2(points, cells)
+        smoothed = np.asarray(smoothed, dtype=float)
+        cells_arr = np.asarray(cells, dtype=int)
+        repaired, repair_info = repair_flipped_elements(pre, smoothed, cells_arr)
+        if repair_info["n_flipped_post_smooth"] > 0:
+            log(
+                f"[oceanmesh] laplacian2 repair: rolled back "
+                f"{repair_info['n_nodes_rolled_back']} node(s) to clear "
+                f"{repair_info['n_flipped_post_smooth']} flipped triangle(s)"
+                f"{' (full rollback)' if repair_info['full_rollback'] else ''}"
+            )
+        points = repaired
 
     return np.asarray(points, dtype=float), np.asarray(cells, dtype=np.int64)

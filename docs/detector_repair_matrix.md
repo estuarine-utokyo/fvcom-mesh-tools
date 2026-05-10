@@ -82,7 +82,7 @@ build's CFL constraint.
 | `--max-frac-lt-20deg 0.005` | i.e. ≤ 0.5 % of triangles below 20° | `architecture.md` §2 |
 | `--max-valence 8` | Conservative legacy FVCOM `MAX_NBR_ELEM` | match your build's compile-time cap |
 | `--max-overconnected 0` | Hard zero is achievable on cleaned oceanmesh meshes (PoC #19, #33) | Phase D + edge swap |
-| `--max-flipped 0` | Hard zero — Phase G's repair_flipped safety net guarantees this | added in commit `ba1d948` |
+| `--max-flipped 0` | Hard zero — Phase G's repair_flipped safety net guarantees this, and the same safety net now wraps the build-time `om.laplacian2` call inside `fmesh-buildmesh --engine oceanmesh` | added in commits `ba1d948` (Phase G) and the build-pipeline follow-up |
 | `--max-disjoint-elems 0` | Hard zero — Phase A removes them | rung 0 always covers this |
 
 A "FVCOM-friendly default preset":
