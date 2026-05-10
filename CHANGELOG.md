@@ -8,479 +8,240 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Highlights
+
+A complete `clean → measure → loop` toolchain for FVCOM mesh quality
+landed under this release. End-to-end:
+
+```
+fmesh-subset-dem → fmesh-buildmesh → fmesh-mesh-pipeline
+                                             ↑
+                                fmesh-mesh-check / -clean / -quality
+```
+
+Build, repair (7 phases A-G), unified metrics with threshold gate,
+progressive 3-rung clean / quality / repeat loop with `--best-rung`
+selection. ocsmesh's build engine is deprecated (PoC #30 / #36
+together close the case); ocsmesh remains a library dependency for
+`ops.combine_mesh` and `utils.cleanup_skewed_el` (no gmsh).
+
 ### Deprecated
 
-- **`fmesh-buildmesh --engine ocsmesh`** is now deprecated. The CLI
-  emits a `DeprecationWarning` plus a visible stderr notice when
-  the option is selected, and the `--help` text and CLI table label
-  it accordingly. The code path is retained for one release for
-  migration; production callers should switch to
-  `--engine oceanmesh` (the default) immediately. Rationale is in
-  `docs/engine_complementarity.md`: ocsmesh + gmsh produces
-  alpha~0.85 / max valence 26 (vs 0.96 / 9 for oceanmesh) and
-  ocsmesh's Triangle backend cannot consume a varying-size raster
-  Hfun (PoC #30), so gmsh cannot be cheaply replaced. **Library
-  use** of ocsmesh (`ops.combine_mesh` for
-  `fmesh-mesh-combine --strategy {overlap,neighbor}`, `utils`,
-  `Raster`) is unaffected — only the buildmesh engine path is
-  going away.
+- **`fmesh-buildmesh --engine ocsmesh`**. Selecting it now emits a
+  `DeprecationWarning` plus a stderr notice. Quality (PoC #16:
+  alpha 0.85, max valence 26) is far below the oceanmesh path
+  (PoC #19: 0.96, max valence 9). PoC #30 ruled out a Triangle
+  replacement (`NotImplementedError("Varying sizing is not supported
+  for Triangle engine!")`); PoC #36 showed oceanmesh's `--om-max-iter
+  10` matches the draft niche at 7 min wall with alpha 0.943
+  (10× faster than default, still well above ocsmesh quality). The
+  build path stays one release for migration. **Library** use of
+  ocsmesh (`ops.combine_mesh`, `utils`, `Raster`) is unaffected.
+  See `docs/engine_complementarity.md` for the full inventory.
 
-### Added
+### Added — CLIs
 
-- ``min_channel_elements`` filter on detector 6
-  (``under_resolved_channels_flag``). Default 1 = no filter
-  (legacy); raise to N to drop any flagged element whose
-  face-face-connected component has fewer than N members. PoC #35
-  characterised the typical detector-6 flag set as ~1,000 small
-  isolated clusters with mean ~3 elements / channel; this filter
-  lets callers ignore that noise and concentrate Phase E (or any
-  future Stage 2 medial-axis remeshing) on the long ribbon-like
-  channels actually worth widening. Plumbed end-to-end:
-  ``run_diagnostics`` accepts ``min_channel_elements``;
-  ``fmesh-mesh-check`` exposes ``--min-channel-elements N``;
-  ``repair_under_resolved_channels`` and ``clean_mesh`` both
-  accept the parameter; ``fmesh-mesh-clean`` and
-  ``fmesh-mesh-pipeline`` expose
-  ``--under-resolved-min-channel-elements N`` (the latter applies
-  to rung 2). Phase E's info dict reports the threshold used and
-  the post-filter flag count. 4 new tests cover the default-no-
-  filter regression guard, the small-component drop behaviour,
-  ``run_diagnostics`` propagation, and Phase E end-to-end
-  propagation through ``clean_mesh``. 195 tests pass.
-- `fvcom_mesh_tools.mesh_clean.analyze_under_resolved_channels` —
-  Stage 1 of the planned "true medial-axis Phase E" project.
-  Splits detector-6-flagged elements into face-face-adjacent
-  connected channel components and reports per-channel
-  ``n_elements``, ``n_nodes``, ``h_local_median_m``,
-  ``long_axis_m`` (PCA principal-axis extent), the existing
-  centroid-widen new-node cost, and the medial-axis estimate of
-  new nodes required for ``target_cells_across`` cells across
-  (default 3). Aggregate dict gives ``n_components``,
-  ``current_phase_e_new_nodes``,
-  ``medial_axis_new_nodes_estimate``, and the implied
-  ``delta_nodes_vs_current``. The function is *measurement only*;
-  it does not modify the mesh. PoC #35
-  (`notebooks/35_phase_e_potential_poc.py`) runs it on the PoC #19
-  cleaned Tokyo-Bay mesh and on the centroid-widen output of
-  PoC #29:
-
-      cleaned_pre_E         : 3,178 flagged → 1,010 components,
-                              centroid 3,178 vs medial-axis 4,714
-                              new nodes (+48 %).
-      after_centroid_widen  : 3,032 flagged → 807 components,
-                              centroid 3,032 vs medial-axis 3,844
-                              new nodes (+27 %).
-
-  **Stage 2 (real medial-axis insertion + local CDT re-meshing)
-  is deferred** based on this evidence: the 1,010 channels split
-  with mean ~3 elements / component, i.e. they are predominantly
-  small isolated clusters at river-mouth corners / jetty tips,
-  not the long ribbon-like narrow inlets the strategy targets.
-  +48 % extra node insertion for marginal real-world benefit on
-  this geography is hard to justify; the more useful follow-up
-  is a min-component-size filter on detector 6 (or a
-  "top-N largest channel" Stage 2 MVP) that would isolate the
-  cases where medial-axis insertion actually wins.
-- `fmesh-mesh-pipeline --best-rung` mode. Disables the default
-  first-passing-rung early-stop and runs every rung up to
-  `--max-iters`, then writes the rung that maximises ``alpha_mean``
-  among the gate-passing rungs (ties broken in favour of the lower
-  rung index — the lighter repair). When no rung passes, the
-  highest-alpha rung overall is written and the JSON
-  ``final.selection_reason`` reports the fallback. NaN ``alpha_mean``
-  (e.g. an empty mesh) is ranked below any finite alpha so it never
-  wins. Useful when the user wants the maximum quality the pipeline
-  can produce, not just the first acceptable mesh; default
-  ``best_rung=False`` preserves the existing first-passing-rung
-  behaviour exactly. JSON payload gains ``best_rung_mode``,
-  ``final.rung_index``, and ``final.selection_reason``.
-  Implementation: ``_select_rung`` in ``cli/meshpipeline.py``
-  centralises the selection logic; 7 new tests cover passing-set
-  selection, gate-fallback, tie-break, NaN handling, default-off
-  preservation, and end-to-end CLI behaviour.
-- `mesh_engine/oceanmesh.py` build pipeline now wraps the post-DistMesh
-  ``om.laplacian2`` cleanup call with the same flip-rollback safety
-  net used by Phase G in ``fmesh-mesh-clean``, fixing the regression
-  PoC #34 surfaced (1 inverted triangle on Tokyo Bay when wavelength
-  sizing was on). The build-time call no longer relies on the
-  upstream perpfix to clean up after ``laplacian2``; any negative-
-  signed-area triangle the smoother leaves behind is detected and
-  rolled back to its pre-smoothing state, with a log line reporting
-  how many nodes were rolled back. ``repair_flipped_elements`` is
-  now a public name in ``mesh_clean`` for cross-module reuse (alias
-  of the existing ``_repair_flipped_elements``); `__all__` exports
-  it. New unit tests in ``tests/test_mesh_engine_oceanmesh_safety.py``
-  drive the wrapper inline using a monkey-patched
-  ``oceanmesh.laplacian2`` that returns hand-crafted flipping
-  vertices and assert the output is flip-free.
-- `docs/detector_repair_matrix.md` consolidates the detector → phase →
-  metric → pipeline-rung mapping into one lookup table. Each row pairs
-  a defect (`disjoint_components_flag`, `over-connected nodes`, …)
-  with the `fmesh-mesh-clean` phase that fixes it, the
-  `fmesh-mesh-quality` metric that measures it, and the
-  `fmesh-mesh-pipeline` rung that turns the phase on automatically.
-  Includes side-effect rows (which phases modify NP / NE / boundary
-  set), a phase-ordering rationale, threshold-gate heuristics
-  (FVCOM-friendly preset), the recommended end-to-end workflow, and a
-  "where to add a new detector / phase" appendix. Cross-linked from
-  README and `docs/architecture.md` §8.
-- `fmesh-buildmesh --om-wavelength-sizing` adds
-  `oceanmesh.wavelength_sizing_function` to the size composition in
-  the oceanmesh engine path, alongside the existing
-  ``feature_sizing_function`` and ``bathymetric_gradient_sizing_function``.
-  The wavelength function returns ``dx ∝ T·√(g·h) / wl``, so
-  shoaling regions get refined to satisfy the FVCOM CFL condition
-  even where ``∇h`` is small. Off by default; tune the period
-  (``--om-wavelength-period``, default 44712 s ≈ M2) and grid
-  spacing (``--om-wavelength-grid-spacing``, default 100 — implies
-  dt = T/wl ≈ 7.5 min, a comfortable FVCOM time step). The three
-  size functions are merged via ``om.compute_minimum`` so the
-  smallest-required size wins per cell. PoC #34
-  (`notebooks/34_wavelength_sizing_poc.py`) A/B's the option on
-  Tokyo Bay vs the gradient-only baseline:
-
-      * shallow-cell density (≤ 5 m) +1.8 % (18,767 → 19,111) —
-        the wavelength contribution does refine shoaling regions
-        as designed.
-      * alpha_mean 0.9594 → 0.9606 (+0.0012); frac<20° drops by
-        22 % relative (0.087 % → 0.067 %).
-      * **min CFL-feasible dt at C=0.7 only +2 %** (1.80 s →
-        1.84 s) — Tokyo Bay's worst-case dt is set by
-        ``feature_sizing_function`` along the coast, not by the
-        gradient or wavelength fields, so the wavelength
-        contribution barely moves the FVCOM-relevant headline
-        number for this basin. Off-by-default is therefore the
-        right posture; turn it on when the basin's smallest cells
-        sit in shoaling regions away from coastline detail.
-      * **Side finding**: wavelength on caused n_flipped 0 → 1
-        (a single inverted triangle that perpfix could not
-        repair). Root cause is oceanmesh's own ``laplacian2`` in
-        the build cleanup chain (`mesh_engine/oceanmesh.py:187`);
-        unlike our Phase G wrapper, the build-time call has no
-        safety net. Tracked as a follow-up: wrap that call with
-        the same flip-rollback used by ``smooth_mesh_laplacian``.
-- `fmesh-mesh-pipeline` CLI: progressive `clean → quality → repeat`
-  loop. Applies three cumulative *rungs* of `fmesh-mesh-clean`
-  phases — rung 0 (A+B+C), rung 1 (+D+F+G), rung 2 (+E) — and
-  evaluates `fmesh-mesh-quality` thresholds after each. Stops at
-  the first rung that passes the gate; exits 1 when thresholds are
-  supplied and no rung satisfies them. Without thresholds, attempts
-  all rungs (or up to `--max-iters`) and reports per-rung metrics
-  without a gate. JSON history records each rung's metrics and
-  threshold-check results so callers can audit which rung achieved
-  the gate. Validated end-to-end by PoC #33 on the PoC #19 raw
-  Tokyo-Bay mesh (the messy starting point: 144 components, 5,496
-  disjoint elements, 3 over-connected nodes).
-- Phase G now repairs flipped triangles introduced by Laplacian
-  smoothing. New helper
-  `fvcom_mesh_tools.mesh_clean._repair_flipped_elements` detects
-  any negative-signed-area triangle in the smoother's output and
-  iteratively reverts the three nodes of every offending triangle
-  to their pre-smoothing positions; the loop stops when no flips
-  remain or `max_passes` (default 5) is reached. A full-rollback
-  safety net guarantees the output is flip-free even when the
-  iterative repair does not converge.
-  `smooth_mesh_laplacian` now exposes `repair_flipped` (default
-  True) and `max_repair_passes` parameters; the returned `info`
-  dict gains `n_flipped_post_smooth`, `n_flipped_after_repair`
-  (always 0 with `repair_flipped=True`), `n_nodes_rolled_back`,
-  `n_rollback_passes`, and `full_rollback`. The `fmesh-mesh-clean`
-  CLI gains `--smooth-no-repair-flipped` and
-  `--smooth-max-repair-passes`. Discovered by
-  `fmesh-mesh-quality` running over PoC #19's raw / cleaned /
-  Phase-G output: the threshold gate `--max-flipped 0` flagged
-  2 inverted triangles produced by `oceanmesh.laplacian2` on the
-  cleaned mesh — a regression that the smoother's edge-length
-  convergence metric does not catch on its own.
-- `fmesh-mesh-quality` CLI + `fvcom_mesh_tools.quality` module: a
-  unified quality-metrics dump that consolidates the per-mesh
-  numbers PoCs computed ad-hoc (alpha mean / p05 / p50, min-angle
-  p05 / p50, frac<20°, max valence, n_overconnected, n_flipped,
-  n_components, n_disjoint_elems) into one place. `compute_metrics`
-  takes a `Fort14Mesh` and returns a flat JSON-friendly dict with
-  the keys listed in `quality.METRIC_KEYS`. The CLI accepts one or
-  more fort.14 inputs: a single mesh prints metrics, two prints a
-  side-by-side table with a `delta` column, three or more prints
-  the matrix. Threshold flags (`--min-alpha`, `--max-frac-lt-20deg`,
+- **`fmesh-mesh-quality`** — unified quality metrics (alpha mean /
+  p05 / p50, min-angle p05 / p50, frac<20°, max valence,
+  n_overconnected, n_flipped, n_components, n_disjoint_elems) for
+  one or more fort.14 inputs. Two inputs print a `delta` column;
+  threshold flags (`--min-alpha`, `--max-frac-lt-20deg`,
   `--max-valence`, `--max-overconnected`, `--max-flipped`,
-  `--max-disjoint-elems`) are evaluated against the LAST mesh and
-  turn the command into a CI gate (exit 1 on any failure). All
-  outputs land in a JSON summary alongside the last input. Validates
-  the gate end-to-end: a smoke run against the PoC #19 raw / cleaned
-  / Phase-G output flagged the 2 inverted triangles Phase G
-  introduced — exactly the kind of regression the gate is for.
-- `fmesh-mesh-clean` Phase G: Laplacian smoothing of interior nodes.
-  New function `fvcom_mesh_tools.mesh_clean.smooth_mesh_laplacian`
-  wraps `oceanmesh.laplacian2`, which derives the boundary set from
-  the mesh topology and pins it automatically — connectivity, depth
-  array, and open / land boundary lists are all preserved across
-  the smoothing pass. Off by default. The CLI gains
-  `--smooth-laplacian` plus `--smooth-laplacian-iters` (default 20)
-  and `--smooth-laplacian-tol` (default 0.01) — both matching the
-  oceanmesh defaults. Importing oceanmesh propagates GPL-3.0 into
-  the redistributed combined work (already documented in
-  `THIRD_PARTY_NOTICES.md`); callers who need a GPL-free path
-  should leave Phase G off. PoC #32
-  (`notebooks/32_phase_g_smooth_poc.py`) sweeps three iteration /
-  tolerance presets on the PoC #19 cleaned Tokyo-Bay mesh:
-  alpha-mean `0.9576 → 0.9590` (+0.0014), min-angle p05
-  `39.90° → 40.27°` (+0.37°), bad-triangle fraction (frac<20°)
-  `0.169 % → 0.120 %` (≈ 29 % relative reduction, 80 → 57 of
-  47,409). Convergence is fast on cleaned input — the gentle
-  preset (`max_iter=5`) yields the same numbers as the default
-  (`max_iter=20`). Topology invariants (NP / NE / boundary
-  counts) preserved across all presets.
-- `fmesh-mesh-clean` Phase F: angle-based skewed-element removal. New
-  function `fvcom_mesh_tools.mesh_clean.repair_skewed_elements` wraps
-  `ocsmesh.utils.cleanup_skewed_el` (gmsh-free; ocsmesh used as a
-  library only — see `docs/engine_complementarity.md` §3.2.3) and
-  deletes triangles whose minimum interior angle is below
-  `--repair-skewed-min-angle-deg` (default 1°) or whose maximum is
-  at or above `--repair-skewed-max-angle-deg` (default 175°). The
-  CLI gains `--repair-skewed-elements` (off by default) plus the
-  two threshold flags. Boundaries are re-derived via DEM-bbox
-  proximity after deletion (skipped when the run is a no-op).
-  Validated by PoC #31 (`notebooks/31_phase_f_skewed_clean_poc.py`)
-  on the PoC #19 cleaned Tokyo-Bay mesh across three threshold
-  presets: at ocsmesh defaults `[1°, 175°]` the cleaned mesh has zero
-  flagged elements (the prior 4-phase pipeline already left no
-  degenerate slivers); at `[5°, 170°]` 3 of 47,409 elements (0.006 %)
-  are removed; at `[10°, 160°]` 9 are removed (0.019 %). Phase F's
-  real leverage is therefore on raw / unclean meshes where slivers
-  survive — particularly the OCSMesh+gmsh path (alpha 0.85,
-  frac<20°=1.13 %) — rather than on already-cleaned oceanmesh output.
-- `docs/engine_complementarity.md` consolidates the empirical and
-  source-level investigation of `oceanmesh` and `ocsmesh`: which
-  capabilities each library has, which are exclusive (a long list on
-  both sides), and which are gmsh-dependent. Headline findings:
-  ocsmesh's Triangle engine cannot consume a varying-size `Hfun`
-  (PoC #30 `NotImplementedError("Varying sizing is not supported for
-  Triangle engine!")`), so it is not a drop-in replacement for gmsh
-  in the build path. Several ocsmesh capabilities have no oceanmesh
-  equivalent and are independently valuable to keep:
-  `add_courant_num_constraint` and the other `Hfun.add_*` sizing
-  primitives, `ops.combine_mesh.merge_overlapping_meshes` and
-  `merge_neighboring_meshes` (Triangle-based, gmsh-free),
-  `utils.cleanup_skewed_el` and `repartition_features`,
-  `utils.interpolate_*` for mesh-to-mesh field transfer, and
-  `Raster.{clip,fill_nodata,gaussian_filter,get_channels}` for DEM
-  preprocessing. The recommended division of labour is "oceanmesh
-  for build, ocsmesh as a library", with `--engine ocsmesh`
-  deprecation planned (decision pending) and ocsmesh utility wrappers
-  evaluated for Phase F sliver clean and Phase G Laplacian smoothing.
-- PoC #30 (`notebooks/30_triangle_engine_poc.py`) tries swapping
-  ocsmesh's `MeshDriver(engine_name="gmsh")` for `engine_name="triangle"`
-  on the Tokyo Bay PoC #16 inputs. ocsmesh's Triangle wrapper raises
-  `NotImplementedError` whenever a raster-driven Hfun is supplied —
-  it only supports constant size — so Triangle is unusable for our
-  build configuration without a from-scratch wrapper around Shewchuk
-  Triangle. Documented in `docs/engine_complementarity.md` §2 as the
-  reason gmsh cannot be cheaply removed.
-- `.pre-commit-config.yaml` for contributor-side git hooks: `ruff
-  check --fix`, trailing-whitespace + EOF-newline + mixed-line-ending
-  fixers, YAML/TOML syntax check, merge-conflict marker check,
-  large-file guard. CI installs `pre-commit` and runs
-  `pre-commit run --all-files`, so local hooks and CI agree.
-- CLI smoke step in GitHub Actions runs `--help` on every console
-  script (`fmesh-buildmesh`, `fmesh-perpfix`, `fmesh-subset-dem`,
-  `fmesh-mesh-combine`, `fmesh-mesh-check`, `fmesh-mesh-clean`) so
-  any regression in the `pyproject.toml` entry-point wiring or
-  argparse construction trips CI.
+  `--max-disjoint-elems`) turn it into a CI gate evaluated against
+  the LAST mesh (exit 1 on failure). Backed by
+  `fvcom_mesh_tools.quality` with `compute_metrics` /
+  `check_thresholds` / `format_comparison_table`.
+- **`fmesh-mesh-pipeline`** — progressive `clean → quality → repeat`
+  loop. Three cumulative rungs: rung 0 (A+B+C), rung 1 (+D+F+G),
+  rung 2 (+E). Default early-stops at the first rung that satisfies
+  the supplied threshold gate; `--best-rung` runs every rung up to
+  `--max-iters` and writes the gate-passing rung with the highest
+  `alpha_mean` (ties broken in favour of the lighter repair).
+  Per-rung JSON history with `selection_reason`. PoC #33 validates
+  end-to-end on the PoC #19 raw Tokyo Bay mesh under the
+  FVCOM-friendly preset (`--min-alpha 0.95 --max-frac-lt-20deg
+  0.005 --max-valence 8 --max-flipped 0 --max-disjoint-elems 0`):
+  rung 1 (`+D+F+G`) passes, rung 2 not needed.
 
-- `fvcom_mesh_tools.diagnostics` module + `fmesh-mesh-check` CLI for
-  detection of inadequate FVCOM meshes, with no repair. Six detectors
-  surface defects that are common in narrow water bodies (rivers,
-  canals, harbours):
-  1. disjoint dual-graph components (isolated wet pools);
-  2. dead-end elements (degree-1 in the dual graph, no open-boundary
-     edge);
-  3. thin elements (all 3 vertices on a boundary);
-  4. thin-chain elements (chain of ≥ `--min-thin-chain` adjacent thin
-     elements — the 1-cell-wide-channel signature);
-  5. over-connected nodes (valence > `--max-nbr-elem`, FVCOM
-     `MAX_NBR_ELEM` cap);
-  6. open-boundary unreachable elements.
-  The CLI emits `<prefix>_summary.txt`, `<prefix>_diag.json` (per-element
-  / per-node records with coordinates), and `<prefix>_map.png`. Exit
-  code is non-zero if any detector fires, so the command works as a
-  CI gate. Validated on the existing Tokyo Bay (PoC #19, #16) and Osaka
-  Bay (PoC #20) fort.14 outputs in PoC #24; the over-connected-node
-  finding for PoC #16 (440 nodes, max valence 26) was characterised in
-  PoC #25 and traced to the OCSMesh+gmsh engine path (oceanmesh engine
-  produces only 3 over-connected nodes for the same inputs). PoC #26
-  ablation showed gmsh itself produces ~380 over-connected nodes
-  (max v=18) on Tokyo Bay+rivers before any post-processing; turning
-  off `--refine-min-angle` (longest-edge bisection) is the single
-  largest improvement available within the OCSMesh path
-  (440 → 313 over-connected, max v 26 → 21), but does not close the
-  gap with the oceanmesh engine.
-- `fmesh-mesh-clean` Phase D: over-connected node repair via
-  valence-balancing edge swaps (graduated from PoC #27). The greedy
-  Lawson-style flip is exposed as
-  `fvcom_mesh_tools.algorithms.swap_edges_for_valence` and as
-  `fvcom_mesh_tools.mesh_clean.repair_overconnected_nodes`. The CLI
-  gains `--repair-overconnected-iters` (default 0 = OFF),
-  `--max-nbr-elem` (default 8 = FVCOM legacy cap), and
-  `--overconn-min-angle-floor` (default 0° — only triangle inversion
-  forbidden, the value PoC #27 found practical on real meshes).
-  Validated on PoC #19's cleaned Tokyo Bay mesh: enabling Phase D
-  drives `n_overconnected: 3 → 0`, `max_valence: 9 → 8` after 20
-  swaps in 2 iterations, with alpha mean 0.9577 → 0.9576, frac<20° =
-  0.16 → 0.17 % — essentially zero quality cost. Severe gmsh-fan
-  cases (PoC #16, max valence 26) are only partially fixable by edge
-  swap alone; mitigation there is engine choice.
-- `fmesh-mesh-clean` Phase E: widen or delete medial-axis-detected
-  under-resolved channel elements (detector 6). Reuses the existing
-  centroid-insertion mechanism from Phase C-widen — each flagged
-  triangle becomes 3 sub-triangles fanning from a new interior
-  centroid. Exposed as
-  `fvcom_mesh_tools.mesh_clean.repair_under_resolved_channels`. The
-  CLI gains `--under-resolved-mode {widen,delete,none}` (default
-  `none`), `--under-resolved-min-w-h` (default 3.0), and the matching
-  detector-6 parameters (`--under-resolved-sample-ds-m`,
-  `--under-resolved-arc-separation-factor`,
-  `--under-resolved-opposite-bank-cos-max`). Phase E is **off by
-  default** because detector 6 typically flags thousands of elements
-  on real meshes; enable deliberately when widening is the desired
-  remediation. PoC #29 validates the widen path end-to-end on the
-  PoC #19 cleaned Tokyo-Bay mesh: topology growth checks pass
-  (NP +3,178, NE +6,356) and boundaries are preserved, but the
-  detector-6 reduction is modest (3,178 → 3,032, 4.6 %). Reason:
-  centroid insertion shrinks h_local by ~0.577× while the geometric
-  channel width is unchanged, so w/h ≈ 1.73× the original ratio —
-  only elements with originally-borderline ratios cross the
-  threshold. Phase E should therefore be read as "lift local
-  resolution one step", not "guarantee 3 cells across every narrow
-  channel". The latter requires inserting nodes along the channel
-  medial axis, a deeper remeshing operation outside `clean_mesh`'s
-  scope.
-- 7th detector `under_resolved_channels_flag` graduates from PoC #28
-  into `fvcom_mesh_tools.diagnostics`. The metric is the smaller of
-  two channel-width candidates divided by the median element edge
-  length:
-    1. **cross-polyline**: distance from the centroid to the two
-       nearest distinct boundary polylines, summed (catches the
-       "channel between mainland and an island" case);
-    2. **same-polyline narrow inlet**: distance to the nearest
-       sample on a polyline plus the distance to the nearest sample
-       on that same polyline whose along-polyline arc separation is
-       large (catches an inlet whose two banks lie on a single
-       continuous coastline). The same-polyline candidate is
-       accepted only when the two vectors (centroid → nearest
-       sample, centroid → far-arc sample) point in roughly opposite
-       directions (cos angle < `--channel-opposite-bank-cos-max`,
-       default −0.8 = angle > 143°), which rejects coastal-corner
-       false positives where the polyline wraps around a peninsula
-       tip.
-  Built per-polyline `cKDTree`s rather than a single combined tree,
-  so cross-polyline distance is exact even on densely-sampled
-  coasts. The CLI gains `--min-w-h` (default 3.0),
-  `--channel-sample-ds-m` (default 50 m),
-  `--channel-arc-separation-factor` (default 4.0), and
-  `--channel-opposite-bank-cos-max` (default −0.8). Validated on the
-  PoC #19 cleaned Tokyo Bay mesh: 3,178 elements (6.7 % of NE) are
-  flagged, concentrated at the northern Tokyo Bay river mouths and
-  along narrow coastal jetties / breakwaters. PoC #28's prototype
-  underflagged (618) by missing same-polyline inlets; the
-  productionised version's same-polyline + direction filter catches
-  them while keeping the median ratio above 26 for the bay
-  interior.
-- PoC #28 (`notebooks/28_channel_width_poc.py`) prototypes a
-  medial-axis-style channel-width / h ratio detector for
-  under-resolved channels (2- to 3-cell wide) that the existing
-  `thin_chain_elements_flag` (1-cell only) misses. Per element, the
-  metric is `(d(centroid, polyline_A) + d(centroid, polyline_B)) /
-  median_edge_length`, where `polyline_A`, `polyline_B` are the two
-  closest *distinct* boundary polylines. Flag when the ratio is below
-  3.
+### Added — `fmesh-mesh-clean` phases
 
-  Validated on the PoC #19 mesh (uncleaned and after Phase A+B+C+D
-  cleaning):
+- **Phase A** `keep_components` — drop disjoint dual-graph
+  components; default keeps only the largest.
+- **Phase B** `trim_dead_ends` — iterative degree-1 trim.
+- **Phase C** `repair_thin_chains` — widen 1-cell channels by
+  centroid insertion (default), or delete the chain.
+- **Phase D** `repair_overconnected_nodes` (off by default) —
+  greedy Lawson edge swap that drives valence ≤ `--max-nbr-elem`.
+  Graduated from PoC #27.
+- **Phase E** `repair_under_resolved_channels` (off by default) —
+  centroid widen of detector-6-flagged elements. The new
+  `--under-resolved-min-channel-elements N` filter (default 1 = no
+  filter) drops flagged elements whose face-face-connected
+  component is smaller than N — see PoC #35 motivation below.
+  Phase E centroid widen lifts h_local by ~0.577× without changing
+  the geometric channel width, so the post-widen w/h ratio is
+  ~1.73× the original — borderline-flagged elements cross the
+  threshold but very narrow channels stay flagged. PoC #29
+  validated 4.6 % reduction on PoC #19; the upper-bound is
+  characterised by PoC #35.
+- **Phase F** `repair_skewed_elements` (off by default) — wraps
+  `ocsmesh.utils.cleanup_skewed_el` (gmsh-free). Deletes triangles
+  whose interior angles fall outside
+  `[--repair-skewed-min-angle-deg, --repair-skewed-max-angle-deg]`
+  (default `[1°, 175°]`). PoC #31 sweep on the cleaned mesh: 0/3/9
+  removed at default / conservative / aggressive thresholds —
+  near-zero impact on already-clean output, real leverage on raw
+  ocsmesh meshes.
+- **Phase G** `smooth_mesh_laplacian` (off by default) — wraps
+  `oceanmesh.laplacian2`. Connectivity, depths, and boundary lists
+  preserved. Includes `repair_flipped=True` (default) safety net
+  that reverts inverted triangles produced by the smoother — caught
+  by `fmesh-mesh-quality --max-flipped 0` over PoC #19's
+  raw / cleaned / Phase-G output. The same `repair_flipped_elements`
+  helper now wraps the build-time `om.laplacian2` call in
+  `mesh_engine/oceanmesh.py` (fixes the regression PoC #34
+  surfaced). PoC #32 numbers on PoC #19's cleaned mesh:
+  alpha 0.9576 → 0.9590, frac<20° drops 29 % relative.
 
-    * On the raw mesh, the detector catches 1,145 elements at
-      threshold 3, of which 1,009 are not flagged by `thin_chain` —
-      these include the genuinely-under-resolved 2-cell channels
-      around the Edogawa / Arakawa / Sumida river mouths in the
-      northern bay, exactly the case the user originally raised.
-    * On the cleaned mesh, 618 elements remain flagged — Phase C
-      widened the 1-cell chains but the channels are still only
-      ~2 cells wide.
-    * Limitation: 691 thin-chain elements are *not* caught because
-      the metric requires two distinct polylines. Where a continuous
-      coastline carves a narrow inlet against itself (both banks on
-      the same polyline), the second-nearest polyline is far away
-      and the ratio inflates. Productionising this detector needs
-      (i) splitting polylines at concave corners, (ii) Voronoi-based
-      true medial axis, or (iii) a "K-nearest with along-polyline
-      separation" filter.
+### Added — `fmesh-buildmesh` (oceanmesh engine)
 
-  The PoC stays as a research notebook; productionising into a
-  diagnostics-module flag is left for follow-up.
-- PoC #27 (`notebooks/27_overconn_repair_poc.py`) explores
-  edge-swap-based repair of over-connected nodes. A greedy
-  Lawson-style flip scored by reduction of per-edge "valence excess"
-  is shown to (i) eliminate the 3 over-connected nodes on the
-  cleaned PoC #19 mesh (max v=9 → 8, +0.01% bad triangles), (ii)
-  reduce 440 → 365 over-connected nodes on the PoC #16 OCSMesh+rivers
-  mesh (max v=26 → 23, +0.25% bad triangles), but only when the
-  min-angle floor is relaxed to 0°. The FVCOM-safe 20° floor rejects
-  every flip on the real meshes; valence fixing is therefore
-  fundamentally at odds with strict quality preservation when the
-  over-connected node sits in a fan-like local topology. The
-  algorithm is staged for productionising into a Phase D of
-  `fmesh-mesh-clean`; the floor / threshold defaults are still under
-  review.
-- `fvcom_mesh_tools.mesh_clean` module + `fmesh-mesh-clean` CLI for
-  the safe-repair subset of the diagnostics surfaced by PoC #24-#26.
-  Phase A keeps dual-graph connected components by size and / or
-  open-boundary touch (default: only the largest). Phase B
-  iteratively trims degree-1 elements that have no open-boundary edge
-  ("spit" terminations of 1-cell channels). Phase C repairs
-  1-cell-wide channels: by default (`--thin-chain-mode widen`) it
-  inserts a centroid into every thin-chain element so each thin
-  triangle becomes three sub-triangles fanning out from a strictly
-  interior point, giving two cells across the channel; with
-  `--thin-chain-mode delete` the chain is removed entirely. Phase A
-  / B / C-delete deletions re-derive boundaries via DEM-bbox
-  proximity (matching `fmesh-buildmesh`); Phase C-widen leaves
-  boundary topology untouched because the centroid is interior.
-  Validated on PoC #19's Tokyo Bay output: 5,496 disjoint elements
-  + 628 dead-end elements removed (Phase A + B), 165 thin-chain
-  elements widened with 165 interior nodes added (Phase C). The
-  cleaned mesh has 1 connected component, 0 dead-ends, 0 unreachable
-  elements, 0 thin chains, alpha mean 0.96, min-angle p50 51 deg,
-  frac<20° = 0.16%, and a single open-boundary segment.
-  Over-connected-node repair is **not** done here; that needs an
-  additional structural policy that is still under design.
-- `MESH_PNG_DPI = 600` shared default in `fvcom_mesh_tools.plotting`;
-  every notebook that writes a mesh visualisation now passes
-  `dpi=MESH_PNG_DPI` to `fig.savefig`. Histograms keep the matplotlib
-  default. PoC #23's `outputs/23_overlap_mesh.png` is regenerated at
-  600 dpi.
-- PoC #23 (`notebooks/23_mesh_combine_overlap.py`) validates
-  `fmesh-mesh-combine --strategy overlap` on real Tokyo Bay data:
-  a coarse outer (hmin=1000 m, NP=4,224) and a fine northern-bay
-  inner (hmin=200 m, NP=6,008) merge via
-  `ocsmesh.ops.merge_overlapping_meshes` into a single fort.14
-  with NP=8,227, NE=13,923, alpha 0.954, frac<20° 0.09 %, no
-  flipped triangles. The CLI hooks for `overlap` and `neighbor`
-  have existed since PoC #21 but had no end-to-end real-data
-  exercise; `overlap` is now covered, `neighbor` still pending.
-- `dem/` subpackage isolates rasterio / netCDF4 / pyproj helpers
-  behind the `[dem]` extra:
-  - `dem.bbox.read(path) -> (minx, miny, maxx, maxy)` for raster
-    bounds.
-  - `dem.subset.to_geotiff(src, dst, bbox, ...)` for clipping a DEM
-    to a lon/lat bounding box (rasterio path + lon/lat-NetCDF path).
-  - `dem.interp.at_points(dem, points, method=...)` for sampling a
-    DEM at mesh-node coordinates (bilinear / nearest, EPSG:4326).
-- `mesh_engine.ocsmesh` adapter. The
-  `mesh_engine.build("ocsmesh", ...)` dispatch path that previously
-  resolved to a non-existent module now works; both engines honour
-  the `(points, cells) -> EPSG:4326` contract.
-- `pyproject.toml` extras layered by concern: `[io-vector]`, `[dem]`,
-  `[oceanmesh]`, `[ocsmesh]`, `[viz]`, `[all]`. `[oceanmesh]` and
-  `[ocsmesh]` self-reference `[dem,io-vector]`.
+- **`--om-wavelength-sizing`** (off by default) — adds
+  `oceanmesh.wavelength_sizing_function` (`dx ∝ T·√(g·h)/wl`) to
+  the size composition alongside `feature_sizing_function` and
+  `bathymetric_gradient_sizing_function`. The three are merged via
+  `om.compute_minimum`. Tunables: `--om-wavelength-period` (default
+  44712 s ≈ M2) and `--om-wavelength-grid-spacing` (default 100,
+  implies dt ≈ T/wl ≈ 7.5 min). PoC #34 on Tokyo Bay: shoaling
+  cells (≤ 5 m) refined +1.8 %, alpha +0.0012, frac<20° -22 %
+  relative; **min CFL-feasible dt only +2 %** because Tokyo Bay's
+  worst-case dt is set by coastline `feature_sizing`, not depth.
+  Off-by-default is the right posture; turn on for basins with
+  shoaling regions away from coastline detail.
+- **Build-time `om.laplacian2` flip-rollback** — same safety net
+  used by Phase G now wraps the build cleanup chain. Eliminates
+  the 1 inverted triangle PoC #34 surfaced. Public alias
+  `fvcom_mesh_tools.mesh_clean.repair_flipped_elements`.
+- **Initial oceanmesh adapter** (`mesh_engine.oceanmesh`) — the
+  default engine; pure-Python DistMesh + post-processing chain.
+  Validated by PoCs #18-#22 (Tokyo Bay alpha 0.96, frac<20° 0.10 %
+  vs ocsmesh+gmsh's 0.85 / 1.13 %).
+
+### Added — diagnostics (`fmesh-mesh-check`)
+
+- **Seven detectors** in `fvcom_mesh_tools.diagnostics`:
+  `disjoint_components_flag`, `dead_end_elements_flag`,
+  `thin_elements_flag`, `thin_chain_elements_flag`,
+  `overconnected_nodes_flag`, `unreachable_elements_flag`,
+  `under_resolved_channels_flag`. The 7th (medial-axis channel
+  width) graduated from PoC #28: per-polyline cKDTrees + arc-
+  separation filter + opposite-bank direction filter
+  (`cos < --channel-opposite-bank-cos-max`, default −0.8).
+- **`--min-channel-elements N`** filter on detector 6 (default 1 =
+  no filter). Drops flagged elements whose face-face-connected
+  component has fewer than N members. PoC #35 found that on real
+  meshes the 3,178 default-flag elements split into 1,010
+  components with mean ~3 elements / channel — mostly small
+  isolated clusters, not the long ribbon-like inlets Phase E
+  targets. Plumbed through `run_diagnostics`, `fmesh-mesh-check`,
+  `repair_under_resolved_channels`, `clean_mesh`,
+  `fmesh-mesh-clean`, and `fmesh-mesh-pipeline`.
+- **`analyze_under_resolved_channels`** in `mesh_clean` — Stage 1
+  measurement for the deferred "true medial-axis Phase E" project.
+  Splits flagged elements into channels, reports per-channel
+  `n_elements`, `h_local_median_m`, `long_axis_m`, and the
+  centroid-widen vs medial-axis-to-N-cells new-node estimates.
+  No re-meshing.
+
+### Added — documentation
+
+- `docs/engine_complementarity.md` — capability map
+  oceanmesh ↔ ocsmesh; recommended division of labour ("oceanmesh
+  for build, ocsmesh as a library").
+- `docs/detector_repair_matrix.md` — single lookup table mapping
+  each detector to the phase that fixes it, the metric that
+  measures it, and the pipeline rung that turns it on.
+  Phase-ordering rationale, side-effect summary, threshold-gate
+  heuristics ("FVCOM-friendly preset"), recommended workflow,
+  and a "where to add a new detector / phase" appendix.
+
+### Added — infrastructure
+
+- `.pre-commit-config.yaml` — ruff + standard hygiene hooks. CI
+  installs pre-commit and runs `pre-commit run --all-files`.
+- GitHub Actions CLI smoke step — `--help` invocation on every
+  console script (`fmesh-buildmesh`, `fmesh-perpfix`,
+  `fmesh-subset-dem`, `fmesh-mesh-combine`, `fmesh-mesh-check`,
+  `fmesh-mesh-clean`, `fmesh-mesh-quality`, `fmesh-mesh-pipeline`).
+- `MESH_PNG_DPI = 600` shared default in
+  `fvcom_mesh_tools.plotting`.
+- `dem/` subpackage isolating rasterio / netCDF4 / pyproj behind
+  the `[dem]` extra (`dem.bbox.read`, `dem.subset.to_geotiff`,
+  `dem.interp.at_points`).
+- `pyproject.toml` extras layered by concern: `[io-vector]`,
+  `[dem]`, `[oceanmesh]`, `[ocsmesh]`, `[viz]`, `[all]`.
+- `mesh_engine.ocsmesh` adapter — keeps the deprecated dispatch
+  path working until removal.
+
+### PoC notes (research findings, deferred decisions)
+
+These are the empirical results that drove the choices above.
+Each links to a notebook in `notebooks/`.
+
+- **PoC #23** — `fmesh-mesh-combine --strategy overlap` validated on
+  real Tokyo Bay data (4,224-node coarse + 6,008-node inner →
+  8,227 NP / 13,923 NE / alpha 0.954). `neighbor` strategy still
+  pending end-to-end exercise.
+- **PoC #25 / #26** — gmsh's over-connected anomaly on Tokyo Bay:
+  ~380 of the 440 over-connected nodes come from gmsh itself
+  before any post-processing; turning off `--refine-min-angle`
+  drops 440 → 313 but cannot close the gap with the oceanmesh
+  engine.
+- **PoC #27** — Phase D feasibility: with the FVCOM-safe 20°
+  min-angle floor every flip is rejected on real meshes, so Phase
+  D defaults to floor=0° (only inversion forbidden).
+- **PoC #28** — first medial-axis channel-width detector
+  (cross-polyline only). Caught 1,009 elements the 1-cell
+  thin-chain detector misses, but missed 691 same-polyline narrow
+  inlets — productionised version added the same-polyline + cosine
+  filter.
+- **PoC #30** — ocsmesh's Triangle backend rejects raster-driven
+  varying sizing. Drove the `--engine ocsmesh` deprecation.
+- **PoC #34** — `--om-wavelength-sizing` A/B on Tokyo Bay. Refines
+  shoaling cells +1.8 % and slightly improves quality, but min CFL
+  dt only +2 % on this basin (coastline-pinned). Stays off by
+  default.
+- **PoC #35** — Stage 1 of "true medial-axis Phase E". Cleaned
+  PoC #19 mesh: 3,178 flagged → 1,010 components, mean ~3 elements
+  / channel; medial-axis estimate +48 % nodes vs centroid widen.
+  **Stage 2 (real CDT re-meshing) deferred** — most channels are
+  small isolated clusters where centroid widen is roughly the
+  right fix. The `--min-channel-elements` filter is the immediate
+  follow-up that landed in this release.
+- **PoC #36** — `--om-max-iter` sweep on Tokyo Bay (50 → 25 → 10 → 5):
+
+      iters   wall    alpha   frac<20°   max_v   n_overconn
+      ------  ------  ------  ---------  ------  ----------
+      50      26.0 m  0.9593  0.116 %    9       2
+      25      14.1 m  0.9545  0.082 %    9       4
+      10       6.8 m  0.9430  0.159 %   10      40
+       5       4.6 m  0.9290  0.267 %   10      97
+
+  At iters=10 oceanmesh produces alpha 0.943 — well above
+  ocsmesh+gmsh's 0.847 — in 7 min. The draft niche `--engine
+  ocsmesh` filled is now better served by `--om-max-iter 10` (or
+  25 for "fast production"); ocsmesh's only remaining advantage
+  was the ~40 s wall-clock, but the quality gap (0.943 vs 0.847,
+  max_v 10 vs 26, n_overconn 40 vs 440) is so large that few real
+  workflows would prefer the older path. The deprecation case is
+  closed.
+
+### Earlier groundwork (pre-CLI)
+
+- `fvcom_mesh_tools.mesh_clean` module (initial 3-phase A+B+C
+  before D/E/F/G landed) — graduated from PoC #24-#26.
+- `fvcom_mesh_tools.diagnostics` module (initial 6 detectors
+  before detector 7 landed).
+- `fmesh-mesh-clean`, `fmesh-mesh-check` CLIs.
 
 ### Changed
 
