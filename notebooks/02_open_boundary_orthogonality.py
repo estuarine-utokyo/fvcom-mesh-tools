@@ -31,6 +31,7 @@ import numpy as np  # noqa: E402
 from meshkernel import Mesh2d, MeshKernel, ProjectionType  # noqa: E402
 
 from fvcom_mesh_tools.io import Fort14Mesh, read_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import MESH_PNG_DPI  # noqa: E402
 
 # MeshKernel returns this sentinel for edges where the orthogonality cannot
 # be computed (e.g. at the mesh boundary, where the second face is absent).
@@ -216,7 +217,7 @@ def plot_perp_map(mesh: Fort14Mesh, perp: dict, png: Path) -> None:
     ax.set_title("open boundary nodes colored by mean perp deviation")
     ax.grid(True, lw=0.3, color="0.9")
     fig.tight_layout()
-    fig.savefig(png, bbox_inches="tight")
+    fig.savefig(png, bbox_inches="tight", dpi=MESH_PNG_DPI)
     plt.close(fig)
 
 

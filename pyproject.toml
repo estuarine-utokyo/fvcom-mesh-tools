@@ -20,6 +20,7 @@ classifiers = [
 
 dependencies = [
   "numpy>=1.23",
+  "scipy>=1.10",
 ]
 
 # Optional extras layered by concern. Pure-fort.14 callers
@@ -44,6 +45,7 @@ fmesh-perpfix = "fvcom_mesh_tools.cli.perpfix:main"
 fmesh-buildmesh = "fvcom_mesh_tools.cli.buildmesh:main"
 fmesh-subset-dem = "fvcom_mesh_tools.cli.subset_dem:main"
 fmesh-mesh-combine = "fvcom_mesh_tools.cli.meshcombine:main"
+fmesh-mesh-check = "fvcom_mesh_tools.cli.meshcheck:main"
 
 [project.urls]
 Homepage = "https://github.com/estuarine-utokyo/fvcom-mesh-tools"

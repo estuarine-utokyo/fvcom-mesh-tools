@@ -1,0 +1,29 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc26
+
+# PoC #26: OCSMesh+gmsh post-processing ablation on Tokyo Bay+rivers
+# to identify the cause of high-valence nodes seen in PoC #16.
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=4
+export OPENBLAS_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+
+: "${HOME:?HOME not set}"
+
+# Use py312test env: OCSMesh engine path needs gmsh, which is installed
+# there but not in oceanmesh-bench. Matches the env PoC #16 originally
+# ran in.
+PY="${HOME}/mambaforge/envs/py312test/bin/python"
+[[ -x "${PY}" ]] || { echo "python not found at ${PY}" >&2; exit 1; }
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+"${PY}" notebooks/26_ocsmesh_overconn_ablation.py

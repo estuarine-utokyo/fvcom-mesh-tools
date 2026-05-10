@@ -32,6 +32,7 @@ from meshkernel import (  # noqa: E402
 )
 
 from fvcom_mesh_tools.io import Fort14Mesh, read_fort14, write_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import MESH_PNG_DPI  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MESH_PATH = REPO_ROOT / "data" / "mesh" / "reference" / "tokyo_bay" / "tb_futtsu20220311.14"
@@ -193,7 +194,7 @@ def plot_open_bdy_xy(before: Fort14Mesh, after: Fort14Mesh, png: Path) -> None:
     ax.legend()
     ax.grid(True, lw=0.3, color="0.9")
     fig.tight_layout()
-    fig.savefig(png, bbox_inches="tight")
+    fig.savefig(png, bbox_inches="tight", dpi=MESH_PNG_DPI)
     plt.close(fig)
 
 

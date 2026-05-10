@@ -32,6 +32,7 @@ from fvcom_mesh_tools.algorithms import (  # noqa: E402
     unique_edges,
 )
 from fvcom_mesh_tools.io import Fort14Mesh, read_fort14, write_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import MESH_PNG_DPI  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MESH_PATH = REPO_ROOT / "data" / "mesh" / "reference" / "tokyo_bay" / "tb_futtsu20220311.14"
@@ -123,7 +124,7 @@ def plot_first_ring(
     ax.legend(handles=[proxy_before, proxy_after, proxy_bdy], loc="best", fontsize=8)
     ax.grid(True, lw=0.3, color="0.9")
     fig.tight_layout()
-    fig.savefig(png, bbox_inches="tight")
+    fig.savefig(png, bbox_inches="tight", dpi=MESH_PNG_DPI)
     plt.close(fig)
 
 

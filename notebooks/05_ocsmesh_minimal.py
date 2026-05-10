@@ -33,6 +33,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 from fvcom_mesh_tools.io import read_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import MESH_PNG_DPI  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEM_PATH = REPO_ROOT / "data" / "bathymetry" / "tokyo_bay" / "dem_00_01_change.nc"
@@ -70,7 +71,7 @@ def plot_mesh(nodes: np.ndarray, elements: np.ndarray, depths: np.ndarray, png: 
     ax.set_ylabel("lat (deg)")
     ax.set_title("OCSMesh minimal pipeline: Tokyo Bay")
     fig.tight_layout()
-    fig.savefig(png, bbox_inches="tight")
+    fig.savefig(png, bbox_inches="tight", dpi=MESH_PNG_DPI)
     plt.close(fig)
 
 

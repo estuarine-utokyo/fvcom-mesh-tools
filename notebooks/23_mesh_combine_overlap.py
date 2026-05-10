@@ -52,6 +52,7 @@ from fvcom_mesh_tools.cli.buildmesh import main as buildmesh_main  # noqa: E402
 from fvcom_mesh_tools.cli.meshcombine import main as meshcombine_main  # noqa: E402
 from fvcom_mesh_tools.dem.subset import to_geotiff  # noqa: E402
 from fvcom_mesh_tools.io import read_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import MESH_PNG_DPI  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEM = REPO_ROOT / "data" / "bathymetry" / "tokyo_bay" / "dem_00_01_change.nc"
@@ -152,7 +153,7 @@ def plot(combined, png: Path) -> None:
     ax.legend(loc="upper right", fontsize=8)
 
     fig.tight_layout()
-    fig.savefig(png, bbox_inches="tight")
+    fig.savefig(png, bbox_inches="tight", dpi=MESH_PNG_DPI)
     plt.close(fig)
 
 

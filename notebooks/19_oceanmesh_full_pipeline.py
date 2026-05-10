@@ -32,6 +32,7 @@ from fvcom_mesh_tools.algorithms import (  # noqa: E402
 )
 from fvcom_mesh_tools.cli.buildmesh import main as buildmesh_main  # noqa: E402
 from fvcom_mesh_tools.io import load_river_points, read_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import MESH_PNG_DPI  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEM = REPO_ROOT / "data" / "bathymetry" / "tokyo_bay" / "dem_00_01_change.nc"
@@ -90,7 +91,7 @@ def plot_mesh(mesh, river_pts: np.ndarray, png: Path) -> None:
     ax.set_title("PoC #19  fmesh-buildmesh --engine oceanmesh")
     ax.legend(loc="lower right", fontsize=8)
     fig.tight_layout()
-    fig.savefig(png, bbox_inches="tight")
+    fig.savefig(png, bbox_inches="tight", dpi=MESH_PNG_DPI)
     plt.close(fig)
 
 

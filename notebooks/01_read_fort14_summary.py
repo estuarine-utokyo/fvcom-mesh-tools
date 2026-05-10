@@ -24,6 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from fvcom_mesh_tools.io import Fort14Mesh, read_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import MESH_PNG_DPI  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MESH_PATH = REPO_ROOT / "data" / "mesh" / "reference" / "tokyo_bay" / "tb_futtsu20220311.14"
@@ -84,7 +85,7 @@ def thumbnail(mesh: Fort14Mesh, png_path: Path) -> None:
     proxy_land = plt.Line2D([], [], color="tab:red", lw=0.8, label="land boundary")
     ax.legend(handles=[proxy_open, proxy_land], loc="best", fontsize=8)
     fig.tight_layout()
-    fig.savefig(png_path, bbox_inches="tight")
+    fig.savefig(png_path, bbox_inches="tight", dpi=MESH_PNG_DPI)
     plt.close(fig)
 
 

@@ -31,6 +31,7 @@ from fvcom_mesh_tools.algorithms import (  # noqa: E402
 )
 from fvcom_mesh_tools.cli.meshcombine import main as meshcombine_main  # noqa: E402
 from fvcom_mesh_tools.io import read_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import MESH_PNG_DPI  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOKYO = REPO_ROOT / "outputs" / "19_tokyo_bay_oceanmesh.14"
@@ -78,7 +79,7 @@ def plot_mesh(mesh, png: Path) -> None:
     ax.set_title("PoC #21 fmesh-mesh-combine disjoint  Kanto + Kansai")
     ax.legend(loc="lower right", fontsize=8)
     fig.tight_layout()
-    fig.savefig(png, bbox_inches="tight")
+    fig.savefig(png, bbox_inches="tight", dpi=MESH_PNG_DPI)
     plt.close(fig)
 
 

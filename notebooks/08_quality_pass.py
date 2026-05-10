@@ -34,6 +34,7 @@ from fvcom_mesh_tools.algorithms import (  # noqa: E402
     signed_areas,
 )
 from fvcom_mesh_tools.io import read_fort14, write_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import MESH_PNG_DPI  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INPUT_F14 = REPO_ROOT / "outputs" / "07_tokyo_bay_buildmesh.14"
@@ -106,7 +107,7 @@ def plot_mesh(nodes: np.ndarray, elements: np.ndarray, depths: np.ndarray, png: 
     ax.set_ylabel("lat (deg)")
     ax.set_title(f"Tokyo Bay after Laplacian quality pass (n_iters={N_ITERS}, alpha={ALPHA})")
     fig.tight_layout()
-    fig.savefig(png, bbox_inches="tight")
+    fig.savefig(png, bbox_inches="tight", dpi=MESH_PNG_DPI)
     plt.close(fig)
 
 

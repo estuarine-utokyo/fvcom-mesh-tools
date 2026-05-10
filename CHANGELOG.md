@@ -10,6 +10,38 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `fvcom_mesh_tools.diagnostics` module + `fmesh-mesh-check` CLI for
+  detection of inadequate FVCOM meshes, with no repair. Six detectors
+  surface defects that are common in narrow water bodies (rivers,
+  canals, harbours):
+  1. disjoint dual-graph components (isolated wet pools);
+  2. dead-end elements (degree-1 in the dual graph, no open-boundary
+     edge);
+  3. thin elements (all 3 vertices on a boundary);
+  4. thin-chain elements (chain of ≥ `--min-thin-chain` adjacent thin
+     elements — the 1-cell-wide-channel signature);
+  5. over-connected nodes (valence > `--max-nbr-elem`, FVCOM
+     `MAX_NBR_ELEM` cap);
+  6. open-boundary unreachable elements.
+  The CLI emits `<prefix>_summary.txt`, `<prefix>_diag.json` (per-element
+  / per-node records with coordinates), and `<prefix>_map.png`. Exit
+  code is non-zero if any detector fires, so the command works as a
+  CI gate. Validated on the existing Tokyo Bay (PoC #19, #16) and Osaka
+  Bay (PoC #20) fort.14 outputs in PoC #24; the over-connected-node
+  finding for PoC #16 (440 nodes, max valence 26) was characterised in
+  PoC #25 and traced to the OCSMesh+gmsh engine path (oceanmesh engine
+  produces only 3 over-connected nodes for the same inputs). PoC #26
+  ablation showed gmsh itself produces ~380 over-connected nodes
+  (max v=18) on Tokyo Bay+rivers before any post-processing; turning
+  off `--refine-min-angle` (longest-edge bisection) is the single
+  largest improvement available within the OCSMesh path
+  (440 → 313 over-connected, max v 26 → 21), but does not close the
+  gap with the oceanmesh engine.
+- `MESH_PNG_DPI = 600` shared default in `fvcom_mesh_tools.plotting`;
+  every notebook that writes a mesh visualisation now passes
+  `dpi=MESH_PNG_DPI` to `fig.savefig`. Histograms keep the matplotlib
+  default. PoC #23's `outputs/23_overlap_mesh.png` is regenerated at
+  600 dpi.
 - PoC #23 (`notebooks/23_mesh_combine_overlap.py`) validates
   `fmesh-mesh-combine --strategy overlap` on real Tokyo Bay data:
   a coarse outer (hmin=1000 m, NP=4,224) and a fine northern-bay

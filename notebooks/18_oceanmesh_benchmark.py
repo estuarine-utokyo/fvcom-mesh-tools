@@ -38,6 +38,8 @@ import numpy as np  # noqa: E402
 import oceanmesh as om  # noqa: E402
 import rasterio  # noqa: E402
 
+from fvcom_mesh_tools.plotting import MESH_PNG_DPI  # noqa: E402
+
 WGS84_PRJ = (
     'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",'
     '6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["Degree",'
@@ -288,7 +290,7 @@ def main() -> None:
     ax.set_ylabel("lat (deg)")
     ax.set_title("oceanmesh + DistMesh: Tokyo Bay")
     fig.tight_layout()
-    fig.savefig(PNG, bbox_inches="tight")
+    fig.savefig(PNG, bbox_inches="tight", dpi=MESH_PNG_DPI)
     plt.close(fig)
     print(f"[18] wrote {PNG}")
 

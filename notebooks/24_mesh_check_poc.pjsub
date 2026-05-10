@@ -1,0 +1,26 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=00:20:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc24
+
+# PoC #24: detect inadequate FVCOM meshes (5 detectors, no repair).
+# Applies to existing PoC #19 / #16 / #20 fort.14 outputs.
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python notebooks/24_mesh_check_poc.py
