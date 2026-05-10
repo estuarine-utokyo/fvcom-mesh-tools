@@ -236,7 +236,12 @@ fmesh-mesh-pipeline tokyo_raw.14 tokyo_passing.14 \
 
 The pipeline writes a JSON history that records each rung's metrics
 and threshold-check results so the caller can audit which rung met
-the gate.
+the gate. By default the loop early-stops at the first rung that
+passes; pass `--best-rung` to disable the early-stop, run every
+rung up to `--max-iters`, and pick the gate-passing rung that
+maximises `alpha_mean` (ties broken in favour of the lighter
+repair). Useful when one wants the maximum quality the pipeline can
+produce, not just the first acceptable mesh.
 
 `docs/architecture.md` is the full decision tree for engine choice and
 combine strategy; `docs/python_pipeline_gap_analysis.md` has the
@@ -329,7 +334,7 @@ Installed when `pip install -e .` is run.
 | `fmesh-mesh-check fort.14 [--max-nbr-elem N] [--min-thin-chain N] [--min-w-h F]` | Detect inadequate FVCOM meshes via seven detectors: disjoint wet-domain components, dead-end elements, thin / thin-chain (1-cell channel) elements, over-connected nodes, open-boundary-unreachable elements, and medial-axis-style under-resolved channels (`width / h < --min-w-h`, default 3). Emits `*_summary.txt`, `*_diag.json` (per-id records with coordinates), and `*_map.png`. No repair. Exit code is non-zero when anything is flagged so the command is usable as a CI gate. |
 | `fmesh-mesh-clean in.14 out.14 [--bbox] [--open-merge-coast-gap N] [--thin-chain-mode {widen,delete,none}] [--repair-overconnected-iters N] [--under-resolved-mode {widen,delete,none}] [--repair-skewed-elements] [--smooth-laplacian]` | Repair the safe-to-fix subset of the `fmesh-mesh-check` flags. Phase A prunes disjoint dual-graph components; Phase B iteratively trims degree-1 elements with no open-boundary edge; Phase C (default `widen`) inserts a centroid into every thin-chain element so 1-cell channels become 2-cell, or removes the chain entirely with `--thin-chain-mode delete`; Phase D (off by default) runs valence-balancing edge swaps that drive every node valence to at most `--max-nbr-elem`; Phase E (off by default) widens or deletes detector-6 under-resolved channel elements via the same centroid-insertion mechanism; Phase F (off by default) deletes triangles whose interior angles fall outside `[--repair-skewed-min-angle-deg, --repair-skewed-max-angle-deg]` via `ocsmesh.utils.cleanup_skewed_el`; Phase G (off by default) Laplacian-smooths interior nodes via `oceanmesh.laplacian2`. Boundaries are re-derived via DEM-bbox proximity, matching `fmesh-buildmesh`. |
 | `fmesh-mesh-quality in.14 [in2.14 ...] [--labels ...] [--min-alpha F] [--max-frac-lt-20deg F] [--max-valence N] [--max-overconnected N] [--max-flipped N] [--max-disjoint-elems N]` | Compute unified mesh-quality metrics (`alpha_mean`, `alpha_p05/p50`, `min_angle_p05/p50_deg`, `frac_lt_20deg`, `max_valence`, `n_overconnected`, `n_flipped`, `n_components`, `n_disjoint_elems`) for one or more fort.14 files. Two inputs print a `delta` column. Threshold flags are evaluated against the LAST input and turn the command into a CI gate (exit 1 on failure). |
-| `fmesh-mesh-pipeline in.14 out.14 [--bbox] [--max-iters N] [--min-alpha F] [--max-frac-lt-20deg F] [--max-valence N] [--max-flipped N] ...` | Progressive `clean → quality → repeat` loop. Applies three cumulative rungs of `fmesh-mesh-clean` phases — rung 0 (A+B+C), rung 1 (+D+F+G), rung 2 (+E) — evaluating `fmesh-mesh-quality` thresholds after each. Stops at the first passing rung; exits 1 if no rung satisfies the gate when thresholds are supplied. JSON history records per-rung metrics and threshold-check results. |
+| `fmesh-mesh-pipeline in.14 out.14 [--bbox] [--max-iters N] [--best-rung] [--min-alpha F] [--max-frac-lt-20deg F] [--max-valence N] [--max-flipped N] ...` | Progressive `clean → quality → repeat` loop. Applies three cumulative rungs of `fmesh-mesh-clean` phases — rung 0 (A+B+C), rung 1 (+D+F+G), rung 2 (+E) — evaluating `fmesh-mesh-quality` thresholds after each. Stops at the first passing rung by default; with `--best-rung`, runs every rung up to `--max-iters` and outputs the gate-passing rung with the highest `alpha_mean` (ties broken in favour of the lighter repair). Exits 1 if no rung satisfies the gate when thresholds are supplied. JSON history records per-rung metrics and threshold-check results. |
 
 ## Changelog
 

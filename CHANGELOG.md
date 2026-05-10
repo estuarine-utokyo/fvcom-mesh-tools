@@ -27,6 +27,23 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `fmesh-mesh-pipeline --best-rung` mode. Disables the default
+  first-passing-rung early-stop and runs every rung up to
+  `--max-iters`, then writes the rung that maximises ``alpha_mean``
+  among the gate-passing rungs (ties broken in favour of the lower
+  rung index — the lighter repair). When no rung passes, the
+  highest-alpha rung overall is written and the JSON
+  ``final.selection_reason`` reports the fallback. NaN ``alpha_mean``
+  (e.g. an empty mesh) is ranked below any finite alpha so it never
+  wins. Useful when the user wants the maximum quality the pipeline
+  can produce, not just the first acceptable mesh; default
+  ``best_rung=False`` preserves the existing first-passing-rung
+  behaviour exactly. JSON payload gains ``best_rung_mode``,
+  ``final.rung_index``, and ``final.selection_reason``.
+  Implementation: ``_select_rung`` in ``cli/meshpipeline.py``
+  centralises the selection logic; 7 new tests cover passing-set
+  selection, gate-fallback, tie-break, NaN handling, default-off
+  preservation, and end-to-end CLI behaviour.
 - `mesh_engine/oceanmesh.py` build pipeline now wraps the post-DistMesh
   ``om.laplacian2`` cleanup call with the same flip-rollback safety
   net used by Phase G in ``fmesh-mesh-clean``, fixing the regression

@@ -124,6 +124,20 @@ def build_parser() -> argparse.ArgumentParser:
             "(attempt all)."
         ),
     )
+    p.add_argument(
+        "--best-rung", action="store_true",
+        help=(
+            "Disable the first-passing-rung early-stop. Attempt every "
+            "rung up to --max-iters and pick the one that maximises "
+            "alpha_mean among the gate-passing rungs (ties broken in "
+            "favour of the lower rung index — the lighter repair). If "
+            "no rung passes the gate (or no thresholds are supplied), "
+            "the rung with the highest alpha_mean overall is chosen. "
+            "More compute (every rung runs) but quality is monotonic in "
+            "rung depth less often than one would hope, so this option "
+            "is the way to find that out."
+        ),
+    )
 
     g_bbox = p.add_argument_group("boundary classification")
     g_bbox.add_argument(
@@ -265,13 +279,12 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     rung_overlays = _build_rung_overlays(args)[: args.max_iters]
-    history: list[dict] = []
     initial_metrics = compute_metrics(mesh_in, max_nbr_elem=args.max_nbr_elem)
 
-    final_mesh = mesh_in
-    final_metrics = initial_metrics
-    final_passed = False
-    final_rung_label: str | None = None
+    # Each entry: history-dict (JSON-friendly) + the cleaned mesh
+    # itself, which we keep in memory so --best-rung can pick a
+    # non-final rung as the output.
+    rung_results: list[tuple[dict, object]] = []
 
     cumulative_kwargs = dict(base_kwargs)
     for rung_idx, (rung_label, overlay) in enumerate(rung_overlays):
@@ -279,21 +292,32 @@ def main(argv: list[str] | None = None) -> int:
         cleaned, clean_info = clean_mesh(mesh_in, **cumulative_kwargs)
         metrics = compute_metrics(cleaned, max_nbr_elem=args.max_nbr_elem)
         passed, checks = check_thresholds(metrics, **thresholds)
-        history.append({
-            "rung_index": rung_idx,
-            "rung_label": rung_label,
-            "kwargs_added": overlay,
-            "phases_run": [p["name"] for p in clean_info.get("phases", [])],
-            "metrics": metrics,
-            "passed": bool(passed),
-            "checks": [c.to_dict() for c in checks],
-        })
-        final_mesh = cleaned
-        final_metrics = metrics
-        final_passed = bool(passed)
-        final_rung_label = rung_label
-        if thresholds and passed:
+        rung_results.append((
+            {
+                "rung_index": rung_idx,
+                "rung_label": rung_label,
+                "kwargs_added": overlay,
+                "phases_run": [p["name"] for p in clean_info.get("phases", [])],
+                "metrics": metrics,
+                "passed": bool(passed),
+                "checks": [c.to_dict() for c in checks],
+            },
+            cleaned,
+        ))
+        # First-passing-rung early-stop, unless --best-rung asked us
+        # to explore every rung.
+        if not args.best_rung and thresholds and passed:
             break
+
+    history = [entry for entry, _ in rung_results]
+
+    chosen_idx, selection_reason = _select_rung(
+        rung_results, thresholds=bool(thresholds), best_rung=args.best_rung,
+    )
+    final_entry, final_mesh = rung_results[chosen_idx]
+    final_metrics = final_entry["metrics"]
+    final_passed = final_entry["passed"]
+    final_rung_label = final_entry["rung_label"]
 
     write_fort14(final_mesh, args.output)
     summary_path = args.summary or args.output.with_name(
@@ -306,12 +330,15 @@ def main(argv: list[str] | None = None) -> int:
         "bbox_source": bbox_source,
         "thresholds": thresholds,
         "max_iters": args.max_iters,
+        "best_rung_mode": bool(args.best_rung),
         "initial_metrics": initial_metrics,
         "history": history,
         "final": {
             "rung_label": final_rung_label,
+            "rung_index": final_entry["rung_index"],
             "metrics": final_metrics,
             "passed": (bool(final_passed) if thresholds else None),
+            "selection_reason": selection_reason,
         },
     }
     summary_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -327,11 +354,12 @@ def main(argv: list[str] | None = None) -> int:
         print(format_comparison_table(rows))
         print()
         print(f"final rung: {final_rung_label}  "
-              f"(phases: {history[-1]['phases_run']})")
+              f"(phases: {final_entry['phases_run']})")
+        print(f"selection: {selection_reason}")
         if thresholds:
             print("\nthresholds (against final):")
             print(format_threshold_table(
-                [_dict_to_check(c) for c in history[-1]["checks"]]
+                [_dict_to_check(c) for c in final_entry["checks"]]
             ))
             print(f"\noverall: {'PASS' if final_passed else 'FAIL'}")
         else:
@@ -341,6 +369,58 @@ def main(argv: list[str] | None = None) -> int:
     if thresholds:
         return 0 if final_passed else 1
     return 0
+
+
+def _select_rung(
+    rung_results: list,
+    *,
+    thresholds: bool,
+    best_rung: bool,
+) -> tuple[int, str]:
+    """Pick which rung's output to write as the final fort.14.
+
+    Returns ``(index, reason)``. Selection rules:
+
+    * **default (``best_rung=False``)**: the last rung that ran. With
+      thresholds set, the loop already early-stops at the first
+      passing rung, so "last" is "first passing" or "last attempted"
+      on failure. Without thresholds, "last" is the deepest rung.
+    * **``best_rung=True``**: among the rungs that pass the gate
+      (or all rungs if no thresholds), pick the one with the highest
+      ``alpha_mean``. Ties broken in favour of the lower rung index
+      (lighter repair). If no rung passes, fall back to the rung
+      with the highest ``alpha_mean`` overall.
+
+    A NaN ``alpha_mean`` (e.g. an empty mesh) is ranked below any
+    finite alpha so it never wins the tie.
+    """
+    if not rung_results:
+        raise ValueError("rung_results must not be empty")
+
+    if not best_rung:
+        return len(rung_results) - 1, "first-passing-rung-or-last"
+
+    def _alpha(entry: dict) -> float:
+        v = entry["metrics"].get("alpha_mean")
+        if v is None:
+            return float("-inf")
+        if isinstance(v, float) and v != v:  # NaN
+            return float("-inf")
+        return float(v)
+
+    # Stable order: lower rung_idx first → max() returns the first
+    # max → ties broken in favour of the lighter repair.
+    passing = [(i, e) for i, (e, _) in enumerate(rung_results)
+               if (not thresholds) or e["passed"]]
+    if passing:
+        idx, _ = max(passing, key=lambda pair: _alpha(pair[1]))
+        return idx, "best-alpha-mean (gate-passing)"
+    # No passing rung: pick the best alpha across all.
+    idx, _ = max(
+        ((i, e) for i, (e, _) in enumerate(rung_results)),
+        key=lambda pair: _alpha(pair[1]),
+    )
+    return idx, "best-alpha-mean (no rung passed gate)"
 
 
 def _dict_to_check(d: dict):
