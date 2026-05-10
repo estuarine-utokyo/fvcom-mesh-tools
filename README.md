@@ -183,6 +183,28 @@ and boundary lists are preserved. Tunable with
 `--smooth-laplacian-iters` (default 20) and
 `--smooth-laplacian-tol` (default 0.01).
 
+`fmesh-mesh-quality` is the unified metrics + threshold-gate
+companion to `fmesh-mesh-check` and `fmesh-mesh-clean`. It computes
+`alpha_mean / alpha_p05 / min_angle_p05_deg / frac_lt_20deg /
+max_valence / n_overconnected / n_flipped / n_components /
+n_disjoint_elems` for one or more fort.14 files, prints a
+side-by-side comparison (with a `delta` column when two meshes are
+passed), and turns into a CI gate when threshold flags are
+supplied. Exit 1 on any failure:
+
+```bash
+# Single mesh
+fmesh-mesh-quality tokyo_clean.14
+
+# Before/after comparison with a delta column
+fmesh-mesh-quality tokyo.14 tokyo_clean.14 --labels before after
+
+# CI gate
+fmesh-mesh-quality tokyo_clean.14 \
+    --min-alpha 0.95 --max-frac-lt-20deg 0.005 \
+    --max-valence 8 --max-flipped 0
+```
+
 `docs/architecture.md` is the full decision tree for engine choice and
 combine strategy; `docs/python_pipeline_gap_analysis.md` has the
 quality / runtime numbers vs. the OceanMesh2D MATLAB reference.
@@ -267,6 +289,7 @@ Installed when `pip install -e .` is run.
 | `fmesh-mesh-combine in1.14 in2.14 [...] out.14 --strategy {disjoint,overlap,neighbor}` | Combine multiple fort.14 meshes. `disjoint` is pure-numpy concat with full boundary preservation (best for non-overlapping basins). `overlap` and `neighbor` wrap `ocsmesh.ops.combine_mesh` for nested-resolution and edge-snap scenarios respectively. |
 | `fmesh-mesh-check fort.14 [--max-nbr-elem N] [--min-thin-chain N] [--min-w-h F]` | Detect inadequate FVCOM meshes via seven detectors: disjoint wet-domain components, dead-end elements, thin / thin-chain (1-cell channel) elements, over-connected nodes, open-boundary-unreachable elements, and medial-axis-style under-resolved channels (`width / h < --min-w-h`, default 3). Emits `*_summary.txt`, `*_diag.json` (per-id records with coordinates), and `*_map.png`. No repair. Exit code is non-zero when anything is flagged so the command is usable as a CI gate. |
 | `fmesh-mesh-clean in.14 out.14 [--bbox] [--open-merge-coast-gap N] [--thin-chain-mode {widen,delete,none}] [--repair-overconnected-iters N] [--under-resolved-mode {widen,delete,none}] [--repair-skewed-elements] [--smooth-laplacian]` | Repair the safe-to-fix subset of the `fmesh-mesh-check` flags. Phase A prunes disjoint dual-graph components; Phase B iteratively trims degree-1 elements with no open-boundary edge; Phase C (default `widen`) inserts a centroid into every thin-chain element so 1-cell channels become 2-cell, or removes the chain entirely with `--thin-chain-mode delete`; Phase D (off by default) runs valence-balancing edge swaps that drive every node valence to at most `--max-nbr-elem`; Phase E (off by default) widens or deletes detector-6 under-resolved channel elements via the same centroid-insertion mechanism; Phase F (off by default) deletes triangles whose interior angles fall outside `[--repair-skewed-min-angle-deg, --repair-skewed-max-angle-deg]` via `ocsmesh.utils.cleanup_skewed_el`; Phase G (off by default) Laplacian-smooths interior nodes via `oceanmesh.laplacian2`. Boundaries are re-derived via DEM-bbox proximity, matching `fmesh-buildmesh`. |
+| `fmesh-mesh-quality in.14 [in2.14 ...] [--labels ...] [--min-alpha F] [--max-frac-lt-20deg F] [--max-valence N] [--max-overconnected N] [--max-flipped N] [--max-disjoint-elems N]` | Compute unified mesh-quality metrics (`alpha_mean`, `alpha_p05/p50`, `min_angle_p05/p50_deg`, `frac_lt_20deg`, `max_valence`, `n_overconnected`, `n_flipped`, `n_components`, `n_disjoint_elems`) for one or more fort.14 files. Two inputs print a `delta` column. Threshold flags are evaluated against the LAST input and turn the command into a CI gate (exit 1 on failure). |
 
 ## Changelog
 

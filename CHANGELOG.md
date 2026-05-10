@@ -27,6 +27,23 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `fmesh-mesh-quality` CLI + `fvcom_mesh_tools.quality` module: a
+  unified quality-metrics dump that consolidates the per-mesh
+  numbers PoCs computed ad-hoc (alpha mean / p05 / p50, min-angle
+  p05 / p50, frac<20°, max valence, n_overconnected, n_flipped,
+  n_components, n_disjoint_elems) into one place. `compute_metrics`
+  takes a `Fort14Mesh` and returns a flat JSON-friendly dict with
+  the keys listed in `quality.METRIC_KEYS`. The CLI accepts one or
+  more fort.14 inputs: a single mesh prints metrics, two prints a
+  side-by-side table with a `delta` column, three or more prints
+  the matrix. Threshold flags (`--min-alpha`, `--max-frac-lt-20deg`,
+  `--max-valence`, `--max-overconnected`, `--max-flipped`,
+  `--max-disjoint-elems`) are evaluated against the LAST mesh and
+  turn the command into a CI gate (exit 1 on any failure). All
+  outputs land in a JSON summary alongside the last input. Validates
+  the gate end-to-end: a smoke run against the PoC #19 raw / cleaned
+  / Phase-G output flagged the 2 inverted triangles Phase G
+  introduced — exactly the kind of regression the gate is for.
 - `fmesh-mesh-clean` Phase G: Laplacian smoothing of interior nodes.
   New function `fvcom_mesh_tools.mesh_clean.smooth_mesh_laplacian`
   wraps `oceanmesh.laplacian2`, which derives the boundary set from
