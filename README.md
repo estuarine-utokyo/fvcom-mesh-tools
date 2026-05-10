@@ -181,7 +181,12 @@ smoothing of all interior nodes via `oceanmesh.laplacian2`.
 Boundary nodes are auto-pinned by oceanmesh; connectivity, depths,
 and boundary lists are preserved. Tunable with
 `--smooth-laplacian-iters` (default 20) and
-`--smooth-laplacian-tol` (default 0.01).
+`--smooth-laplacian-tol` (default 0.01). The smoother converges on
+edge-length stability but does not check signed area, so by
+default Phase G also runs an iterative rollback that detects any
+flipped triangle in oceanmesh's output and reverts the offending
+nodes back to their pre-smoothing positions; pass
+`--smooth-no-repair-flipped` to surface the raw output instead.
 
 `fmesh-mesh-quality` is the unified metrics + threshold-gate
 companion to `fmesh-mesh-check` and `fmesh-mesh-clean`. It computes

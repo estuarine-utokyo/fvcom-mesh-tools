@@ -852,3 +852,133 @@ def test_clean_mesh_phase_g_explicit_smooths_interior() -> None:
     assert np.linalg.norm(moved - np.array([0.5, 0.5])) < (
         np.linalg.norm(mesh.nodes[4] - np.array([0.5, 0.5]))
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase G repair: flip detection + rollback safety net
+# ---------------------------------------------------------------------------
+
+
+def test_repair_flipped_elements_no_flip_is_noop() -> None:
+    """If post is identical to pre (no flips), repair returns post
+    unchanged with zeroed counts."""
+    from fvcom_mesh_tools.mesh_clean import _repair_flipped_elements
+
+    pre = np.array([[0, 0], [1, 0], [0, 1]], dtype=float)
+    post = pre.copy()
+    elements = np.array([[0, 1, 2]], dtype=np.int64)
+    repaired, info = _repair_flipped_elements(pre, post, elements)
+    np.testing.assert_array_equal(repaired, pre)
+    assert info["n_flipped_post_smooth"] == 0
+    assert info["n_flipped_after_repair"] == 0
+    assert info["n_nodes_rolled_back"] == 0
+    assert info["n_rollback_passes"] == 0
+    assert info["full_rollback"] is False
+
+
+def test_repair_flipped_elements_rolls_back_offending_nodes() -> None:
+    """Construct a hand-crafted post-smoothing array where the centre
+    node has been displaced outside the square, flipping every
+    triangle. The repair must restore it."""
+    from fvcom_mesh_tools.mesh_clean import _repair_flipped_elements
+
+    pre = np.array([
+        [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.5, 0.5],
+    ], dtype=float)
+    post = pre.copy()
+    post[4] = [2.0, 2.0]   # outside the square — flips every triangle
+    elements = np.array([[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]],
+                        dtype=np.int64)
+
+    repaired, info = _repair_flipped_elements(pre, post, elements)
+    # Repair restored the centre node.
+    np.testing.assert_array_equal(repaired[4], pre[4])
+    assert info["n_flipped_post_smooth"] >= 1
+    assert info["n_flipped_after_repair"] == 0
+    assert info["n_nodes_rolled_back"] >= 1
+    assert info["full_rollback"] is False
+
+
+def test_repair_flipped_elements_full_rollback_safety_net() -> None:
+    """If max_passes=0 leaves flips in place, the safety net fully
+    reverts to ``pre``."""
+    from fvcom_mesh_tools.mesh_clean import _repair_flipped_elements
+
+    pre = np.array([
+        [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.5, 0.5],
+    ], dtype=float)
+    post = pre.copy()
+    post[4] = [2.0, 2.0]
+    elements = np.array([[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]],
+                        dtype=np.int64)
+
+    repaired, info = _repair_flipped_elements(
+        pre, post, elements, max_passes=0,
+    )
+    # Full rollback fired.
+    np.testing.assert_array_equal(repaired, pre)
+    assert info["full_rollback"] is True
+    assert info["n_flipped_after_repair"] == 0
+
+
+def test_smooth_mesh_laplacian_emits_repair_info_keys() -> None:
+    """Even on a non-flipping fixture, the new info keys are present."""
+    mesh = _square_with_offcenter_node()
+    _, info = smooth_mesh_laplacian(mesh, max_iter=20, tol=1e-6)
+    assert "n_flipped_post_smooth" in info
+    assert "n_flipped_after_repair" in info
+    assert "n_nodes_rolled_back" in info
+    assert "n_rollback_passes" in info
+    assert "full_rollback" in info
+    # Square test fixture must not flip.
+    assert info["n_flipped_post_smooth"] == 0
+    assert info["n_flipped_after_repair"] == 0
+
+
+def test_smooth_mesh_laplacian_repair_off_keeps_flips() -> None:
+    """Synthetic test: monkey-patch oceanmesh.laplacian2 to return
+    flipped vertices, and verify ``repair_flipped=False`` surfaces
+    the raw output (n_flipped_after_repair > 0)."""
+    import fvcom_mesh_tools.mesh_clean as mc
+
+    mesh = _square_with_offcenter_node()
+    flipped_post = mesh.nodes.copy()
+    flipped_post[4] = [2.0, 2.0]
+
+    # Stand-in laplacian2 that ignores its inputs and returns the flip.
+    def fake_laplacian2(vertices, entities, **kwargs):  # noqa: ARG001
+        return flipped_post.copy(), entities
+
+    import oceanmesh
+    real = oceanmesh.laplacian2
+    oceanmesh.laplacian2 = fake_laplacian2
+    try:
+        out_unsafe, info_unsafe = mc.smooth_mesh_laplacian(
+            mesh, max_iter=1, tol=1.0, repair_flipped=False,
+        )
+        out_safe, info_safe = mc.smooth_mesh_laplacian(
+            mesh, max_iter=1, tol=1.0, repair_flipped=True,
+        )
+    finally:
+        oceanmesh.laplacian2 = real
+
+    # repair_flipped=False propagates the flips.
+    assert info_unsafe["n_flipped_post_smooth"] >= 1
+    assert info_unsafe["n_flipped_after_repair"] == info_unsafe[
+        "n_flipped_post_smooth"
+    ]
+    np.testing.assert_array_equal(out_unsafe.nodes[4], flipped_post[4])
+
+    # repair_flipped=True (default) repairs the flips.
+    assert info_safe["n_flipped_post_smooth"] >= 1
+    assert info_safe["n_flipped_after_repair"] == 0
+    # The centre node was reverted.
+    np.testing.assert_array_equal(out_safe.nodes[4], mesh.nodes[4])
+
+
+def test_smooth_mesh_laplacian_rejects_negative_max_repair_passes() -> None:
+    mesh = _square_with_offcenter_node()
+    import pytest
+
+    with pytest.raises(ValueError, match="max_repair_passes"):
+        smooth_mesh_laplacian(mesh, max_repair_passes=-1)

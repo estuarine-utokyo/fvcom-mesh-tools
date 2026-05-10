@@ -40,6 +40,7 @@ from fvcom_mesh_tools.mesh_clean import (
     DEFAULT_SKEWED_MIN_ANGLE_DEG,
     DEFAULT_SMOOTH_LAPLACIAN_ITERS,
     DEFAULT_SMOOTH_LAPLACIAN_TOL,
+    DEFAULT_SMOOTH_REPAIR_PASSES,
     clean_mesh,
 )
 
@@ -295,6 +296,29 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--smooth-no-repair-flipped", dest="smooth_repair_flipped",
+        action="store_false",
+        help=(
+            "Phase G: surface raw oceanmesh.laplacian2 output without "
+            "rolling back flipped triangles. Default behaviour repairs "
+            "flips by reverting affected nodes' positions; pass this "
+            "flag to diagnose whether a particular mesh causes "
+            "flipping."
+        ),
+    )
+    p.set_defaults(smooth_repair_flipped=True)
+    p.add_argument(
+        "--smooth-max-repair-passes", type=int,
+        default=DEFAULT_SMOOTH_REPAIR_PASSES,
+        help=(
+            "Phase G: cap on the iterative-rollback loop used to "
+            "repair flipped triangles. Default "
+            f"{DEFAULT_SMOOTH_REPAIR_PASSES}; full rollback to the "
+            "pre-smoothing positions fires if convergence is not "
+            "reached within this many passes."
+        ),
+    )
+    p.add_argument(
         "--summary", type=Path, default=None,
         help=(
             "Optional path for the JSON summary. Default: "
@@ -361,6 +385,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.smooth_laplacian_tol <= 0:
         print("--smooth-laplacian-tol must be > 0.", file=sys.stderr)
         return 2
+    if args.smooth_max_repair_passes < 0:
+        print("--smooth-max-repair-passes must be >= 0.", file=sys.stderr)
+        return 2
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     mesh = read_fort14(args.input)
@@ -396,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
         smooth_laplacian=args.smooth_laplacian,
         smooth_laplacian_iters=args.smooth_laplacian_iters,
         smooth_laplacian_tol=args.smooth_laplacian_tol,
+        smooth_repair_flipped=args.smooth_repair_flipped,
+        smooth_max_repair_passes=args.smooth_max_repair_passes,
     )
     write_fort14(cleaned, args.output)
 

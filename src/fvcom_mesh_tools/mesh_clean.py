@@ -687,6 +687,119 @@ def repair_skewed_elements(
 DEFAULT_SMOOTH_LAPLACIAN_ITERS: int = 20
 DEFAULT_SMOOTH_LAPLACIAN_TOL: float = 0.01
 
+# Cap on the iterative rollback loop in :func:`_repair_flipped_elements`.
+# Five passes is enough in practice (a flip propagates ≤ K rings away
+# after K passes); the full-rollback fallback handles the rare case
+# where it doesn't converge.
+DEFAULT_SMOOTH_REPAIR_PASSES: int = 5
+
+
+def _signed_areas_raw(nodes: np.ndarray, elements: np.ndarray) -> np.ndarray:
+    """Per-element signed area for raw ``(NP, 2)`` / ``(NE, 3)`` arrays.
+
+    Same convention as
+    :func:`fvcom_mesh_tools.algorithms.perpendicularity.signed_areas`
+    but takes plain numpy arrays so it can be used inside helpers
+    that have not yet wrapped a result into a :class:`Fort14Mesh`.
+    """
+    p0 = nodes[elements[:, 0]]
+    p1 = nodes[elements[:, 1]]
+    p2 = nodes[elements[:, 2]]
+    return 0.5 * (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+
+
+def _repair_flipped_elements(
+    pre_nodes: np.ndarray,
+    post_nodes: np.ndarray,
+    elements: np.ndarray,
+    *,
+    max_passes: int = DEFAULT_SMOOTH_REPAIR_PASSES,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Roll back nodes belonging to negative-signed-area triangles.
+
+    A Laplacian smoothing pass converges on edge-length stability but
+    does not check signed area, so a topologically-valid input can
+    converge to a state with locally-flipped triangles. This helper
+    iteratively reverts the three nodes of every flipped triangle to
+    their pre-smoothing positions until no flips remain or
+    ``max_passes`` is reached. If flips persist, the function falls
+    back to a full rollback (``post_nodes := pre_nodes``) so the
+    caller is guaranteed a flip-free output.
+
+    Assumes ``pre_nodes`` is itself flip-free; if the input is already
+    pathological the full-rollback safety net does not help.
+
+    Returns ``(repaired_nodes, info)``. ``info`` keys:
+
+    - ``n_flipped_post_smooth``: signed-area-negative count in
+      ``post_nodes`` before any rollback.
+    - ``n_flipped_after_repair``: ditto after the rollback (always 0
+      on success).
+    - ``n_nodes_rolled_back``: count of nodes that ended up reverted
+      to their pre-smoothing position.
+    - ``n_rollback_passes``: number of rollback passes actually run
+      (0 if no flips were detected, ``max_passes`` if the fallback
+      fired).
+    - ``full_rollback``: True iff the safety net wiped every node
+      back to its pre-smoothing position.
+    """
+    repaired = np.asarray(post_nodes, dtype=float).copy()
+    pre = np.asarray(pre_nodes, dtype=float)
+    n_flipped_initial = int((_signed_areas_raw(repaired, elements) < 0).sum())
+    rolled_back = np.zeros(pre.shape[0], dtype=bool)
+
+    if n_flipped_initial == 0:
+        return repaired, {
+            "n_flipped_post_smooth": 0,
+            "n_flipped_after_repair": 0,
+            "n_nodes_rolled_back": 0,
+            "n_rollback_passes": 0,
+            "full_rollback": False,
+        }
+
+    passes_run = 0
+    for pass_idx in range(max_passes):
+        passes_run = pass_idx + 1
+        sa = _signed_areas_raw(repaired, elements)
+        flipped_mask = sa < 0
+        if not flipped_mask.any():
+            return repaired, {
+                "n_flipped_post_smooth": n_flipped_initial,
+                "n_flipped_after_repair": 0,
+                "n_nodes_rolled_back": int(rolled_back.sum()),
+                "n_rollback_passes": pass_idx,
+                "full_rollback": False,
+            }
+        bad_nodes = np.unique(elements[flipped_mask].ravel())
+        repaired[bad_nodes] = pre[bad_nodes]
+        rolled_back[bad_nodes] = True
+
+    # Final check after the loop.
+    sa = _signed_areas_raw(repaired, elements)
+    if not (sa < 0).any():
+        return repaired, {
+            "n_flipped_post_smooth": n_flipped_initial,
+            "n_flipped_after_repair": 0,
+            "n_nodes_rolled_back": int(rolled_back.sum()),
+            "n_rollback_passes": passes_run,
+            "full_rollback": False,
+        }
+
+    # Safety net: full rollback. Guaranteed flip-free as long as the
+    # caller's pre_nodes was itself flip-free.
+    repaired = pre.copy()
+    rolled_back[:] = True
+    return repaired, {
+        "n_flipped_post_smooth": n_flipped_initial,
+        "n_flipped_after_repair": 0,
+        "n_nodes_rolled_back": int(rolled_back.sum()),
+        "n_rollback_passes": max_passes,
+        "full_rollback": True,
+    }
+
 
 def smooth_mesh_laplacian(
     mesh: Fort14Mesh,
@@ -694,6 +807,8 @@ def smooth_mesh_laplacian(
     max_iter: int = DEFAULT_SMOOTH_LAPLACIAN_ITERS,
     tol: float = DEFAULT_SMOOTH_LAPLACIAN_TOL,
     pfix: np.ndarray | None = None,
+    repair_flipped: bool = True,
+    max_repair_passes: int = DEFAULT_SMOOTH_REPAIR_PASSES,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Phase G: move every non-boundary node to the mean position of its
     connected neighbours (Laplacian smoothing).
@@ -704,6 +819,18 @@ def smooth_mesh_laplacian(
     lists themselves are unchanged. Connectivity and depth indices
     are preserved (``laplacian2`` only moves vertices). ``pfix`` adds
     extra fixed coordinates beyond the topological boundary.
+
+    ``oceanmesh.laplacian2`` converges on edge-length stability but
+    does not check signed area, so a topologically-valid input can
+    converge to a locally-flipped state. With ``repair_flipped=True``
+    (default) any flipped triangles are repaired by rolling back
+    their three nodes' positions; see :func:`_repair_flipped_elements`
+    for the algorithm and its termination guarantees. The repair
+    counts surface in the returned ``info`` dict
+    (``n_flipped_post_smooth``, ``n_nodes_rolled_back``,
+    ``full_rollback``). Set ``repair_flipped=False`` to surface the
+    raw oceanmesh output (useful for diagnosing whether a particular
+    mesh causes flipping).
 
     .. note::
        Importing :mod:`oceanmesh` (GPL-3.0-or-later) propagates GPL
@@ -723,6 +850,8 @@ def smooth_mesh_laplacian(
         raise ValueError(f"max_iter must be >= 1, got {max_iter}")
     if tol <= 0:
         raise ValueError(f"tol must be > 0, got {tol}")
+    if max_repair_passes < 0:
+        raise ValueError(f"max_repair_passes must be >= 0, got {max_repair_passes}")
     if mesh.n_elements == 0:
         return mesh, {
             "max_iter": int(max_iter),
@@ -731,20 +860,38 @@ def smooth_mesh_laplacian(
             "n_nodes_moved": 0,
             "displacement_max": 0.0,
             "displacement_mean": 0.0,
+            "n_flipped_post_smooth": 0,
+            "n_flipped_after_repair": 0,
+            "n_nodes_rolled_back": 0,
+            "n_rollback_passes": 0,
+            "full_rollback": False,
             "skipped": True,
         }
 
     from oceanmesh import laplacian2  # GPL-3.0-or-later, lazy import
 
     pre = np.asarray(mesh.nodes, dtype=float).copy()
+    elements = np.asarray(mesh.elements, dtype=int)
     new_vertices, _ = laplacian2(
-        pre.copy(),
-        np.asarray(mesh.elements, dtype=int),
-        max_iter=int(max_iter),
-        tol=float(tol),
-        pfix=pfix,
+        pre.copy(), elements,
+        max_iter=int(max_iter), tol=float(tol), pfix=pfix,
     )
     new_vertices = np.asarray(new_vertices, dtype=float)
+
+    if repair_flipped:
+        new_vertices, repair_info = _repair_flipped_elements(
+            pre, new_vertices, elements, max_passes=max_repair_passes,
+        )
+    else:
+        sa = _signed_areas_raw(new_vertices, elements)
+        n_flipped_raw = int((sa < 0).sum())
+        repair_info = {
+            "n_flipped_post_smooth": n_flipped_raw,
+            "n_flipped_after_repair": n_flipped_raw,
+            "n_nodes_rolled_back": 0,
+            "n_rollback_passes": 0,
+            "full_rollback": False,
+        }
 
     disp = new_vertices - pre
     disp_norm = np.linalg.norm(disp, axis=1)
@@ -757,6 +904,7 @@ def smooth_mesh_laplacian(
         "n_nodes_moved": int((disp_norm > eps).sum()),
         "displacement_max": float(disp_norm.max()) if disp_norm.size else 0.0,
         "displacement_mean": float(disp_norm.mean()) if disp_norm.size else 0.0,
+        **repair_info,
     }
 
     out = Fort14Mesh(
@@ -803,6 +951,8 @@ def clean_mesh(
     smooth_laplacian: bool = False,
     smooth_laplacian_iters: int = DEFAULT_SMOOTH_LAPLACIAN_ITERS,
     smooth_laplacian_tol: float = DEFAULT_SMOOTH_LAPLACIAN_TOL,
+    smooth_repair_flipped: bool = True,
+    smooth_max_repair_passes: int = DEFAULT_SMOOTH_REPAIR_PASSES,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Run Phase A (component pruning) and Phase B (dead-end trimming).
 
@@ -889,6 +1039,17 @@ def clean_mesh(
     smooth_laplacian_iters, smooth_laplacian_tol:
         Phase G iteration cap and convergence tolerance. Defaults
         match ``oceanmesh.laplacian2``: ``max_iter=20, tol=0.01``.
+    smooth_repair_flipped:
+        Phase G safety net (default True). After
+        ``oceanmesh.laplacian2`` returns, detect any negative
+        signed-area triangles and roll the affected nodes back to
+        their pre-smoothing positions; iterate until no flips
+        remain. Set False to surface the raw oceanmesh result.
+    smooth_max_repair_passes:
+        Cap on the iterative-rollback loop. Default
+        ``DEFAULT_SMOOTH_REPAIR_PASSES = 5``; full rollback to the
+        pre-smoothing positions fires if convergence is not reached
+        within this many passes.
     """
     if thin_chain_mode not in ("widen", "delete", "none"):
         raise ValueError(
@@ -933,6 +1094,8 @@ def clean_mesh(
             "smooth_laplacian": bool(smooth_laplacian),
             "smooth_laplacian_iters": int(smooth_laplacian_iters),
             "smooth_laplacian_tol": float(smooth_laplacian_tol),
+            "smooth_repair_flipped": bool(smooth_repair_flipped),
+            "smooth_max_repair_passes": int(smooth_max_repair_passes),
         },
         "phases": [],
     }
@@ -1030,6 +1193,8 @@ def clean_mesh(
             cur,
             max_iter=smooth_laplacian_iters,
             tol=smooth_laplacian_tol,
+            repair_flipped=smooth_repair_flipped,
+            max_repair_passes=smooth_max_repair_passes,
         )
         info["phases"].append({"name": "smooth_mesh_laplacian", **g_info})
 
@@ -1059,6 +1224,7 @@ __all__ = [
     "DEFAULT_SKEWED_MIN_ANGLE_DEG",
     "DEFAULT_SMOOTH_LAPLACIAN_ITERS",
     "DEFAULT_SMOOTH_LAPLACIAN_TOL",
+    "DEFAULT_SMOOTH_REPAIR_PASSES",
     "ThinChainMode",
     "UnderResolvedMode",
     "clean_mesh",

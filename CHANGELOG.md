@@ -27,6 +27,27 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- Phase G now repairs flipped triangles introduced by Laplacian
+  smoothing. New helper
+  `fvcom_mesh_tools.mesh_clean._repair_flipped_elements` detects
+  any negative-signed-area triangle in the smoother's output and
+  iteratively reverts the three nodes of every offending triangle
+  to their pre-smoothing positions; the loop stops when no flips
+  remain or `max_passes` (default 5) is reached. A full-rollback
+  safety net guarantees the output is flip-free even when the
+  iterative repair does not converge.
+  `smooth_mesh_laplacian` now exposes `repair_flipped` (default
+  True) and `max_repair_passes` parameters; the returned `info`
+  dict gains `n_flipped_post_smooth`, `n_flipped_after_repair`
+  (always 0 with `repair_flipped=True`), `n_nodes_rolled_back`,
+  `n_rollback_passes`, and `full_rollback`. The `fmesh-mesh-clean`
+  CLI gains `--smooth-no-repair-flipped` and
+  `--smooth-max-repair-passes`. Discovered by
+  `fmesh-mesh-quality` running over PoC #19's raw / cleaned /
+  Phase-G output: the threshold gate `--max-flipped 0` flagged
+  2 inverted triangles produced by `oceanmesh.laplacian2` on the
+  cleaned mesh — a regression that the smoother's edge-length
+  convergence metric does not catch on its own.
 - `fmesh-mesh-quality` CLI + `fvcom_mesh_tools.quality` module: a
   unified quality-metrics dump that consolidates the per-mesh
   numbers PoCs computed ad-hoc (alpha mean / p05 / p50, min-angle
