@@ -84,6 +84,14 @@ DEFAULT_ARC_SEPARATION_FACTOR: float = 4.0
 # wraps around a peninsula tip.
 DEFAULT_OPPOSITE_BANK_COS_MAX: float = -0.8
 
+# detector 6 default min-channel-elements filter. ``1`` keeps every
+# flagged element (legacy behaviour); raise to N to drop flagged
+# elements whose face-face-connected channel component has fewer
+# than N members. Useful to suppress the "noise" of small isolated
+# clusters (river-mouth corners, jetty tips) flagged as
+# under-resolved when only the long ribbon-like channels matter.
+DEFAULT_MIN_CHANNEL_ELEMENTS: int = 1
+
 # Earth radius used for the lon/lat → metric projection in the
 # channel-width detector.
 _EARTH_R_M: float = 6_371_000.0
@@ -508,11 +516,22 @@ def under_resolved_channels_flag(
     sample_ds_m: float = DEFAULT_CHANNEL_SAMPLE_DS_M,
     arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
     opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
+    min_channel_elements: int = DEFAULT_MIN_CHANNEL_ELEMENTS,
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     """Element-level flag: True if ``w_h_ratio < min_w_h``.
 
     Returns ``(flag, metric_info)`` where ``metric_info`` is the dict
     returned by :func:`channel_width_metric`.
+
+    ``min_channel_elements`` (default 1 = no filter) drops any flagged
+    element whose face-face-connected component has fewer than
+    ``min_channel_elements`` flagged members. Use to suppress small
+    isolated clusters (river-mouth corners, jetty tips) when only
+    longer ribbon-like channels are of interest. PoC #35 found that
+    on Tokyo Bay the 3,178 default-flag elements split into 1,010
+    components with mean ~3 elements / component; a filter of, say,
+    10 keeps the dozens of meaningful long channels while pruning
+    the 970+ small-cluster noise.
     """
     info = channel_width_metric(
         mesh,
@@ -521,6 +540,19 @@ def under_resolved_channels_flag(
         opposite_bank_cos_max=opposite_bank_cos_max,
     )
     flag = info["w_h_ratio"] < min_w_h
+    if min_channel_elements <= 1 or not flag.any():
+        return flag, info
+
+    # Drop flagged elements whose channel component is too small.
+    flagged_idx = np.where(flag)[0]
+    full_adj = face_face_adjacency(mesh.elements)
+    sub = full_adj[flagged_idx][:, flagged_idx]
+    n_comp, labels = connected_components(sub, directed=False, return_labels=True)
+    sizes = np.bincount(labels, minlength=int(n_comp))
+    small_component = sizes < int(min_channel_elements)
+    drop_mask = small_component[labels]   # True for flagged elements to drop
+    flag = flag.copy()
+    flag[flagged_idx[drop_mask]] = False
     return flag, info
 
 
@@ -599,6 +631,7 @@ def run_diagnostics(
     channel_sample_ds_m: float = DEFAULT_CHANNEL_SAMPLE_DS_M,
     channel_arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
     channel_opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
+    min_channel_elements: int = DEFAULT_MIN_CHANNEL_ELEMENTS,
 ) -> DiagnosticReport:
     """Apply all seven detectors to ``mesh`` and return a
     :class:`DiagnosticReport`.
@@ -623,6 +656,7 @@ def run_diagnostics(
         sample_ds_m=channel_sample_ds_m,
         arc_separation_factor=channel_arc_separation_factor,
         opposite_bank_cos_max=channel_opposite_bank_cos_max,
+        min_channel_elements=min_channel_elements,
     )
 
     return DiagnosticReport(
@@ -946,6 +980,7 @@ __all__ = [
     "DEFAULT_ARC_SEPARATION_FACTOR",
     "DEFAULT_CHANNEL_SAMPLE_DS_M",
     "DEFAULT_MAX_NBR_ELEM",
+    "DEFAULT_MIN_CHANNEL_ELEMENTS",
     "DEFAULT_MIN_THIN_CHAIN",
     "DEFAULT_MIN_W_H",
     "DEFAULT_OPPOSITE_BANK_COS_MAX",

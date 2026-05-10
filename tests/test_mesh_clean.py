@@ -625,6 +625,28 @@ def test_clean_mesh_phase_e_widen_explicit() -> None:
     assert info["output"]["n_nodes"] == mesh.n_nodes + mesh.n_elements
 
 
+def test_clean_mesh_phase_e_min_channel_elements_filter_propagates() -> None:
+    """``under_resolved_min_channel_elements`` larger than the strip's
+    one component drops every flag, so Phase E reports n_flagged=0."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    cleaned, info = clean_mesh(
+        mesh,
+        bbox=(0.0, 0.0, 0.08, 0.01), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        thin_chain_mode="none",
+        under_resolved_mode="widen",
+        under_resolved_min_w_h=3.0,
+        under_resolved_min_channel_elements=999,
+    )
+    phase_e = next(p for p in info["phases"]
+                   if p["name"] == "repair_under_resolved_channels")
+    assert phase_e["min_channel_elements"] == 999
+    assert phase_e["n_flagged"] == 0
+    assert phase_e.get("skipped") is True
+    assert info["output"]["n_nodes"] == mesh.n_nodes
+    assert info["output"]["n_elements"] == mesh.n_elements
+
+
 def test_clean_mesh_phase_e_invalid_mode_raises() -> None:
     mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
     import pytest

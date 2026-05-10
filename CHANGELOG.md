@@ -27,6 +27,26 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- ``min_channel_elements`` filter on detector 6
+  (``under_resolved_channels_flag``). Default 1 = no filter
+  (legacy); raise to N to drop any flagged element whose
+  face-face-connected component has fewer than N members. PoC #35
+  characterised the typical detector-6 flag set as ~1,000 small
+  isolated clusters with mean ~3 elements / channel; this filter
+  lets callers ignore that noise and concentrate Phase E (or any
+  future Stage 2 medial-axis remeshing) on the long ribbon-like
+  channels actually worth widening. Plumbed end-to-end:
+  ``run_diagnostics`` accepts ``min_channel_elements``;
+  ``fmesh-mesh-check`` exposes ``--min-channel-elements N``;
+  ``repair_under_resolved_channels`` and ``clean_mesh`` both
+  accept the parameter; ``fmesh-mesh-clean`` and
+  ``fmesh-mesh-pipeline`` expose
+  ``--under-resolved-min-channel-elements N`` (the latter applies
+  to rung 2). Phase E's info dict reports the threshold used and
+  the post-filter flag count. 4 new tests cover the default-no-
+  filter regression guard, the small-component drop behaviour,
+  ``run_diagnostics`` propagation, and Phase E end-to-end
+  propagation through ``clean_mesh``. 195 tests pass.
 - `fvcom_mesh_tools.mesh_clean.analyze_under_resolved_channels` —
   Stage 1 of the planned "true medial-axis Phase E" project.
   Splits detector-6-flagged elements into face-face-adjacent

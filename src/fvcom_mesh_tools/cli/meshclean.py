@@ -240,6 +240,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--under-resolved-min-channel-elements", type=int, default=1,
+        help=(
+            "Phase E: ignore detector-6 flags whose face-face-connected "
+            "channel component has fewer than this many flagged "
+            "elements. Default 1 (no filter). PoC #35 found that on "
+            "real meshes most flagged clusters are tiny (~3 elements / "
+            "channel); raise to e.g. 10 to limit Phase E to the long "
+            "ribbon-like channels actually worth widening."
+        ),
+    )
+    p.add_argument(
         "--repair-skewed-elements", action="store_true",
         help=(
             "Phase F switch (off by default). Delete triangles whose "
@@ -369,6 +380,10 @@ def main(argv: list[str] | None = None) -> int:
         print("--under-resolved-opposite-bank-cos-max must be in [-1, 1].",
               file=sys.stderr)
         return 2
+    if args.under_resolved_min_channel_elements < 1:
+        print("--under-resolved-min-channel-elements must be >= 1.",
+              file=sys.stderr)
+        return 2
     if args.repair_skewed_min_angle_deg < 0:
         print("--repair-skewed-min-angle-deg must be >= 0.", file=sys.stderr)
         return 2
@@ -417,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
         under_resolved_sample_ds_m=args.under_resolved_sample_ds_m,
         under_resolved_arc_separation_factor=args.under_resolved_arc_separation_factor,
         under_resolved_opposite_bank_cos_max=args.under_resolved_opposite_bank_cos_max,
+        under_resolved_min_channel_elements=args.under_resolved_min_channel_elements,
         repair_skewed=args.repair_skewed_elements,
         repair_skewed_min_angle_deg=args.repair_skewed_min_angle_deg,
         repair_skewed_max_angle_deg=args.repair_skewed_max_angle_deg,

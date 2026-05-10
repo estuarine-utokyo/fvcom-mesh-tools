@@ -450,6 +450,51 @@ def test_channel_width_metric_six_row_strip_partially_unflagged() -> None:
     assert float(np.median(info["w_h_ratio"])) > 3.0
 
 
+def test_under_resolved_channels_min_channel_elements_default_is_no_filter() -> None:
+    """``min_channel_elements=1`` (the default) keeps every flagged
+    element — regression guard against accidentally turning the filter
+    on by default."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    base_flag, _ = under_resolved_channels_flag(mesh, min_w_h=3.0)
+    filtered_flag, _ = under_resolved_channels_flag(
+        mesh, min_w_h=3.0, min_channel_elements=1,
+    )
+    np.testing.assert_array_equal(base_flag, filtered_flag)
+
+
+def test_under_resolved_channels_min_channel_elements_drops_small_components() -> None:
+    """A small strip has 16 flagged elements forming one component.
+    Setting min_channel_elements=20 drops everything; setting it to 16
+    keeps everything; setting it to 17 drops everything."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    base_flag, _ = under_resolved_channels_flag(mesh, min_w_h=3.0)
+    n_base = int(base_flag.sum())
+    assert n_base == 16
+
+    # Threshold == component size → keep.
+    keep_flag, _ = under_resolved_channels_flag(
+        mesh, min_w_h=3.0, min_channel_elements=n_base,
+    )
+    assert int(keep_flag.sum()) == n_base
+
+    # Threshold > component size → drop everything.
+    drop_flag, _ = under_resolved_channels_flag(
+        mesh, min_w_h=3.0, min_channel_elements=n_base + 1,
+    )
+    assert int(drop_flag.sum()) == 0
+
+
+def test_run_diagnostics_propagates_min_channel_elements() -> None:
+    """The high-level driver must honour ``min_channel_elements``."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    rep_default = run_diagnostics(mesh, min_w_h=3.0)
+    rep_filtered = run_diagnostics(
+        mesh, min_w_h=3.0, min_channel_elements=100,
+    )
+    assert rep_default.under_resolved_channels_flag.any()
+    assert not rep_filtered.under_resolved_channels_flag.any()
+
+
 def test_channel_width_metric_handles_no_boundary() -> None:
     """A mesh with no boundary lists returns inf-ratio (no flags)."""
     mesh = _square_around_centre()

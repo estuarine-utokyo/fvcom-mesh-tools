@@ -26,6 +26,7 @@ from fvcom_mesh_tools.diagnostics import (
     DEFAULT_ARC_SEPARATION_FACTOR,
     DEFAULT_CHANNEL_SAMPLE_DS_M,
     DEFAULT_MAX_NBR_ELEM,
+    DEFAULT_MIN_CHANNEL_ELEMENTS,
     DEFAULT_MIN_THIN_CHAIN,
     DEFAULT_MIN_W_H,
     DEFAULT_OPPOSITE_BANK_COS_MAX,
@@ -116,6 +117,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--min-channel-elements", type=int,
+        default=DEFAULT_MIN_CHANNEL_ELEMENTS,
+        help=(
+            "Drop detector-6 (under-resolved channel) flags whose "
+            "face-face-connected component has fewer than this many "
+            f"flagged elements. Default {DEFAULT_MIN_CHANNEL_ELEMENTS} "
+            "(no filter). Raise to e.g. 10 to suppress small isolated "
+            "clusters at river-mouth corners or jetty tips, leaving "
+            "only the long ribbon-like channels."
+        ),
+    )
+    p.add_argument(
         "--no-plot", action="store_true",
         help="Skip writing the *_map.png overlay.",
     )
@@ -164,6 +177,9 @@ def main(argv: list[str] | None = None) -> int:
     if not (-1.0 <= args.channel_opposite_bank_cos_max <= 1.0):
         print("--channel-opposite-bank-cos-max must be in [-1, 1].", file=sys.stderr)
         return 2
+    if args.min_channel_elements < 1:
+        print("--min-channel-elements must be >= 1.", file=sys.stderr)
+        return 2
 
     prefix = _resolve_prefix(args.input, args.out_prefix)
     summary_path = prefix.with_name(prefix.name + "_summary.txt")
@@ -181,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         channel_sample_ds_m=args.channel_sample_ds_m,
         channel_arc_separation_factor=args.channel_arc_separation_factor,
         channel_opposite_bank_cos_max=args.channel_opposite_bank_cos_max,
+        min_channel_elements=args.min_channel_elements,
     )
 
     summary = report_to_summary_text(report)

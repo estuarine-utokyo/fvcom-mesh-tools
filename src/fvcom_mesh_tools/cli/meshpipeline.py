@@ -95,6 +95,8 @@ def _build_rung_overlays(args: argparse.Namespace) -> list[tuple[str, dict]]:
             {
                 "under_resolved_mode": "widen",
                 "under_resolved_min_w_h": float(args.under_resolved_min_w_h),
+                "under_resolved_min_channel_elements":
+                    int(args.under_resolved_min_channel_elements),
             },
         ),
     ]
@@ -200,6 +202,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--under-resolved-min-w-h", type=float, default=DEFAULT_MIN_W_H,
         help=f"Phase E w/h threshold. Default {DEFAULT_MIN_W_H:g}.",
     )
+    g_rung2.add_argument(
+        "--under-resolved-min-channel-elements", type=int, default=1,
+        help=(
+            "Phase E: ignore detector-6 flags whose channel component "
+            "has fewer than N flagged elements. Default 1 (no filter); "
+            "raise to skip the small isolated clusters PoC #35 "
+            "characterised."
+        ),
+    )
 
     g_thresh = p.add_argument_group("quality thresholds (any → CI gate)")
     g_thresh.add_argument("--min-alpha", type=float, default=None)
@@ -237,6 +248,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.max_nbr_elem < 3:
         print("--max-nbr-elem must be >= 3.", file=sys.stderr)
+        return 2
+    if args.under_resolved_min_channel_elements < 1:
+        print("--under-resolved-min-channel-elements must be >= 1.",
+              file=sys.stderr)
         return 2
     if args.under_resolved_min_w_h <= 0:
         print("--under-resolved-min-w-h must be > 0.", file=sys.stderr)

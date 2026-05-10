@@ -500,6 +500,7 @@ def repair_under_resolved_channels(
     sample_ds_m: float = DEFAULT_CHANNEL_SAMPLE_DS_M,
     arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
     opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
+    min_channel_elements: int = 1,
     bbox: tuple[float, float, float, float] | None = None,
     tol_deg: float | None = None,
     land_ibtype: int = 0,
@@ -543,12 +544,14 @@ def repair_under_resolved_channels(
         sample_ds_m=sample_ds_m,
         arc_separation_factor=arc_separation_factor,
         opposite_bank_cos_max=opposite_bank_cos_max,
+        min_channel_elements=int(min_channel_elements),
     )
     n_flagged = int(flag.sum())
     info: dict[str, Any] = {
         "mode": mode,
         "min_w_h": float(min_w_h),
         "sample_ds_m": float(sample_ds_m),
+        "min_channel_elements": int(min_channel_elements),
         "n_flagged": n_flagged,
     }
     if n_flagged == 0:
@@ -1117,6 +1120,7 @@ def clean_mesh(
     under_resolved_sample_ds_m: float = DEFAULT_CHANNEL_SAMPLE_DS_M,
     under_resolved_arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
     under_resolved_opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
+    under_resolved_min_channel_elements: int = 1,
     repair_skewed: bool = False,
     repair_skewed_min_angle_deg: float = DEFAULT_SKEWED_MIN_ANGLE_DEG,
     repair_skewed_max_angle_deg: float = DEFAULT_SKEWED_MAX_ANGLE_DEG,
@@ -1190,6 +1194,13 @@ def clean_mesh(
     under_resolved_opposite_bank_cos_max:
         Medial-axis detector parameters. See
         :func:`channel_width_metric`.
+    under_resolved_min_channel_elements:
+        Forwarded to :func:`under_resolved_channels_flag`. Default 1
+        (no filter); raise to N to ignore detector-6 flags whose
+        face-face-connected component has fewer than N flagged
+        elements. PoC #35 motivated this filter — most flagged
+        clusters on real meshes are tiny (mean ~3 elements / channel)
+        and not the long ribbon-like inlets Phase E targets.
     repair_skewed:
         Phase F switch (off by default). When True, delete triangles
         whose minimum interior angle is below
@@ -1260,6 +1271,8 @@ def clean_mesh(
                 float(under_resolved_arc_separation_factor),
             "under_resolved_opposite_bank_cos_max":
                 float(under_resolved_opposite_bank_cos_max),
+            "under_resolved_min_channel_elements":
+                int(under_resolved_min_channel_elements),
             "repair_skewed": bool(repair_skewed),
             "repair_skewed_min_angle_deg": float(repair_skewed_min_angle_deg),
             "repair_skewed_max_angle_deg": float(repair_skewed_max_angle_deg),
@@ -1341,6 +1354,7 @@ def clean_mesh(
             sample_ds_m=under_resolved_sample_ds_m,
             arc_separation_factor=under_resolved_arc_separation_factor,
             opposite_bank_cos_max=under_resolved_opposite_bank_cos_max,
+            min_channel_elements=under_resolved_min_channel_elements,
             bbox=bbox,
             tol_deg=_tol_deg(cur),
             land_ibtype=land_ibtype,
