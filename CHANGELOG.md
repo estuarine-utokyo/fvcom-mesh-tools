@@ -320,6 +320,34 @@ Each links to a notebook in `notebooks/`.
   mesh get better". For basins where the smallest cells are in
   deep offshore (rather than coastline detail), the worst-case
   gain would be larger.
+- **PoC #40** — Stage 1 of the planned "Phase H" per-element greedy
+  optimizer. Goal: replicate the SMS manual mesh-edit workflow as a
+  greedy optimiser that visits each element failing a strict
+  per-element gate (``alpha >= 0.95`` ∧ ``min_angle >= 20°``) and
+  tries a sequence of local-edit operators. The PoC dry-runs the
+  two simplest operators (``smooth_node``, ``edge_swap``) on every
+  fail element of the pipeline-rung-1 output of PoC #19:
+
+      total elements              : 47,426
+      fail elements               : 12,440  (26.2 %)
+      fail elements on boundary   : 5,717   (46 % of fail)
+      smooth+swap fixable         : 2 of 12,440  (0.02 %)
+
+  **Headline finding**: the post-rung-1 mesh sits at the
+  simultaneous fixed point of Laplacian smoothing (Phase G) and
+  Lawson edge swap (Phase D). Moving any non-boundary vertex to its
+  1-ring centroid is by construction a no-op (penalty before ==
+  after), and every internal edge swap would flip a triangle
+  (Delaunay-optimal). Smooth+swap alone cannot escape this local
+  optimum. **Implication for Phase H**: the operator inventory must
+  include topology-changing primitives — ``edge_split`` (interior
+  + boundary, the latter projecting to the coastline),
+  ``vertex_remove`` + 1-ring CDT (single-element variant of the
+  Stage 2 medial-axis re-mesh), ``edge_collapse``, and a
+  boundary-tangent smooth for the 46 % of fail elements that touch
+  a boundary. PoC #40 thus reframes Phase H from "smooth + swap on
+  hot spots" to "topology-changing local edits driven by a per-
+  element penalty heap".
 - **PoC #36** — `--om-max-iter` sweep on Tokyo Bay (50 → 25 → 10 → 5):
 
       iters   wall    alpha   frac<20°   max_v   n_overconn
