@@ -52,6 +52,31 @@ will only ship with a major bump (Semantic Versioning).
   0.16 → 0.17 % — essentially zero quality cost. Severe gmsh-fan
   cases (PoC #16, max valence 26) are only partially fixable by edge
   swap alone; mitigation there is engine choice.
+- `fmesh-mesh-clean` Phase E: widen or delete medial-axis-detected
+  under-resolved channel elements (detector 6). Reuses the existing
+  centroid-insertion mechanism from Phase C-widen — each flagged
+  triangle becomes 3 sub-triangles fanning from a new interior
+  centroid. Exposed as
+  `fvcom_mesh_tools.mesh_clean.repair_under_resolved_channels`. The
+  CLI gains `--under-resolved-mode {widen,delete,none}` (default
+  `none`), `--under-resolved-min-w-h` (default 3.0), and the matching
+  detector-6 parameters (`--under-resolved-sample-ds-m`,
+  `--under-resolved-arc-separation-factor`,
+  `--under-resolved-opposite-bank-cos-max`). Phase E is **off by
+  default** because detector 6 typically flags thousands of elements
+  on real meshes; enable deliberately when widening is the desired
+  remediation. PoC #29 validates the widen path end-to-end on the
+  PoC #19 cleaned Tokyo-Bay mesh: topology growth checks pass
+  (NP +3,178, NE +6,356) and boundaries are preserved, but the
+  detector-6 reduction is modest (3,178 → 3,032, 4.6 %). Reason:
+  centroid insertion shrinks h_local by ~0.577× while the geometric
+  channel width is unchanged, so w/h ≈ 1.73× the original ratio —
+  only elements with originally-borderline ratios cross the
+  threshold. Phase E should therefore be read as "lift local
+  resolution one step", not "guarantee 3 cells across every narrow
+  channel". The latter requires inserting nodes along the channel
+  medial axis, a deeper remeshing operation outside `clean_mesh`'s
+  scope.
 - 7th detector `under_resolved_channels_flag` graduates from PoC #28
   into `fvcom_mesh_tools.diagnostics`. The metric is the smaller of
   two channel-width candidates divided by the median element edge

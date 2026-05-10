@@ -12,6 +12,7 @@ from fvcom_mesh_tools.mesh_clean import (
     remove_elements,
     repair_overconnected_nodes,
     repair_thin_chains,
+    repair_under_resolved_channels,
     trim_dead_ends,
     widen_thin_elements_at_centroid,
 )
@@ -475,3 +476,159 @@ def test_clean_mesh_phase_d_explicit_floor0_balances_fan() -> None:
                    if p["name"] == "repair_overconnected_nodes")
     assert phase_d["max_valence_after"] <= 8
     assert phase_d["n_overconn_after"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase E: under-resolved channel repair (detector 6)
+# ---------------------------------------------------------------------------
+
+
+def _strip_mesh_n_rows(
+    *, length_deg: float, width_deg: float, n_x: int, n_rows: int,
+) -> Fort14Mesh:
+    """Strip in lon/lat: top + bottom land, left + right open boundary.
+
+    Same fixture as in ``test_diagnostics`` — duplicated here so the
+    two test files do not depend on each other.
+    """
+    n_pts_x = n_x + 1
+    n_pts_y = n_rows + 1
+    nodes_rows: list[np.ndarray] = []
+    for j in range(n_pts_y):
+        y = (j / (n_pts_y - 1)) * width_deg
+        nodes_rows.append(np.column_stack([
+            np.linspace(0.0, length_deg, n_pts_x),
+            np.full(n_pts_x, y),
+        ]))
+    nodes = np.vstack(nodes_rows)
+    elems: list[list[int]] = []
+    for j in range(n_rows):
+        for i in range(n_x):
+            i00 = j * n_pts_x + i
+            i01 = j * n_pts_x + (i + 1)
+            i10 = (j + 1) * n_pts_x + i
+            i11 = (j + 1) * n_pts_x + (i + 1)
+            elems.append([i00, i01, i11])
+            elems.append([i00, i11, i10])
+    elements = np.asarray(elems, dtype=np.int64)
+    bot_seg = np.arange(n_pts_x, dtype=np.int64)
+    top_seg = np.arange(n_pts_x, dtype=np.int64) + n_rows * n_pts_x
+    left_seg = np.array(
+        [j * n_pts_x for j in range(n_pts_y)], dtype=np.int64,
+    )
+    right_seg = np.array(
+        [j * n_pts_x + (n_pts_x - 1) for j in range(n_pts_y)], dtype=np.int64,
+    )
+    return _mesh(
+        nodes, elements,
+        open_boundaries=[left_seg, right_seg],
+        land_boundaries=[(0, bot_seg), (0, top_seg)],
+    )
+
+
+def test_repair_under_resolved_channels_widen_inserts_centroids() -> None:
+    """A 1-row strip is fully flagged by detector 6 (w/h ≈ 1); widening
+    inserts one centroid per element."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    out, info = repair_under_resolved_channels(
+        mesh, mode="widen", min_w_h=3.0,
+    )
+    assert info["mode"] == "widen"
+    assert info["n_flagged"] == mesh.n_elements
+    assert info["n_widened"] == mesh.n_elements
+    assert out.n_nodes == mesh.n_nodes + mesh.n_elements
+    # Each flagged element becomes 3 sub-triangles → net +2 per flagged.
+    assert out.n_elements == 3 * mesh.n_elements
+
+
+def test_repair_under_resolved_channels_delete_removes_flagged() -> None:
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    out, info = repair_under_resolved_channels(
+        mesh, mode="delete", min_w_h=3.0,
+        bbox=(0.0, 0.0, 0.08, 0.01), tol_deg=1e-3, land_ibtype=0,
+    )
+    assert info["mode"] == "delete"
+    assert info["n_flagged"] == mesh.n_elements
+    assert info["n_elements_removed"] == mesh.n_elements
+    assert out.n_elements == 0
+
+
+def test_repair_under_resolved_channels_none_is_noop() -> None:
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    out, info = repair_under_resolved_channels(mesh, mode="none")
+    assert info["mode"] == "none"
+    assert out.n_elements == mesh.n_elements
+    assert out.n_nodes == mesh.n_nodes
+
+
+def test_repair_under_resolved_channels_skips_when_unflagged() -> None:
+    """A wide 6-row strip has at least some elements above min_w_h=3 —
+    relaxing the threshold below 1 marks zero elements (no flags)."""
+    mesh = _strip_mesh_n_rows(
+        length_deg=0.5, width_deg=0.10, n_x=20, n_rows=6,
+    )
+    out, info = repair_under_resolved_channels(
+        mesh, mode="widen", min_w_h=0.1,
+    )
+    assert info["n_flagged"] == 0
+    assert info.get("skipped") is True
+    assert out.n_nodes == mesh.n_nodes
+    assert out.n_elements == mesh.n_elements
+
+
+def test_repair_under_resolved_channels_delete_requires_bbox() -> None:
+    """``mode='delete'`` without bbox/tol_deg raises a clear error."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    import pytest
+
+    with pytest.raises(ValueError, match="delete mode requires bbox"):
+        repair_under_resolved_channels(mesh, mode="delete", min_w_h=3.0)
+
+
+def test_clean_mesh_phase_e_default_off() -> None:
+    """Phase E is off by default — a fully-flagged 1-row strip is left
+    untouched after a default ``clean_mesh`` run with all other phases
+    disabled."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    cleaned, info = clean_mesh(
+        mesh,
+        bbox=(0.0, 0.0, 0.08, 0.01), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        thin_chain_mode="none",
+        # under_resolved_mode defaults to "none"
+    )
+    assert all(p["name"] != "repair_under_resolved_channels"
+               for p in info["phases"])
+    assert cleaned.n_elements == mesh.n_elements
+
+
+def test_clean_mesh_phase_e_widen_explicit() -> None:
+    """Enabling ``under_resolved_mode='widen'`` widens every flagged
+    element in the 1-row strip."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    cleaned, info = clean_mesh(
+        mesh,
+        bbox=(0.0, 0.0, 0.08, 0.01), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        thin_chain_mode="none",
+        under_resolved_mode="widen",
+        under_resolved_min_w_h=3.0,
+    )
+    phase_e = next(p for p in info["phases"]
+                   if p["name"] == "repair_under_resolved_channels")
+    assert phase_e["mode"] == "widen"
+    assert phase_e["n_flagged"] == mesh.n_elements
+    assert phase_e["n_widened"] == mesh.n_elements
+    assert info["output"]["n_nodes"] == mesh.n_nodes + mesh.n_elements
+
+
+def test_clean_mesh_phase_e_invalid_mode_raises() -> None:
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    import pytest
+
+    with pytest.raises(ValueError, match="under_resolved_mode"):
+        clean_mesh(
+            mesh,
+            bbox=(0.0, 0.0, 0.08, 0.01), bbox_tol_m=1.0,
+            under_resolved_mode="bogus",  # type: ignore[arg-type]
+        )

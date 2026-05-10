@@ -140,10 +140,11 @@ below `--min-w-h`. Detector 6 catches 2- and 3-cell channels that
 detector 3b misses.
 
 `fmesh-mesh-clean` repairs the safe-to-fix subset that
-`fmesh-mesh-check` surfaces — disjoint pools, dead-end "spits", and
-1-cell-wide channels. Pass the original DEM bbox (and the same
-`--open-merge-coast-gap` you used at build time) so the re-derived
-boundaries match `fmesh-buildmesh`:
+`fmesh-mesh-check` surfaces — disjoint pools, dead-end "spits",
+1-cell-wide channels, over-connected nodes, and (optionally)
+under-resolved 2-cell channels. Pass the original DEM bbox (and the
+same `--open-merge-coast-gap` you used at build time) so the
+re-derived boundaries match `fmesh-buildmesh`:
 
 ```bash
 fmesh-mesh-clean tokyo_bay.14 tokyo_bay_clean.14 \
@@ -165,7 +166,13 @@ Lawson edge-swap that drives every node valence to at most
 `--max-nbr-elem` (default 8 = FVCOM legacy cap); with the default
 `--overconn-min-angle-floor 0` it eliminates mild over-connection
 (max v=9) at near-zero quality cost on real meshes. Severe gmsh-fan
-cases need engine-level fixes instead.
+cases need engine-level fixes instead. Phase E
+(`--under-resolved-mode {widen,delete,none}`, default `none`)
+widens (or deletes) elements flagged by detector 6 — the
+medial-axis-style channel-width metric — using the same centroid
+insertion as Phase C-widen, lifting 2-cell channels to 3-cell.
+Detector 6 typically flags thousands of elements on real meshes, so
+enable Phase E deliberately.
 
 `docs/architecture.md` is the full decision tree for engine choice and
 combine strategy; `docs/python_pipeline_gap_analysis.md` has the
@@ -214,6 +221,7 @@ End-to-end smoke tests under `notebooks/` (each ships with a matching
 | 26 | `26_ocsmesh_overconn_ablation.py` | Post-processing ablation on Tokyo Bay+rivers (OCSMesh engine fixed): turning off `--refine-min-angle` drops over-connected nodes 440 → 313 (max valence 26 → 21). gmsh itself accounts for ~380 of them; the gap with the oceanmesh engine (3 over-connected, max v=9) cannot be closed by post-processing alone. |
 | 27 | `27_overconn_repair_poc.py` | Greedy edge-swap repair of over-connected nodes scored by per-edge "valence excess" reduction. With `--overconn-min-angle-floor 0` it reduces 3 over-connected nodes (max v=9) to 0 on the cleaned PoC #19 mesh at +0.01% bad triangles, and 440 → 365 (max v 26 → 23) on the OCSMesh+rivers PoC #16 mesh at +0.25% bad triangles. With the FVCOM-safe 20° floor no swap is accepted on either real mesh, confirming that valence fixing requires accepting some sliver creation. |
 | 28 | `28_channel_width_poc.py` | Medial-axis-style detector for under-resolved channels via `(d_to_polyline_A + d_to_polyline_B) / median_edge_length`. On the raw PoC #19 mesh it flags 1,145 elements at threshold 3, of which 1,009 are missed by the existing 1-cell `thin_chain` detector — including the under-resolved 2-cell channels around the northern Tokyo Bay river mouths. On the A+B+C+D-cleaned mesh, 618 elements remain flagged because Phase C only widens 1-cell chains. Known limitation: same-polyline narrow inlets (both banks on a continuous coastline) are missed; productionising needs polyline splitting or true Voronoi medial-axis. |
+| 29 | `29_phase_e_widen_poc.py` | End-to-end validation of `fmesh-mesh-clean` Phase E (`--under-resolved-mode widen`) on the PoC #19 cleaned Tokyo-Bay mesh. Topology checks pass (NP +3,178, NE +6,356; boundaries preserved), but detector-6 flagged count drops only modestly (3,178 → 3,032; 4.6 %). Reason: centroid insertion shrinks h_local by ~0.577× while the geometric channel width is unchanged, so post-widen w/h ≈ 1.73× the original — only borderline-flagged elements cross the threshold. Phase E is "lift local resolution one step", not "guarantee 3 cells across every narrow channel". |
 
 `docs/python_pipeline_gap_analysis.md` summarises what the Python
 pipeline still has to gain to match the OceanMesh2D reference output.
@@ -233,7 +241,7 @@ Installed when `pip install -e .` is run.
 | `fmesh-subset-dem SRC OUT --bbox MINLON MINLAT MAXLON MAXLAT [--src-var z]` | Clip a global DEM (SRTM15+, GEBCO, GeoTIFF, ...) to a lon/lat bbox and emit a CF-tagged GeoTIFF for `fmesh-buildmesh`. Two read paths: rasterio (CRS-tagged inputs) and netCDF4 (lon/lat NetCDF without CRS, selected by `--src-var`). |
 | `fmesh-mesh-combine in1.14 in2.14 [...] out.14 --strategy {disjoint,overlap,neighbor}` | Combine multiple fort.14 meshes. `disjoint` is pure-numpy concat with full boundary preservation (best for non-overlapping basins). `overlap` and `neighbor` wrap `ocsmesh.ops.combine_mesh` for nested-resolution and edge-snap scenarios respectively. |
 | `fmesh-mesh-check fort.14 [--max-nbr-elem N] [--min-thin-chain N] [--min-w-h F]` | Detect inadequate FVCOM meshes via seven detectors: disjoint wet-domain components, dead-end elements, thin / thin-chain (1-cell channel) elements, over-connected nodes, open-boundary-unreachable elements, and medial-axis-style under-resolved channels (`width / h < --min-w-h`, default 3). Emits `*_summary.txt`, `*_diag.json` (per-id records with coordinates), and `*_map.png`. No repair. Exit code is non-zero when anything is flagged so the command is usable as a CI gate. |
-| `fmesh-mesh-clean in.14 out.14 [--bbox] [--open-merge-coast-gap N] [--thin-chain-mode {widen,delete,none}] [--repair-overconnected-iters N]` | Repair the safe-to-fix subset of the `fmesh-mesh-check` flags. Phase A prunes disjoint dual-graph components; Phase B iteratively trims degree-1 elements with no open-boundary edge; Phase C (default `widen`) inserts a centroid into every thin-chain element so 1-cell channels become 2-cell, or removes the chain entirely with `--thin-chain-mode delete`; Phase D (off by default) runs valence-balancing edge swaps that drive every node valence to at most `--max-nbr-elem`. Boundaries are re-derived via DEM-bbox proximity, matching `fmesh-buildmesh`. |
+| `fmesh-mesh-clean in.14 out.14 [--bbox] [--open-merge-coast-gap N] [--thin-chain-mode {widen,delete,none}] [--repair-overconnected-iters N] [--under-resolved-mode {widen,delete,none}]` | Repair the safe-to-fix subset of the `fmesh-mesh-check` flags. Phase A prunes disjoint dual-graph components; Phase B iteratively trims degree-1 elements with no open-boundary edge; Phase C (default `widen`) inserts a centroid into every thin-chain element so 1-cell channels become 2-cell, or removes the chain entirely with `--thin-chain-mode delete`; Phase D (off by default) runs valence-balancing edge swaps that drive every node valence to at most `--max-nbr-elem`; Phase E (off by default) widens or deletes detector-6 under-resolved channel elements via the same centroid-insertion mechanism. Boundaries are re-derived via DEM-bbox proximity, matching `fmesh-buildmesh`. |
 
 ## Changelog
 

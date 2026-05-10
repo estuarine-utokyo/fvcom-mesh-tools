@@ -1,7 +1,8 @@
 """Mesh-clean operations: prune disjoint pools, trim dead-end elements,
-repair 1-cell-wide channels, and balance over-connected node valence.
+repair 1-cell-wide channels, balance over-connected node valence,
+and widen under-resolved channels.
 
-Four phases, applied in order:
+Five phases, applied in order:
 
     Phase A — :func:`keep_components`
         Drop dual-graph connected components by size and / or whether
@@ -31,12 +32,21 @@ Four phases, applied in order:
         defaults to 0° (only triangle inversion forbidden) when the
         phase is enabled.
 
+    Phase E — :func:`repair_under_resolved_channels`
+        Widen elements flagged by the medial-axis-style channel-width
+        detector (detector 6, ``w/h < min_w_h``) using the same
+        centroid-insertion mechanism as Phase C-widen. Catches
+        2- and 3-cell-wide narrowed channels that Phase C does not
+        flag. Off by default — detector 6 typically flags thousands
+        of elements on real meshes, so enable it deliberately.
+
 After every Phase A / B / C-delete / D deletion or topology change
 the boundaries are re-derived via
 :func:`fvcom_mesh_tools.algorithms.classify_boundaries_by_bbox`, so
 the output mesh has a consistent open / land segmentation in the
-same style as ``fmesh-buildmesh``. Phase C-widen and Phase D do not
-change the boundary edge set, so their re-derive is a no-op.
+same style as ``fmesh-buildmesh``. Phase C-widen, Phase D, and
+Phase E-widen do not change the boundary edge set, so their
+re-derive is a no-op.
 """
 
 from __future__ import annotations
@@ -51,15 +61,21 @@ from fvcom_mesh_tools.algorithms import (
     swap_edges_for_valence,
 )
 from fvcom_mesh_tools.diagnostics import (
+    DEFAULT_ARC_SEPARATION_FACTOR,
+    DEFAULT_CHANNEL_SAMPLE_DS_M,
+    DEFAULT_MIN_W_H,
+    DEFAULT_OPPOSITE_BANK_COS_MAX,
     dead_end_elements_flag,
     face_face_adjacency,
     open_boundary_node_mask,
     thin_chain_elements_flag,
     thin_elements_flag,
+    under_resolved_channels_flag,
 )
 from fvcom_mesh_tools.io import Fort14Mesh
 
 ThinChainMode = Literal["widen", "delete", "none"]
+UnderResolvedMode = Literal["widen", "delete", "none"]
 
 EARTH_R_M: float = 6_371_000.0
 
@@ -453,6 +469,97 @@ def repair_overconnected_nodes(
 
 
 # ---------------------------------------------------------------------------
+# Phase E: widen under-resolved channels (detector 6 repair)
+# ---------------------------------------------------------------------------
+
+
+def repair_under_resolved_channels(
+    mesh: Fort14Mesh,
+    *,
+    mode: UnderResolvedMode = "widen",
+    min_w_h: float = DEFAULT_MIN_W_H,
+    sample_ds_m: float = DEFAULT_CHANNEL_SAMPLE_DS_M,
+    arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
+    opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
+    bbox: tuple[float, float, float, float] | None = None,
+    tol_deg: float | None = None,
+    land_ibtype: int = 0,
+    open_merge_coast_gap: int = 0,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Apply Phase E: widen or delete under-resolved channel elements.
+
+    The target flag is :func:`under_resolved_channels_flag` (detector 6)
+    with the supplied ``min_w_h`` threshold and same medial-axis
+    parameters used by ``fmesh-mesh-check``. ``mode='widen'`` (default)
+    inserts a centroid in every flagged element; boundaries are
+    preserved. ``mode='delete'`` removes the flagged elements and
+    re-derives boundaries via bbox proximity (``bbox`` and ``tol_deg``
+    must be provided). ``mode='none'`` is a no-op.
+
+    Centroid insertion shrinks each new sub-triangle's median edge
+    length to ~0.577 × the parent's, while the geometric channel
+    width (set by the bank polylines) is unchanged. So the post-widen
+    w/h ratio is ~1.73 × the pre-widen ratio: borderline-flagged
+    elements (ratio just below ``min_w_h``) cross the threshold, but
+    very narrow channels (ratio well below) stay flagged. Phase E is
+    therefore best read as "lift local resolution one step" rather
+    than "guarantee 3 cells across every narrow channel"; the latter
+    needs medial-axis insertion which is outside this driver.
+    Empirically on the PoC #19 cleaned Tokyo-Bay mesh: 3,178 → 3,032
+    flagged (4.6 % reduction); 6.7 % → 5.6 % per-mesh flagged
+    fraction.
+
+    Detector 6 typically flags thousands of elements on real meshes,
+    so ``widen`` adds one interior node and two net elements per
+    flagged element — the output mesh size grows proportionally.
+    ``delete`` is useful for stripping cosmetic narrow inlets but is
+    destructive on meshes where the inlets matter.
+    """
+    if mode == "none":
+        return mesh, {"mode": "none", "n_flagged": 0, "skipped": True}
+
+    flag, _metric = under_resolved_channels_flag(
+        mesh,
+        min_w_h=min_w_h,
+        sample_ds_m=sample_ds_m,
+        arc_separation_factor=arc_separation_factor,
+        opposite_bank_cos_max=opposite_bank_cos_max,
+    )
+    n_flagged = int(flag.sum())
+    info: dict[str, Any] = {
+        "mode": mode,
+        "min_w_h": float(min_w_h),
+        "sample_ds_m": float(sample_ds_m),
+        "n_flagged": n_flagged,
+    }
+    if n_flagged == 0:
+        info["skipped"] = True
+        return mesh, info
+
+    if mode == "widen":
+        new_mesh, w_info = widen_thin_elements_at_centroid(mesh, flag)
+        info.update(w_info)
+        return new_mesh, info
+
+    if mode == "delete":
+        if bbox is None or tol_deg is None:
+            raise ValueError(
+                "delete mode requires bbox and tol_deg for boundary rebuild"
+            )
+        new_mesh = remove_elements(mesh, ~flag)
+        new_mesh = rebuild_boundaries(
+            new_mesh, bbox=bbox, tol_deg=tol_deg,
+            land_ibtype=land_ibtype,
+            open_merge_coast_gap=open_merge_coast_gap,
+        )
+        info["n_elements_removed"] = n_flagged
+        info["n_nodes_removed"] = int(mesh.n_nodes - new_mesh.n_nodes)
+        return new_mesh, info
+
+    raise ValueError(f"unknown under_resolved_mode: {mode!r}")
+
+
+# ---------------------------------------------------------------------------
 # Driver: clean_mesh
 # ---------------------------------------------------------------------------
 
@@ -473,6 +580,11 @@ def clean_mesh(
     repair_overconnected_iters: int = 0,
     max_nbr_elem: int = 8,
     overconn_min_angle_floor_deg: float = 0.0,
+    under_resolved_mode: UnderResolvedMode = "none",
+    under_resolved_min_w_h: float = DEFAULT_MIN_W_H,
+    under_resolved_sample_ds_m: float = DEFAULT_CHANNEL_SAMPLE_DS_M,
+    under_resolved_arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
+    under_resolved_opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Run Phase A (component pruning) and Phase B (dead-end trimming).
 
@@ -522,10 +634,31 @@ def clean_mesh(
         inversion forbidden) — raise to e.g. 20 to forbid sliver
         creation, at the cost of typically rejecting every candidate
         on fan-like local topology (PoC #27).
+    under_resolved_mode:
+        Phase E policy for under-resolved channel elements (detector
+        6). ``"widen"`` inserts a centroid in every flagged element
+        so a 2-cell channel becomes 3-cell; ``"delete"`` removes the
+        flagged elements and re-derives boundaries; ``"none"``
+        (default) skips Phase E. Detector 6 typically flags thousands
+        of elements on real meshes — enable deliberately.
+    under_resolved_min_w_h:
+        Threshold for Phase E. An element is flagged when its local
+        channel width divided by the median edge length is below
+        this value. Default ``DEFAULT_MIN_W_H`` matches
+        ``fmesh-mesh-check``.
+    under_resolved_sample_ds_m, under_resolved_arc_separation_factor,
+    under_resolved_opposite_bank_cos_max:
+        Medial-axis detector parameters. See
+        :func:`channel_width_metric`.
     """
     if thin_chain_mode not in ("widen", "delete", "none"):
         raise ValueError(
             f"thin_chain_mode must be one of widen / delete / none, got {thin_chain_mode!r}"
+        )
+    if under_resolved_mode not in ("widen", "delete", "none"):
+        raise ValueError(
+            "under_resolved_mode must be one of widen / delete / none, "
+            f"got {under_resolved_mode!r}"
         )
     info: dict[str, Any] = {
         "input": {
@@ -548,6 +681,13 @@ def clean_mesh(
             "repair_overconnected_iters": int(repair_overconnected_iters),
             "max_nbr_elem": int(max_nbr_elem),
             "overconn_min_angle_floor_deg": float(overconn_min_angle_floor_deg),
+            "under_resolved_mode": under_resolved_mode,
+            "under_resolved_min_w_h": float(under_resolved_min_w_h),
+            "under_resolved_sample_ds_m": float(under_resolved_sample_ds_m),
+            "under_resolved_arc_separation_factor":
+                float(under_resolved_arc_separation_factor),
+            "under_resolved_opposite_bank_cos_max":
+                float(under_resolved_opposite_bank_cos_max),
         },
         "phases": [],
     }
@@ -613,6 +753,21 @@ def clean_mesh(
         )
         info["phases"].append({"name": "repair_overconnected_nodes", **d_info})
 
+    if under_resolved_mode != "none":
+        cur, e_info = repair_under_resolved_channels(
+            cur,
+            mode=under_resolved_mode,
+            min_w_h=under_resolved_min_w_h,
+            sample_ds_m=under_resolved_sample_ds_m,
+            arc_separation_factor=under_resolved_arc_separation_factor,
+            opposite_bank_cos_max=under_resolved_opposite_bank_cos_max,
+            bbox=bbox,
+            tol_deg=_tol_deg(cur),
+            land_ibtype=land_ibtype,
+            open_merge_coast_gap=open_merge_coast_gap,
+        )
+        info["phases"].append({"name": "repair_under_resolved_channels", **e_info})
+
     if not info["phases"]:
         # Every phase disabled — still re-derive boundaries so the
         # output is a normalised pass-through.
@@ -636,12 +791,14 @@ def clean_mesh(
 __all__ = [
     "DEFAULT_BBOX_TOL_M",
     "ThinChainMode",
+    "UnderResolvedMode",
     "clean_mesh",
     "keep_components",
     "rebuild_boundaries",
     "remove_elements",
     "repair_overconnected_nodes",
     "repair_thin_chains",
+    "repair_under_resolved_channels",
     "trim_dead_ends",
     "widen_thin_elements_at_centroid",
 ]

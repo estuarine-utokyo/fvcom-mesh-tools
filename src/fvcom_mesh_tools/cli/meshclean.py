@@ -1,13 +1,17 @@
-"""``fmesh-mesh-clean`` CLI: prune disjoint pools and trim dead-end elements.
+"""``fmesh-mesh-clean`` CLI: clean an FVCOM mesh in five composable phases.
 
 Phase A removes dual-graph connected components by size and / or
 open-boundary touch (default keeps only the largest component). Phase B
 iteratively deletes degree-1 elements with no open-boundary edge so
-"spit" terminations of 1-cell channels are removed. Boundaries are
-re-derived against a DEM-bbox classifier matching ``fmesh-buildmesh``.
-
-This command does **not** repair thin elements, thin chains, or
-over-connected nodes; those stages are deferred to follow-up work.
+"spit" terminations of 1-cell channels are removed. Phase C widens or
+deletes 1-cell-wide channels (chains of "thin" triangles where all 3
+vertices sit on a boundary). Phase D drives node valences down via
+Lawson edge-flips. Phase E widens or deletes elements flagged as
+under-resolved by the medial-axis channel-width detector
+(``w/h < min_w_h``), catching 2- and 3-cell-wide channels Phase C does
+not flag. Boundaries are re-derived against a DEM-bbox classifier
+matching ``fmesh-buildmesh``. Phases D and E are off by default —
+enable deliberately.
 """
 
 from __future__ import annotations
@@ -19,6 +23,12 @@ from pathlib import Path
 
 import numpy as np
 
+from fvcom_mesh_tools.diagnostics import (
+    DEFAULT_ARC_SEPARATION_FACTOR,
+    DEFAULT_CHANNEL_SAMPLE_DS_M,
+    DEFAULT_MIN_W_H,
+    DEFAULT_OPPOSITE_BANK_COS_MAX,
+)
 from fvcom_mesh_tools.io import Fort14Mesh, read_fort14, write_fort14
 from fvcom_mesh_tools.mesh_clean import DEFAULT_BBOX_TOL_M, clean_mesh
 
@@ -50,14 +60,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="fmesh-mesh-clean",
         description=(
-            "Clean an FVCOM mesh by pruning disjoint wet pools and "
-            "trimming dead-end elements. Phase A keeps dual-graph "
-            "components by size and / or open-boundary touch; Phase B "
-            "iteratively trims degree-1 elements with no open-boundary "
-            "edge. Boundaries are re-derived via DEM-bbox proximity, "
-            "matching the fmesh-buildmesh convention. Thin / "
-            "1-cell-channel / over-connected-node repair is NOT "
-            "performed here."
+            "Clean an FVCOM mesh in five composable phases. Phase A: "
+            "drop dual-graph components by size / open-boundary touch. "
+            "Phase B: trim degree-1 dead-end elements iteratively. "
+            "Phase C: widen or delete 1-cell-wide channels. Phase D: "
+            "Lawson edge-flips to drive valence below MAX_NBR_ELEM. "
+            "Phase E: widen or delete medial-axis-detected "
+            "under-resolved channels (2- and 3-cell-wide). Boundaries "
+            "are re-derived via DEM-bbox proximity. Phases D and E are "
+            "off by default."
         ),
     )
     p.add_argument("input", type=Path, help="Input fort.14.")
@@ -168,6 +179,52 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--under-resolved-mode", choices=["widen", "delete", "none"],
+        default="none",
+        help=(
+            "Phase E policy for under-resolved channel elements "
+            "(detector 6). 'widen' inserts a centroid in every flagged "
+            "element so 2-cell channels become 3-cell. 'delete' removes "
+            "the flagged elements. 'none' (default) skips Phase E. "
+            "Detector 6 typically flags thousands of elements on real "
+            "meshes — enable deliberately."
+        ),
+    )
+    p.add_argument(
+        "--under-resolved-min-w-h", type=float, default=DEFAULT_MIN_W_H,
+        help=(
+            "Phase E threshold. An element is flagged when its local "
+            "channel width divided by the median edge length is below "
+            f"this value. Default {DEFAULT_MIN_W_H:g} (matches "
+            "fmesh-mesh-check)."
+        ),
+    )
+    p.add_argument(
+        "--under-resolved-sample-ds-m", type=float,
+        default=DEFAULT_CHANNEL_SAMPLE_DS_M,
+        help=(
+            "Phase E: boundary-sample spacing in metres for the "
+            f"medial-axis detector. Default {DEFAULT_CHANNEL_SAMPLE_DS_M:g} m."
+        ),
+    )
+    p.add_argument(
+        "--under-resolved-arc-separation-factor", type=float,
+        default=DEFAULT_ARC_SEPARATION_FACTOR,
+        help=(
+            "Phase E: arc-separation factor for same-polyline narrow "
+            f"inlet detection. Default {DEFAULT_ARC_SEPARATION_FACTOR:g}."
+        ),
+    )
+    p.add_argument(
+        "--under-resolved-opposite-bank-cos-max", type=float,
+        default=DEFAULT_OPPOSITE_BANK_COS_MAX,
+        help=(
+            "Phase E: maximum cosine of the angle between the two "
+            "candidate-bank rays from the centroid. Default "
+            f"{DEFAULT_OPPOSITE_BANK_COS_MAX:g} (matches fmesh-mesh-check)."
+        ),
+    )
+    p.add_argument(
         "--summary", type=Path, default=None,
         help=(
             "Optional path for the JSON summary. Default: "
@@ -204,6 +261,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.overconn_min_angle_floor < 0:
         print("--overconn-min-angle-floor must be >= 0.", file=sys.stderr)
         return 2
+    if args.under_resolved_min_w_h <= 0:
+        print("--under-resolved-min-w-h must be > 0.", file=sys.stderr)
+        return 2
+    if args.under_resolved_sample_ds_m <= 0:
+        print("--under-resolved-sample-ds-m must be > 0.", file=sys.stderr)
+        return 2
+    if args.under_resolved_arc_separation_factor <= 0:
+        print("--under-resolved-arc-separation-factor must be > 0.",
+              file=sys.stderr)
+        return 2
+    if not (-1.0 <= args.under_resolved_opposite_bank_cos_max <= 1.0):
+        print("--under-resolved-opposite-bank-cos-max must be in [-1, 1].",
+              file=sys.stderr)
+        return 2
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     mesh = read_fort14(args.input)
@@ -228,6 +299,11 @@ def main(argv: list[str] | None = None) -> int:
         repair_overconnected_iters=args.repair_overconnected_iters,
         max_nbr_elem=args.max_nbr_elem,
         overconn_min_angle_floor_deg=args.overconn_min_angle_floor,
+        under_resolved_mode=args.under_resolved_mode,
+        under_resolved_min_w_h=args.under_resolved_min_w_h,
+        under_resolved_sample_ds_m=args.under_resolved_sample_ds_m,
+        under_resolved_arc_separation_factor=args.under_resolved_arc_separation_factor,
+        under_resolved_opposite_bank_cos_max=args.under_resolved_opposite_bank_cos_max,
     )
     write_fort14(cleaned, args.output)
 
