@@ -42,3 +42,4 @@ jobs:
           fmesh-mesh-check --help > /dev/null
           fmesh-mesh-clean --help > /dev/null
           fmesh-mesh-quality --help > /dev/null
+          fmesh-mesh-pipeline --help > /dev/null

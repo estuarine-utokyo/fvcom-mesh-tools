@@ -210,6 +210,34 @@ fmesh-mesh-quality tokyo_clean.14 \
     --max-valence 8 --max-flipped 0
 ```
 
+`fmesh-mesh-pipeline` chains the clean / quality steps into a
+progressive `clean → quality → repeat` loop. It applies three
+cumulative *rungs* of `fmesh-mesh-clean` phases, evaluating quality
+thresholds after each, and stops at the first rung that passes —
+or exits 1 if no rung does. The rungs are:
+
+* **rung 0** — A + B + C (the conservative `fmesh-mesh-clean`
+  default: drop disjoint pools, trim dead-end spits, widen 1-cell
+  channels).
+* **rung 1** — rung 0 + D + F + G: Lawson edge swap to balance
+  over-connected nodes, skewed-element removal, Laplacian
+  smoothing (with the flipped-triangle safety net).
+* **rung 2** — rung 1 + E: widen detector-6 under-resolved
+  channels; the most destructive rung (~3× new elements per
+  flagged element).
+
+```bash
+fmesh-mesh-pipeline tokyo_raw.14 tokyo_passing.14 \
+    --bbox 139.46 34.99 140.10 35.74 \
+    --open-merge-coast-gap 50 \
+    --min-alpha 0.95 --max-frac-lt-20deg 0.005 \
+    --max-valence 8 --max-flipped 0 --max-disjoint-elems 0
+```
+
+The pipeline writes a JSON history that records each rung's metrics
+and threshold-check results so the caller can audit which rung met
+the gate.
+
 `docs/architecture.md` is the full decision tree for engine choice and
 combine strategy; `docs/python_pipeline_gap_analysis.md` has the
 quality / runtime numbers vs. the OceanMesh2D MATLAB reference.
@@ -274,6 +302,7 @@ End-to-end smoke tests under `notebooks/` (each ships with a matching
 | 30 | `30_triangle_engine_poc.py` | Probe ocsmesh's Triangle backend on Tokyo Bay. Result: `NotImplementedError("Varying sizing is not supported for Triangle engine!")`. ocsmesh's Triangle wrapper accepts only constant size, so it cannot replace gmsh in our build path. Drove the deprecation of `--engine ocsmesh` (see `docs/engine_complementarity.md` §2). |
 | 31 | `31_phase_f_skewed_clean_poc.py` | Phase F (`--repair-skewed-elements`) sweep on the PoC #19 cleaned mesh across three threshold presets. ocsmesh defaults `[1°, 175°]` flag 0; conservative `[5°, 170°]` flag 3 of 47,409 (0.006 %); aggressive `[10°, 160°]` flag 9 (0.019 %). Phase F has near-zero impact on already-clean oceanmesh output; its leverage is on raw or OCSMesh+gmsh meshes where slivers survive. |
 | 32 | `32_phase_g_smooth_poc.py` | Phase G (`--smooth-laplacian`) sweep on the PoC #19 cleaned mesh across three iter/tol presets (default 20/1e-2, gentle 5/1e-2, deep 50/1e-4). Records max/mean node displacement, alpha-mean shift, frac<20° shift, and topology-preservation invariants (NP / NE / boundary counts unchanged). |
+| 33 | `33_pipeline_poc.py` | End-to-end validation of `fmesh-mesh-pipeline` on the PoC #19 raw Tokyo-Bay mesh (144 components, 5,496 disjoint elements, max valence 9). Threshold preset `--min-alpha 0.95 --max-frac-lt-20deg 0.005 --max-valence 8 --max-flipped 0 --max-disjoint-elems 0`. Rung 0 (A+B+C) drops disjoint elements but leaves valence=9 — gate FAILS. Rung 1 (+D+F+G) brings valence to 8 and alpha to 0.9588 — gate PASSES. Rung 2 not needed. |
 
 `docs/python_pipeline_gap_analysis.md` summarises what the Python
 pipeline still has to gain to match the OceanMesh2D reference output.
@@ -295,6 +324,7 @@ Installed when `pip install -e .` is run.
 | `fmesh-mesh-check fort.14 [--max-nbr-elem N] [--min-thin-chain N] [--min-w-h F]` | Detect inadequate FVCOM meshes via seven detectors: disjoint wet-domain components, dead-end elements, thin / thin-chain (1-cell channel) elements, over-connected nodes, open-boundary-unreachable elements, and medial-axis-style under-resolved channels (`width / h < --min-w-h`, default 3). Emits `*_summary.txt`, `*_diag.json` (per-id records with coordinates), and `*_map.png`. No repair. Exit code is non-zero when anything is flagged so the command is usable as a CI gate. |
 | `fmesh-mesh-clean in.14 out.14 [--bbox] [--open-merge-coast-gap N] [--thin-chain-mode {widen,delete,none}] [--repair-overconnected-iters N] [--under-resolved-mode {widen,delete,none}] [--repair-skewed-elements] [--smooth-laplacian]` | Repair the safe-to-fix subset of the `fmesh-mesh-check` flags. Phase A prunes disjoint dual-graph components; Phase B iteratively trims degree-1 elements with no open-boundary edge; Phase C (default `widen`) inserts a centroid into every thin-chain element so 1-cell channels become 2-cell, or removes the chain entirely with `--thin-chain-mode delete`; Phase D (off by default) runs valence-balancing edge swaps that drive every node valence to at most `--max-nbr-elem`; Phase E (off by default) widens or deletes detector-6 under-resolved channel elements via the same centroid-insertion mechanism; Phase F (off by default) deletes triangles whose interior angles fall outside `[--repair-skewed-min-angle-deg, --repair-skewed-max-angle-deg]` via `ocsmesh.utils.cleanup_skewed_el`; Phase G (off by default) Laplacian-smooths interior nodes via `oceanmesh.laplacian2`. Boundaries are re-derived via DEM-bbox proximity, matching `fmesh-buildmesh`. |
 | `fmesh-mesh-quality in.14 [in2.14 ...] [--labels ...] [--min-alpha F] [--max-frac-lt-20deg F] [--max-valence N] [--max-overconnected N] [--max-flipped N] [--max-disjoint-elems N]` | Compute unified mesh-quality metrics (`alpha_mean`, `alpha_p05/p50`, `min_angle_p05/p50_deg`, `frac_lt_20deg`, `max_valence`, `n_overconnected`, `n_flipped`, `n_components`, `n_disjoint_elems`) for one or more fort.14 files. Two inputs print a `delta` column. Threshold flags are evaluated against the LAST input and turn the command into a CI gate (exit 1 on failure). |
+| `fmesh-mesh-pipeline in.14 out.14 [--bbox] [--max-iters N] [--min-alpha F] [--max-frac-lt-20deg F] [--max-valence N] [--max-flipped N] ...` | Progressive `clean → quality → repeat` loop. Applies three cumulative rungs of `fmesh-mesh-clean` phases — rung 0 (A+B+C), rung 1 (+D+F+G), rung 2 (+E) — evaluating `fmesh-mesh-quality` thresholds after each. Stops at the first passing rung; exits 1 if no rung satisfies the gate when thresholds are supplied. JSON history records per-rung metrics and threshold-check results. |
 
 ## Changelog
 

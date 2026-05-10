@@ -1,0 +1,25 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc33
+
+# PoC #33: fmesh-mesh-pipeline end-to-end on the PoC #19 raw mesh.
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=4
+export OPENBLAS_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python notebooks/33_pipeline_poc.py

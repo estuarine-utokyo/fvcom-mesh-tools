@@ -27,6 +27,18 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `fmesh-mesh-pipeline` CLI: progressive `clean → quality → repeat`
+  loop. Applies three cumulative *rungs* of `fmesh-mesh-clean`
+  phases — rung 0 (A+B+C), rung 1 (+D+F+G), rung 2 (+E) — and
+  evaluates `fmesh-mesh-quality` thresholds after each. Stops at
+  the first rung that passes the gate; exits 1 when thresholds are
+  supplied and no rung satisfies them. Without thresholds, attempts
+  all rungs (or up to `--max-iters`) and reports per-rung metrics
+  without a gate. JSON history records each rung's metrics and
+  threshold-check results so callers can audit which rung achieved
+  the gate. Validated end-to-end by PoC #33 on the PoC #19 raw
+  Tokyo-Bay mesh (the messy starting point: 144 components, 5,496
+  disjoint elements, 3 over-connected nodes).
 - Phase G now repairs flipped triangles introduced by Laplacian
   smoothing. New helper
   `fvcom_mesh_tools.mesh_clean._repair_flipped_elements` detects
