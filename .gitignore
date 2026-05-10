@@ -38,6 +38,9 @@ figures/
 *.[0-9]*.out
 *.[0-9]*.err
 *.[0-9]*.stats
+# PJM nodeinfo / per-job temp files written into the submission CWD
+.d[0-9]*
+.d[0-9]*_nodeinfo
 
 # Core dumps (e.g. from third-party native libraries)
 core

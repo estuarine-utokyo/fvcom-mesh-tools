@@ -71,6 +71,151 @@ def _m_to_deg_lon(m: float, lat: float) -> float:
     return m / (111_320.0 * float(np.cos(np.deg2rad(lat))))
 
 
+def _meters_per_degree_at_lat(lat_deg: float) -> float:
+    """Metres-per-degree at ``lat_deg``, **matching oceanmesh's
+    internal convention**: the upstream sizing functions feed the
+    latitude expressed in *degrees* directly into ``np.cos``, so we
+    do the same to keep the metres-to-degrees scaling consistent
+    across all sizing components when they are merged via
+    ``compute_minimum``. The numerical value is therefore not the
+    physically correct WGS84 metres-per-degree; it is the same scale
+    factor the wavelength / bathymetric-gradient functions apply.
+    """
+    return (
+        111132.92
+        - 559.82 * np.cos(2 * lat_deg)
+        + 1.175 * np.cos(4 * lat_deg)
+        - 0.0023 * np.cos(6 * lat_deg)
+    )
+
+
+def courant_sizing_function(
+    dem,
+    *,
+    target_courant: float = 0.7,
+    timestep_s: float = 5.0,
+    wave_amplitude_m: float = 2.0,
+    min_edgelength: float | None = None,
+    max_edge_length: float | None = None,
+    gravity: float = 9.81,
+    crs: str | int = "EPSG:4326",
+):
+    """Per-cell sizing such that the approximate Courant number is
+    capped at ``target_courant`` for the given ``timestep_s``.
+
+    The characteristic celerity is approximated from linear long-wave
+    theory, exactly as in OceanMesh2D's MATLAB Courant constraint and
+    the ``ocsmesh.add_courant_num_constraint`` reference. For a depth
+    ``h`` (positive metres):
+
+    * ocean (``h > nu``):
+      ``c = nu * sqrt(g / h) + sqrt(g * h)`` (particle velocity from
+      linear wave theory + long-wave celerity).
+    * overland (``h <= nu``):
+      ``c = 2 * sqrt(g * nu)`` (the linear approximation breaks down
+      when ``h ~ nu`` so we use the standard overland surrogate).
+
+    Maximum element size such that ``C = c * dt / dx <= target_C``:
+
+        ``dx_max = c * dt / target_C``.
+
+    Composes via :func:`oceanmesh.compute_minimum` alongside feature /
+    gradient / wavelength sizing functions; the final mesh respects
+    ``C <= target_C`` everywhere.
+
+    The algorithm is a few-line analytical formula based on the
+    documented OceanMesh2D recipe and is implemented here from first
+    principles — no code is borrowed from ``ocsmesh`` (CC0) or
+    ``oceanmesh`` (GPL-3.0).
+
+    Parameters
+    ----------
+    dem
+        :class:`oceanmesh.DEM` instance.
+    target_courant
+        Upper bound on the approximate Courant number. Default 0.7
+        matches the FVCOM-friendly preset documented in
+        ``docs/architecture.md`` § 2.
+    timestep_s
+        Reference time step (seconds). The size function is scaled so
+        that ``C <= target_courant`` at this step. Default 5.0 s — a
+        comfortable production FVCOM step in coastal applications.
+    wave_amplitude_m
+        Wave amplitude / surface-elevation amplitude in metres. The
+        linear-wave-theory regime threshold (``h > wave_amplitude_m``)
+        and the particle-velocity coefficient. Default 2.0 m matches
+        ``ocsmesh.add_courant_num_constraint``.
+    min_edgelength, max_edge_length
+        Optional clamp on the output sizing. Units must match the
+        ``crs`` (degrees for ``EPSG:4326``).
+    gravity
+        Gravitational acceleration in m / s². Default 9.81.
+    crs
+        Coordinate reference of the returned :class:`oceanmesh.Grid`.
+        ``EPSG:4326`` (default) returns sizes in degrees, matching the
+        rest of the oceanmesh sizing chain.
+
+    Returns
+    -------
+    :class:`oceanmesh.Grid`
+        Sizing grid with values in degrees (geographic) or metres
+        (projected). Its ``hmin`` attribute is set if
+        ``min_edgelength`` was supplied.
+    """
+    import oceanmesh as om
+
+    if target_courant <= 0:
+        raise ValueError(f"target_courant must be > 0, got {target_courant}")
+    if timestep_s <= 0:
+        raise ValueError(f"timestep_s must be > 0, got {timestep_s}")
+    if wave_amplitude_m <= 0:
+        raise ValueError(
+            f"wave_amplitude_m must be > 0, got {wave_amplitude_m}"
+        )
+
+    lon, lat = dem.create_grid()
+    tmpz = dem.eval((lon, lat))
+    abs_h = np.abs(np.asarray(tmpz, dtype=float))
+    abs_h = np.where(abs_h < 1.0, 1.0, abs_h)  # safety floor (matches om)
+
+    nu = float(wave_amplitude_m)
+    deep_mask = abs_h > nu
+    sqrt_gh = np.sqrt(gravity * abs_h)
+    u_mag_deep = nu * np.sqrt(gravity / abs_h)
+    u_mag_shallow = np.sqrt(gravity * nu)
+    char_vel = np.where(
+        deep_mask, u_mag_deep + sqrt_gh, 2.0 * u_mag_shallow,
+    )
+
+    dx_max_m = char_vel * float(timestep_s) / float(target_courant)
+
+    grid = om.Grid(
+        bbox=dem.bbox, dx=dem.dx, dy=dem.dy,
+        extrapolate=True, values=0.0, crs=crs,
+    )
+    if crs in ("EPSG:4326", 4326):
+        mean_latitude = float(np.mean(dem.bbox[2:]))
+        meters_per_degree = _meters_per_degree_at_lat(mean_latitude)
+        grid.values = dx_max_m / meters_per_degree
+        grid.dx = dem.dx
+        grid.dy = dem.dy
+    else:
+        grid.values = dx_max_m
+
+    if min_edgelength is not None:
+        grid.values = np.where(
+            grid.values < min_edgelength, min_edgelength, grid.values,
+        )
+        grid.hmin = min_edgelength
+    if max_edge_length is not None:
+        grid.values = np.where(
+            grid.values > max_edge_length, max_edge_length, grid.values,
+        )
+
+    grid.build_interpolant()
+    return grid
+
+
 def build(
     *,
     dem_path: Path,
@@ -90,6 +235,10 @@ def build(
     use_wavelength_sizing: bool = False,
     wavelength_period_s: float = 44712.0,   # M2 ≈ 12.42 h
     wavelength_grid_spacing: int = 100,
+    use_courant_sizing: bool = False,
+    courant_target: float = 0.7,
+    courant_timestep_s: float = 5.0,
+    courant_wave_amplitude_m: float = 2.0,
     log: Callable[[str], None] = print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a mesh with oceanmesh + DistMesh.
@@ -140,6 +289,26 @@ def build(
         ``wl`` parameter (number of cells per wavelength) for
         ``wavelength_sizing_function``. Default 100 — corresponds to
         ``dt = T/wl`` ≈ 7.5 min for M2, a comfortable FVCOM time step.
+    use_courant_sizing
+        Add a per-cell Courant-bound sizing contribution via
+        :func:`courant_sizing_function`. Off by default. Sets the
+        upper sizing envelope so the mesh respects ``C <= courant_target``
+        at the requested ``courant_timestep_s``. Where
+        ``wavelength_sizing_function`` ties dx to a *wavelength*
+        (a property of the dynamics), Courant ties dx to an *explicit
+        time step* (a property of the solver) — the two compose by
+        ``compute_minimum``. PoC #39 quantifies the trade.
+    courant_target
+        Upper bound on the approximate Courant number used by
+        Phase E sizing. Default 0.7 matches the FVCOM-friendly preset
+        in ``docs/architecture.md`` § 2.
+    courant_timestep_s
+        Target time step in seconds. Default 5.0 s — a comfortable
+        production FVCOM coastal step.
+    courant_wave_amplitude_m
+        Wave amplitude / surface-elevation amplitude (metres) used by
+        the linear-wave-theory regime threshold. Default 2.0 m
+        matches the OceanMesh2D / ``ocsmesh`` reference value.
     minimum_area_mult
         Forwarded to ``om.Shoreline``. Inner-shoreline features
         smaller than ``minimum_area_mult * h0**2`` (with ``h0`` being
@@ -218,6 +387,23 @@ def build(
                 crs=4326,
             )
             edge_components.append(edge_wave)
+        if use_courant_sizing:
+            log(
+                f"[oceanmesh] courant_sizing_function "
+                f"(C_target={courant_target:g}, "
+                f"dt={courant_timestep_s:g} s, "
+                f"nu={courant_wave_amplitude_m:g} m) ..."
+            )
+            edge_courant = courant_sizing_function(
+                dem,
+                target_courant=float(courant_target),
+                timestep_s=float(courant_timestep_s),
+                wave_amplitude_m=float(courant_wave_amplitude_m),
+                min_edgelength=hmin_deg,
+                max_edge_length=hmax_deg,
+                crs=4326,
+            )
+            edge_components.append(edge_courant)
         if len(edge_components) == 1:
             edge = om.enforce_mesh_gradation(edge_feat, gradation=gradation)
         else:

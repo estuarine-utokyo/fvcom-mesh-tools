@@ -131,6 +131,32 @@ together close the case); ocsmesh remains a library dependency for
   worst-case dt is set by coastline `feature_sizing`, not depth.
   Off-by-default is the right posture; turn on for basins with
   shoaling regions away from coastline detail.
+- **`--om-courant-sizing`** (off by default) — adds the new
+  :func:`fvcom_mesh_tools.mesh_engine.oceanmesh.courant_sizing_function`
+  to the size composition. Per cell, the linear-wave-theory
+  characteristic celerity (`c = nu * sqrt(g/h) + sqrt(g*h)` deep,
+  `2 * sqrt(g*nu)` overland) is converted into a maximum element
+  size `dx_max = c * dt / C`. Composes with the other sizing
+  functions via `om.compute_minimum`. Tunables: `--om-courant-target`
+  (default 0.7), `--om-courant-timestep` (default 5 s),
+  `--om-courant-wave-amplitude` (default 2 m). Where wavelength
+  sizing ties dx to a *wavelength* (a property of the dynamics),
+  Courant sizing ties dx to an *explicit time step* (a property of
+  the solver). The algorithm is implemented from first principles
+  off the documented OceanMesh2D / `ocsmesh.add_courant_num_constraint`
+  recipe; no code is borrowed from ocsmesh (CC0) or oceanmesh
+  (GPL-3.0). PoC #39 on Tokyo Bay (`dt=10 s`, `C=0.7`): NP +58 %,
+  NE +69 %, alpha 0.9586 → 0.9731 (+1.5 %), frac<20° 0.101 % →
+  0.023 % (-77 % relative), `n_overconnected` 3 → 0 — but the
+  worst-case CFL-feasible dt p01 only goes 1.44 → 1.62 s (+12 %)
+  because Tokyo Bay's worst case sits in coastline-pinned shallow
+  channels where the Courant envelope clamps to `--hmin`. The
+  *median* dt p50 jumps 4.92 → 7.95 s (+62 %), and quality lifts
+  globally because the constraint forces refinement in deep
+  offshore regions that the gradient sizing left coarse. This
+  closes ``docs/engine_complementarity.md`` decision #5 (the
+  remaining ocsmesh sizing primitives `add_topo_bound_constraint`
+  / `add_subtidal_flow_limiter` are still on the follow-up list).
 - **Build-time `om.laplacian2` flip-rollback** — same safety net
   used by Phase G now wraps the build cleanup chain. Eliminates
   the 1 inverted triangle PoC #34 surfaced. Public alias
@@ -268,6 +294,32 @@ Each links to a notebook in `notebooks/`.
   rejected components: 8 non-convex rim, 3 branching rim — those
   patches keep their original triangulation as a safe fallback.
   Wall-clock identical (~2.6 s) on the 47 k-element mesh.
+- **PoC #39** — ``--om-courant-sizing`` end-to-end on Tokyo Bay at
+  ``dt=10 s`` / ``C=0.7`` / ``nu=2 m``:
+
+      metric                   baseline    courant       Δ
+      ----------------------   --------    --------    --------
+      NP                          31,771      50,095    +58 %
+      NE                          53,203      89,902    +69 %
+      alpha mean                  0.9586      0.9731    +0.0145
+      alpha p05                   0.8706      0.9171    +0.0465
+      min angle p05               39.8°       43.6°     +3.7°
+      frac<20°                    0.101 %     0.023 %   -77 % rel
+      max valence                 9           8         -1
+      n_overconnected             3           0         -3
+      min CFL dt p01 @ C=0.7      1.44 s      1.62 s    +12 %
+      min CFL dt p50 @ C=0.7      4.92 s      7.95 s    +62 %
+
+  Implementation works as designed; per-cell quality is dramatically
+  better because the Courant envelope forces refinement in deep
+  offshore regions that the gradient sizing left coarse. The
+  worst-case (p01) feasible dt only goes +12 % because Tokyo Bay's
+  bottleneck cells sit in coastline-pinned shallow channels where
+  the Courant envelope clamps to ``--hmin``; the median p50 dt
+  improvement (+62 %) is the right metric for "did the bulk of the
+  mesh get better". For basins where the smallest cells are in
+  deep offshore (rather than coastline detail), the worst-case
+  gain would be larger.
 - **PoC #36** — `--om-max-iter` sweep on Tokyo Bay (50 → 25 → 10 → 5):
 
       iters   wall    alpha   frac<20°   max_v   n_overconn

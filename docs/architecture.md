@@ -159,6 +159,16 @@ MLIT C23.
   wavelength, default 100 — implies dt ≈ T/wl ≈ 7.5 min for M2).
   PoC #34 quantifies the alpha / NP / NE / shallow-cell / minimum
   CFL-feasible-dt trade against the gradient-only baseline.
+- `--om-courant-sizing` — opt-in per-cell Courant-bounded sizing
+  via :func:`fvcom_mesh_tools.mesh_engine.oceanmesh.courant_sizing_function`.
+  The size envelope is `dx_max = c_char(h, nu) * dt / C` where
+  `c_char` is the linear-wave-theory characteristic celerity (long-
+  wave celerity + particle velocity, with an overland surrogate).
+  Tunable with `--om-courant-target` (default 0.7),
+  `--om-courant-timestep` (default 5 s), and
+  `--om-courant-wave-amplitude` (default 2 m). Composes with
+  feature / gradient / wavelength via `compute_minimum`. PoC #39
+  validates this on Tokyo Bay.
 
 `--engine ocsmesh` accepts the legacy OCSMesh-driven flags:
 

@@ -187,6 +187,44 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--om-courant-sizing", action="store_true",
+        help=(
+            "[oceanmesh] Add a per-cell Courant-bound sizing "
+            "contribution. Sets the upper sizing envelope so the mesh "
+            "respects approximate Courant number "
+            "C = c_char * dt / dx <= --om-courant-target at the "
+            "requested --om-courant-timestep. Where wavelength sizing "
+            "ties dx to a wavelength (a property of the dynamics), "
+            "Courant sizing ties dx to an explicit dt (a property of "
+            "the solver) — the two compose by min."
+        ),
+    )
+    p.add_argument(
+        "--om-courant-target", type=float, default=0.7,
+        help=(
+            "[oceanmesh] Upper bound on the approximate Courant number "
+            "for --om-courant-sizing. Default 0.7 (FVCOM-friendly "
+            "preset). Lower for more conservative meshes."
+        ),
+    )
+    p.add_argument(
+        "--om-courant-timestep", type=float, default=5.0,
+        help=(
+            "[oceanmesh] Reference time step in seconds for "
+            "--om-courant-sizing. Default 5.0 — a comfortable production "
+            "FVCOM coastal step. Lower if the FVCOM run actually uses a "
+            "smaller dt; raising it relaxes the upper sizing envelope."
+        ),
+    )
+    p.add_argument(
+        "--om-courant-wave-amplitude", type=float, default=2.0,
+        help=(
+            "[oceanmesh] Wave amplitude (metres) for the linear-wave-"
+            "theory regime threshold used by --om-courant-sizing. "
+            "Default 2.0 m matches the OceanMesh2D / ocsmesh reference."
+        ),
+    )
+    p.add_argument(
         "--bbox-tol-m", type=float, default=None,
         help=(
             "Distance tolerance for 'on the DEM bbox' open-boundary "
@@ -367,6 +405,22 @@ def main(argv: list[str] | None = None) -> int:
         if args.om_wavelength_grid_spacing < 1:
             print("--om-wavelength-grid-spacing must be >= 1.", file=sys.stderr)
             return 2
+    if args.om_courant_sizing:
+        if not 0.0 < args.om_courant_target <= 1.5:
+            print(
+                "--om-courant-target must be in (0, 1.5] (typical "
+                "FVCOM-friendly value 0.7).",
+                file=sys.stderr,
+            )
+            return 2
+        if args.om_courant_timestep <= 0:
+            print("--om-courant-timestep must be > 0.", file=sys.stderr)
+            return 2
+        if args.om_courant_wave_amplitude <= 0:
+            print(
+                "--om-courant-wave-amplitude must be > 0.", file=sys.stderr,
+            )
+            return 2
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -412,6 +466,10 @@ def main(argv: list[str] | None = None) -> int:
             use_wavelength_sizing=args.om_wavelength_sizing,
             wavelength_period_s=args.om_wavelength_period,
             wavelength_grid_spacing=args.om_wavelength_grid_spacing,
+            use_courant_sizing=args.om_courant_sizing,
+            courant_target=args.om_courant_target,
+            courant_timestep_s=args.om_courant_timestep,
+            courant_wave_amplitude_m=args.om_courant_wave_amplitude,
         )
     else:  # ocsmesh; argparse choices guard the value space
         engine_kwargs = dict(

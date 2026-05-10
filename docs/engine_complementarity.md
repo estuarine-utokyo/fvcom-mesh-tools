@@ -252,9 +252,12 @@ The following are recommendations, not yet decided:
 4. **Phase G = `oceanmesh.laplacian2` wrapper** with a per-step
    guard against boundary-node motion. Only enable on demand.
 5. **Port the most valuable sizing primitive — `add_courant_num_constraint`**
-   — onto oceanmesh's `Grid`/`compose_h0` structure. Treat the
-   others (`add_topo_bound_constraint`, `add_subtidal_flow_limiter`)
-   as a follow-up batch.
+   — onto oceanmesh's `Grid`/`compose_h0` structure. **Done** — see
+   `fvcom_mesh_tools.mesh_engine.oceanmesh.courant_sizing_function`
+   and the `--om-courant-sizing` CLI flag, validated by PoC #39.
+   The remaining primitives (`add_topo_bound_constraint`,
+   `add_subtidal_flow_limiter`) are still candidates for a
+   follow-up batch.
 
 ## 7. Glossary of cross-references
 
