@@ -49,8 +49,30 @@ will only ship with a major bump (Semantic Versioning).
   spacing (``--om-wavelength-grid-spacing``, default 100 — implies
   dt = T/wl ≈ 7.5 min, a comfortable FVCOM time step). The three
   size functions are merged via ``om.compute_minimum`` so the
-  smallest-required size wins per cell. Validated against PoC #19
-  in PoC #34 (`notebooks/34_wavelength_sizing_poc.py`).
+  smallest-required size wins per cell. PoC #34
+  (`notebooks/34_wavelength_sizing_poc.py`) A/B's the option on
+  Tokyo Bay vs the gradient-only baseline:
+
+      * shallow-cell density (≤ 5 m) +1.8 % (18,767 → 19,111) —
+        the wavelength contribution does refine shoaling regions
+        as designed.
+      * alpha_mean 0.9594 → 0.9606 (+0.0012); frac<20° drops by
+        22 % relative (0.087 % → 0.067 %).
+      * **min CFL-feasible dt at C=0.7 only +2 %** (1.80 s →
+        1.84 s) — Tokyo Bay's worst-case dt is set by
+        ``feature_sizing_function`` along the coast, not by the
+        gradient or wavelength fields, so the wavelength
+        contribution barely moves the FVCOM-relevant headline
+        number for this basin. Off-by-default is therefore the
+        right posture; turn it on when the basin's smallest cells
+        sit in shoaling regions away from coastline detail.
+      * **Side finding**: wavelength on caused n_flipped 0 → 1
+        (a single inverted triangle that perpfix could not
+        repair). Root cause is oceanmesh's own ``laplacian2`` in
+        the build cleanup chain (`mesh_engine/oceanmesh.py:187`);
+        unlike our Phase G wrapper, the build-time call has no
+        safety net. Tracked as a follow-up: wrap that call with
+        the same flip-rollback used by ``smooth_mesh_laplacian``.
 - `fmesh-mesh-pipeline` CLI: progressive `clean → quality → repeat`
   loop. Applies three cumulative *rungs* of `fmesh-mesh-clean`
   phases — rung 0 (A+B+C), rung 1 (+D+F+G), rung 2 (+E) — and
