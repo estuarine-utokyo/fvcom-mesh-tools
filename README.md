@@ -186,6 +186,19 @@ make test      # pytest -q
 make lint      # ruff check
 ```
 
+A `.pre-commit-config.yaml` is checked in for contributor convenience.
+After installing dev deps, run:
+
+```bash
+pre-commit install        # one-time: register the git hook
+pre-commit run --all-files  # equivalent of what CI runs
+```
+
+The hook runs the same `ruff check --fix` and standard hygiene checks
+(trailing whitespace, EOF newline, no merge conflict markers, no
+oversized files) that GitHub Actions enforces, so local commits stay
+in sync with CI expectations.
+
 ## Proof-of-concept notebooks
 
 End-to-end smoke tests under `notebooks/` (each ships with a matching

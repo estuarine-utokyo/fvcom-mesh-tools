@@ -10,6 +10,17 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `.pre-commit-config.yaml` for contributor-side git hooks: `ruff
+  check --fix`, trailing-whitespace + EOF-newline + mixed-line-ending
+  fixers, YAML/TOML syntax check, merge-conflict marker check,
+  large-file guard. CI installs `pre-commit` and runs
+  `pre-commit run --all-files`, so local hooks and CI agree.
+- CLI smoke step in GitHub Actions runs `--help` on every console
+  script (`fmesh-buildmesh`, `fmesh-perpfix`, `fmesh-subset-dem`,
+  `fmesh-mesh-combine`, `fmesh-mesh-check`, `fmesh-mesh-clean`) so
+  any regression in the `pyproject.toml` entry-point wiring or
+  argparse construction trips CI.
+
 - `fvcom_mesh_tools.diagnostics` module + `fmesh-mesh-check` CLI for
   detection of inadequate FVCOM meshes, with no repair. Six detectors
   surface defects that are common in narrow water bodies (rivers,
