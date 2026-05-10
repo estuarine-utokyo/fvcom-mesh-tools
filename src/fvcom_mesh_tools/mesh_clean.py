@@ -636,6 +636,7 @@ def analyze_under_resolved_channels(
     sample_ds_m: float = 50.0,
     arc_separation_factor: float = 4.0,
     opposite_bank_cos_max: float = -0.8,
+    min_channel_elements: int = 1,
     target_cells_across: int = 3,
 ) -> dict[str, Any]:
     """Stage 1 of the "true medial-axis Phase E" project.
@@ -663,6 +664,12 @@ def analyze_under_resolved_channels(
       the real number depends on the local channel-width profile
       and is computed in Stage 2.
 
+    ``min_channel_elements`` (default 1 = no filter) is forwarded to
+    the underlying detector; small components are dropped before the
+    per-component tally is computed. PoC #37 sweeps this to
+    characterise where the medial-axis estimate breaks even with the
+    centroid-widen baseline.
+
     The aggregate dict includes ``n_components``,
     ``total_flagged_elements``, the existing-Phase-E vs medial-axis
     new-node counts summed across channels, and the implied
@@ -681,10 +688,12 @@ def analyze_under_resolved_channels(
         sample_ds_m=float(sample_ds_m),
         arc_separation_factor=float(arc_separation_factor),
         opposite_bank_cos_max=float(opposite_bank_cos_max),
+        min_channel_elements=int(min_channel_elements),
     )
     n_flagged = int(flag.sum())
     info: dict[str, Any] = {
         "min_w_h": float(min_w_h),
+        "min_channel_elements": int(min_channel_elements),
         "target_cells_across": int(target_cells_across),
         "total_flagged_elements": n_flagged,
         "n_components": 0,

@@ -212,10 +212,15 @@ The project's actual workflow shape, based on this map:
 In other words:
 
 * **`fmesh-buildmesh`**: oceanmesh becomes the only build path.
-  `--engine ocsmesh` is deprecated and slated for removal once a
-  Triangle-without-gmsh path exists for draft use, or once
-  oceanmesh's iteration cap can be lowered enough to provide
-  sub-minute draft turnaround.
+  `--engine ocsmesh` is deprecated and slated for removal in a
+  future release. PoC #36 (``--om-max-iter`` sweep) closed the
+  draft-turnaround case: `--om-max-iter 10` produces alpha 0.943
+  on Tokyo Bay in ~7 min — still well above ocsmesh+gmsh's 0.847
+  in ~40 s — so the quality gap dominates the wall-clock advantage
+  and there is no remaining workflow that prefers the older path.
+  PoC #30 had earlier ruled out a Triangle-without-gmsh escape
+  hatch (`NotImplementedError("Varying sizing is not supported for
+  Triangle engine!")`).
 * **`fmesh-mesh-combine`**: stays on `ocsmesh.ops.combine_mesh`. This
   is gmsh-free and has no oceanmesh substitute.
 * **`fmesh-mesh-clean`**: keeps its own pure-Python phases A–E, but

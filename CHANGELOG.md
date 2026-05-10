@@ -213,10 +213,33 @@ Each links to a notebook in `notebooks/`.
 - **PoC #35** — Stage 1 of "true medial-axis Phase E". Cleaned
   PoC #19 mesh: 3,178 flagged → 1,010 components, mean ~3 elements
   / channel; medial-axis estimate +48 % nodes vs centroid widen.
-  **Stage 2 (real CDT re-meshing) deferred** — most channels are
-  small isolated clusters where centroid widen is roughly the
-  right fix. The `--min-channel-elements` filter is the immediate
-  follow-up that landed in this release.
+  Headline at the time: Stage 2 deferred because most channels
+  looked like small isolated clusters where centroid widen is the
+  right fix. PoC #37 below revisits this with the new filter and
+  inverts the conclusion.
+- **PoC #37** — `--min-channel-elements` sweep applied to the same
+  cleaned PoC #19 mesh as Stage 1:
+
+      min_n  flagged  comps  mean_la/h  centroid_n  medial_n  medial/centroid
+      -----  -------  -----  ---------  ----------  --------  ----------------
+          1    3,178  1,010      1.82       3,178     4,714        1.48
+          3    2,239    301      3.06       2,239     2,112        0.94
+          5    1,756    157      4.01       1,756     1,412        0.80
+         10    1,070     51      6.51       1,070       710        0.66
+         20      597     14     11.14         597       322        0.54
+
+  **Stage 2 GO.** Once the small-cluster noise is filtered out
+  (`min_n >= 3`) the medial-axis estimate becomes cheaper than
+  centroid widen *and* the surviving channels are genuinely
+  ribbon-like (mean ``long_axis_m / h_local_median`` rising from
+  3.06 to 11.14). Production sweet spot: `--min-channel-elements
+  10` (51 components / 1,070 elements). PoC #35's "Stage 2 not
+  justified" headline came from the unfiltered noise dominating
+  the average — the actual long ribbon-like channels (where
+  medial-axis insertion is also topologically more correct than
+  centroid widen, since centroid only lifts ``w/h`` to ~1.73× and
+  cannot guarantee ``target_cells_across`` cells) are real and
+  worth re-meshing.
 - **PoC #36** — `--om-max-iter` sweep on Tokyo Bay (50 → 25 → 10 → 5):
 
       iters   wall    alpha   frac<20°   max_v   n_overconn

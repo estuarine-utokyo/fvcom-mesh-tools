@@ -1088,3 +1088,22 @@ def test_analyze_under_resolved_channels_target_4_cells_doubles_estimate() -> No
         / r3["medial_axis_new_nodes_estimate"],
         3.0 / 2.0, atol=0.5,  # rounding in nodes-per-row
     )
+
+
+def test_analyze_under_resolved_channels_min_channel_elements_filters() -> None:
+    """``min_channel_elements`` larger than every component's size drops
+    all flagged elements before the per-component tally is computed."""
+    mesh = _strip_mesh_n_rows(length_deg=0.08, width_deg=0.01, n_x=8, n_rows=1)
+    base = analyze_under_resolved_channels(mesh, min_w_h=3.0)
+    assert base["total_flagged_elements"] > 0
+    assert base["n_components"] >= 1
+
+    filtered = analyze_under_resolved_channels(
+        mesh, min_w_h=3.0, min_channel_elements=base["total_flagged_elements"] + 1,
+    )
+    assert filtered["min_channel_elements"] == base["total_flagged_elements"] + 1
+    assert filtered["total_flagged_elements"] == 0
+    assert filtered["n_components"] == 0
+    assert filtered["components"] == []
+    assert filtered["current_phase_e_new_nodes"] == 0
+    assert filtered["medial_axis_new_nodes_estimate"] == 0

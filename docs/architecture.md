@@ -104,8 +104,10 @@ While the path still exists, the historical use cases were:
 
 - **Iteration / exploration phase.** You're tuning bbox, hmin/hmax,
   river-points, etc., and need fast feedback (~40 s vs ~25 min on
-  Tokyo Bay). Reducing `--om-max-iter` is the planned replacement
-  for this once benchmarked.
+  Tokyo Bay). PoC #36 confirms `--om-max-iter 10` is the right
+  replacement: alpha 0.943 / max valence 10 / wall ~7 min on Tokyo
+  Bay — far better than ocsmesh+gmsh's 0.847 / max valence 26 in
+  the same niche, at a wall-clock cost worth the trade.
 - When the coastline is sparse and the bathymetric-gradient size
   function would dominate anyway.
 - When OCSMesh's polygon area filters (`--min-polygon-area-m2`,
