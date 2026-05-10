@@ -240,7 +240,11 @@ the gate.
 
 `docs/architecture.md` is the full decision tree for engine choice and
 combine strategy; `docs/python_pipeline_gap_analysis.md` has the
-quality / runtime numbers vs. the OceanMesh2D MATLAB reference.
+quality / runtime numbers vs. the OceanMesh2D MATLAB reference;
+`docs/detector_repair_matrix.md` maps each `fmesh-mesh-check` detector
+to the `fmesh-mesh-clean` Phase that fixes it, the
+`fmesh-mesh-quality` metric that measures it, and the
+`fmesh-mesh-pipeline` rung that turns it on automatically.
 
 ## Development
 

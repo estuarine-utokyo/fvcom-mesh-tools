@@ -27,6 +27,17 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `docs/detector_repair_matrix.md` consolidates the detector → phase →
+  metric → pipeline-rung mapping into one lookup table. Each row pairs
+  a defect (`disjoint_components_flag`, `over-connected nodes`, …)
+  with the `fmesh-mesh-clean` phase that fixes it, the
+  `fmesh-mesh-quality` metric that measures it, and the
+  `fmesh-mesh-pipeline` rung that turns the phase on automatically.
+  Includes side-effect rows (which phases modify NP / NE / boundary
+  set), a phase-ordering rationale, threshold-gate heuristics
+  (FVCOM-friendly preset), the recommended end-to-end workflow, and a
+  "where to add a new detector / phase" appendix. Cross-linked from
+  README and `docs/architecture.md` §8.
 - `fmesh-buildmesh --om-wavelength-sizing` adds
   `oceanmesh.wavelength_sizing_function` to the size composition in
   the oceanmesh engine path, alongside the existing

@@ -352,3 +352,15 @@ The `--engine ocsmesh` path stays Apache-friendly (CC0 + GPL-only-runtime
 through gmsh).
 
 See `THIRD_PARTY_NOTICES.md` for the full attribution text.
+
+## 8. Cross-references
+
+* [`docs/engine_complementarity.md`](engine_complementarity.md) — full
+  capability inventory of `oceanmesh` vs. `ocsmesh` (which features
+  each library has, where they overlap, and which are gmsh-dependent).
+* [`docs/detector_repair_matrix.md`](detector_repair_matrix.md) —
+  detector → repair → quality-metric → pipeline-rung lookup table.
+  Read this when you need to know which CLI fixes a particular mesh
+  pathology, or when adding a new detector / phase.
+* [`docs/python_pipeline_gap_analysis.md`](python_pipeline_gap_analysis.md) —
+  remaining gap vs. the OceanMesh2D MATLAB reference output.
