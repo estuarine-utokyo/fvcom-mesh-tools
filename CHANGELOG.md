@@ -10,6 +10,33 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `docs/engine_complementarity.md` consolidates the empirical and
+  source-level investigation of `oceanmesh` and `ocsmesh`: which
+  capabilities each library has, which are exclusive (a long list on
+  both sides), and which are gmsh-dependent. Headline findings:
+  ocsmesh's Triangle engine cannot consume a varying-size `Hfun`
+  (PoC #30 `NotImplementedError("Varying sizing is not supported for
+  Triangle engine!")`), so it is not a drop-in replacement for gmsh
+  in the build path. Several ocsmesh capabilities have no oceanmesh
+  equivalent and are independently valuable to keep:
+  `add_courant_num_constraint` and the other `Hfun.add_*` sizing
+  primitives, `ops.combine_mesh.merge_overlapping_meshes` and
+  `merge_neighboring_meshes` (Triangle-based, gmsh-free),
+  `utils.cleanup_skewed_el` and `repartition_features`,
+  `utils.interpolate_*` for mesh-to-mesh field transfer, and
+  `Raster.{clip,fill_nodata,gaussian_filter,get_channels}` for DEM
+  preprocessing. The recommended division of labour is "oceanmesh
+  for build, ocsmesh as a library", with `--engine ocsmesh`
+  deprecation planned (decision pending) and ocsmesh utility wrappers
+  evaluated for Phase F sliver clean and Phase G Laplacian smoothing.
+- PoC #30 (`notebooks/30_triangle_engine_poc.py`) tries swapping
+  ocsmesh's `MeshDriver(engine_name="gmsh")` for `engine_name="triangle"`
+  on the Tokyo Bay PoC #16 inputs. ocsmesh's Triangle wrapper raises
+  `NotImplementedError` whenever a raster-driven Hfun is supplied —
+  it only supports constant size — so Triangle is unusable for our
+  build configuration without a from-scratch wrapper around Shewchuk
+  Triangle. Documented in `docs/engine_complementarity.md` §2 as the
+  reason gmsh cannot be cheaply removed.
 - `.pre-commit-config.yaml` for contributor-side git hooks: `ruff
   check --fix`, trailing-whitespace + EOF-newline + mixed-line-ending
   fixers, YAML/TOML syntax check, merge-conflict marker check,

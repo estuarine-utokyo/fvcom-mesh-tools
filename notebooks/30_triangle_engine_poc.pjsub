@@ -1,0 +1,30 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc30
+
+# PoC #30: Tokyo-Bay mesh build via ocsmesh's Triangle engine.
+# Compares quality (alpha, frac<20°, valence) against PoC #16 (gmsh)
+# and PoC #19 (oceanmesh).
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=4
+export OPENBLAS_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+# py312test has both ocsmesh + gmsh; oceanmesh-bench lacks gmsh which
+# Hfun(raster).meshdata() needs for the background size-function mesh
+# even when the final mesh engine is Triangle.
+conda activate py312test
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python notebooks/30_triangle_engine_poc.py

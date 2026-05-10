@@ -71,6 +71,12 @@ either by pure concatenation (`disjoint`) or by delegating to OCSMesh's
 
 `fmesh-buildmesh --engine` picks between two backends.
 
+> **See also**: `docs/engine_complementarity.md` for the full
+> capability inventory (which features each library has, where they
+> overlap, and which are tied to gmsh). This section covers the
+> day-to-day `fmesh-buildmesh` usage; the complementarity doc is the
+> reference for "which library should I reach for to do X?".
+
 ### When to use `--engine oceanmesh` (default)
 
 - **Final / production meshes.**
