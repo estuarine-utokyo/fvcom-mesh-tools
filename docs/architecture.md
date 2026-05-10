@@ -89,16 +89,29 @@ either by pure concatenation (`disjoint`) or by delegating to OCSMesh's
   detail). oceanmesh feeds the shoreline directly into its size
   function and benefits from detail.
 
-### When to use `--engine ocsmesh`
+### When to use `--engine ocsmesh` (DEPRECATED)
+
+> `--engine ocsmesh` is deprecated and slated for removal. Selecting
+> it emits a `DeprecationWarning` plus an stderr notice. The reasons
+> are documented in `docs/engine_complementarity.md` (quality gap,
+> gmsh's over-connected anomaly per PoCs #25/#26, and PoC #30's
+> finding that ocsmesh's Triangle backend cannot consume varying
+> sizing so gmsh cannot be cheaply replaced). Library-level use of
+> `ocsmesh.ops`, `ocsmesh.utils`, and `ocsmesh.Raster` continues —
+> only the build engine path is going away.
+
+While the path still exists, the historical use cases were:
 
 - **Iteration / exploration phase.** You're tuning bbox, hmin/hmax,
   river-points, etc., and need fast feedback (~40 s vs ~25 min on
-  Tokyo Bay).
+  Tokyo Bay). Reducing `--om-max-iter` is the planned replacement
+  for this once benchmarked.
 - When the coastline is sparse and the bathymetric-gradient size
   function would dominate anyway.
 - When OCSMesh's polygon area filters (`--min-polygon-area-m2`,
-  `--min-island-area-m2`) are the right hammer for the geometry —
-  they have no oceanmesh equivalent yet.
+  `--min-island-area-m2`) are the right hammer for the geometry.
+  oceanmesh's `--om-minimum-area-mult` (PoC #22) covers the most
+  common case (drop islets below `mult * h0**2`).
 
 ### Side-by-side numbers (Tokyo Bay, hmin=200/hmax=5000)
 

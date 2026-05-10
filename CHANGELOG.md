@@ -8,6 +8,23 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Deprecated
+
+- **`fmesh-buildmesh --engine ocsmesh`** is now deprecated. The CLI
+  emits a `DeprecationWarning` plus a visible stderr notice when
+  the option is selected, and the `--help` text and CLI table label
+  it accordingly. The code path is retained for one release for
+  migration; production callers should switch to
+  `--engine oceanmesh` (the default) immediately. Rationale is in
+  `docs/engine_complementarity.md`: ocsmesh + gmsh produces
+  alpha~0.85 / max valence 26 (vs 0.96 / 9 for oceanmesh) and
+  ocsmesh's Triangle backend cannot consume a varying-size raster
+  Hfun (PoC #30), so gmsh cannot be cheaply replaced. **Library
+  use** of ocsmesh (`ops.combine_mesh` for
+  `fmesh-mesh-combine --strategy {overlap,neighbor}`, `utils`,
+  `Raster`) is unaffected — only the buildmesh engine path is
+  going away.
+
 ### Added
 
 - `docs/engine_complementarity.md` consolidates the empirical and

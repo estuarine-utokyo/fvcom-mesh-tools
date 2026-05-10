@@ -4,7 +4,7 @@ Pipeline (single command, no MATLAB intermediate):
 
     DEM (NetCDF/GeoTIFF)
         -> dem.bbox.read              (lon/lat extent for boundary classify)
-        -> mesh_engine.build(engine)  (oceanmesh DistMesh or ocsmesh+gmsh)
+        -> mesh_engine.build(engine)  (oceanmesh DistMesh; ocsmesh+gmsh deprecated)
         -> dem.interp.at_points       (per-node depth, mesher-agnostic)
         -> classify boundaries by DEM bbox proximity
         -> (optional) edge-swap + Laplacian quality pass
@@ -19,6 +19,16 @@ monotonically improves mean alpha-quality but plateaus at a level that
 depends on the initial size function (PoC #10). Driving the bad-element
 fraction to zero requires adaptive sizing, which
 ``docs/python_pipeline_gap_analysis.md`` tracks.
+
+.. note::
+   ``--engine ocsmesh`` is **deprecated** and emits a
+   :class:`DeprecationWarning` plus an stderr notice when selected.
+   It is retained for one release to give downstream callers time
+   to migrate. Production meshes should use ``--engine oceanmesh``
+   (the default). See ``docs/engine_complementarity.md`` for the
+   rationale (PoC #30 quality gap and Triangle-backend limitation).
+   Library-level use of ocsmesh (``ops.combine_mesh``, ``utils``,
+   ``Raster``) is unaffected.
 """
 
 from __future__ import annotations
@@ -96,8 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Mesh-generation backend (default: oceanmesh). 'oceanmesh' "
             "is the OceanMesh2D Python port - higher quality "
             "(alpha~0.96) but slower (~25 min on Tokyo Bay). 'ocsmesh' "
-            "uses OCSMesh+gmsh - lower quality (alpha~0.85) but ~40x "
-            "faster; useful for draft / iteration."
+            "is DEPRECATED and slated for removal in a future release "
+            "(see docs/engine_complementarity.md): it uses OCSMesh+gmsh "
+            "- alpha~0.85, max valence 26, and PoC #30 confirmed the "
+            "Triangle escape hatch is unusable. Library use of ocsmesh "
+            "(ops.combine_mesh, utils, Raster) is unaffected."
         ),
     )
     p.add_argument(
@@ -280,8 +293,36 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+_OCSMESH_DEPRECATION_MESSAGE = (
+    "--engine ocsmesh is DEPRECATED and slated for removal in a future "
+    "release. Use --engine oceanmesh (the default) for production "
+    "meshes. See docs/engine_complementarity.md for the rationale: "
+    "ocsmesh+gmsh produces alpha~0.85 / max valence 26 (vs 0.96 / 9 "
+    "for oceanmesh on the same input), and ocsmesh's Triangle backend "
+    "rejects raster-driven varying sizing (PoC #30), so gmsh cannot "
+    "be cheaply replaced. Library-level use of ocsmesh "
+    "(ops.combine_mesh, utils, Raster) is unaffected."
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.engine == "ocsmesh":
+        # Visible on stderr regardless of warning filters; also emit a
+        # DeprecationWarning so any harness that promotes warnings to
+        # errors picks it up.
+        import warnings
+
+        print(
+            f"[buildmesh] WARNING: {_OCSMESH_DEPRECATION_MESSAGE}",
+            file=sys.stderr,
+        )
+        warnings.warn(
+            _OCSMESH_DEPRECATION_MESSAGE,
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     if not args.dem.exists():
         print(f"DEM not found: {args.dem}", file=sys.stderr)

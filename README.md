@@ -20,7 +20,7 @@ rather than reimplementing meshing algorithms from scratch.
 | Role | Backend | License | How used |
 |------|---------|---------|----------|
 | Mesh generation (default) | [oceanmesh](https://github.com/CHLNDDEV/oceanmesh) (DistMesh) | GPL-3.0-or-later | imported |
-| Mesh generation (alt / draft) | [OCSMesh](https://github.com/noaa-ocs-modeling/OCSMesh) + [gmsh](https://gmsh.info/) | CC0-1.0 + GPL-2.0+ runtime | imported (OCSMesh); gmsh called via OCSMesh |
+| Mesh generation (alt / draft, **deprecated**) | [OCSMesh](https://github.com/noaa-ocs-modeling/OCSMesh) + [gmsh](https://gmsh.info/) | CC0-1.0 + GPL-2.0+ runtime | imported (OCSMesh); gmsh called via OCSMesh |
 | Multi-mesh stitching | [OCSMesh](https://github.com/noaa-ocs-modeling/OCSMesh) (`ops.combine_mesh`) | CC0-1.0 | imported |
 | Auxiliary mesh utilities (legacy) | [MeshKernelPy](https://github.com/Deltares/MeshKernelPy), [stompy](https://github.com/rustychris/stompy) | MIT | optional, imported |
 
@@ -69,7 +69,7 @@ the compiled raster stack:
 | `pip install -e ".[io-vector]"` | + shapely / geopandas / fiona | coastline / river-point / multipolygon-area helpers |
 | `pip install -e ".[dem]"` | + rasterio / netCDF4 / pyproj | `dem.subset` / `dem.interp` / `dem.bbox`, `fmesh-subset-dem` |
 | `pip install -e ".[oceanmesh]"` | + oceanmesh and the above | `fmesh-buildmesh --engine oceanmesh` (default) |
-| `pip install -e ".[ocsmesh]"` | + ocsmesh, gmsh, and the above | `fmesh-buildmesh --engine ocsmesh`, `fmesh-mesh-combine --strategy {overlap,neighbor}` |
+| `pip install -e ".[ocsmesh]"` | + ocsmesh, gmsh, and the above | `fmesh-mesh-combine --strategy {overlap,neighbor}` (Triangle-based, gmsh-free at runtime); `fmesh-buildmesh --engine ocsmesh` (**deprecated**, slated for removal) |
 | `pip install -e ".[all]"` | superset of the above plus `viz` | every CLI and helper |
 
 Note: `oceanmesh` on PyPI lists deps that conflict with conda-forge
@@ -97,17 +97,14 @@ fmesh-buildmesh /tmp/tb.tif /tmp/tokyo_bay.14 \
     --perpfix-iters 1
 ```
 
-To iterate fast, swap to the OCSMesh + gmsh backend (~40x faster, lower
-quality). For draft work the same flag set works:
-
-```bash
-fmesh-buildmesh /tmp/tb.tif /tmp/tokyo_draft.14 --engine ocsmesh \
-    --hmin 200 --hmax 5000 \
-    --coastline data/coastline/MLIT_C23/C23-06_TOKYOBAY.shp \
-    --coast-target-size 200 --coast-expansion-rate 0.005 \
-    --min-island-area-m2 100000 \
-    --quality-pass 6 --refine-min-angle 20
-```
+> **`--engine ocsmesh` is deprecated.** It is kept one release for
+> migration but emits a `DeprecationWarning` and a stderr notice when
+> selected. Production meshes should use `--engine oceanmesh` (the
+> default). The OCSMesh + gmsh path produces alpha~0.85 / max valence
+> 26 vs. 0.96 / 9 for oceanmesh, and PoC #30 confirmed ocsmesh's
+> Triangle backend cannot replace gmsh under varying sizing. See
+> `docs/engine_complementarity.md` for the rationale. **Library** use
+> of ocsmesh (`ops.combine_mesh`, `utils`, `Raster`) is unaffected.
 
 To stitch independently generated meshes:
 
@@ -249,7 +246,7 @@ Installed when `pip install -e .` is run.
 
 | CLI | Purpose |
 |-----|---------|
-| `fmesh-buildmesh DEM out.14 [--engine oceanmesh\|ocsmesh]` | Single-shot DEM → fort.14. Default engine `oceanmesh` (OceanMesh2D Python port; alpha~0.96, slow). Alternative engine `ocsmesh` (OCSMesh+gmsh; alpha~0.85, ~40× faster) for draft / iteration. Shared post-processing: depth interp, bbox-based open/land split, river inflow, perpfix. |
+| `fmesh-buildmesh DEM out.14 [--engine oceanmesh\|ocsmesh]` | Single-shot DEM → fort.14. Default engine `oceanmesh` (OceanMesh2D Python port; alpha~0.96). `--engine ocsmesh` is **deprecated** (alpha~0.85, max valence 26; PoC #30 ruled out a Triangle replacement) and slated for removal — see `docs/engine_complementarity.md`. Shared post-processing: depth interp, bbox-based open/land split, river inflow, perpfix. |
 | `fmesh-perpfix in.14 out.14`  | Stand-alone open-boundary first-ring perpendicularity correction. |
 | `fmesh-subset-dem SRC OUT --bbox MINLON MINLAT MAXLON MAXLAT [--src-var z]` | Clip a global DEM (SRTM15+, GEBCO, GeoTIFF, ...) to a lon/lat bbox and emit a CF-tagged GeoTIFF for `fmesh-buildmesh`. Two read paths: rasterio (CRS-tagged inputs) and netCDF4 (lon/lat NetCDF without CRS, selected by `--src-var`). |
 | `fmesh-mesh-combine in1.14 in2.14 [...] out.14 --strategy {disjoint,overlap,neighbor}` | Combine multiple fort.14 meshes. `disjoint` is pure-numpy concat with full boundary preservation (best for non-overlapping basins). `overlap` and `neighbor` wrap `ocsmesh.ops.combine_mesh` for nested-resolution and edge-snap scenarios respectively. |
