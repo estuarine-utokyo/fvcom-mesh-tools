@@ -14,6 +14,7 @@ from fvcom_mesh_tools.mesh_clean import (
     repair_skewed_elements,
     repair_thin_chains,
     repair_under_resolved_channels,
+    smooth_mesh_laplacian,
     trim_dead_ends,
     widen_thin_elements_at_centroid,
 )
@@ -748,3 +749,106 @@ def test_clean_mesh_phase_f_explicit_removes_sliver() -> None:
                    if p["name"] == "repair_skewed_elements")
     assert phase_f["n_elements_removed"] == 1
     assert info["output"]["n_elements"] == mesh.n_elements - 1
+
+
+# ---------------------------------------------------------------------------
+# Phase G: Laplacian smoothing (wraps oceanmesh.laplacian2)
+# ---------------------------------------------------------------------------
+
+
+def _square_with_offcenter_node() -> Fort14Mesh:
+    """Unit square with a centre node *displaced* from the geometric
+    centre. Laplacian smoothing should pull it back toward (0.5, 0.5).
+    """
+    nodes = [
+        [0.0, 0.0],          # 0
+        [1.0, 0.0],          # 1
+        [1.0, 1.0],          # 2
+        [0.0, 1.0],          # 3
+        [0.7, 0.7],          # 4 — interior, off-centre
+    ]
+    elements = [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]]
+    return _mesh(
+        nodes, elements,
+        open_boundaries=[np.array([0, 1])],
+        land_boundaries=[(0, np.array([1, 2, 3, 0]))],
+    )
+
+
+def test_smooth_mesh_laplacian_pulls_interior_node_to_centre() -> None:
+    """The off-centre interior node should move toward (0.5, 0.5);
+    the four boundary corners must not move at all.
+    """
+    mesh = _square_with_offcenter_node()
+    pre_centre = mesh.nodes[4].copy()
+    out, info = smooth_mesh_laplacian(mesh, max_iter=20, tol=1e-6)
+
+    # Interior moves toward the geometric centre.
+    new_centre = out.nodes[4]
+    assert np.linalg.norm(new_centre - np.array([0.5, 0.5])) < (
+        np.linalg.norm(pre_centre - np.array([0.5, 0.5]))
+    )
+    # Boundary corners pinned.
+    np.testing.assert_array_equal(out.nodes[:4], mesh.nodes[:4])
+    # Connectivity, depths, boundaries preserved.
+    np.testing.assert_array_equal(out.elements, mesh.elements)
+    np.testing.assert_array_equal(out.depths, mesh.depths)
+    assert len(out.open_boundaries) == 1
+    assert len(out.land_boundaries) == 1
+    assert info["max_iter"] == 20
+    assert info["n_nodes_moved"] >= 1
+
+
+def test_smooth_mesh_laplacian_empty_mesh_is_noop() -> None:
+    mesh = Fort14Mesh(
+        title="empty",
+        nodes=np.empty((0, 2), dtype=float),
+        depths=np.empty((0,), dtype=float),
+        elements=np.empty((0, 3), dtype=np.int64),
+        open_boundaries=[], land_boundaries=[],
+    )
+    out, info = smooth_mesh_laplacian(mesh)
+    assert info.get("skipped") is True
+    assert out.n_elements == 0
+
+
+def test_smooth_mesh_laplacian_rejects_invalid_args() -> None:
+    mesh = _square_with_offcenter_node()
+    import pytest
+
+    with pytest.raises(ValueError, match="max_iter"):
+        smooth_mesh_laplacian(mesh, max_iter=0)
+    with pytest.raises(ValueError, match="tol"):
+        smooth_mesh_laplacian(mesh, tol=0.0)
+
+
+def test_clean_mesh_phase_g_default_off() -> None:
+    mesh = _square_with_offcenter_node()
+    cleaned, info = clean_mesh(
+        mesh,
+        bbox=(0.0, 0.0, 1.0, 1.0), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        thin_chain_mode="none",
+    )
+    assert all(p["name"] != "smooth_mesh_laplacian" for p in info["phases"])
+    np.testing.assert_array_equal(cleaned.nodes[4], mesh.nodes[4])
+
+
+def test_clean_mesh_phase_g_explicit_smooths_interior() -> None:
+    mesh = _square_with_offcenter_node()
+    cleaned, info = clean_mesh(
+        mesh,
+        bbox=(0.0, 0.0, 1.0, 1.0), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        thin_chain_mode="none",
+        smooth_laplacian=True, smooth_laplacian_iters=20,
+        smooth_laplacian_tol=1e-6,
+    )
+    phase_g = next(p for p in info["phases"]
+                   if p["name"] == "smooth_mesh_laplacian")
+    assert phase_g["n_nodes_moved"] >= 1
+    # Interior node moved toward (0.5, 0.5).
+    moved = cleaned.nodes[4]
+    assert np.linalg.norm(moved - np.array([0.5, 0.5])) < (
+        np.linalg.norm(mesh.nodes[4] - np.array([0.5, 0.5]))
+    )

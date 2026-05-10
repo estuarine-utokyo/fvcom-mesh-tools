@@ -1,4 +1,4 @@
-"""``fmesh-mesh-clean`` CLI: clean an FVCOM mesh in six composable phases.
+"""``fmesh-mesh-clean`` CLI: clean an FVCOM mesh in seven composable phases.
 
 Phase A removes dual-graph connected components by size and / or
 open-boundary touch (default keeps only the largest component). Phase B
@@ -12,9 +12,10 @@ under-resolved by the medial-axis channel-width detector
 not flag. Phase F deletes triangles whose minimum or maximum interior
 angle exceeds the configured thresholds (wraps
 ``ocsmesh.utils.cleanup_skewed_el``; ocsmesh used as a library only,
-no gmsh dependency). Boundaries are re-derived against a DEM-bbox
-classifier matching ``fmesh-buildmesh``. Phases D, E, and F are off
-by default — enable deliberately.
+no gmsh dependency). Phase G smooths interior nodes via Laplacian
+relaxation (wraps ``oceanmesh.laplacian2``). Boundaries are re-derived
+against a DEM-bbox classifier matching ``fmesh-buildmesh``. Phases D,
+E, F, and G are off by default — enable deliberately.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ from fvcom_mesh_tools.mesh_clean import (
     DEFAULT_BBOX_TOL_M,
     DEFAULT_SKEWED_MAX_ANGLE_DEG,
     DEFAULT_SKEWED_MIN_ANGLE_DEG,
+    DEFAULT_SMOOTH_LAPLACIAN_ITERS,
+    DEFAULT_SMOOTH_LAPLACIAN_TOL,
     clean_mesh,
 )
 
@@ -68,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="fmesh-mesh-clean",
         description=(
-            "Clean an FVCOM mesh in six composable phases. Phase A: "
+            "Clean an FVCOM mesh in seven composable phases. Phase A: "
             "drop dual-graph components by size / open-boundary touch. "
             "Phase B: trim degree-1 dead-end elements iteratively. "
             "Phase C: widen or delete 1-cell-wide channels. Phase D: "
@@ -76,9 +79,10 @@ def build_parser() -> argparse.ArgumentParser:
             "Phase E: widen or delete medial-axis-detected "
             "under-resolved channels (2- and 3-cell-wide). Phase F: "
             "delete skewed triangles by angle thresholds (wraps "
-            "ocsmesh.utils.cleanup_skewed_el). Boundaries are "
-            "re-derived via DEM-bbox proximity. Phases D, E, and F "
-            "are off by default."
+            "ocsmesh.utils.cleanup_skewed_el). Phase G: Laplacian "
+            "smoothing of interior nodes (wraps oceanmesh.laplacian2). "
+            "Boundaries are re-derived via DEM-bbox proximity. Phases "
+            "D, E, F, and G are off by default."
         ),
     )
     p.add_argument("input", type=Path, help="Input fort.14.")
@@ -263,6 +267,34 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--smooth-laplacian", action="store_true",
+        help=(
+            "Phase G switch (off by default). Run Laplacian smoothing "
+            "of all interior nodes via oceanmesh.laplacian2. Boundary "
+            "nodes are auto-pinned. Connectivity, depths, and "
+            "boundary lists are preserved. Note: oceanmesh is "
+            "GPL-3.0-or-later; importing it propagates GPL into the "
+            "redistributed combined work (see THIRD_PARTY_NOTICES.md)."
+        ),
+    )
+    p.add_argument(
+        "--smooth-laplacian-iters", type=int,
+        default=DEFAULT_SMOOTH_LAPLACIAN_ITERS,
+        help=(
+            "Phase G: maximum smoothing iterations. Default "
+            f"{DEFAULT_SMOOTH_LAPLACIAN_ITERS} (matches oceanmesh.laplacian2)."
+        ),
+    )
+    p.add_argument(
+        "--smooth-laplacian-tol", type=float,
+        default=DEFAULT_SMOOTH_LAPLACIAN_TOL,
+        help=(
+            "Phase G: convergence tolerance on the max relative edge "
+            "length change per iteration. Default "
+            f"{DEFAULT_SMOOTH_LAPLACIAN_TOL:g} (matches oceanmesh)."
+        ),
+    )
+    p.add_argument(
         "--summary", type=Path, default=None,
         help=(
             "Optional path for the JSON summary. Default: "
@@ -323,6 +355,12 @@ def main(argv: list[str] | None = None) -> int:
         print("--repair-skewed-min-angle-deg must be < --repair-skewed-max-angle-deg.",
               file=sys.stderr)
         return 2
+    if args.smooth_laplacian_iters < 1:
+        print("--smooth-laplacian-iters must be >= 1.", file=sys.stderr)
+        return 2
+    if args.smooth_laplacian_tol <= 0:
+        print("--smooth-laplacian-tol must be > 0.", file=sys.stderr)
+        return 2
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     mesh = read_fort14(args.input)
@@ -355,6 +393,9 @@ def main(argv: list[str] | None = None) -> int:
         repair_skewed=args.repair_skewed_elements,
         repair_skewed_min_angle_deg=args.repair_skewed_min_angle_deg,
         repair_skewed_max_angle_deg=args.repair_skewed_max_angle_deg,
+        smooth_laplacian=args.smooth_laplacian,
+        smooth_laplacian_iters=args.smooth_laplacian_iters,
+        smooth_laplacian_tol=args.smooth_laplacian_tol,
     )
     write_fort14(cleaned, args.output)
 

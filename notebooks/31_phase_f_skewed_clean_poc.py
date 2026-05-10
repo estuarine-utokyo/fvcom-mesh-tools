@@ -76,7 +76,8 @@ def _angle_stats(mesh) -> dict[str, float]:
     min_a = angs.min(axis=1)
     max_a = angs.max(axis=1)
     # Also recompute with the package helper for cross-check.
-    pkg_min = np.degrees(min_interior_angle(mesh))
+    # min_interior_angle returns degrees by default.
+    pkg_min = min_interior_angle(mesh)
     return {
         "n_elements": int(elems.shape[0]),
         "n_nodes": int(NP),

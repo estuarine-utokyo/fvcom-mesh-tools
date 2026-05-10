@@ -1,8 +1,9 @@
 """Mesh-clean operations: prune disjoint pools, trim dead-end elements,
 repair 1-cell-wide channels, balance over-connected node valence,
-widen under-resolved channels, and remove skewed elements.
+widen under-resolved channels, remove skewed elements, and smooth
+interior nodes.
 
-Six phases, applied in order:
+Seven phases, applied in order:
 
     Phase A — :func:`keep_components`
         Drop dual-graph connected components by size and / or whether
@@ -47,6 +48,16 @@ Six phases, applied in order:
         no element is improved, only removed. Off by default — slivers
         are sometimes load-bearing near the boundary, and removing
         them silently can introduce holes the user didn't expect.
+
+    Phase G — :func:`smooth_mesh_laplacian`
+        Move every non-boundary node to the average of its connected
+        neighbours (Laplacian smoothing). Wraps ``oceanmesh.laplacian2``,
+        which automatically pins all topological boundary nodes; the
+        connectivity, depths, and boundary lists are unchanged. Off by
+        default — smoothing improves angle distribution but moves
+        nodes away from the depth values they were originally
+        interpolated at, so re-interpolating depths from the source
+        DEM is an out-of-band step.
 
 After every Phase A / B / C-delete / D / F deletion or topology
 change the boundaries are re-derived via
@@ -668,6 +679,99 @@ def repair_skewed_elements(
 
 
 # ---------------------------------------------------------------------------
+# Phase G: Laplacian smoothing (wraps oceanmesh.laplacian2)
+# ---------------------------------------------------------------------------
+
+
+# Defaults match ``oceanmesh.laplacian2`` exactly.
+DEFAULT_SMOOTH_LAPLACIAN_ITERS: int = 20
+DEFAULT_SMOOTH_LAPLACIAN_TOL: float = 0.01
+
+
+def smooth_mesh_laplacian(
+    mesh: Fort14Mesh,
+    *,
+    max_iter: int = DEFAULT_SMOOTH_LAPLACIAN_ITERS,
+    tol: float = DEFAULT_SMOOTH_LAPLACIAN_TOL,
+    pfix: np.ndarray | None = None,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Phase G: move every non-boundary node to the mean position of its
+    connected neighbours (Laplacian smoothing).
+
+    Wraps :func:`oceanmesh.laplacian2`. oceanmesh derives the boundary
+    set from the mesh topology and pins it automatically, so the
+    output's open / land boundary node coordinates and the boundary
+    lists themselves are unchanged. Connectivity and depth indices
+    are preserved (``laplacian2`` only moves vertices). ``pfix`` adds
+    extra fixed coordinates beyond the topological boundary.
+
+    .. note::
+       Importing :mod:`oceanmesh` (GPL-3.0-or-later) propagates GPL
+       into the redistributed combined work. See
+       ``THIRD_PARTY_NOTICES.md`` and
+       ``docs/engine_complementarity.md``. Callers without oceanmesh
+       installed will see :class:`ImportError` at call time.
+
+    .. note::
+       Smoothing moves interior nodes away from the coordinates at
+       which their depths were interpolated. For high-fidelity FVCOM
+       runs you should re-interpolate depths from the source DEM
+       after Phase G; the toolkit does not currently do this
+       automatically.
+    """
+    if max_iter < 1:
+        raise ValueError(f"max_iter must be >= 1, got {max_iter}")
+    if tol <= 0:
+        raise ValueError(f"tol must be > 0, got {tol}")
+    if mesh.n_elements == 0:
+        return mesh, {
+            "max_iter": int(max_iter),
+            "tol": float(tol),
+            "n_pfix": 0,
+            "n_nodes_moved": 0,
+            "displacement_max": 0.0,
+            "displacement_mean": 0.0,
+            "skipped": True,
+        }
+
+    from oceanmesh import laplacian2  # GPL-3.0-or-later, lazy import
+
+    pre = np.asarray(mesh.nodes, dtype=float).copy()
+    new_vertices, _ = laplacian2(
+        pre.copy(),
+        np.asarray(mesh.elements, dtype=int),
+        max_iter=int(max_iter),
+        tol=float(tol),
+        pfix=pfix,
+    )
+    new_vertices = np.asarray(new_vertices, dtype=float)
+
+    disp = new_vertices - pre
+    disp_norm = np.linalg.norm(disp, axis=1)
+    eps = 1e-12
+
+    info: dict[str, Any] = {
+        "max_iter": int(max_iter),
+        "tol": float(tol),
+        "n_pfix": 0 if pfix is None else int(np.asarray(pfix).reshape(-1, 2).shape[0]),
+        "n_nodes_moved": int((disp_norm > eps).sum()),
+        "displacement_max": float(disp_norm.max()) if disp_norm.size else 0.0,
+        "displacement_mean": float(disp_norm.mean()) if disp_norm.size else 0.0,
+    }
+
+    out = Fort14Mesh(
+        title=mesh.title,
+        nodes=new_vertices,
+        depths=mesh.depths.copy(),
+        elements=mesh.elements.copy(),
+        open_boundaries=[np.asarray(s).copy() for s in mesh.open_boundaries],
+        land_boundaries=[(int(ib), np.asarray(s).copy())
+                         for ib, s in mesh.land_boundaries],
+    )
+    return out, info
+
+
+# ---------------------------------------------------------------------------
 # Driver: clean_mesh
 # ---------------------------------------------------------------------------
 
@@ -696,6 +800,9 @@ def clean_mesh(
     repair_skewed: bool = False,
     repair_skewed_min_angle_deg: float = DEFAULT_SKEWED_MIN_ANGLE_DEG,
     repair_skewed_max_angle_deg: float = DEFAULT_SKEWED_MAX_ANGLE_DEG,
+    smooth_laplacian: bool = False,
+    smooth_laplacian_iters: int = DEFAULT_SMOOTH_LAPLACIAN_ITERS,
+    smooth_laplacian_tol: float = DEFAULT_SMOOTH_LAPLACIAN_TOL,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Run Phase A (component pruning) and Phase B (dead-end trimming).
 
@@ -773,6 +880,15 @@ def clean_mesh(
         ``ocsmesh.utils.cleanup_skewed_el``: ``[1.0, 175.0]``. Tighten
         (e.g. raise to 5° / lower to 170°) to remove milder skews at
         the cost of more aggressive deletion.
+    smooth_laplacian:
+        Phase G switch (off by default). When True, run Laplacian
+        smoothing of all interior nodes via
+        :func:`smooth_mesh_laplacian` (wraps
+        :func:`oceanmesh.laplacian2`). Boundary nodes are auto-pinned
+        by oceanmesh; connectivity and depth indices are preserved.
+    smooth_laplacian_iters, smooth_laplacian_tol:
+        Phase G iteration cap and convergence tolerance. Defaults
+        match ``oceanmesh.laplacian2``: ``max_iter=20, tol=0.01``.
     """
     if thin_chain_mode not in ("widen", "delete", "none"):
         raise ValueError(
@@ -814,6 +930,9 @@ def clean_mesh(
             "repair_skewed": bool(repair_skewed),
             "repair_skewed_min_angle_deg": float(repair_skewed_min_angle_deg),
             "repair_skewed_max_angle_deg": float(repair_skewed_max_angle_deg),
+            "smooth_laplacian": bool(smooth_laplacian),
+            "smooth_laplacian_iters": int(smooth_laplacian_iters),
+            "smooth_laplacian_tol": float(smooth_laplacian_tol),
         },
         "phases": [],
     }
@@ -906,6 +1025,14 @@ def clean_mesh(
         )
         info["phases"].append({"name": "repair_skewed_elements", **f_info})
 
+    if smooth_laplacian:
+        cur, g_info = smooth_mesh_laplacian(
+            cur,
+            max_iter=smooth_laplacian_iters,
+            tol=smooth_laplacian_tol,
+        )
+        info["phases"].append({"name": "smooth_mesh_laplacian", **g_info})
+
     if not info["phases"]:
         # Every phase disabled — still re-derive boundaries so the
         # output is a normalised pass-through.
@@ -930,6 +1057,8 @@ __all__ = [
     "DEFAULT_BBOX_TOL_M",
     "DEFAULT_SKEWED_MAX_ANGLE_DEG",
     "DEFAULT_SKEWED_MIN_ANGLE_DEG",
+    "DEFAULT_SMOOTH_LAPLACIAN_ITERS",
+    "DEFAULT_SMOOTH_LAPLACIAN_TOL",
     "ThinChainMode",
     "UnderResolvedMode",
     "clean_mesh",
@@ -940,6 +1069,7 @@ __all__ = [
     "repair_skewed_elements",
     "repair_thin_chains",
     "repair_under_resolved_channels",
+    "smooth_mesh_laplacian",
     "trim_dead_ends",
     "widen_thin_elements_at_centroid",
 ]

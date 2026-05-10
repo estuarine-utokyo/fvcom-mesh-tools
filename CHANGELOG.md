@@ -27,6 +27,27 @@ will only ship with a major bump (Semantic Versioning).
 
 ### Added
 
+- `fmesh-mesh-clean` Phase G: Laplacian smoothing of interior nodes.
+  New function `fvcom_mesh_tools.mesh_clean.smooth_mesh_laplacian`
+  wraps `oceanmesh.laplacian2`, which derives the boundary set from
+  the mesh topology and pins it automatically — connectivity, depth
+  array, and open / land boundary lists are all preserved across
+  the smoothing pass. Off by default. The CLI gains
+  `--smooth-laplacian` plus `--smooth-laplacian-iters` (default 20)
+  and `--smooth-laplacian-tol` (default 0.01) — both matching the
+  oceanmesh defaults. Importing oceanmesh propagates GPL-3.0 into
+  the redistributed combined work (already documented in
+  `THIRD_PARTY_NOTICES.md`); callers who need a GPL-free path
+  should leave Phase G off. PoC #32
+  (`notebooks/32_phase_g_smooth_poc.py`) sweeps three iteration /
+  tolerance presets on the PoC #19 cleaned Tokyo-Bay mesh:
+  alpha-mean `0.9576 → 0.9590` (+0.0014), min-angle p05
+  `39.90° → 40.27°` (+0.37°), bad-triangle fraction (frac<20°)
+  `0.169 % → 0.120 %` (≈ 29 % relative reduction, 80 → 57 of
+  47,409). Convergence is fast on cleaned input — the gentle
+  preset (`max_iter=5`) yields the same numbers as the default
+  (`max_iter=20`). Topology invariants (NP / NE / boundary
+  counts) preserved across all presets.
 - `fmesh-mesh-clean` Phase F: angle-based skewed-element removal. New
   function `fvcom_mesh_tools.mesh_clean.repair_skewed_elements` wraps
   `ocsmesh.utils.cleanup_skewed_el` (gmsh-free; ocsmesh used as a
