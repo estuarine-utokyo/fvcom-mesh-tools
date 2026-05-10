@@ -46,6 +46,7 @@ fmesh-buildmesh = "fvcom_mesh_tools.cli.buildmesh:main"
 fmesh-subset-dem = "fvcom_mesh_tools.cli.subset_dem:main"
 fmesh-mesh-combine = "fvcom_mesh_tools.cli.meshcombine:main"
 fmesh-mesh-check = "fvcom_mesh_tools.cli.meshcheck:main"
+fmesh-mesh-clean = "fvcom_mesh_tools.cli.meshclean:main"
 
 [project.urls]
 Homepage = "https://github.com/estuarine-utokyo/fvcom-mesh-tools"

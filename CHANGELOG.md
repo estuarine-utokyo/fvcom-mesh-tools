@@ -37,6 +37,19 @@ will only ship with a major bump (Semantic Versioning).
   largest improvement available within the OCSMesh path
   (440 → 313 over-connected, max v 26 → 21), but does not close the
   gap with the oceanmesh engine.
+- `fvcom_mesh_tools.mesh_clean` module + `fmesh-mesh-clean` CLI for
+  the safe-repair subset of the diagnostics surfaced by PoC #24-#26.
+  Phase A keeps dual-graph connected components by size and / or
+  open-boundary touch (default: only the largest); Phase B
+  iteratively trims degree-1 elements that have no open-boundary edge
+  ("spit" terminations of 1-cell channels). Boundaries are re-derived
+  via DEM-bbox proximity, matching the `fmesh-buildmesh` convention,
+  so the cleaned fort.14 is FVCOM-ingestible. Validated on PoC #19's
+  Tokyo Bay output: 5,496 disjoint elements + 628 dead-ends removed,
+  cleaned mesh has 1 connected component, 0 dead-ends, 0 unreachable
+  elements, and a single open-boundary segment. Thin / 1-cell-channel
+  / over-connected-node repair is **not** done here; those need
+  topology-changing policies that are still under design.
 - `MESH_PNG_DPI = 600` shared default in `fvcom_mesh_tools.plotting`;
   every notebook that writes a mesh visualisation now passes
   `dpi=MESH_PNG_DPI` to `fig.savefig`. Histograms keep the matplotlib
