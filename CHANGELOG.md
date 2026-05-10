@@ -37,6 +37,20 @@ will only ship with a major bump (Semantic Versioning).
   largest improvement available within the OCSMesh path
   (440 → 313 over-connected, max v 26 → 21), but does not close the
   gap with the oceanmesh engine.
+- PoC #27 (`notebooks/27_overconn_repair_poc.py`) explores
+  edge-swap-based repair of over-connected nodes. A greedy
+  Lawson-style flip scored by reduction of per-edge "valence excess"
+  is shown to (i) eliminate the 3 over-connected nodes on the
+  cleaned PoC #19 mesh (max v=9 → 8, +0.01% bad triangles), (ii)
+  reduce 440 → 365 over-connected nodes on the PoC #16 OCSMesh+rivers
+  mesh (max v=26 → 23, +0.25% bad triangles), but only when the
+  min-angle floor is relaxed to 0°. The FVCOM-safe 20° floor rejects
+  every flip on the real meshes; valence fixing is therefore
+  fundamentally at odds with strict quality preservation when the
+  over-connected node sits in a fan-like local topology. The
+  algorithm is staged for productionising into a Phase D of
+  `fmesh-mesh-clean`; the floor / threshold defaults are still under
+  review.
 - `fvcom_mesh_tools.mesh_clean` module + `fmesh-mesh-clean` CLI for
   the safe-repair subset of the diagnostics surfaced by PoC #24-#26.
   Phase A keeps dual-graph connected components by size and / or
