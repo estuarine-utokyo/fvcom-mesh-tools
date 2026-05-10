@@ -138,6 +138,36 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--repair-overconnected-iters", type=int, default=0,
+        help=(
+            "Phase D: maximum iterations of valence-balancing edge "
+            "swaps. Default 0 (Phase D OFF). Set to e.g. 50 to enable. "
+            "PoC #27 found this can eliminate mild over-connection "
+            "(max v=9) in cleaned real meshes at a near-zero quality "
+            "cost; severe gmsh-fan cases (max v >= 20) are only "
+            "partially fixable by edge swap alone."
+        ),
+    )
+    p.add_argument(
+        "--max-nbr-elem", type=int, default=8,
+        help=(
+            "Phase D: FVCOM MAX_NBR_ELEM cap to drive every node "
+            "valence to. Default 8 (matches fmesh-mesh-check). Raise "
+            "if your FVCOM build is compiled with a larger cap."
+        ),
+    )
+    p.add_argument(
+        "--overconn-min-angle-floor", type=float, default=0.0,
+        help=(
+            "Phase D: minimum interior angle (degrees) a flip is "
+            "allowed to produce. Default 0 — only triangle inversion "
+            "forbidden, the value PoC #27 found practical on real "
+            "meshes. Raise to 20 to forbid sliver creation; on "
+            "fan-like local topology this typically rejects every "
+            "candidate."
+        ),
+    )
+    p.add_argument(
         "--summary", type=Path, default=None,
         help=(
             "Optional path for the JSON summary. Default: "
@@ -165,6 +195,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.min_thin_chain < 1:
         print("--min-thin-chain must be >= 1.", file=sys.stderr)
         return 2
+    if args.repair_overconnected_iters < 0:
+        print("--repair-overconnected-iters must be >= 0.", file=sys.stderr)
+        return 2
+    if args.max_nbr_elem < 3:
+        print("--max-nbr-elem must be >= 3.", file=sys.stderr)
+        return 2
+    if args.overconn_min_angle_floor < 0:
+        print("--overconn-min-angle-floor must be >= 0.", file=sys.stderr)
+        return 2
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     mesh = read_fort14(args.input)
@@ -186,6 +225,9 @@ def main(argv: list[str] | None = None) -> int:
         trim_dead_ends_iters=args.trim_dead_ends_iters,
         thin_chain_mode=args.thin_chain_mode,
         min_thin_chain=args.min_thin_chain,
+        repair_overconnected_iters=args.repair_overconnected_iters,
+        max_nbr_elem=args.max_nbr_elem,
+        overconn_min_angle_floor_deg=args.overconn_min_angle_floor,
     )
     write_fort14(cleaned, args.output)
 

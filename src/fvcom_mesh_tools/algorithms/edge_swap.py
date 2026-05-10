@@ -1,21 +1,29 @@
 """Delaunay-style edge swapping for unstructured triangle meshes.
 
-For every interior edge ``(i, j)`` shared by two triangles ``T1, T2``,
-the swap replaces the diagonal: ``T1, T2 -> T1', T2'`` where ``T1'`` and
-``T2'`` share the new diagonal connecting the two "opposite" vertices.
-The swap is accepted if it strictly improves the worst minimum-interior
-angle of the two triangles. This is the classical sliver-removal step
-that pure Laplacian smoothing (PoC #8) cannot perform - slivers are
-topology, not metric, problems.
+Two flavours of greedy Lawson-style flips share the same machinery:
 
-Within one pass:
+* :func:`swap_edges_for_quality` accepts a flip when the worst-of-pair
+  min-interior-angle strictly improves; this is the classical
+  sliver-removal step that pure Laplacian smoothing (PoC #8) cannot
+  perform.
+* :func:`swap_edges_for_valence` accepts a flip when it strictly
+  reduces the per-edge "valence excess" — sum over the four touched
+  nodes of ``max(0, valence - max_nbr_elem)``. The flip mechanics
+  mean ``valence(i)`` and ``valence(j)`` each drop by 1 while
+  ``valence(k)`` and ``valence(m)`` each rise by 1, so a flip strictly
+  redistributes valence and the score test picks ones that drain
+  excess away from over-connected nodes. PoC #27 explores the
+  trade-off between the FVCOM 20° quality floor and what is
+  achievable.
+
+Within one pass (either flavour):
 
 * All swap candidates are evaluated in a single vectorised pass.
 * Candidates that produce a degenerate or flipped triangle are skipped.
 * Accepted candidates are applied in order of largest improvement,
   greedily skipping any whose two triangles have already been
-  consumed by an earlier (better) swap. This avoids cascade
-  conflicts within one pass.
+  consumed by an earlier (better) swap. This avoids cascade conflicts
+  within one pass.
 
 Multiple passes converge quickly: in typical use only 3-6 passes are
 required before no further improvement is possible.
@@ -218,4 +226,159 @@ def swap_edges_for_quality(
         "max_iters": max_iters,
         "swaps_per_iter": swaps_per_iter,
         "total_swaps": int(sum(swaps_per_iter)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Valence-balancing edge swap
+# ---------------------------------------------------------------------------
+
+
+def _node_valence(elements: np.ndarray, n_nodes: int) -> np.ndarray:
+    counts = np.zeros(n_nodes, dtype=np.int64)
+    np.add.at(counts, elements.ravel(), 1)
+    return counts
+
+
+def _valence_swap_pass(
+    elements: np.ndarray,
+    nodes: np.ndarray,
+    *,
+    max_nbr_elem: int,
+    min_angle_floor_deg: float,
+) -> int:
+    """One pass of valence-balancing flips. Returns the number applied."""
+    edges, tri_pairs = _interior_edge_pairs(elements)
+    if edges.size == 0:
+        return 0
+
+    val = _node_valence(elements, nodes.shape[0])
+
+    i, j = edges[:, 0], edges[:, 1]
+    T1 = elements[tri_pairs[:, 0]]
+    T2 = elements[tri_pairs[:, 1]]
+    k = T1.sum(axis=1) - i - j
+    m = T2.sum(axis=1) - i - j
+
+    cand1 = np.stack([i, m, k], axis=1)
+    cand2 = np.stack([j, k, m], axis=1)
+    for cand in (cand1, cand2):
+        sa = _signed_area(nodes, cand)
+        flip = sa < 0
+        if flip.any():
+            cand[flip] = cand[flip][:, [0, 2, 1]]
+    sa1 = _signed_area(nodes, cand1)
+    sa2 = _signed_area(nodes, cand2)
+    no_invert = (sa1 > 0) & (sa2 > 0)
+
+    cap = max_nbr_elem
+    v_i, v_j, v_k, v_m = val[i], val[j], val[k], val[m]
+    excess_before = (
+        np.maximum(0, v_i - cap) + np.maximum(0, v_j - cap)
+        + np.maximum(0, v_k - cap) + np.maximum(0, v_m - cap)
+    )
+    excess_after = (
+        np.maximum(0, v_i - 1 - cap) + np.maximum(0, v_j - 1 - cap)
+        + np.maximum(0, v_k + 1 - cap) + np.maximum(0, v_m + 1 - cap)
+    )
+    score = excess_before - excess_after
+
+    q_before = np.minimum(_min_angle(nodes, T1), _min_angle(nodes, T2))
+    q_after = np.minimum(_min_angle(nodes, cand1), _min_angle(nodes, cand2))
+    quality_ok = q_after >= np.minimum(q_before, min_angle_floor_deg) - 1e-9
+
+    improves = no_invert & quality_ok & (score > 0)
+    if not improves.any():
+        return 0
+
+    order = np.argsort(-score, kind="stable")
+    used = np.zeros(elements.shape[0], dtype=bool)
+    n_applied = 0
+    for k_idx in order:
+        if not improves[k_idx]:
+            break
+        t1 = int(tri_pairs[k_idx, 0])
+        t2 = int(tri_pairs[k_idx, 1])
+        if used[t1] or used[t2]:
+            continue
+        elements[t1] = cand1[k_idx]
+        elements[t2] = cand2[k_idx]
+        used[t1] = True
+        used[t2] = True
+        n_applied += 1
+    return n_applied
+
+
+def swap_edges_for_valence(
+    mesh: Fort14Mesh,
+    *,
+    max_nbr_elem: int = 8,
+    max_iters: int = 50,
+    min_angle_floor_deg: float = 0.0,
+) -> tuple[Fort14Mesh, dict]:
+    """Iteratively flip interior edges to drive every node valence to
+    at most ``max_nbr_elem``.
+
+    Boundary edges are excluded from the candidate list (they are not
+    in :func:`_interior_edge_pairs`), so the open-boundary and
+    coastline are preserved by construction.
+
+    Each flip reduces ``valence(i) + valence(j)`` by 2 and increases
+    ``valence(k) + valence(m)`` by 2; we accept it when it strictly
+    decreases the total per-edge "excess"
+    ``sum_{n in {i,j,k,m}} max(0, valence(n) - max_nbr_elem)`` and the
+    worst-of-pair min-angle does not drop below
+    ``min(min_angle_floor_deg, current_worst)``. The default floor
+    ``0.0`` means only triangle inversion is forbidden — pure
+    topological flipping. PoC #27 found the FVCOM-safe ``20.0``
+    rejects every candidate on real Tokyo Bay meshes; valence fixing
+    in fan-like local topology fundamentally requires accepting some
+    sliver creation.
+
+    Returns
+    -------
+    (swapped_mesh, info)
+        ``info`` keys: ``"max_nbr_elem"``, ``"min_angle_floor_deg"``,
+        ``"swaps_per_iter"``, ``"total_swaps"``, ``"iterations_run"``,
+        ``"initial_total_excess"``, ``"final_total_excess"``,
+        ``"max_valence_before"``, ``"max_valence_after"``,
+        ``"n_overconn_before"``, ``"n_overconn_after"``.
+    """
+    elements = mesh.elements.copy()
+    nodes = mesh.nodes
+    n_nodes = mesh.n_nodes
+
+    val_before = _node_valence(elements, n_nodes)
+    initial_excess = int(np.maximum(0, val_before - max_nbr_elem).sum())
+    n_overconn_before = int((val_before > max_nbr_elem).sum())
+    max_v_before = int(val_before.max()) if n_nodes else 0
+
+    history: list[int] = []
+    for _ in range(max_iters):
+        val = _node_valence(elements, n_nodes)
+        if (val <= max_nbr_elem).all():
+            break
+        applied = _valence_swap_pass(
+            elements, nodes,
+            max_nbr_elem=max_nbr_elem,
+            min_angle_floor_deg=min_angle_floor_deg,
+        )
+        history.append(applied)
+        if applied == 0:
+            break
+
+    val_after = _node_valence(elements, n_nodes)
+    out = replace(mesh, elements=elements)
+    return out, {
+        "max_nbr_elem": int(max_nbr_elem),
+        "min_angle_floor_deg": float(min_angle_floor_deg),
+        "swaps_per_iter": history,
+        "total_swaps": int(sum(history)),
+        "iterations_run": len(history),
+        "initial_total_excess": initial_excess,
+        "final_total_excess": int(np.maximum(0, val_after - max_nbr_elem).sum()),
+        "max_valence_before": max_v_before,
+        "max_valence_after": int(val_after.max()) if n_nodes else 0,
+        "n_overconn_before": n_overconn_before,
+        "n_overconn_after": int((val_after > max_nbr_elem).sum()),
     }

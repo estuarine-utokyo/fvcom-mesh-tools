@@ -10,6 +10,7 @@ from fvcom_mesh_tools.mesh_clean import (
     keep_components,
     rebuild_boundaries,
     remove_elements,
+    repair_overconnected_nodes,
     repair_thin_chains,
     trim_dead_ends,
     widen_thin_elements_at_centroid,
@@ -376,3 +377,101 @@ def test_clean_mesh_phase_c_delete_explicit() -> None:
     assert phase_c["mode"] == "delete"
     assert phase_c["n_elements_removed"] == 8
     assert info["output"]["n_elements"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase D: over-connected node repair
+# ---------------------------------------------------------------------------
+
+
+def _fan_mesh(n_wedges: int) -> Fort14Mesh:
+    """Regular ``n_wedges``-spoke fan around an interior centre node.
+
+    Centre node valence = ``n_wedges``; every rim node has valence 2.
+    The rim is a single closed land segment.
+    """
+    centre = np.array([[0.0, 0.0]])
+    angles = np.linspace(0.0, 2.0 * np.pi, n_wedges + 1)[:-1]
+    rim = np.column_stack([np.cos(angles), np.sin(angles)])
+    nodes = np.vstack([centre, rim])
+    elements = np.array(
+        [[0, 1 + i, 1 + (i + 1) % n_wedges] for i in range(n_wedges)],
+        dtype=np.int64,
+    )
+    rim_chain = np.concatenate([np.arange(1, n_wedges + 1), [1]])
+    return _mesh(nodes, elements, land_boundaries=[(0, rim_chain.astype(np.int64))])
+
+
+def test_repair_overconnected_nodes_floor20_rejects_fan_flips() -> None:
+    """The 12-wedge fan has a centre at valence 12; with the FVCOM-safe
+    20° quality floor every flip would create a sliver chord triangle
+    so the algorithm is expected to reject every candidate.
+    """
+    mesh = _fan_mesh(12)
+    out, info = repair_overconnected_nodes(
+        mesh, max_nbr_elem=8, max_iters=10, min_angle_floor_deg=20.0,
+    )
+    assert info["max_valence_before"] == 12
+    assert info["max_valence_after"] == 12
+    assert info["total_swaps"] == 0
+
+
+def test_repair_overconnected_nodes_floor0_balances_fan() -> None:
+    """With floor=0 the algorithm is allowed to introduce slivers and
+    can drive the centre valence below the cap.
+    """
+    mesh = _fan_mesh(12)
+    out, info = repair_overconnected_nodes(
+        mesh, max_nbr_elem=8, max_iters=10, min_angle_floor_deg=0.0,
+    )
+    assert info["max_valence_before"] == 12
+    assert info["max_valence_after"] <= 8
+    assert info["total_swaps"] >= 1
+    assert info["n_overconn_after"] == 0
+
+
+def test_repair_overconnected_nodes_noop_when_cap_already_met() -> None:
+    """6-wedge fan: centre valence 6, already <= 8, so the algorithm is
+    a no-op irrespective of floor.
+    """
+    mesh = _fan_mesh(6)
+    out, info = repair_overconnected_nodes(
+        mesh, max_nbr_elem=8, max_iters=10, min_angle_floor_deg=20.0,
+    )
+    assert info["total_swaps"] == 0
+    assert info["max_valence_before"] == 6
+    assert info["max_valence_after"] == 6
+    assert info["n_overconn_before"] == 0
+
+
+def test_clean_mesh_phase_d_default_off() -> None:
+    """Phase D is off by default — the 12-wedge fan stays at valence 12
+    after a default mesh-clean run.
+    """
+    mesh = _fan_mesh(12)
+    cleaned, info = clean_mesh(
+        mesh,
+        bbox=(-1.0, -1.0, 1.0, 1.0), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        thin_chain_mode="none",
+        # Default: repair_overconnected_iters=0
+    )
+    assert all(p["name"] != "repair_overconnected_nodes" for p in info["phases"])
+
+
+def test_clean_mesh_phase_d_explicit_floor0_balances_fan() -> None:
+    """Enabling Phase D with floor=0 reduces fan centre valence."""
+    mesh = _fan_mesh(12)
+    cleaned, info = clean_mesh(
+        mesh,
+        bbox=(-1.0, -1.0, 1.0, 1.0), bbox_tol_m=1.0,
+        remove_disjoint=False, trim_dead_ends_iters=0,
+        thin_chain_mode="none",
+        repair_overconnected_iters=10,
+        max_nbr_elem=8,
+        overconn_min_angle_floor_deg=0.0,
+    )
+    phase_d = next(p for p in info["phases"]
+                   if p["name"] == "repair_overconnected_nodes")
+    assert phase_d["max_valence_after"] <= 8
+    assert phase_d["n_overconn_after"] == 0

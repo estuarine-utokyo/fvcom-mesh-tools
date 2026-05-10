@@ -148,8 +148,13 @@ open-boundary edge, iterating until convergence. Phase C
 (`--thin-chain-mode widen`, default) inserts a centroid into every
 thin-chain element so each 1-cell channel becomes 2-cell;
 `--thin-chain-mode delete` removes the chain instead, and
-`--thin-chain-mode none` skips Phase C. Over-connected-node repair is
-**not** done yet.
+`--thin-chain-mode none` skips Phase C. Phase D
+(`--repair-overconnected-iters N`, off by default) runs a greedy
+Lawson edge-swap that drives every node valence to at most
+`--max-nbr-elem` (default 8 = FVCOM legacy cap); with the default
+`--overconn-min-angle-floor 0` it eliminates mild over-connection
+(max v=9) at near-zero quality cost on real meshes. Severe gmsh-fan
+cases need engine-level fixes instead.
 
 `docs/architecture.md` is the full decision tree for engine choice and
 combine strategy; `docs/python_pipeline_gap_analysis.md` has the
@@ -216,7 +221,7 @@ Installed when `pip install -e .` is run.
 | `fmesh-subset-dem SRC OUT --bbox MINLON MINLAT MAXLON MAXLAT [--src-var z]` | Clip a global DEM (SRTM15+, GEBCO, GeoTIFF, ...) to a lon/lat bbox and emit a CF-tagged GeoTIFF for `fmesh-buildmesh`. Two read paths: rasterio (CRS-tagged inputs) and netCDF4 (lon/lat NetCDF without CRS, selected by `--src-var`). |
 | `fmesh-mesh-combine in1.14 in2.14 [...] out.14 --strategy {disjoint,overlap,neighbor}` | Combine multiple fort.14 meshes. `disjoint` is pure-numpy concat with full boundary preservation (best for non-overlapping basins). `overlap` and `neighbor` wrap `ocsmesh.ops.combine_mesh` for nested-resolution and edge-snap scenarios respectively. |
 | `fmesh-mesh-check fort.14 [--max-nbr-elem N] [--min-thin-chain N]` | Detect inadequate FVCOM meshes. Flags disjoint wet-domain components, dead-end elements, thin / thin-chain (1-cell channel) elements, over-connected nodes, and open-boundary-unreachable elements. Emits `*_summary.txt`, `*_diag.json` (per-id records with coordinates), and `*_map.png`. No repair. Exit code is non-zero when anything is flagged so the command is usable as a CI gate. |
-| `fmesh-mesh-clean in.14 out.14 [--bbox] [--open-merge-coast-gap N] [--thin-chain-mode {widen,delete,none}]` | Repair the safe-to-fix subset of the `fmesh-mesh-check` flags. Phase A prunes disjoint dual-graph components; Phase B iteratively trims degree-1 elements with no open-boundary edge; Phase C (default `widen`) inserts a centroid into every thin-chain element so 1-cell channels become 2-cell, or removes the chain entirely with `--thin-chain-mode delete`. Boundaries are re-derived via DEM-bbox proximity, matching `fmesh-buildmesh`. Over-connected-node repair is not yet implemented. |
+| `fmesh-mesh-clean in.14 out.14 [--bbox] [--open-merge-coast-gap N] [--thin-chain-mode {widen,delete,none}] [--repair-overconnected-iters N]` | Repair the safe-to-fix subset of the `fmesh-mesh-check` flags. Phase A prunes disjoint dual-graph components; Phase B iteratively trims degree-1 elements with no open-boundary edge; Phase C (default `widen`) inserts a centroid into every thin-chain element so 1-cell channels become 2-cell, or removes the chain entirely with `--thin-chain-mode delete`; Phase D (off by default) runs valence-balancing edge swaps that drive every node valence to at most `--max-nbr-elem`. Boundaries are re-derived via DEM-bbox proximity, matching `fmesh-buildmesh`. |
 
 ## Changelog
 

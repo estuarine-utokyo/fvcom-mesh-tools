@@ -7,7 +7,10 @@ from fvcom_mesh_tools.algorithms.boundary import (
     classify_outer_loop_by_bbox,
     outer_loop,
 )
-from fvcom_mesh_tools.algorithms.edge_swap import swap_edges_for_quality
+from fvcom_mesh_tools.algorithms.edge_swap import (
+    swap_edges_for_quality,
+    swap_edges_for_valence,
+)
 from fvcom_mesh_tools.algorithms.perpendicularity import (
     align_open_boundary_first_ring,
     open_bdy_perpendicularity,
@@ -39,5 +42,6 @@ __all__ = [
     "refine_bad_triangles",
     "signed_areas",
     "swap_edges_for_quality",
+    "swap_edges_for_valence",
     "unique_edges",
 ]

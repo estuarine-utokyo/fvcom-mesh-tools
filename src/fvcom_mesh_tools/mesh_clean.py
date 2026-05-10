@@ -1,7 +1,7 @@
 """Mesh-clean operations: prune disjoint pools, trim dead-end elements,
-and repair 1-cell-wide channels.
+repair 1-cell-wide channels, and balance over-connected node valence.
 
-Three phases, applied in order:
+Four phases, applied in order:
 
     Phase A — :func:`keep_components`
         Drop dual-graph connected components by size and / or whether
@@ -22,13 +22,21 @@ Three phases, applied in order:
         sub-triangles with one interior vertex, or delete the whole
         chain.
 
-After every Phase A / B / C-delete deletion the boundaries are
-re-derived via
-:func:`fvcom_mesh_tools.algorithms.classify_boundaries_by_bbox`, so the
-output mesh has a consistent open / land segmentation in the same
-style as ``fmesh-buildmesh``. Phase C-widen preserves boundaries
-unchanged because centroid insertion only introduces interior nodes /
-edges. Repair of over-connected nodes is **not** implemented here.
+    Phase D — :func:`repair_overconnected_nodes`
+        Greedy Lawson-style edge swap that strictly reduces the
+        per-edge "valence excess"
+        ``sum_{n in {i,j,k,m}} max(0, valence(n) - max_nbr_elem)``.
+        Off by default; PoC #27 found the FVCOM-safe 20° quality
+        floor rejects every candidate on real meshes, so the floor
+        defaults to 0° (only triangle inversion forbidden) when the
+        phase is enabled.
+
+After every Phase A / B / C-delete / D deletion or topology change
+the boundaries are re-derived via
+:func:`fvcom_mesh_tools.algorithms.classify_boundaries_by_bbox`, so
+the output mesh has a consistent open / land segmentation in the
+same style as ``fmesh-buildmesh``. Phase C-widen and Phase D do not
+change the boundary edge set, so their re-derive is a no-op.
 """
 
 from __future__ import annotations
@@ -38,7 +46,10 @@ from typing import Any, Literal
 import numpy as np
 from scipy.sparse.csgraph import connected_components
 
-from fvcom_mesh_tools.algorithms import classify_boundaries_by_bbox
+from fvcom_mesh_tools.algorithms import (
+    classify_boundaries_by_bbox,
+    swap_edges_for_valence,
+)
 from fvcom_mesh_tools.diagnostics import (
     dead_end_elements_flag,
     face_face_adjacency,
@@ -411,6 +422,37 @@ def repair_thin_chains(
 
 
 # ---------------------------------------------------------------------------
+# Phase D: repair over-connected nodes via valence-balancing edge swap
+# ---------------------------------------------------------------------------
+
+
+def repair_overconnected_nodes(
+    mesh: Fort14Mesh,
+    *,
+    max_nbr_elem: int = 8,
+    max_iters: int = 50,
+    min_angle_floor_deg: float = 0.0,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Phase D: drive every node valence to at most ``max_nbr_elem`` via
+    iterative Lawson edge flips that strictly decrease total valence
+    excess.
+
+    Boundary edges are excluded from the candidate list, so this never
+    changes the open / land segmentation. ``min_angle_floor_deg``
+    defaults to 0 (only triangle inversion forbidden); raise to e.g.
+    20 to forbid sliver creation, at the cost of typically rejecting
+    every candidate on fan-like local topology.
+    """
+    out, info = swap_edges_for_valence(
+        mesh,
+        max_nbr_elem=max_nbr_elem,
+        max_iters=max_iters,
+        min_angle_floor_deg=min_angle_floor_deg,
+    )
+    return out, info
+
+
+# ---------------------------------------------------------------------------
 # Driver: clean_mesh
 # ---------------------------------------------------------------------------
 
@@ -428,6 +470,9 @@ def clean_mesh(
     trim_dead_ends_iters: int = 10,
     thin_chain_mode: ThinChainMode = "widen",
     min_thin_chain: int = 3,
+    repair_overconnected_iters: int = 0,
+    max_nbr_elem: int = 8,
+    overconn_min_angle_floor_deg: float = 0.0,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Run Phase A (component pruning) and Phase B (dead-end trimming).
 
@@ -466,6 +511,17 @@ def clean_mesh(
         Minimum length of a connected thin-element run that we treat
         as a 1-cell-wide channel run for Phase C. Default 3, matching
         ``fmesh-mesh-check``.
+    repair_overconnected_iters:
+        Phase D iteration cap. ``0`` (default) disables Phase D; set
+        to e.g. 50 to enable.
+    max_nbr_elem:
+        FVCOM ``MAX_NBR_ELEM`` cap that Phase D drives every valence
+        to. Default 8 (matches ``fmesh-mesh-check``).
+    overconn_min_angle_floor_deg:
+        Phase D quality floor in degrees. Default 0 (only triangle
+        inversion forbidden) — raise to e.g. 20 to forbid sliver
+        creation, at the cost of typically rejecting every candidate
+        on fan-like local topology (PoC #27).
     """
     if thin_chain_mode not in ("widen", "delete", "none"):
         raise ValueError(
@@ -489,6 +545,9 @@ def clean_mesh(
             "trim_dead_ends_iters": int(trim_dead_ends_iters),
             "thin_chain_mode": thin_chain_mode,
             "min_thin_chain": int(min_thin_chain),
+            "repair_overconnected_iters": int(repair_overconnected_iters),
+            "max_nbr_elem": int(max_nbr_elem),
+            "overconn_min_angle_floor_deg": float(overconn_min_angle_floor_deg),
         },
         "phases": [],
     }
@@ -545,6 +604,15 @@ def clean_mesh(
         )
         info["phases"].append({"name": "repair_thin_chains", **c_info})
 
+    if repair_overconnected_iters > 0:
+        cur, d_info = repair_overconnected_nodes(
+            cur,
+            max_nbr_elem=max_nbr_elem,
+            max_iters=repair_overconnected_iters,
+            min_angle_floor_deg=overconn_min_angle_floor_deg,
+        )
+        info["phases"].append({"name": "repair_overconnected_nodes", **d_info})
+
     if not info["phases"]:
         # Every phase disabled — still re-derive boundaries so the
         # output is a normalised pass-through.
@@ -572,6 +640,7 @@ __all__ = [
     "keep_components",
     "rebuild_boundaries",
     "remove_elements",
+    "repair_overconnected_nodes",
     "repair_thin_chains",
     "trim_dead_ends",
     "widen_thin_elements_at_centroid",

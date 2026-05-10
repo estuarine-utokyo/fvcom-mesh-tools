@@ -37,6 +37,21 @@ will only ship with a major bump (Semantic Versioning).
   largest improvement available within the OCSMesh path
   (440 → 313 over-connected, max v 26 → 21), but does not close the
   gap with the oceanmesh engine.
+- `fmesh-mesh-clean` Phase D: over-connected node repair via
+  valence-balancing edge swaps (graduated from PoC #27). The greedy
+  Lawson-style flip is exposed as
+  `fvcom_mesh_tools.algorithms.swap_edges_for_valence` and as
+  `fvcom_mesh_tools.mesh_clean.repair_overconnected_nodes`. The CLI
+  gains `--repair-overconnected-iters` (default 0 = OFF),
+  `--max-nbr-elem` (default 8 = FVCOM legacy cap), and
+  `--overconn-min-angle-floor` (default 0° — only triangle inversion
+  forbidden, the value PoC #27 found practical on real meshes).
+  Validated on PoC #19's cleaned Tokyo Bay mesh: enabling Phase D
+  drives `n_overconnected: 3 → 0`, `max_valence: 9 → 8` after 20
+  swaps in 2 iterations, with alpha mean 0.9577 → 0.9576, frac<20° =
+  0.16 → 0.17 % — essentially zero quality cost. Severe gmsh-fan
+  cases (PoC #16, max valence 26) are only partially fixable by edge
+  swap alone; mitigation there is engine choice.
 - PoC #27 (`notebooks/27_overconn_repair_poc.py`) explores
   edge-swap-based repair of over-connected nodes. A greedy
   Lawson-style flip scored by reduction of per-edge "valence excess"
