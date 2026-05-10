@@ -317,10 +317,17 @@ def _classify_element(
 
 def _ring_by_node(elements: np.ndarray, n_nodes: int
                   ) -> dict[int, np.ndarray]:
-    """Map node-id → array of incident element ids."""
+    """Map node-id → array of incident element ids.
+
+    ``elements.ravel()`` lays out vertices in row-major order:
+    position ``k*3 + i`` is vertex ``i`` of element ``k``. The
+    element id at each position is therefore ``k = pos // 3``,
+    i.e. ``np.repeat(np.arange(NE), 3)`` (an earlier draft used
+    ``np.tile`` which produced bogus rings).
+    """
     rows = elements.ravel()
-    cols = np.tile(np.arange(elements.shape[0]), 3)
-    order = np.argsort(rows)
+    cols = np.repeat(np.arange(elements.shape[0]), 3)
+    order = np.argsort(rows, kind="stable")
     rows = rows[order]
     cols = cols[order]
     boundaries = np.searchsorted(rows, np.arange(n_nodes + 1))

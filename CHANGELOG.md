@@ -166,6 +166,41 @@ together close the case); ocsmesh remains a library dependency for
   Validated by PoCs #18-#22 (Tokyo Bay alpha 0.96, frac<20° 0.10 %
   vs ocsmesh+gmsh's 0.85 / 1.13 %).
 
+### Added — Phase H per-element greedy optimiser
+
+- **`fvcom_mesh_tools.mesh_clean_phase_h.phase_h_optimize`** (v1) —
+  the planned automation of the SMS manual mesh-edit workflow:
+  visit every element failing a strict per-element gate
+  (``alpha >= alpha_target`` ∧ ``min_angle >= min_angle_target``),
+  try a sequence of local-edit operators in turn, accept the first
+  that strictly reduces the local 1-ring penalty without flipping a
+  triangle. The driver alternates **Pass A** (batch Gauss-Seidel
+  smooth: all interior vertices per sweep, ~3 s/sweep on a
+  47 k-element mesh) with **Pass B** (per-element greedy on fail
+  elements, topology operators only: ``edge_swap``,
+  ``edge_split_interior``, ``vertex_remove``). The smooth pass
+  reuses its aux dicts across sweeps; the topology pass rebuilds
+  them per accept. Operator inventory:
+
+    * ``_apply_smooth_node`` — Gauss-Seidel move of an interior
+      vertex to its 1-ring centroid.
+    * ``_apply_edge_swap`` — Lawson swap on an internal edge with
+      alpha-driven acceptance.
+    * ``_apply_edge_split_interior`` — insert a midpoint on an
+      interior edge; the two incident triangles become four.
+    * ``_apply_vertex_remove`` — delete an interior vertex, gather
+      its 1-ring, and re-triangulate via Delaunay pruned by the
+      rim (single-element variant of the Stage 2 medial-axis
+      re-mesh, reusing ``_patch_rim_polygon`` /
+      ``_retriangulate_patch``).
+
+  v1 boundary handling is conservative: any operator refuses to
+  move or insert a node on (or onto) the open / land boundary. v2
+  will add a coastline-projecting boundary edge_split and a
+  boundary-tangent smooth — PoC #40 quantified that 84 % of the v1
+  unfixable residual touches a boundary, so v2 is where the next
+  big quality-fraction win comes from.
+
 ### Added — diagnostics (`fmesh-mesh-check`)
 
 - **Seven detectors** in `fvcom_mesh_tools.diagnostics`:
@@ -331,23 +366,55 @@ Each links to a notebook in `notebooks/`.
       total elements              : 47,426
       fail elements               : 12,440  (26.2 %)
       fail elements on boundary   : 5,717   (46 % of fail)
-      smooth+swap fixable         : 2 of 12,440  (0.02 %)
+      fixable by smooth_node      : 9,297  (74.7 % of fail)
+      fixable by edge_swap        :     2  (0.02 %)
+      unfixable by either         : 3,141  (25.3 %)
+      boundary-touching unfixable : 2,647  (84 % of unfixable)
 
-  **Headline finding**: the post-rung-1 mesh sits at the
-  simultaneous fixed point of Laplacian smoothing (Phase G) and
-  Lawson edge swap (Phase D). Moving any non-boundary vertex to its
-  1-ring centroid is by construction a no-op (penalty before ==
-  after), and every internal edge swap would flip a triangle
-  (Delaunay-optimal). Smooth+swap alone cannot escape this local
-  optimum. **Implication for Phase H**: the operator inventory must
-  include topology-changing primitives — ``edge_split`` (interior
-  + boundary, the latter projecting to the coastline),
-  ``vertex_remove`` + 1-ring CDT (single-element variant of the
-  Stage 2 medial-axis re-mesh), ``edge_collapse``, and a
-  boundary-tangent smooth for the 46 % of fail elements that touch
-  a boundary. PoC #40 thus reframes Phase H from "smooth + swap on
-  hot spots" to "topology-changing local edits driven by a per-
-  element penalty heap".
+  An earlier draft of the dry-run helper used ``np.tile`` instead
+  of ``np.repeat`` to build the node→element-ring map, which
+  produced bogus rings (every vertex was scored against unrelated
+  elements) and pushed the smooth-fixable count to 0. The numbers
+  above are the corrected re-run. The corrected reading: ~75 % of
+  fail elements DO move under a Gauss-Seidel smooth (the Phase G
+  output is at a Jacobi-Laplacian fixed point, not a Gauss-Seidel
+  one). The remaining 25 % are dominated by boundary-touching
+  elements (84 %), which v1 conservatively refuses to edit. The
+  v2 work item is a boundary-tangent smoother + coastline-
+  projecting boundary ``edge_split`` to unlock those.
+- **PoC #41** — Phase H v1 end-to-end on the same input. Driver
+  alternates Pass A (batch Gauss-Seidel smooth, all interior nodes
+  per sweep, accept iff per-1-ring penalty strictly drops without
+  flipping a triangle) with Pass B (per-element greedy on fail
+  elements, topology operators only — ``edge_swap``,
+  ``edge_split_interior``, ``vertex_remove``). Aux dicts (n2e,
+  edge_uses, boundary masks) are built once per Pass A and
+  rebuilt per accept inside Pass B; smooth therefore runs at
+  ~3 s/sweep on the 47k-element mesh while topology accepts pay
+  an O(NE) rebuild each. Result on the pipeline-rung-1 output (4
+  outer rounds, 61 smooth sweeps, 595 s wall):
+
+      metric            input    output      Δ
+      --------------    -----    ------      -----
+      NP                27,185   27,250      +65
+      NE                47,426   46,500      -926
+      alpha mean        0.9588   0.9655      +0.0067
+      alpha p05         0.8758   0.9001      +0.0243
+      min angle p05     40.2°    41.9°       +1.7°
+      frac<20°          0.131 %  0.013 %     -90 % rel
+      max_valence       8        8           unchanged
+      n_overconnected   0        0           unchanged
+      n_flipped         0        0           unchanged
+      fail elements     12,440   11,182      -10 %
+
+  Operators applied: smooth_node 56,047 / vertex_remove 528 /
+  edge_split_interior 65 / edge_swap 2. Quality clearly improves
+  (alpha p05 +0.024, frac<20° -90 %); the fail-count headline
+  (-10 %) is bounded by the per-element threshold being a hard
+  constraint that local greedy cannot always satisfy on borderline
+  elements (α 0.93-0.94) where the improvement direction would
+  degrade a neighbour. The 11,182 abandoned residual matches the
+  v1 boundary-handling gap PoC #40 identified.
 - **PoC #36** — `--om-max-iter` sweep on Tokyo Bay (50 → 25 → 10 → 5):
 
       iters   wall    alpha   frac<20°   max_v   n_overconn
