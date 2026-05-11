@@ -316,9 +316,9 @@ def _try_two_step(
 
 
 def main() -> None:
-    print(f"[PoC #44] loading {INPUT}")
+    print(f"[PoC #44] loading {INPUT}", flush=True)
     mesh = read_fort14(INPUT)
-    print(f"  NP={mesh.n_nodes:,}  NE={mesh.n_elements:,}")
+    print(f"  NP={mesh.n_nodes:,}  NE={mesh.n_elements:,}", flush=True)
 
     ctx = _ctx_for_mesh(mesh)
     alpha, min_ang = _per_element_quality(mesh.nodes, mesh.elements)
@@ -328,7 +328,7 @@ def main() -> None:
     )
     fail_eids = np.where(fail)[0]
     print(f"  fail elements: {fail_eids.size:,} "
-          f"(α<{ALPHA_TARGET} ∨ min_ang<{MIN_ANGLE_TARGET}°)")
+          f"(α<{ALPHA_TARGET} ∨ min_ang<{MIN_ANGLE_TARGET}°)", flush=True)
 
     if MAX_FAIL_ELEMENTS is not None and MAX_FAIL_ELEMENTS < fail_eids.size:
         rng = np.random.default_rng(42)
@@ -337,7 +337,8 @@ def main() -> None:
         ))
         print(
             f"  RANDOM-SAMPLED {MAX_FAIL_ELEMENTS:,} of {fail_eids.size:,} "
-            f"(seed=42); rate extrapolates to full residual"
+            f"(seed=42); rate extrapolates to full residual",
+            flush=True,
         )
         fail_eids = sampled
 
@@ -348,6 +349,56 @@ def main() -> None:
     pair_hist: Counter = Counter()
     sample_residual: list[dict] = []
 
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _write_summary(n_processed: int, elapsed_sec: float, partial: bool) -> None:
+        total = max(one_step + two_step + unfixable, 1)
+        pair_lines = "\n".join(
+            f"  {p[0]:>22s} + {p[1]:<14s} : {c:>5d}"
+            for p, c in pair_hist.most_common(10)
+        ) or "  (none)"
+        status = "PARTIAL (job in progress / interrupted)" if partial else "FINAL"
+        SUMMARY_TXT.write_text(
+            f"PoC #44 — 2-step lookahead dry-run on {INPUT.name}\n"
+            f"status           = {status}\n"
+            f"NP={mesh.n_nodes:,}  NE={mesh.n_elements:,}  "
+            f"fail_total={fail_eids.size:,}  processed={n_processed}  "
+            f"wall={elapsed_sec:.0f}s\n"
+            f"\n"
+            f"alpha_target     = {ALPHA_TARGET}\n"
+            f"min_angle_target = {MIN_ANGLE_TARGET}°\n"
+            f"op1 inventory    = {OP1_INVENTORY}\n"
+            f"op2 inventory    = {OP2_INVENTORY}\n"
+            f"\n"
+            f"1-step fixable : {one_step:6d} ({one_step/total:.1%})\n"
+            f"2-step fixable : {two_step:6d} ({two_step/total:.1%})\n"
+            f"unfixable      : {unfixable:6d} ({unfixable/total:.1%})\n"
+            f"\n"
+            f"op-pair histogram (top 10):\n{pair_lines}\n"
+        )
+        SUMMARY_JSON.write_text(json.dumps({
+            "status": status,
+            "input": str(INPUT),
+            "n_nodes": int(mesh.n_nodes),
+            "n_elements": int(mesh.n_elements),
+            "n_fail_total": int(fail_eids.size),
+            "n_processed": int(n_processed),
+            "alpha_target": ALPHA_TARGET,
+            "min_angle_target": MIN_ANGLE_TARGET,
+            "op1_inventory": list(OP1_INVENTORY),
+            "op2_inventory": list(OP2_INVENTORY),
+            "wall_seconds": float(elapsed_sec),
+            "one_step_fixable": int(one_step),
+            "two_step_fixable": int(two_step),
+            "unfixable": int(unfixable),
+            "op1_histogram": dict(op1_hist),
+            "op_pair_histogram": {
+                f"{k[0]}+{k[1]}": int(v) for k, v in pair_hist.items()
+            },
+            "sample_residual": sample_residual,
+        }, indent=2))
+
+    CHECKPOINT_EVERY = 100
     t0 = time.time()
     for i, eid in enumerate(fail_eids):
         eid = int(eid)
@@ -355,81 +406,44 @@ def main() -> None:
         if info_1 is not None:
             one_step += 1
             op1_hist[info_1["operator"]] += 1
-            continue
-        pair = _try_two_step(mesh, eid, ctx)
-        if pair is not None:
-            two_step += 1
-            pair_hist[pair] += 1
         else:
-            unfixable += 1
-            if len(sample_residual) < 20:
-                sample_residual.append({
-                    "elem_id": eid,
-                    "alpha": float(alpha[eid]),
-                    "min_angle_deg": float(min_ang[eid]),
-                })
-        if (i + 1) % 500 == 0:
+            pair = _try_two_step(mesh, eid, ctx)
+            if pair is not None:
+                two_step += 1
+                pair_hist[pair] += 1
+            else:
+                unfixable += 1
+                if len(sample_residual) < 20:
+                    sample_residual.append({
+                        "elem_id": eid,
+                        "alpha": float(alpha[eid]),
+                        "min_angle_deg": float(min_ang[eid]),
+                    })
+        if (i + 1) % CHECKPOINT_EVERY == 0:
             elapsed = time.time() - t0
             rate = (i + 1) / elapsed
             eta_min = (fail_eids.size - i - 1) / rate / 60.0
             print(
                 f"  [{i+1:>6d}/{fail_eids.size}] "
                 f"1-step={one_step}  2-step={two_step}  unfix={unfixable}  "
-                f"rate={rate:.1f}/s  eta={eta_min:.1f}min"
+                f"rate={rate:.2f}/s  eta={eta_min:.1f}min",
+                flush=True,
             )
+            _write_summary(i + 1, elapsed, partial=True)
 
     elapsed = time.time() - t0
-    total = one_step + two_step + unfixable
-    print(f"[PoC #44] done in {elapsed:.0f}s")
-    print(f"  1-step fixable  : {one_step:6d}  ({one_step/total:.1%})")
-    print(f"  2-step fixable  : {two_step:6d}  ({two_step/total:.1%})")
-    print(f"  unfixable       : {unfixable:6d}  ({unfixable/total:.1%})")
-    print(f"  op1 hist (1-step): {dict(op1_hist.most_common())}")
+    total = max(one_step + two_step + unfixable, 1)
+    print(f"[PoC #44] done in {elapsed:.0f}s", flush=True)
+    print(f"  1-step fixable  : {one_step:6d}  ({one_step/total:.1%})", flush=True)
+    print(f"  2-step fixable  : {two_step:6d}  ({two_step/total:.1%})", flush=True)
+    print(f"  unfixable       : {unfixable:6d}  ({unfixable/total:.1%})", flush=True)
+    print(f"  op1 hist (1-step): {dict(op1_hist.most_common())}", flush=True)
     print(f"  op-pair hist top 10: "
-          f"{dict(pair_hist.most_common(10))}")
+          f"{dict(pair_hist.most_common(10))}", flush=True)
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    pair_lines = "\n".join(
-        f"  {p[0]:>22s} + {p[1]:<14s} : {c:>5d}"
-        for p, c in pair_hist.most_common(10)
-    ) or "  (none)"
-    SUMMARY_TXT.write_text(
-        f"PoC #44 — 2-step lookahead dry-run on {INPUT.name}\n"
-        f"NP={mesh.n_nodes:,}  NE={mesh.n_elements:,}  "
-        f"fail={fail_eids.size:,}  wall={elapsed:.0f}s\n"
-        f"\n"
-        f"alpha_target     = {ALPHA_TARGET}\n"
-        f"min_angle_target = {MIN_ANGLE_TARGET}°\n"
-        f"op1 inventory    = {OP1_INVENTORY}\n"
-        f"op2 inventory    = {OP2_INVENTORY}\n"
-        f"\n"
-        f"1-step fixable : {one_step:6d} ({one_step/total:.1%})\n"
-        f"2-step fixable : {two_step:6d} ({two_step/total:.1%})\n"
-        f"unfixable      : {unfixable:6d} ({unfixable/total:.1%})\n"
-        f"\n"
-        f"op-pair histogram (top 10):\n{pair_lines}\n"
-    )
-    SUMMARY_JSON.write_text(json.dumps({
-        "input": str(INPUT),
-        "n_nodes": int(mesh.n_nodes),
-        "n_elements": int(mesh.n_elements),
-        "n_fail_initial": int(fail_eids.size),
-        "alpha_target": ALPHA_TARGET,
-        "min_angle_target": MIN_ANGLE_TARGET,
-        "op1_inventory": list(OP1_INVENTORY),
-        "op2_inventory": list(OP2_INVENTORY),
-        "wall_seconds": float(elapsed),
-        "one_step_fixable": int(one_step),
-        "two_step_fixable": int(two_step),
-        "unfixable": int(unfixable),
-        "op1_histogram": dict(op1_hist),
-        "op_pair_histogram": {
-            f"{k[0]}+{k[1]}": int(v) for k, v in pair_hist.items()
-        },
-        "sample_residual": sample_residual,
-    }, indent=2))
-    print(f"  wrote {SUMMARY_TXT}")
-    print(f"  wrote {SUMMARY_JSON}")
+    _write_summary(fail_eids.size, elapsed, partial=False)
+    print(f"  wrote {SUMMARY_TXT}", flush=True)
+    print(f"  wrote {SUMMARY_JSON}", flush=True)
 
 
 if __name__ == "__main__":

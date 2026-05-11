@@ -2,20 +2,23 @@
 #PJM -L rscgrp=a-batch
 #PJM -L vnode=1
 #PJM -L vnode-core=1
-#PJM -L elapse=02:00:00
+#PJM -L elapse=02:30:00
 #PJM -j
 #PJM -X
 #PJM -N fvcm-poc44
 
 # PoC #44: 2-step lookahead dry-run on Phase H v3 residual.
-# Random sample of 2000 fail elements (seed=42).
+# Random sample of 1000 fail elements (seed=42).
+# Checkpoints summary every 100 elements (so partial results survive
+# even if the job hits the elapse cap).
 
 set -euo pipefail
 
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
-export POC44_MAX_FAIL=2000
+export POC44_MAX_FAIL=1000
+export PYTHONUNBUFFERED=1
 
 : "${HOME:?HOME not set}"
 
@@ -24,4 +27,4 @@ conda activate oceanmesh-bench
 
 cd "${HOME}/Github/fvcom-mesh-tools"
 
-python notebooks/44_phase_h_2step_dry_run_poc.py
+python -u notebooks/44_phase_h_2step_dry_run_poc.py
