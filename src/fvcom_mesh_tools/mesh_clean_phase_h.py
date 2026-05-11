@@ -353,11 +353,15 @@ def _apply_smooth_node(
     mesh: Fort14Mesh, vertex_id: int, ring_elem_ids: np.ndarray,
     *, alpha_target: float, min_angle_target: float,
     boundary_node_mask: np.ndarray,
+    force: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
     """Greedy smooth: move ``vertex_id`` to its 1-ring centroid if
     that strictly reduces the local penalty AND keeps every signed
     area positive. Returns the updated mesh + info, or ``None`` if
-    the move is rejected.
+    the move is rejected. ``force=True`` skips the penalty gate
+    (validity checks remain) — used by the 2-step lookahead driver
+    to evaluate op1 candidates that do not directly improve their
+    local 1-ring.
     """
     if boundary_node_mask[vertex_id]:
         return None
@@ -381,7 +385,7 @@ def _apply_smooth_node(
         a_after, m_after,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
     ).sum()
-    if p_after + 1e-12 >= p_before:
+    if not force and p_after + 1e-12 >= p_before:
         return None
 
     # Signed-area check.
@@ -410,6 +414,7 @@ def _apply_smooth_node(
         "penalty_before": float(p_before),
         "penalty_after": float(p_after),
         "affected_elements": [int(x) for x in ring_elem_ids],
+        "forced": bool(force),
     }
 
 
@@ -423,10 +428,12 @@ def _apply_edge_swap(
     *, alpha_target: float, min_angle_target: float,
     edge_uses: dict[tuple[int, int], list[int]],
     boundary_edge_keys: set,
+    force: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
     """Swap the shared edge between ``elem_id`` and its buddy across
     edge index ``edge_local``. Accept iff the local penalty drops and
-    no signed area goes negative.
+    no signed area goes negative. ``force=True`` skips the penalty
+    gate (validity checks remain) — see ``_apply_smooth_node``.
     """
     a = int(mesh.elements[elem_id, edge_local])
     b = int(mesh.elements[elem_id, (edge_local + 1) % 3])
@@ -456,7 +463,7 @@ def _apply_edge_swap(
         a_a, m_a,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
     ).sum()
-    if p_after + 1e-12 >= p_before:
+    if not force and p_after + 1e-12 >= p_before:
         return None
 
     # Signed-area check.
@@ -488,6 +495,7 @@ def _apply_edge_swap(
         "elements_modified": [int(elem_id), int(buddy_id)],
         "penalty_before": float(p_before),
         "penalty_after": float(p_after),
+        "forced": bool(force),
     }
 
 
@@ -524,6 +532,7 @@ def _apply_edge_split_interior(
     *, alpha_target: float, min_angle_target: float,
     edge_uses: dict[tuple[int, int], list[int]],
     boundary_edge_keys: set,
+    force: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
     """Insert a node at the midpoint of edge ``edge_local`` of element
     ``elem_id``. Replace the two incident triangles (e1, e2) with
@@ -571,7 +580,7 @@ def _apply_edge_split_interior(
         a_a, m_a,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
     ).sum()
-    if p_after + 1e-12 >= p_before:
+    if not force and p_after + 1e-12 >= p_before:
         return None
 
     # Signed-area check on all 4 new triangles.
@@ -610,6 +619,7 @@ def _apply_edge_split_interior(
         "removed_elements": [int(e_self), int(e_other)],
         "penalty_before": float(p_before),
         "penalty_after": float(p_after),
+        "forced": bool(force),
     }
 
 
@@ -624,6 +634,7 @@ def _apply_edge_split_boundary(
     edge_uses: dict[tuple[int, int], list[int]],
     edge_to_segment: dict[tuple[int, int], tuple[str, int, int, int]],
     coastline_projector: CoastlineProjector | None = None,
+    force: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
     """Insert a node at the midpoint of a boundary edge of ``elem_id``.
     Replace the single incident triangle with two sub-triangles and
@@ -678,7 +689,7 @@ def _apply_edge_split_boundary(
         a_a, m_a,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
     ).sum()
-    if p_after + 1e-12 >= p_before:
+    if not force and p_after + 1e-12 >= p_before:
         return None
 
     # Signed-area check on the new sub-triangles.
@@ -732,6 +743,7 @@ def _apply_edge_split_boundary(
         "penalty_before": float(p_before),
         "penalty_after": float(p_after),
         "snapped_to_coastline": bool(snapped_to_coastline),
+        "forced": bool(force),
     }
 
 
@@ -744,6 +756,7 @@ def _apply_vertex_remove(
     mesh: Fort14Mesh, vertex_id: int, ring_elem_ids: np.ndarray,
     *, alpha_target: float, min_angle_target: float,
     boundary_node_mask: np.ndarray,
+    force: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
     """Remove ``vertex_id`` (interior only) and re-triangulate the
     enclosing 1-ring polygon via Delaunay (pruned by the rim).
@@ -806,7 +819,7 @@ def _apply_vertex_remove(
         a_a, m_a,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
     ).sum()
-    if p_after + 1e-12 >= p_before:
+    if not force and p_after + 1e-12 >= p_before:
         return None
 
     # Build new mesh: drop the 1-ring elements, append the new
@@ -839,6 +852,7 @@ def _apply_vertex_remove(
         "n_new_elements": int(new_block.shape[0]),
         "penalty_before": float(p_before),
         "penalty_after": float(p_after),
+        "forced": bool(force),
     }
 
 

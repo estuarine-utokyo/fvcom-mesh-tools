@@ -485,6 +485,99 @@ def test_apply_edge_split_boundary_projector_returning_none_uses_chord() -> None
     )
 
 
+def test_smooth_node_force_skips_penalty_gate() -> None:
+    """``force=True`` should accept a smooth that the strict gate
+    rejects. Recentre vertex 6 once, then attempt a second smooth: the
+    1-ring centroid coincides with the moved position so penalty is
+    unchanged, the strict gate rejects, ``force=True`` accepts.
+    """
+    mesh = _skewed_quad()
+    n2e = _node_to_elements(mesh.elements, mesh.n_nodes)
+    bnd = _boundary_node_mask(mesh)
+    first = _apply_smooth_node(
+        mesh, 6, n2e[6],
+        alpha_target=0.95, min_angle_target=20.0,
+        boundary_node_mask=bnd,
+    )
+    assert first is not None
+    mesh1, _ = first
+    n2e1 = _node_to_elements(mesh1.elements, mesh1.n_nodes)
+
+    rejected = _apply_smooth_node(
+        mesh1, 6, n2e1[6],
+        alpha_target=0.95, min_angle_target=20.0,
+        boundary_node_mask=bnd,
+    )
+    assert rejected is None, "strict gate should reject the no-op smooth"
+
+    forced = _apply_smooth_node(
+        mesh1, 6, n2e1[6],
+        alpha_target=0.95, min_angle_target=20.0,
+        boundary_node_mask=bnd,
+        force=True,
+    )
+    assert forced is not None, "force=True should accept the no-op smooth"
+    new_mesh, info = forced
+    assert info["operator"] == "smooth_node"
+    assert info["forced"] is True
+    # The proposed position equals the current → mesh is unchanged.
+    np.testing.assert_allclose(new_mesh.nodes[6], mesh1.nodes[6])
+
+
+def test_edge_swap_force_skips_penalty_gate() -> None:
+    """Two right-isoceles triangles sharing the (0, 2) diagonal (under
+    the element ordering ``[(0, 2, 1), (0, 3, 2)]`` which matches the
+    operator's CCW post-swap convention). The Lawson swap to the
+    (1, 3) diagonal yields two congruent right triangles — penalty
+    is unchanged, strict gate rejects, ``force=True`` accepts.
+    """
+    nodes = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        dtype=float,
+    )
+    elements = np.array(
+        [[0, 2, 1], [0, 3, 2]],
+        dtype=np.int64,
+    )
+    mesh = Fort14Mesh(
+        title="swap_force",
+        nodes=nodes,
+        depths=np.zeros(nodes.shape[0]),
+        elements=elements,
+        open_boundaries=[],
+        land_boundaries=[
+            (0, np.array([0, 1, 2, 3, 0], dtype=np.int64)),
+        ],
+    )
+    eu = _edge_use_counts(mesh.elements)
+    bnd_edges = {k for k, v in eu.items() if len(v) == 1}
+    assert eu[(0, 2)] == [0, 1], "shared diagonal must be interior"
+
+    strict = _apply_edge_swap(
+        mesh, elem_id=0, edge_local=0,
+        alpha_target=0.95, min_angle_target=20.0,
+        edge_uses=eu, boundary_edge_keys=bnd_edges,
+    )
+    assert strict is None, "Lawson-neutral swap must be rejected strict"
+
+    forced = _apply_edge_swap(
+        mesh, elem_id=0, edge_local=0,
+        alpha_target=0.95, min_angle_target=20.0,
+        edge_uses=eu, boundary_edge_keys=bnd_edges,
+        force=True,
+    )
+    assert forced is not None, "force=True must accept the swap"
+    new_mesh, info = forced
+    assert info["operator"] == "edge_swap"
+    assert info["forced"] is True
+    assert info["penalty_after"] == info["penalty_before"]
+    assert new_mesh.n_elements == mesh.n_elements
+    # After the swap the (0, 2) diagonal disappears and (1, 3) appears.
+    new_eu = _edge_use_counts(new_mesh.elements)
+    assert (1, 3) in new_eu and len(new_eu[(1, 3)]) == 2
+    assert (0, 2) not in new_eu
+
+
 def test_build_coastline_projector_returns_none_for_empty_paths() -> None:
     from fvcom_mesh_tools.mesh_clean_phase_h import (
         build_coastline_projector,

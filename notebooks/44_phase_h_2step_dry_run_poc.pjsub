@@ -1,0 +1,27 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=1
+#PJM -L elapse=02:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc44
+
+# PoC #44: 2-step lookahead dry-run on Phase H v3 residual.
+# Random sample of 2000 fail elements (seed=42).
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export POC44_MAX_FAIL=2000
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python notebooks/44_phase_h_2step_dry_run_poc.py
