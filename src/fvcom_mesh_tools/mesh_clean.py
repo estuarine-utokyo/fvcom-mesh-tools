@@ -1628,6 +1628,14 @@ def clean_mesh(
     smooth_laplacian_tol: float = DEFAULT_SMOOTH_LAPLACIAN_TOL,
     smooth_repair_flipped: bool = True,
     smooth_max_repair_passes: int = DEFAULT_SMOOTH_REPAIR_PASSES,
+    phase_h: bool = False,
+    phase_h_alpha_target: float = 0.95,
+    phase_h_min_angle_target: float = 20.0,
+    phase_h_max_outer_rounds: int = 10,
+    phase_h_max_topology_per_round: int = 10_000,
+    phase_h_max_smooth_sweeps: int = 200,
+    phase_h_coastline_paths: list | None = None,
+    phase_h_max_snap_distance_m: float = 500.0,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Run Phase A (component pruning) and Phase B (dead-end trimming).
 
@@ -1780,6 +1788,17 @@ def clean_mesh(
             "smooth_laplacian_tol": float(smooth_laplacian_tol),
             "smooth_repair_flipped": bool(smooth_repair_flipped),
             "smooth_max_repair_passes": int(smooth_max_repair_passes),
+            "phase_h": bool(phase_h),
+            "phase_h_alpha_target": float(phase_h_alpha_target),
+            "phase_h_min_angle_target": float(phase_h_min_angle_target),
+            "phase_h_max_outer_rounds": int(phase_h_max_outer_rounds),
+            "phase_h_max_topology_per_round":
+                int(phase_h_max_topology_per_round),
+            "phase_h_max_smooth_sweeps": int(phase_h_max_smooth_sweeps),
+            "phase_h_coastline_paths":
+                [str(p) for p in (phase_h_coastline_paths or [])],
+            "phase_h_max_snap_distance_m":
+                float(phase_h_max_snap_distance_m),
         },
         "phases": [],
     }
@@ -1882,6 +1901,33 @@ def clean_mesh(
             max_repair_passes=smooth_max_repair_passes,
         )
         info["phases"].append({"name": "smooth_mesh_laplacian", **g_info})
+
+    if phase_h:
+        # Lazy import to avoid a module-level cycle (mesh_clean_phase_h
+        # imports a couple of helpers from mesh_clean).
+        from fvcom_mesh_tools.mesh_clean_phase_h import (
+            build_coastline_projector,
+            phase_h_optimize,
+        )
+        projector = None
+        if phase_h_coastline_paths:
+            projector = build_coastline_projector(
+                phase_h_coastline_paths,
+                max_snap_distance_m=float(phase_h_max_snap_distance_m),
+                mean_latitude_deg=(
+                    float(cur.nodes[:, 1].mean()) if cur.n_nodes else None
+                ),
+            )
+        cur, h_info = phase_h_optimize(
+            cur,
+            alpha_target=float(phase_h_alpha_target),
+            min_angle_target=float(phase_h_min_angle_target),
+            max_smooth_sweeps=int(phase_h_max_smooth_sweeps),
+            max_topology_per_round=int(phase_h_max_topology_per_round),
+            max_outer_rounds=int(phase_h_max_outer_rounds),
+            coastline_projector=projector,
+        )
+        info["phases"].append({"name": "phase_h_optimize", **h_info})
 
     if not info["phases"]:
         # Every phase disabled — still re-derive boundaries so the

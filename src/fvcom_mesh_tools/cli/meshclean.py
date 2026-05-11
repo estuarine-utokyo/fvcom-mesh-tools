@@ -335,6 +335,84 @@ def build_parser() -> argparse.ArgumentParser:
             "reached within this many passes."
         ),
     )
+
+    # Phase H: per-element greedy quality optimiser.
+    p.add_argument(
+        "--phase-h", action="store_true",
+        help=(
+            "Phase H: per-element greedy quality optimiser. Visits "
+            "every element failing the per-element gate "
+            "(--phase-h-alpha-target ∧ --phase-h-min-angle-target) "
+            "and tries an operator inventory (Gauss-Seidel smooth, "
+            "Lawson edge swap, interior + boundary edge split, "
+            "vertex remove + 1-ring CDT) until the local 1-ring "
+            "penalty strictly drops without flipping a triangle. "
+            "Off by default — typically 10-30 min on a 47 k-element "
+            "mesh and only worthwhile after Phase G has run. Phase "
+            "H sits at the end of the A-G pipeline so it sees "
+            "topologically-clean, Laplacian-smoothed input."
+        ),
+    )
+    p.add_argument(
+        "--phase-h-alpha-target", type=float, default=0.95,
+        help=(
+            "Phase H per-element alpha gate. Default 0.95; an element "
+            "is 'fail' until its alpha >= this value AND its min "
+            "interior angle >= --phase-h-min-angle-target."
+        ),
+    )
+    p.add_argument(
+        "--phase-h-min-angle-target", type=float, default=20.0,
+        help=(
+            "Phase H per-element minimum-interior-angle gate (degrees). "
+            "Default 20."
+        ),
+    )
+    p.add_argument(
+        "--phase-h-max-outer-rounds", type=int, default=10,
+        help=(
+            "Phase H: cap on alternations of Pass A (batch smooth) "
+            "and Pass B (topology operators). Default 10; convergence "
+            "is typically reached in 3-5 rounds."
+        ),
+    )
+    p.add_argument(
+        "--phase-h-max-topology-per-round", type=int, default=10_000,
+        help=(
+            "Phase H: cap on topology accepts within a single Pass B. "
+            "Default 10000."
+        ),
+    )
+    p.add_argument(
+        "--phase-h-max-smooth-sweeps", type=int, default=200,
+        help=(
+            "Phase H: cap on Gauss-Seidel sweeps within a single "
+            "Pass A. Default 200; convergence is typically reached "
+            "in 10-30 sweeps."
+        ),
+    )
+    p.add_argument(
+        "--phase-h-coastline", type=Path, action="append", default=[],
+        help=(
+            "Phase H (optional, repeatable): path to a coastline "
+            "shapefile / GeoJSON / any GeoPandas-readable vector "
+            "source. When supplied, new boundary nodes inserted by "
+            "edge_split_boundary and moved by the boundary-tangent "
+            "smooth are snapped onto the nearest coastline polyline "
+            "within --phase-h-max-snap-m. Coordinates are auto-"
+            "reprojected to EPSG:4326."
+        ),
+    )
+    p.add_argument(
+        "--phase-h-max-snap-m", type=float, default=500.0,
+        help=(
+            "Phase H: maximum snap distance (metres) for the "
+            "coastline projector. Default 500 m (~ 2.5 × the "
+            "Tokyo-Bay hmin). Proposals farther than this from any "
+            "polyline fall through to the un-projected position."
+        ),
+    )
+
     p.add_argument(
         "--summary", type=Path, default=None,
         help=(
@@ -409,6 +487,47 @@ def main(argv: list[str] | None = None) -> int:
     if args.smooth_max_repair_passes < 0:
         print("--smooth-max-repair-passes must be >= 0.", file=sys.stderr)
         return 2
+    if args.phase_h:
+        if not 0.0 < args.phase_h_alpha_target <= 1.0:
+            print(
+                "--phase-h-alpha-target must be in (0, 1].",
+                file=sys.stderr,
+            )
+            return 2
+        if not 0.0 < args.phase_h_min_angle_target < 60.0:
+            print(
+                "--phase-h-min-angle-target must be in (0, 60).",
+                file=sys.stderr,
+            )
+            return 2
+        if args.phase_h_max_outer_rounds < 1:
+            print(
+                "--phase-h-max-outer-rounds must be >= 1.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.phase_h_max_topology_per_round < 0:
+            print(
+                "--phase-h-max-topology-per-round must be >= 0.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.phase_h_max_smooth_sweeps < 0:
+            print(
+                "--phase-h-max-smooth-sweeps must be >= 0.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.phase_h_max_snap_m <= 0:
+            print("--phase-h-max-snap-m must be > 0.", file=sys.stderr)
+            return 2
+        for coast_path in args.phase_h_coastline:
+            if not coast_path.exists():
+                print(
+                    f"--phase-h-coastline file not found: {coast_path}",
+                    file=sys.stderr,
+                )
+                return 2
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     mesh = read_fort14(args.input)
@@ -447,6 +566,14 @@ def main(argv: list[str] | None = None) -> int:
         smooth_laplacian_tol=args.smooth_laplacian_tol,
         smooth_repair_flipped=args.smooth_repair_flipped,
         smooth_max_repair_passes=args.smooth_max_repair_passes,
+        phase_h=args.phase_h,
+        phase_h_alpha_target=args.phase_h_alpha_target,
+        phase_h_min_angle_target=args.phase_h_min_angle_target,
+        phase_h_max_outer_rounds=args.phase_h_max_outer_rounds,
+        phase_h_max_topology_per_round=args.phase_h_max_topology_per_round,
+        phase_h_max_smooth_sweeps=args.phase_h_max_smooth_sweeps,
+        phase_h_coastline_paths=list(args.phase_h_coastline) or None,
+        phase_h_max_snap_distance_m=args.phase_h_max_snap_m,
     )
     write_fort14(cleaned, args.output)
 

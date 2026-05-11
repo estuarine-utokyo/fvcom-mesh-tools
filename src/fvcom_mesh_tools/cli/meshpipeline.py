@@ -13,6 +13,12 @@ Three cumulative *rungs* of `fmesh-mesh-clean` phases are applied:
       Adds ~3× new elements per flagged element so this is the most
       destructive rung; reach for it only when the threshold gate
       still fails after rung 1.
+    * **rung 3** — rung 2 + H: per-element greedy quality optimiser
+      (Gauss-Seidel smooth + Lawson swap + interior / boundary
+      edge_split + vertex_remove + optional coastline projection).
+      The most expensive rung (10-30 min on a 47 k-element mesh);
+      reach for it only when even rung 2 cannot pass the gate.
+      Off by default — requires ``--phase-h`` to enable.
 
 After each rung the toolkit's unified quality metrics
 (:func:`fvcom_mesh_tools.quality.compute_metrics`) are computed and
@@ -99,6 +105,23 @@ def _build_rung_overlays(args: argparse.Namespace) -> list[tuple[str, dict]]:
                     int(args.under_resolved_min_channel_elements),
             },
         ),
+        (
+            "rung3:+H",
+            {
+                "phase_h": bool(args.phase_h),
+                "phase_h_alpha_target": float(args.phase_h_alpha_target),
+                "phase_h_min_angle_target": float(args.phase_h_min_angle_target),
+                "phase_h_max_outer_rounds": int(args.phase_h_max_outer_rounds),
+                "phase_h_max_topology_per_round":
+                    int(args.phase_h_max_topology_per_round),
+                "phase_h_max_smooth_sweeps":
+                    int(args.phase_h_max_smooth_sweeps),
+                "phase_h_coastline_paths":
+                    list(args.phase_h_coastline) or None,
+                "phase_h_max_snap_distance_m":
+                    float(args.phase_h_max_snap_m),
+            },
+        ),
     ]
 
 
@@ -106,13 +129,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="fmesh-mesh-pipeline",
         description=(
-            "Progressively clean a fort.14 through three cumulative "
-            "rungs of fmesh-mesh-clean phases (A+B+C → +D+F+G → +E), "
-            "evaluating fmesh-mesh-quality thresholds after each. "
-            "Stops at the first passing rung; exits 1 on threshold "
-            "failure when thresholds were supplied. Boundaries are "
-            "re-derived via DEM-bbox proximity, matching "
-            "fmesh-buildmesh."
+            "Progressively clean a fort.14 through up to four "
+            "cumulative rungs of fmesh-mesh-clean phases "
+            "(A+B+C → +D+F+G → +E → +H), evaluating "
+            "fmesh-mesh-quality thresholds after each. Stops at the "
+            "first passing rung; exits 1 on threshold failure when "
+            "thresholds were supplied. Boundaries are re-derived via "
+            "DEM-bbox proximity, matching fmesh-buildmesh. Rung 3 "
+            "(Phase H) is off by default — enable via --phase-h plus "
+            "--max-iters 4."
         ),
     )
     p.add_argument("input", type=Path, help="Input fort.14.")
@@ -121,9 +146,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--max-iters", type=int, default=3,
         help=(
-            "Maximum number of rungs to attempt (1, 2, or 3). "
-            "Rung indices: 0=A+B+C, 1=+D+F+G, 2=+E. Default 3 "
-            "(attempt all)."
+            "Maximum number of rungs to attempt (1, 2, 3, or 4). "
+            "Rung indices: 0=A+B+C, 1=+D+F+G, 2=+E, 3=+H. Default 3 "
+            "(stops before Phase H — rung 3 must be opted into "
+            "explicitly via --max-iters 4 plus --phase-h)."
         ),
     )
     p.add_argument(
@@ -225,6 +251,47 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    g_rung3 = p.add_argument_group("rung 3 tuning (Phase H)")
+    g_rung3.add_argument(
+        "--phase-h", action="store_true",
+        help=(
+            "Enable Phase H (per-element greedy quality optimiser) "
+            "as rung 3. Off by default — rung 3 is skipped if this "
+            "flag is not set, leaving the loop at rung 2."
+        ),
+    )
+    g_rung3.add_argument(
+        "--phase-h-alpha-target", type=float, default=0.95,
+        help="Phase H per-element alpha gate. Default 0.95.",
+    )
+    g_rung3.add_argument(
+        "--phase-h-min-angle-target", type=float, default=20.0,
+        help="Phase H per-element min-angle gate (deg). Default 20.",
+    )
+    g_rung3.add_argument(
+        "--phase-h-max-outer-rounds", type=int, default=10,
+        help="Phase H Pass-A/Pass-B alternation cap. Default 10.",
+    )
+    g_rung3.add_argument(
+        "--phase-h-max-topology-per-round", type=int, default=10_000,
+        help="Phase H topology-accept cap per round. Default 10000.",
+    )
+    g_rung3.add_argument(
+        "--phase-h-max-smooth-sweeps", type=int, default=200,
+        help="Phase H smooth-sweep cap per round. Default 200.",
+    )
+    g_rung3.add_argument(
+        "--phase-h-coastline", type=Path, action="append", default=[],
+        help=(
+            "Phase H optional coastline path (repeatable). Enables "
+            "coastline projection for new boundary nodes."
+        ),
+    )
+    g_rung3.add_argument(
+        "--phase-h-max-snap-m", type=float, default=500.0,
+        help="Phase H coastline snap radius (metres). Default 500.",
+    )
+
     g_thresh = p.add_argument_group("quality thresholds (any → CI gate)")
     g_thresh.add_argument("--min-alpha", type=float, default=None)
     g_thresh.add_argument("--max-frac-lt-20deg", type=float, default=None)
@@ -253,8 +320,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.input.exists():
         print(f"input not found: {args.input}", file=sys.stderr)
         return 2
-    if not 1 <= args.max_iters <= 3:
-        print("--max-iters must be in [1, 3].", file=sys.stderr)
+    if not 1 <= args.max_iters <= 4:
+        print("--max-iters must be in [1, 4].", file=sys.stderr)
         return 2
     if args.bbox_tol_m <= 0:
         print("--bbox-tol-m must be > 0.", file=sys.stderr)
@@ -279,6 +346,28 @@ def main(argv: list[str] | None = None) -> int:
         print("--repair-skewed-min-angle-deg must be < --repair-skewed-max-angle-deg.",
               file=sys.stderr)
         return 2
+    if not 0.0 < args.phase_h_alpha_target <= 1.0:
+        print("--phase-h-alpha-target must be in (0, 1].", file=sys.stderr)
+        return 2
+    if not 0.0 < args.phase_h_min_angle_target < 60.0:
+        print("--phase-h-min-angle-target must be in (0, 60).", file=sys.stderr)
+        return 2
+    if args.phase_h_max_outer_rounds < 1:
+        print("--phase-h-max-outer-rounds must be >= 1.", file=sys.stderr)
+        return 2
+    if args.phase_h_max_topology_per_round < 1:
+        print("--phase-h-max-topology-per-round must be >= 1.", file=sys.stderr)
+        return 2
+    if args.phase_h_max_smooth_sweeps < 1:
+        print("--phase-h-max-smooth-sweeps must be >= 1.", file=sys.stderr)
+        return 2
+    if args.phase_h_max_snap_m <= 0:
+        print("--phase-h-max-snap-m must be > 0.", file=sys.stderr)
+        return 2
+    for cl in args.phase_h_coastline:
+        if not cl.exists():
+            print(f"--phase-h-coastline path not found: {cl}", file=sys.stderr)
+            return 2
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     mesh_in = read_fort14(args.input)

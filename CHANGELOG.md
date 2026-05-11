@@ -168,6 +168,18 @@ together close the case); ocsmesh remains a library dependency for
 
 ### Added — Phase H per-element greedy optimiser
 
+- **CLI integration** — Phase H is wired into both top-level CLIs.
+  `fmesh-mesh-clean` gains a `--phase-h` switch (off by default) plus
+  seven tuning flags (`--phase-h-alpha-target`,
+  `--phase-h-min-angle-target`, `--phase-h-max-outer-rounds`,
+  `--phase-h-max-topology-per-round`, `--phase-h-max-smooth-sweeps`,
+  `--phase-h-coastline` (repeatable), `--phase-h-max-snap-m`); enabling
+  it runs the optimiser after Phase G. `fmesh-mesh-pipeline` exposes
+  the same flags under a new **rung 3 (+H)**; rung 3 is opt-in via
+  `--max-iters 4 --phase-h ...` (default `--max-iters 3` preserves
+  pre-Phase-H behaviour). Coastline projection is wired through the
+  pipeline overlay so the rung 3 boundary nodes can snap to the user's
+  shapefile(s) — leave the flag unset for v2-style chord midpoints.
 - **`fvcom_mesh_tools.mesh_clean_phase_h.phase_h_optimize`** (v3) —
   v3 adds coastline projection on top of v2's boundary handling.
   ``build_coastline_projector(coastline_paths, max_snap_distance_m)``
