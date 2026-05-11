@@ -407,3 +407,125 @@ def test_phase_h_v2_default_operator_order_includes_boundary_split() -> None:
     valid targets."""
     from fvcom_mesh_tools.mesh_clean_phase_h import DEFAULT_OPERATOR_ORDER
     assert "edge_split_boundary" in DEFAULT_OPERATOR_ORDER
+
+
+# ---------------------------------------------------------------------------
+# v3: coastline-projecting boundary operations
+# ---------------------------------------------------------------------------
+
+
+def test_apply_edge_split_boundary_snaps_to_coastline_projector() -> None:
+    """When a coastline projector is supplied that nudges the
+    midpoint slightly *into* the triangle (toward the apex), the new
+    midpoint is placed at the projector's output rather than the
+    chord midpoint. The shift must be small enough that the resulting
+    sub-triangles still improve over the parent (otherwise the
+    operator rejects)."""
+    mesh = _long_thin_boundary_triangle()
+    eu = _edge_use_counts(mesh.elements)
+    _, _, e2s = _boundary_topology(mesh)
+
+    # Nudge +0.02 in y (toward the apex at (2, 1)). At this magnitude
+    # the resulting alpha is still well above the parent's.
+    def _shift_projector(xy: np.ndarray) -> np.ndarray:
+        return np.asarray([xy[0], xy[1] + 0.02], dtype=float)
+
+    out = _apply_edge_split_boundary(
+        mesh, elem_id=0, edge_local=0,
+        alpha_target=0.95, min_angle_target=20.0,
+        edge_uses=eu, edge_to_segment=e2s,
+        coastline_projector=_shift_projector,
+    )
+    assert out is not None
+    new_mesh, info = out
+    assert info["snapped_to_coastline"] is True
+    # Original straight midpoint of (0,0)→(4,0) is (2, 0); projector
+    # bumps the y to 0.02.
+    np.testing.assert_allclose(
+        new_mesh.nodes[mesh.n_nodes], [2.0, 0.02],
+    )
+
+
+def test_apply_edge_split_boundary_no_projector_uses_chord_midpoint() -> None:
+    """Without a projector, v3 still produces v2 behaviour."""
+    mesh = _long_thin_boundary_triangle()
+    eu = _edge_use_counts(mesh.elements)
+    _, _, e2s = _boundary_topology(mesh)
+    out = _apply_edge_split_boundary(
+        mesh, elem_id=0, edge_local=0,
+        alpha_target=0.95, min_angle_target=20.0,
+        edge_uses=eu, edge_to_segment=e2s,
+        coastline_projector=None,
+    )
+    assert out is not None
+    new_mesh, info = out
+    assert info["snapped_to_coastline"] is False
+    np.testing.assert_allclose(
+        new_mesh.nodes[mesh.n_nodes], [2.0, 0.0],
+    )
+
+
+def test_apply_edge_split_boundary_projector_returning_none_uses_chord() -> None:
+    """A projector that returns ``None`` (point too far from any
+    polyline) falls back to the chord midpoint."""
+    mesh = _long_thin_boundary_triangle()
+    eu = _edge_use_counts(mesh.elements)
+    _, _, e2s = _boundary_topology(mesh)
+    out = _apply_edge_split_boundary(
+        mesh, elem_id=0, edge_local=0,
+        alpha_target=0.95, min_angle_target=20.0,
+        edge_uses=eu, edge_to_segment=e2s,
+        coastline_projector=lambda _xy: None,
+    )
+    assert out is not None
+    new_mesh, info = out
+    assert info["snapped_to_coastline"] is False
+    np.testing.assert_allclose(
+        new_mesh.nodes[mesh.n_nodes], [2.0, 0.0],
+    )
+
+
+def test_build_coastline_projector_returns_none_for_empty_paths() -> None:
+    from fvcom_mesh_tools.mesh_clean_phase_h import (
+        build_coastline_projector,
+    )
+    assert build_coastline_projector(None) is None
+    assert build_coastline_projector([]) is None
+
+
+def test_build_coastline_projector_snaps_to_nearest_polyline(tmp_path) -> None:
+    """Build a tiny shapefile from a hand-crafted polyline and verify
+    that ``build_coastline_projector`` snaps an off-line point onto
+    it, while a far-away point falls through (returns ``None``)."""
+    import pytest
+    gpd = pytest.importorskip("geopandas")
+    from shapely.geometry import LineString
+
+    from fvcom_mesh_tools.mesh_clean_phase_h import (
+        build_coastline_projector,
+    )
+
+    # Polyline at y=35.0 between x=139.0 and x=140.0 (Tokyo Bay-ish lat).
+    polyline = LineString([(139.0, 35.0), (140.0, 35.0)])
+    gdf = gpd.GeoDataFrame(geometry=[polyline], crs="EPSG:4326")
+    shp = tmp_path / "coast.shp"
+    gdf.to_file(shp)
+
+    proj = build_coastline_projector(
+        [shp], max_snap_distance_m=5_000.0, mean_latitude_deg=35.0,
+    )
+    assert proj is not None
+    # A point ~100 m above the polyline at lon 139.5 → projects to
+    # (139.5, 35.0).
+    deg_per_m_lat = 1.0 / (
+        6_371_000.0 * (np.pi / 180.0)
+    )
+    near = np.array([139.5, 35.0 + 100.0 * deg_per_m_lat])
+    snapped = proj(near)
+    assert snapped is not None
+    np.testing.assert_allclose(snapped[0], 139.5, atol=1e-8)
+    np.testing.assert_allclose(snapped[1], 35.0, atol=1e-8)
+
+    # A point 100 km above is far beyond the 5 km snap range → None.
+    far = np.array([139.5, 35.0 + 1.0])
+    assert proj(far) is None

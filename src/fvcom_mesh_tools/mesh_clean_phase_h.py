@@ -41,7 +41,8 @@ from __future__ import annotations
 
 import heapq
 from collections import defaultdict
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 
@@ -57,7 +58,109 @@ from fvcom_mesh_tools.mesh_clean import (
     _retriangulate_patch,
 )
 
+CoastlineProjector = Callable[[np.ndarray], np.ndarray | None]
+"""``(xy: np.ndarray of shape (2,)) -> projected np.ndarray or None``.
+
+Returns the input point projected onto the nearest coastline polyline
+when it lies within the configured snap distance, else ``None`` so
+the caller falls back to the un-projected position.
+"""
+
 EARTH_R_M: float = 6_371_000.0
+
+
+def build_coastline_projector(
+    coastline_paths: list[Path] | list[str] | None,
+    *,
+    max_snap_distance_m: float = 500.0,
+    mean_latitude_deg: float | None = None,
+) -> CoastlineProjector | None:
+    """Construct a projector callable that snaps a point in EPSG:4326
+    onto the nearest coastline polyline within ``max_snap_distance_m``.
+
+    Loads ``coastline_paths`` (shapefile / GeoJSON / any GeoPandas-
+    readable vector source) and assembles every ``LineString``,
+    ``MultiLineString``, ``Polygon`` boundary, and ``MultiPolygon``
+    boundary into a flat polyline list. A :class:`shapely.STRtree`
+    indexes the polylines for O(log N) nearest-neighbour lookup.
+
+    ``max_snap_distance_m`` is converted to degrees at
+    ``mean_latitude_deg`` (or the mean latitude of the union of
+    polyline bounding boxes if ``None``) — this is the longitudinal
+    metres-per-degree, which is the shorter axis at non-equatorial
+    latitudes and therefore the conservative bound on the snap
+    distance the projector enforces in lon-lat space.
+
+    Returns ``None`` when ``coastline_paths`` is empty or no
+    geometries load successfully (the caller then falls back to
+    midpoint behaviour).
+    """
+    if not coastline_paths:
+        return None
+    try:
+        import geopandas as gpd  # noqa: I001
+        from shapely import STRtree
+        from shapely.geometry import Point
+    except ImportError as e:
+        raise RuntimeError(
+            "build_coastline_projector requires geopandas + shapely; "
+            f"install the [io-vector] extra. Underlying error: {e}"
+        ) from e
+
+    polylines: list = []
+    for raw_path in coastline_paths:
+        path = Path(raw_path)
+        gdf = gpd.read_file(path)
+        # Reproject to EPSG:4326 if metadata says otherwise.
+        if gdf.crs is not None and gdf.crs.to_epsg() != 4326:
+            gdf = gdf.to_crs(4326)
+        for geom in gdf.geometry:
+            if geom is None or geom.is_empty:
+                continue
+            gt = geom.geom_type
+            if gt == "LineString":
+                polylines.append(geom)
+            elif gt == "MultiLineString":
+                polylines.extend(list(geom.geoms))
+            elif gt == "Polygon":
+                polylines.append(geom.boundary)
+            elif gt == "MultiPolygon":
+                for sub in geom.geoms:
+                    polylines.append(sub.boundary)
+            # Other types (Point / MultiPoint) are ignored.
+
+    if not polylines:
+        return None
+
+    if mean_latitude_deg is None:
+        # Mean latitude across all polylines' bounding boxes.
+        lat_centres = []
+        for ls in polylines:
+            (_minx, miny, _maxx, maxy) = ls.bounds
+            lat_centres.append(0.5 * (miny + maxy))
+        mean_latitude_deg = float(np.mean(lat_centres))
+
+    deg_per_m_lon = 1.0 / (
+        EARTH_R_M
+        * max(np.cos(np.deg2rad(mean_latitude_deg)), 1e-6)
+        * np.pi / 180.0
+    )
+    max_snap_deg = float(max_snap_distance_m) * deg_per_m_lon
+
+    tree = STRtree(polylines)
+
+    def _project(xy: np.ndarray) -> np.ndarray | None:
+        pt = Point(float(xy[0]), float(xy[1]))
+        idx = tree.nearest(pt)
+        if idx is None:
+            return None
+        polyline = polylines[int(idx)]
+        if polyline.distance(pt) > max_snap_deg:
+            return None
+        proj = polyline.interpolate(polyline.project(pt))
+        return np.asarray([proj.x, proj.y], dtype=float)
+
+    return _project
 
 
 # ---------------------------------------------------------------------------
@@ -520,14 +623,19 @@ def _apply_edge_split_boundary(
     *, alpha_target: float, min_angle_target: float,
     edge_uses: dict[tuple[int, int], list[int]],
     edge_to_segment: dict[tuple[int, int], tuple[str, int, int, int]],
+    coastline_projector: CoastlineProjector | None = None,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
     """Insert a node at the midpoint of a boundary edge of ``elem_id``.
     Replace the single incident triangle with two sub-triangles and
     update the boundary segment to thread the new node between its
-    two endpoints. Coastline projection is deferred to v3; the
-    midpoint is the simple linear average of the two endpoints.
-    Accept iff per-element penalty drops and no signed area becomes
-    non-positive.
+    two endpoints.
+
+    When ``coastline_projector`` is supplied, the straight chord
+    midpoint is projected onto the nearest coastline polyline within
+    the projector's configured snap distance (v3); when projection
+    is unavailable or out-of-range, the straight midpoint stands (v2
+    behaviour). Accept iff per-element penalty drops and no signed
+    area becomes non-positive.
     """
     a = int(mesh.elements[elem_id, edge_local])
     b = int(mesh.elements[elem_id, (edge_local + 1) % 3])
@@ -543,6 +651,12 @@ def _apply_edge_split_boundary(
 
     kind, seg_idx, position, ibtype = seg_meta
     midpoint = 0.5 * (mesh.nodes[a] + mesh.nodes[b])
+    snapped_to_coastline = False
+    if coastline_projector is not None:
+        snapped = coastline_projector(midpoint)
+        if snapped is not None:
+            midpoint = snapped
+            snapped_to_coastline = True
     mid_depth = 0.5 * (mesh.depths[a] + mesh.depths[b])
     n_new = mesh.n_nodes
 
@@ -617,6 +731,7 @@ def _apply_edge_split_boundary(
         "removed_elements": [int(elem_id)],
         "penalty_before": float(p_before),
         "penalty_after": float(p_after),
+        "snapped_to_coastline": bool(snapped_to_coastline),
     }
 
 
@@ -755,6 +870,7 @@ def _batch_smooth_sweep(
     n2e: dict[int, np.ndarray],
     boundary_prev: np.ndarray | None = None,
     boundary_next: np.ndarray | None = None,
+    coastline_projector: CoastlineProjector | None = None,
 ) -> int:
     """One Gauss-Seidel pass over every node:
 
@@ -806,6 +922,10 @@ def _batch_smooth_sweep(
             t = float(((ring_centroid - a_pos) @ ab) / ab_len_sq)
             t = max(BOUNDARY_TANGENT_T_MIN, min(BOUNDARY_TANGENT_T_MAX, t))
             proposed_v = a_pos + t * ab
+            if coastline_projector is not None:
+                snapped = coastline_projector(proposed_v)
+                if snapped is not None:
+                    proposed_v = snapped
         else:
             elem_block = mesh.elements[ring]
             nbrs = np.unique(elem_block.ravel())
@@ -853,6 +973,7 @@ def _topology_round(
     *, alpha_target: float, min_angle_target: float,
     operator_order: tuple[str, ...],
     max_topology_accepts: int,
+    coastline_projector: CoastlineProjector | None = None,
 ) -> tuple[Fort14Mesh, dict[str, int], int]:
     """Run a single Pass-B round: pop fail elements by descending
     penalty and apply topology operators. ``smooth_node`` is *not*
@@ -930,6 +1051,7 @@ def _topology_round(
                             min_angle_target=min_angle_target,
                             edge_uses=eu,
                             edge_to_segment=e2s,
+                            coastline_projector=coastline_projector,
                         )
                         if out is not None:
                             applied = out
@@ -978,6 +1100,7 @@ def phase_h_optimize(
     max_topology_per_round: int = 10_000,
     max_outer_rounds: int = 10,
     operator_order: tuple[str, ...] = DEFAULT_OPERATOR_ORDER,
+    coastline_projector: CoastlineProjector | None = None,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Phase H driver: alternating Pass A (batch smooth) ↔ Pass B
     (topology operators) until both stop making progress.
@@ -1057,6 +1180,7 @@ def phase_h_optimize(
                     n2e=n2e,
                     boundary_prev=bnd_prev,
                     boundary_next=bnd_next,
+                    coastline_projector=coastline_projector,
                 )
                 info["operators_applied"]["smooth_node"] += int(n_acc)
                 info["n_iters"] += int(n_acc)
@@ -1073,6 +1197,7 @@ def phase_h_optimize(
                 min_angle_target=min_angle_target,
                 operator_order=operator_order,
                 max_topology_accepts=max_topology_per_round,
+                coastline_projector=coastline_projector,
             )
             for op_name, n in topo_acc.items():
                 info["operators_applied"][op_name] += int(n)
@@ -1099,8 +1224,10 @@ def phase_h_optimize(
 
 
 __all__ = [
+    "CoastlineProjector",
     "DEFAULT_ALPHA_TARGET",
     "DEFAULT_MIN_ANGLE_TARGET",
     "DEFAULT_OPERATOR_ORDER",
+    "build_coastline_projector",
     "phase_h_optimize",
 ]

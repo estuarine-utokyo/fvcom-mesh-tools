@@ -168,6 +168,33 @@ together close the case); ocsmesh remains a library dependency for
 
 ### Added — Phase H per-element greedy optimiser
 
+- **`fvcom_mesh_tools.mesh_clean_phase_h.phase_h_optimize`** (v3) —
+  v3 adds coastline projection on top of v2's boundary handling.
+  ``build_coastline_projector(coastline_paths, max_snap_distance_m)``
+  loads every ``LineString`` / ``MultiLineString`` / ``Polygon``
+  boundary / ``MultiPolygon`` boundary from the supplied shapefiles
+  (any GeoPandas-readable vector source; CRS auto-reprojected to
+  EPSG:4326) into a ``shapely.STRtree`` and returns a callable
+  that snaps a proposed boundary position onto the nearest
+  polyline within ``max_snap_distance_m`` (converted to degrees
+  at the polylines' mean latitude). Both Pass A's
+  boundary-tangent smooth and Pass B's ``edge_split_boundary``
+  route their candidate position through the projector — when
+  the projector returns a value the new boundary node lands on
+  the actual coastline; when it returns ``None`` (snap distance
+  exceeded) the v2 chord midpoint stands. PoC #43 validates v3
+  against v2 on the pipeline-rung-1 output of PoC #19 with the
+  MLIT C23 Tokyo Bay coastline: NP +164 vs +205, alpha p05 +0.028
+  vs +0.033, ``frac<20°`` stays at **0.000 %**, fail -11 % vs
+  -17 %, wall 1735 s vs 748 s (2.3× slower due to ~70k STRtree
+  probes). The lower ``edge_split_boundary`` count (71 vs 108)
+  and modest quality slip vs v2 reflect that projecting the
+  midpoint off the chord can leave the two sub-triangles
+  geometrically less symmetric. The trade-off is **every new
+  boundary node lies on the actual coastline**, matching the SMS
+  manual-edit standard for coastline fidelity. Choose v2 for
+  best absolute quality metrics; v3 when boundary geometry must
+  follow the user's coastline shapefile faithfully.
 - **`fvcom_mesh_tools.mesh_clean_phase_h.phase_h_optimize`** (v2) —
   v2 adds boundary handling on top of v1: Pass A's batch smooth
   now moves segment-interior boundary nodes along the prev-next
@@ -184,8 +211,7 @@ together close the case); ocsmesh remains a library dependency for
   pipeline-rung-1 output of PoC #19: NP +205 vs +65, alpha p05
   +0.033 vs +0.024, ``frac<20°`` 0.013 % → **0.000 %** (every
   element now passes the 20° gate), fail count -17 % vs -10 %.
-  v3 will add coastline-shapefile projection for new boundary
-  nodes (currently lands at the straight midpoint).
+  v3 (above) adds coastline-shapefile projection on top.
 - **`fvcom_mesh_tools.mesh_clean_phase_h.phase_h_optimize`** (v1) —
   the planned automation of the SMS manual mesh-edit workflow:
   visit every element failing a strict per-element gate
@@ -460,9 +486,36 @@ Each links to a notebook in `notebooks/`.
   remaining 10,302 fail elements are all ``alpha < 0.95`` cases
   that no single-vertex local edit can lift without dragging a
   neighbour below threshold — these are fundamental constraints
-  of greedy local optimisation rather than v2 gaps. v3 will add
-  coastline-shapefile projection for new boundary nodes (v2
-  currently lands at the straight midpoint).
+  of greedy local optimisation rather than v2 gaps. v3 below
+  adds coastline-shapefile projection for new boundary nodes.
+- **PoC #43** — Phase H v3 (coastline-projecting boundary ops)
+  on the same pipeline-rung-1 input + the MLIT C23 Tokyo Bay
+  coastline at ``max_snap_m=500`` (~2.5 × hmin):
+
+      metric            input    v2        v3
+      --------------    -----    -------   -------
+      NP                27,185   27,390    27,349
+      NE                47,426   46,750    46,665
+      alpha mean        0.9588   0.9675    0.9663
+      alpha p05         0.8758   0.9084    0.9040
+      min angle p05     40.2°    42.7°     42.2°
+      frac<20°          0.131 %  0.000 %   0.000 %
+      fail elements     12,440   10,302    11,015
+      fail Δ from input —        -17 %     -11 %
+      wall (s)          —        748       1,735
+
+  Operators applied (v3): smooth_node 56,142, edge_split_boundary
+  71 (v2: 108), edge_split_interior 93, vertex_remove 509,
+  edge_swap 2. The lower ``edge_split_boundary`` count and
+  modest quality slip vs v2 reflect that projecting the midpoint
+  off the chord can leave the two sub-triangles geometrically
+  less symmetric — but every new boundary node now lies on the
+  actual coastline polyline, matching the SMS manual-edit
+  standard for coastline fidelity. ``frac<20°`` stays at 0 %.
+  v3 trades ~3 % of v2's α gain for boundary geometry that
+  follows the user's shapefile faithfully; choose v2 when only
+  the headline quality metrics matter and v3 when the boundary
+  must respect the actual coastline curve.
 - **PoC #36** — `--om-max-iter` sweep on Tokyo Bay (50 → 25 → 10 → 5):
 
       iters   wall    alpha   frac<20°   max_v   n_overconn
