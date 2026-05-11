@@ -184,6 +184,63 @@ def _boundary_node_mask(mesh: Fort14Mesh) -> np.ndarray:
     return mask
 
 
+def _boundary_topology(
+    mesh: Fort14Mesh,
+) -> tuple[np.ndarray, np.ndarray, dict[tuple[int, int], tuple[str, int, int, int]]]:
+    """Build per-node boundary tangent neighbours + per-edge segment
+    map.
+
+    Returns ``(bnd_prev, bnd_next, edge_to_segment)`` where:
+
+    * ``bnd_prev[v]`` and ``bnd_next[v]`` are the boundary-tangent
+      neighbours of node ``v`` along its segment (``-1`` if ``v`` is
+      not interior to any segment — either off-boundary, at a
+      segment endpoint, or repeated across multiple segments).
+    * ``edge_to_segment`` maps each topological boundary edge
+      ``(min(a, b), max(a, b))`` to ``(kind, seg_idx, position,
+      land_ibtype)`` where ``kind`` is ``"open"`` or ``"land"``,
+      ``seg_idx`` indexes into ``mesh.open_boundaries`` /
+      ``mesh.land_boundaries``, ``position`` is the index ``j`` such
+      that ``seg[j], seg[j+1] == a, b`` (in segment order, not the
+      sorted edge key), and ``land_ibtype`` is the ibtype (``-1`` for
+      open segments).
+    """
+    n_nodes = mesh.n_nodes
+    bnd_prev = np.full(n_nodes, -1, dtype=np.int64)
+    bnd_next = np.full(n_nodes, -1, dtype=np.int64)
+    seen_v: dict[int, int] = {}  # node-id → count of segments it appears in
+    edge_to_segment: dict[tuple[int, int], tuple[str, int, int, int]] = {}
+
+    def _walk(seg_list, kind: str, ibtype_of_seg):
+        for seg_idx, seg in enumerate(seg_list):
+            ibtype = ibtype_of_seg(seg_idx)
+            arr = np.asarray(seg, dtype=np.int64)
+            for j in range(arr.size):
+                v = int(arr[j])
+                seen_v[v] = seen_v.get(v, 0) + 1
+                if j > 0:
+                    bnd_prev[v] = int(arr[j - 1])
+                if j < arr.size - 1:
+                    bnd_next[v] = int(arr[j + 1])
+                    a = int(arr[j])
+                    b = int(arr[j + 1])
+                    key = (min(a, b), max(a, b))
+                    edge_to_segment[key] = (kind, seg_idx, j, ibtype)
+
+    _walk(mesh.open_boundaries, "open", lambda _i: -1)
+    _walk([s for _ib, s in mesh.land_boundaries], "land",
+          lambda i: int(mesh.land_boundaries[i][0]))
+
+    # Nodes appearing in multiple segments are corners; clear their
+    # tangent neighbours so smoothers refuse to move them.
+    for v, count in seen_v.items():
+        if count > 1:
+            bnd_prev[v] = -1
+            bnd_next[v] = -1
+
+    return bnd_prev, bnd_next, edge_to_segment
+
+
 # ---------------------------------------------------------------------------
 # Operator: smooth_node (move 1 interior vertex to its 1-ring centroid)
 # ---------------------------------------------------------------------------
@@ -454,6 +511,116 @@ def _apply_edge_split_interior(
 
 
 # ---------------------------------------------------------------------------
+# Operator: edge_split_boundary (insert midpoint on a boundary edge)
+# ---------------------------------------------------------------------------
+
+
+def _apply_edge_split_boundary(
+    mesh: Fort14Mesh, elem_id: int, edge_local: int,
+    *, alpha_target: float, min_angle_target: float,
+    edge_uses: dict[tuple[int, int], list[int]],
+    edge_to_segment: dict[tuple[int, int], tuple[str, int, int, int]],
+) -> tuple[Fort14Mesh, dict[str, Any]] | None:
+    """Insert a node at the midpoint of a boundary edge of ``elem_id``.
+    Replace the single incident triangle with two sub-triangles and
+    update the boundary segment to thread the new node between its
+    two endpoints. Coastline projection is deferred to v3; the
+    midpoint is the simple linear average of the two endpoints.
+    Accept iff per-element penalty drops and no signed area becomes
+    non-positive.
+    """
+    a = int(mesh.elements[elem_id, edge_local])
+    b = int(mesh.elements[elem_id, (edge_local + 1) % 3])
+    key = (min(a, b), max(a, b))
+    seg_meta = edge_to_segment.get(key)
+    if seg_meta is None:
+        return None  # not a topological boundary edge
+    incident = edge_uses.get(key, [])
+    if len(incident) != 1:
+        return None  # geometric boundary disagrees — skip rather than corrupt
+    if incident[0] != elem_id:
+        return None  # caller passed an edge that does not include elem_id
+
+    kind, seg_idx, position, ibtype = seg_meta
+    midpoint = 0.5 * (mesh.nodes[a] + mesh.nodes[b])
+    mid_depth = 0.5 * (mesh.depths[a] + mesh.depths[b])
+    n_new = mesh.n_nodes
+
+    new_self = _split_triangle_at_edge(
+        mesh.elements[elem_id], a, b, n_new,
+    )
+
+    block_before = mesh.elements[[elem_id]]
+    block_after = np.array(new_self, dtype=mesh.elements.dtype)
+    nodes_proposed = np.vstack([mesh.nodes, midpoint[None, :]])
+
+    a_b, m_b = _per_element_quality(mesh.nodes, block_before)
+    a_a, m_a = _per_element_quality(nodes_proposed, block_after)
+    p_before = _penalty(
+        a_b, m_b,
+        alpha_target=alpha_target, min_angle_target=min_angle_target,
+    ).sum()
+    p_after = _penalty(
+        a_a, m_a,
+        alpha_target=alpha_target, min_angle_target=min_angle_target,
+    ).sum()
+    if p_after + 1e-12 >= p_before:
+        return None
+
+    # Signed-area check on the new sub-triangles.
+    p0 = nodes_proposed[block_after[:, 0]]
+    p1 = nodes_proposed[block_after[:, 1]]
+    p2 = nodes_proposed[block_after[:, 2]]
+    cross = (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+    if (cross <= 0).any():
+        return None
+
+    # Update the segment array: insert n_new between positions
+    # ``position`` and ``position + 1``.
+    new_open = [np.asarray(s).copy() for s in mesh.open_boundaries]
+    new_land = [(int(ib), np.asarray(s).copy())
+                for ib, s in mesh.land_boundaries]
+    if kind == "open":
+        seg = new_open[seg_idx]
+        new_open[seg_idx] = np.concatenate(
+            [seg[: position + 1], [n_new], seg[position + 1:]]
+        ).astype(seg.dtype)
+    else:
+        ib, seg = new_land[seg_idx]
+        new_seg = np.concatenate(
+            [seg[: position + 1], [n_new], seg[position + 1:]]
+        ).astype(seg.dtype)
+        new_land[seg_idx] = (ib, new_seg)
+
+    keep_mask = np.ones(mesh.n_elements, dtype=bool)
+    keep_mask[elem_id] = False
+    new_elements = np.vstack([mesh.elements[keep_mask], block_after])
+    new_depths = np.concatenate([mesh.depths, [mid_depth]])
+    new_mesh = Fort14Mesh(
+        title=mesh.title,
+        nodes=nodes_proposed,
+        depths=new_depths,
+        elements=new_elements,
+        open_boundaries=new_open,
+        land_boundaries=new_land,
+    )
+    return new_mesh, {
+        "operator": "edge_split_boundary",
+        "edge": [int(min(a, b)), int(max(a, b))],
+        "new_node": int(n_new),
+        "boundary_kind": kind,
+        "segment_idx": int(seg_idx),
+        "land_ibtype": int(ibtype),
+        "removed_elements": [int(elem_id)],
+        "penalty_before": float(p_before),
+        "penalty_after": float(p_after),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Operator: vertex_remove (remove interior node, retriangulate 1-ring)
 # ---------------------------------------------------------------------------
 
@@ -571,9 +738,14 @@ DEFAULT_OPERATOR_ORDER: tuple[str, ...] = (
     "smooth_node",
     "edge_swap",
     "edge_split_interior",
+    "edge_split_boundary",
     "vertex_remove",
 )
 DEFAULT_MAX_SMOOTH_SWEEPS: int = 200
+
+
+BOUNDARY_TANGENT_T_MIN: float = 0.05
+BOUNDARY_TANGENT_T_MAX: float = 0.95
 
 
 def _batch_smooth_sweep(
@@ -581,29 +753,66 @@ def _batch_smooth_sweep(
     *, alpha_target: float, min_angle_target: float,
     boundary_node_mask: np.ndarray,
     n2e: dict[int, np.ndarray],
+    boundary_prev: np.ndarray | None = None,
+    boundary_next: np.ndarray | None = None,
 ) -> int:
-    """One Gauss-Seidel pass over the interior vertices: for each
-    non-boundary node ``v`` whose 1-ring exists, propose the centroid
-    of its 1-ring neighbours and accept the move iff (a) no flipped
-    triangle results and (b) the per-1-ring penalty strictly drops.
+    """One Gauss-Seidel pass over every node:
 
-    Mutates ``mesh.nodes`` in place. Returns the count of accepted
-    moves. The caller iterates the sweep until no accepts. Topology
-    is unchanged so ``n2e`` and ``boundary_node_mask`` stay valid
-    across sweeps; the caller passes them in to avoid rebuild costs.
+    * **Interior** (``~boundary_node_mask``): propose the 1-ring
+      centroid.
+    * **Boundary, segment-interior**: project the 1-ring centroid
+      onto the line ``[bnd_prev[v], bnd_next[v]]`` and clamp the
+      parameter to ``(BOUNDARY_TANGENT_T_MIN, BOUNDARY_TANGENT_T_MAX)``
+      so the moving node cannot collapse onto either tangent
+      neighbour. Requires ``boundary_prev`` / ``boundary_next``;
+      otherwise boundary nodes are skipped (v1 behaviour).
+    * **Corners** (no tangent neighbour, or shared by multiple
+      segments): skipped.
+
+    Each candidate is accepted iff (a) no flipped triangle results
+    and (b) the per-1-ring penalty strictly drops. Mutates
+    ``mesh.nodes`` in place. Topology is unchanged so the aux
+    structures the caller passes in stay valid across sweeps.
     """
     accepts = 0
     nodes = mesh.nodes  # mutable view
-    for v in np.where(~boundary_node_mask)[0]:
+    has_tangent = (
+        boundary_prev is not None and boundary_next is not None
+    )
+    for v in range(mesh.n_nodes):
         ring = n2e.get(int(v))
         if ring is None:
             continue
-        elem_block = mesh.elements[ring]
-        nbrs = np.unique(elem_block.ravel())
-        nbrs = nbrs[nbrs != v]
-        if nbrs.size == 0:
-            continue
-        proposed_v = nodes[nbrs].mean(axis=0)
+        is_bnd = bool(boundary_node_mask[v])
+        if is_bnd:
+            if not has_tangent:
+                continue
+            pv = int(boundary_prev[v])
+            nv = int(boundary_next[v])
+            if pv < 0 or nv < 0:
+                continue  # corner
+            a_pos = nodes[pv]
+            b_pos = nodes[nv]
+            ab = b_pos - a_pos
+            ab_len_sq = float((ab * ab).sum())
+            if ab_len_sq < 1e-20:
+                continue
+            elem_block = mesh.elements[ring]
+            nbrs = np.unique(elem_block.ravel())
+            nbrs = nbrs[nbrs != v]
+            if nbrs.size == 0:
+                continue
+            ring_centroid = nodes[nbrs].mean(axis=0)
+            t = float(((ring_centroid - a_pos) @ ab) / ab_len_sq)
+            t = max(BOUNDARY_TANGENT_T_MIN, min(BOUNDARY_TANGENT_T_MAX, t))
+            proposed_v = a_pos + t * ab
+        else:
+            elem_block = mesh.elements[ring]
+            nbrs = np.unique(elem_block.ravel())
+            nbrs = nbrs[nbrs != v]
+            if nbrs.size == 0:
+                continue
+            proposed_v = nodes[nbrs].mean(axis=0)
 
         p0 = nodes[elem_block[:, 0]]
         p1 = nodes[elem_block[:, 1]]
@@ -673,6 +882,7 @@ def _topology_round(
         n2e = _node_to_elements(cur.elements, cur.n_nodes)
         eu = _edge_use_counts(cur.elements)
         bnd_edges = {k for k, v in eu.items() if len(v) == 1}
+        _bp, _bn, e2s = _boundary_topology(cur)
 
         progress = False
         while heap:
@@ -708,6 +918,18 @@ def _topology_round(
                             min_angle_target=min_angle_target,
                             edge_uses=eu,
                             boundary_edge_keys=bnd_edges,
+                        )
+                        if out is not None:
+                            applied = out
+                            break
+                elif op_name == "edge_split_boundary":
+                    for k in range(3):
+                        out = _apply_edge_split_boundary(
+                            cur, int(eid), k,
+                            alpha_target=alpha_target,
+                            min_angle_target=min_angle_target,
+                            edge_uses=eu,
+                            edge_to_segment=e2s,
                         )
                         if out is not None:
                             applied = out
@@ -821,10 +1043,11 @@ def phase_h_optimize(
         info["n_outer_rounds"] = outer_round + 1
         round_accepts = 0
 
-        # Pass A: batch Gauss-Seidel smooth.
+        # Pass A: batch Gauss-Seidel smooth (interior + boundary).
         if do_smooth:
             bnd_node = _boundary_node_mask(cur)
             n2e = _node_to_elements(cur.elements, cur.n_nodes)
+            bnd_prev, bnd_next, _ = _boundary_topology(cur)
             for _sweep in range(max_smooth_sweeps):
                 n_acc = _batch_smooth_sweep(
                     cur,
@@ -832,6 +1055,8 @@ def phase_h_optimize(
                     min_angle_target=min_angle_target,
                     boundary_node_mask=bnd_node,
                     n2e=n2e,
+                    boundary_prev=bnd_prev,
+                    boundary_next=bnd_next,
                 )
                 info["operators_applied"]["smooth_node"] += int(n_acc)
                 info["n_iters"] += int(n_acc)

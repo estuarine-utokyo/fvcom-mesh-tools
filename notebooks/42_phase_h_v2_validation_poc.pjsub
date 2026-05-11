@@ -1,0 +1,25 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc42
+
+# PoC #42: Phase H v2 end-to-end validation (boundary-aware ops).
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=4
+export OPENBLAS_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python notebooks/42_phase_h_v2_validation_poc.py

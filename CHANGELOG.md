@@ -168,6 +168,24 @@ together close the case); ocsmesh remains a library dependency for
 
 ### Added — Phase H per-element greedy optimiser
 
+- **`fvcom_mesh_tools.mesh_clean_phase_h.phase_h_optimize`** (v2) —
+  v2 adds boundary handling on top of v1: Pass A's batch smooth
+  now moves segment-interior boundary nodes along the prev-next
+  tangent line (1-ring centroid projected onto the line, clamped
+  to (5 %, 95 %) of the segment so the moving node cannot collapse
+  onto a neighbour); Pass B gains an ``_apply_edge_split_boundary``
+  operator that inserts a midpoint on a topological boundary edge,
+  splits the single incident triangle, and threads the new node
+  into the relevant open / land segment. Segment endpoints /
+  corners stay pinned (shared by two segments). The boundary
+  topology is built once per Pass A and once per Pass B accept via
+  ``_boundary_topology`` (returns prev / next neighbour arrays plus
+  an edge → segment map). PoC #42 validates v2 against v1 on the
+  pipeline-rung-1 output of PoC #19: NP +205 vs +65, alpha p05
+  +0.033 vs +0.024, ``frac<20°`` 0.013 % → **0.000 %** (every
+  element now passes the 20° gate), fail count -17 % vs -10 %.
+  v3 will add coastline-shapefile projection for new boundary
+  nodes (currently lands at the straight midpoint).
 - **`fvcom_mesh_tools.mesh_clean_phase_h.phase_h_optimize`** (v1) —
   the planned automation of the SMS manual mesh-edit workflow:
   visit every element failing a strict per-element gate
@@ -415,6 +433,36 @@ Each links to a notebook in `notebooks/`.
   elements (α 0.93-0.94) where the improvement direction would
   degrade a neighbour. The 11,182 abandoned residual matches the
   v1 boundary-handling gap PoC #40 identified.
+- **PoC #42** — Phase H v2 (boundary-aware) on the same input. Same
+  driver shape as v1, but Pass A's batch smooth now moves
+  segment-interior boundary nodes along the prev-next tangent
+  (1-ring centroid projected onto the line, clamped to (5 %,
+  95 %)), and Pass B gains an ``edge_split_boundary`` operator
+  that inserts a midpoint on a topological boundary edge, splits
+  the single incident triangle, and threads the new node into the
+  segment. Result (4 outer rounds, 72 smooth sweeps, 748 s wall):
+
+      metric            input    v1 output   v2 output
+      --------------    -----    ---------   ---------
+      NP                27,185   27,250      27,390
+      NE                47,426   46,500      46,750
+      alpha mean        0.9588   0.9655      0.9675
+      alpha p05         0.8758   0.9001      0.9084
+      min angle p05     40.2°    41.9°       42.7°
+      frac<20°          0.131 %  0.013 %     0.000 %
+      fail elements     12,440   11,182      10,302
+      fail Δ from input —        -10 %       -17 %
+
+  Operators applied (v2): smooth_node 57,585 (incl. boundary
+  tangent), edge_split_boundary 108, edge_split_interior 97,
+  vertex_remove 489, edge_swap 2. Notably ``frac<20°`` collapses
+  to zero (every element passes the 20° angle gate). The
+  remaining 10,302 fail elements are all ``alpha < 0.95`` cases
+  that no single-vertex local edit can lift without dragging a
+  neighbour below threshold — these are fundamental constraints
+  of greedy local optimisation rather than v2 gaps. v3 will add
+  coastline-shapefile projection for new boundary nodes (v2
+  currently lands at the straight midpoint).
 - **PoC #36** — `--om-max-iter` sweep on Tokyo Bay (50 → 25 → 10 → 5):
 
       iters   wall    alpha   frac<20°   max_v   n_overconn

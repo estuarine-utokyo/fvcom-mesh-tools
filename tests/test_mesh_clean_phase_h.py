@@ -15,11 +15,14 @@ import numpy as np
 from fvcom_mesh_tools.algorithms.quality import alpha_quality
 from fvcom_mesh_tools.io import Fort14Mesh
 from fvcom_mesh_tools.mesh_clean_phase_h import (
+    _apply_edge_split_boundary,
     _apply_edge_split_interior,
     _apply_edge_swap,
     _apply_smooth_node,
     _apply_vertex_remove,
+    _batch_smooth_sweep,
     _boundary_node_mask,
+    _boundary_topology,
     _edge_use_counts,
     _node_to_elements,
     phase_h_optimize,
@@ -248,3 +251,159 @@ def test_phase_h_optimize_no_op_on_clean_mesh() -> None:
     assert info["n_input_fail"] == 0
     assert info["n_iters"] == 0
     assert out.n_elements == mesh.n_elements
+
+
+# ---------------------------------------------------------------------------
+# v2: boundary-tangent smooth + boundary edge_split
+# ---------------------------------------------------------------------------
+
+
+def test_boundary_topology_strip_fixture() -> None:
+    """The skewed-quad strip has 4 open + 4 land boundary nodes
+    (with corners shared by an open and a land segment, so those
+    corners must report no tangent neighbour)."""
+    mesh = _skewed_quad()
+    bnd_prev, bnd_next, e2s = _boundary_topology(mesh)
+    # Land bottom row [0, 1, 2]: node 1 is interior to the segment so
+    # both tangent neighbours exist.
+    assert int(bnd_prev[1]) == 0
+    assert int(bnd_next[1]) == 2
+    # Node 0 is a corner (open[0] starts here, land[0] starts here) →
+    # neighbours wiped.
+    assert int(bnd_prev[0]) == -1
+    assert int(bnd_next[0]) == -1
+    # Interior node 6 has no boundary tangent at all.
+    assert int(bnd_prev[6]) == -1
+    assert int(bnd_next[6]) == -1
+    # Edge (1, 2) is on the land bottom segment.
+    assert (1, 2) in e2s
+    kind, seg_idx, position, ibtype = e2s[(1, 2)]
+    assert kind == "land"
+    assert ibtype == 0
+    # Edge (1, 4) is interior so not in the segment map.
+    assert (1, 4) not in e2s
+
+
+def test_batch_smooth_sweep_with_boundary_tangent_moves_segment_interior() -> None:
+    """A linear land segment whose middle node is displaced normal to
+    the segment must, under boundary-tangent smooth, slide back
+    toward the segment line."""
+    # Five collinear coastal nodes spaced along y=0, with the middle
+    # one pulled down to y = -0.1.
+    nodes = np.array(
+        [
+            [0.0, 0.0], [1.0, 0.0], [2.0, -0.1], [3.0, 0.0], [4.0, 0.0],
+            [0.0, 1.0], [4.0, 1.0],
+        ],
+        dtype=float,
+    )
+    elements = np.array(
+        [
+            [0, 1, 5], [1, 2, 5], [2, 3, 5], [3, 4, 5],
+            [5, 4, 6],
+        ],
+        dtype=np.int64,
+    )
+    mesh = Fort14Mesh(
+        title="bnd", nodes=nodes, depths=np.zeros(nodes.shape[0]),
+        elements=elements,
+        open_boundaries=[np.array([5, 6], dtype=np.int64)],
+        land_boundaries=[(0, np.array([0, 1, 2, 3, 4], dtype=np.int64))],
+    )
+    bnd_node = _boundary_node_mask(mesh)
+    bnd_prev, bnd_next, _ = _boundary_topology(mesh)
+    n2e = _node_to_elements(mesh.elements, mesh.n_nodes)
+
+    y_before = float(mesh.nodes[2, 1])
+    assert y_before == -0.1
+
+    accepts_total = 0
+    for _ in range(20):
+        n_acc = _batch_smooth_sweep(
+            mesh,
+            alpha_target=0.95, min_angle_target=20.0,
+            boundary_node_mask=bnd_node, n2e=n2e,
+            boundary_prev=bnd_prev, boundary_next=bnd_next,
+        )
+        accepts_total += int(n_acc)
+        if n_acc == 0:
+            break
+
+    y_after = float(mesh.nodes[2, 1])
+    assert accepts_total >= 1, "boundary tangent smooth should fire at least once"
+    # Node 2's tangent line is y = 0 between (1, 0) and (3, 0); after
+    # smoothing it should be much closer to y=0 than to its starting
+    # y=-0.1.
+    assert abs(y_after) < 0.02, f"node 2 y not pulled back to segment: {y_after}"
+
+
+def _long_thin_boundary_triangle() -> Fort14Mesh:
+    """Single 4:1-aspect isoceles triangle with the long edge on
+    the boundary. Original alpha ~0.53; splitting the long boundary
+    edge at the midpoint yields two right triangles with alpha
+    ~0.69 each — penalty drops, so the operator should accept."""
+    nodes = np.array(
+        [[0.0, 0.0], [4.0, 0.0], [2.0, 1.0]], dtype=float,
+    )
+    elements = np.array([[0, 1, 2]], dtype=np.int64)
+    return Fort14Mesh(
+        title="thin", nodes=nodes,
+        depths=np.zeros(nodes.shape[0]),
+        elements=elements,
+        open_boundaries=[],
+        land_boundaries=[
+            (0, np.array([0, 1], dtype=np.int64)),
+            (0, np.array([1, 2], dtype=np.int64)),
+            (0, np.array([2, 0], dtype=np.int64)),
+        ],
+    )
+
+
+def test_apply_edge_split_boundary_inserts_and_updates_segment() -> None:
+    mesh = _long_thin_boundary_triangle()
+    eu = _edge_use_counts(mesh.elements)
+    _, _, e2s = _boundary_topology(mesh)
+    # Edge (0, 1) is on land segment 0; original triangle alpha is
+    # ~0.23 (needle); splitting (0, 1) yields two alpha~0.77 triangles.
+    assert (0, 1) in e2s
+    out = _apply_edge_split_boundary(
+        mesh, elem_id=0, edge_local=0,
+        alpha_target=0.95, min_angle_target=20.0,
+        edge_uses=eu, edge_to_segment=e2s,
+    )
+    assert out is not None
+    new_mesh, info = out
+    assert info["operator"] == "edge_split_boundary"
+    assert info["boundary_kind"] == "land"
+    assert new_mesh.n_nodes == mesh.n_nodes + 1
+    assert new_mesh.n_elements == mesh.n_elements + 1  # 1 - 1 + 2
+    # The new node sits at the midpoint of (0, 1).
+    np.testing.assert_allclose(
+        new_mesh.nodes[mesh.n_nodes], 0.5 * (mesh.nodes[0] + mesh.nodes[1]),
+    )
+    # The land segment containing the (0, 1) edge now threads the new
+    # node between them.
+    bot_seg = new_mesh.land_boundaries[0][1]
+    assert list(bot_seg) == [0, mesh.n_nodes, 1]
+
+
+def test_apply_edge_split_boundary_rejects_interior_edge() -> None:
+    mesh = _skewed_quad()
+    eu = _edge_use_counts(mesh.elements)
+    _, _, e2s = _boundary_topology(mesh)
+    # (1, 4) is an internal edge — not in the segment map.
+    assert (1, 4) not in e2s
+    out = _apply_edge_split_boundary(
+        mesh, elem_id=1, edge_local=0,
+        alpha_target=0.95, min_angle_target=20.0,
+        edge_uses=eu, edge_to_segment=e2s,
+    )
+    assert out is None
+
+
+def test_phase_h_v2_default_operator_order_includes_boundary_split() -> None:
+    """The v2 default operator order plumbs ``edge_split_boundary``
+    so a Phase H run with default kwargs sees boundary edges as
+    valid targets."""
+    from fvcom_mesh_tools.mesh_clean_phase_h import DEFAULT_OPERATOR_ORDER
+    assert "edge_split_boundary" in DEFAULT_OPERATOR_ORDER
