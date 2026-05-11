@@ -528,6 +528,41 @@ Each links to a notebook in `notebooks/`.
   follows the user's shapefile faithfully; choose v2 when only
   the headline quality metrics matter and v3 when the boundary
   must respect the actual coastline curve.
+- **PoC #44** — 2-step lookahead dry-run on the v3 residual mesh
+  (``outputs/43_phase_h_v3_optimized.14``, 11,015 fail elements).
+  For each of 1,000 random-sampled fail elements (seed=42), the
+  PoC confirms 1-step strict-gate rejection (sanity ✓ for v3) and
+  then searches for an accepting ``(op1, op2)`` pair: op1 from the
+  full Phase H v3 inventory applied with ``force=True`` (validity-
+  only — penalty gate bypassed), op2 from ``{smooth_node,
+  edge_swap}`` with combined-union-penalty acceptance over op1 ∪
+  op2 affected nodes. Result (4,237 s wall on 1 core):
+
+      partition                       count   share
+      ---------------------------     -----   -----
+      1-step fixable                      0    0.0 %
+      2-step lookahead fixable          610   61.0 %
+      unfixable                         390   39.0 %
+
+  Accepted operator pairs (only two distinct pairs ever won):
+
+      vertex_remove + smooth_node       326   53.4 %
+      smooth_node   + smooth_node       284   46.6 %
+
+  No accepted pair uses ``edge_swap``, ``edge_split_interior``,
+  or ``edge_split_boundary`` as op1; ``edge_swap`` as op2 also
+  never wins. The structure is uniform: a "barrier-crossing"
+  op1 that displaces or removes a single vertex, followed by a
+  ``smooth_node`` recoupment. Statistical bound on the 61.0 %
+  rate at n=1,000 is ±3.0 % (95 % CI), tight enough to claim
+  the GO signal for a Phase H v4 driver. Extrapolated to the
+  full residual: 11,015 × 0.61 ≈ 6,700 additional fixable
+  elements, leaving ~4,300 residual after v4. The remaining
+  39 % unfixable population is the candidate pool for **patch
+  re-CDT** (op-cluster scale, beyond local 1-ring), the natural
+  next operator class. The PoC adds a ``force=False`` kwarg to
+  all five v3 operators (skips the 1-ring penalty gate; validity
+  unchanged) plus regression tests pinning the gate behaviour.
 - **PoC #36** — `--om-max-iter` sweep on Tokyo Bay (50 → 25 → 10 → 5):
 
       iters   wall    alpha   frac<20°   max_v   n_overconn
