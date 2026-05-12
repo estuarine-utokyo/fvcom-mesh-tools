@@ -28,6 +28,43 @@ per-element gate.
 This is what SMS users do by hand: identify a bad neighbourhood,
 delete the local mesh inside a chosen boundary, re-mesh.
 
+### 1.1 Empirical cluster structure (v3 residual)
+
+The cluster-scale assumption was tested directly. Running the
+read-only analysis ``notebooks/47a_cluster_structure_analysis.py``
+on ``outputs/43_phase_h_v3_optimized.14`` (11,015 fail elements in
+46,665 total) finds **5,298 connected components** of the fail
+subgraph under face-face adjacency, with size 1 to 20:
+
+    bucket                  #clusters   #fails   share   cumul
+    -----------------------------------------------------------
+    size = 1 (lone)             2,812    2,812   25.5 %  25.5 %
+    size = 2 (adj. pair)        1,269    2,538   23.0 %  48.6 %
+    size = 3                      499    1,497   13.6 %  62.2 %
+    size 4-9                      655    3,405   30.9 %  93.1 %
+    size 10-29                     63      763    6.9 %  100.0 %
+    size >= 30                      0        0    0.0 %  100.0 %
+
+The largest cluster has 20 elements (alpha_min 0.72, min_angle_min
+27.5°). No mega-clusters threaten the design's ``max_cluster_size``
+cap.
+
+* **25.5 %** lone fails — Pass D buys nothing here; 1-ring
+  lookahead (v4.1 Pass C) is the right tool.
+* **23.0 %** adjacent pairs — Pass D *might* help (pair re-CDT on
+  the 4-vertex rim is the smallest non-trivial case); needs
+  validation in the dry-run PoC.
+* **51.4 %** clusters of size ≥ 3 — Pass D's strong target.
+  These cannot be fixed by any sequence of single-vertex / single-
+  edge edits and are the addressable market for cluster re-CDT.
+
+The findings confirm the design hypothesis: a non-trivial majority
+of the residual sits in cluster components, the cluster size
+distribution is well-bounded (max 20, mean 2.08, median 1) and a
+``max_cluster_size`` of 100 leaves no cluster unhandled. Pass D's
+upper bound is 74.5 % of residual fails (everything in size ≥ 2);
+the realistic target is the 62.2 % cumulative coverage at size ≥ 3.
+
 ## 2. Hypothesis
 
 Cluster fails persist after Pass A / B / C because the optimal
