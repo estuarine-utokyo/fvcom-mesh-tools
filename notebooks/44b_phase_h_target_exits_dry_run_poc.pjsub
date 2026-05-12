@@ -1,0 +1,28 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=1
+#PJM -L elapse=02:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc44b
+
+# PoC #44b: target_exits_fail dry-run on v3 residual (1000-sample,
+# seed=42). Companion to PoC #44 — same sample, new gate.
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export POC44B_MAX_FAIL=1000
+export PYTHONUNBUFFERED=1
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u notebooks/44b_phase_h_target_exits_dry_run_poc.py
