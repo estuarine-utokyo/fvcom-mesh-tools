@@ -563,6 +563,65 @@ Each links to a notebook in `notebooks/`.
   next operator class. The PoC adds a ``force=False`` kwarg to
   all five v3 operators (skips the 1-ring penalty gate; validity
   unchanged) plus regression tests pinning the gate behaviour.
+- **PoC #45 — negative result for Phase H v4 (2-step lookahead)
+  as currently designed.** End-to-end run of ``phase_h_optimize``
+  with ``lookahead_enabled=True``, ``max_lookahead_per_round=2000``
+  on the same pipeline-rung-1 input + Tokyo-Bay coastline used by
+  PoC #43 (v3):
+
+      metric            v3 (PoC #43)   v4 (PoC #45)   Δ
+      ---------------   ------------   ------------   -------
+      n_elements              46,665         46,269   -396
+      alpha_mean              0.9663         0.9655   -0.0008
+      alpha_p05               0.9040         0.9025   -0.0016
+      min_angle_p05_deg       42.23          42.08    -0.15
+      frac<20°                0.000 %        0.0006 % +0.0006
+      fail elements           11,015         11,080   **+65**
+      wall                    1,735 s        20,914 s **×12.1**
+
+  Pass C accepted **20,000** lookahead pairs (cap 2,000 × 10 outer
+  rounds) — ``smooth_node + smooth_node`` 19,831 (99.2 %),
+  ``vertex_remove + smooth_node`` 169 (0.8 %) — yet quality
+  regressed slightly and the fail count grew by 65. The PoC #44
+  dry-run had predicted 6,700 additional fixable elements; the
+  driver realised approximately **zero net** gain.
+
+  **Root cause.** The PoC #44 dry-run measured *"could a single
+  pair drop the union penalty from the v3 baseline?"* without
+  applying the pair. The v4 driver applies pairs iteratively and
+  the dry-run's per-pair gain does not aggregate, for three
+  reasons:
+
+   1. The union-penalty gate is too local. It sums only over
+      elements touching ``op1.affected ∪ op2.affected`` nodes
+      (typically 6-12 elements). It does not catch 2-ring drift.
+   2. The gate is too permissive. A pair is accepted on *any*
+      strict drop; many accepts deliver penalty changes of
+      O(10⁻³) without lifting the target element out of fail
+      status. Most "improvements" reside in Pass C's accept
+      counter rather than in real quality.
+   3. Pass A re-smoothing in the next outer round partially undoes
+      Pass C's perturbations because Pass A's strict gate rejects
+      moves that Pass C's looser gate had let through. The system
+      thrashes: 10 rounds × 2,000 Pass C accepts ↔ 213 Pass A
+      sweeps net to ≈ 0 fail-count delta.
+
+  v4 (current design) is therefore **NOT recommended** —
+  ``--phase-h-lookahead`` stays off by default and is left in
+  the code base as a known-bad baseline for the next iteration.
+  Two viable design fixes for v4.1 / v4.2:
+
+   * **Strictly-fixes-target gate**: accept ``(op1, op2)`` iff
+     the target element ``E`` exits fail status on ``m2``
+     (``alpha(E) >= alpha_target ∧ min_angle(E) >= min_angle_target``).
+     This is the SMS-manual-edit standard and stops the thrash.
+   * **2-ring union penalty**: extend the gate's elements to the
+     2-ring of ``(op1.affected ∪ op2.affected)`` to catch drift.
+
+  The negative result reinforces the original PoC #44 caveat that
+  the next big quality lever is *patch re-CDT* (cluster-scale
+  re-triangulation) rather than further refinement of local
+  2-step rules.
 - **PoC #36** — `--om-max-iter` sweep on Tokyo Bay (50 → 25 → 10 → 5):
 
       iters   wall    alpha   frac<20°   max_v   n_overconn
