@@ -412,6 +412,30 @@ def build_parser() -> argparse.ArgumentParser:
             "polyline fall through to the un-projected position."
         ),
     )
+    p.add_argument(
+        "--phase-h-lookahead", action="store_true",
+        help=(
+            "Phase H v4 (opt-in): enable Pass C 2-step lookahead "
+            "after Pass B in every outer round. For each remaining "
+            "fail element, op1 ∈ {smooth_node, vertex_remove} is "
+            "applied with the penalty gate bypassed (force=True; "
+            "validity unchanged), then op2 = smooth_node is searched "
+            "on the elements overlapping op1's affected region. The "
+            "pair is accepted iff the union penalty over the op1 ∪ "
+            "op2 affected nodes strictly drops vs the round-start "
+            "mesh. PoC #44 measured 61%% additional fixable on the "
+            "Tokyo-Bay v3 residual (n=1000, 95%% CI ±3%%)."
+        ),
+    )
+    p.add_argument(
+        "--phase-h-max-lookahead-per-round", type=int, default=10_000,
+        help=(
+            "Phase H v4: cap on the number of (op1, op2) accepts in "
+            "a single Pass C invocation. Default 10000. Each accept "
+            "rebuilds the aux dicts on the new mesh so the cost is "
+            "~250 ms / accept on a 47 k-element mesh."
+        ),
+    )
 
     p.add_argument(
         "--summary", type=Path, default=None,
@@ -521,6 +545,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.phase_h_max_snap_m <= 0:
             print("--phase-h-max-snap-m must be > 0.", file=sys.stderr)
             return 2
+        if args.phase_h_max_lookahead_per_round < 1:
+            print(
+                "--phase-h-max-lookahead-per-round must be >= 1.",
+                file=sys.stderr,
+            )
+            return 2
         for coast_path in args.phase_h_coastline:
             if not coast_path.exists():
                 print(
@@ -574,6 +604,8 @@ def main(argv: list[str] | None = None) -> int:
         phase_h_max_smooth_sweeps=args.phase_h_max_smooth_sweeps,
         phase_h_coastline_paths=list(args.phase_h_coastline) or None,
         phase_h_max_snap_distance_m=args.phase_h_max_snap_m,
+        phase_h_lookahead=args.phase_h_lookahead,
+        phase_h_max_lookahead_per_round=args.phase_h_max_lookahead_per_round,
     )
     write_fort14(cleaned, args.output)
 

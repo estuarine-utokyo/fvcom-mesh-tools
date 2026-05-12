@@ -1636,6 +1636,8 @@ def clean_mesh(
     phase_h_max_smooth_sweeps: int = 200,
     phase_h_coastline_paths: list | None = None,
     phase_h_max_snap_distance_m: float = 500.0,
+    phase_h_lookahead: bool = False,
+    phase_h_max_lookahead_per_round: int = 10_000,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Run Phase A (component pruning) and Phase B (dead-end trimming).
 
@@ -1799,6 +1801,9 @@ def clean_mesh(
                 [str(p) for p in (phase_h_coastline_paths or [])],
             "phase_h_max_snap_distance_m":
                 float(phase_h_max_snap_distance_m),
+            "phase_h_lookahead": bool(phase_h_lookahead),
+            "phase_h_max_lookahead_per_round":
+                int(phase_h_max_lookahead_per_round),
         },
         "phases": [],
     }
@@ -1926,6 +1931,8 @@ def clean_mesh(
             max_topology_per_round=int(phase_h_max_topology_per_round),
             max_outer_rounds=int(phase_h_max_outer_rounds),
             coastline_projector=projector,
+            lookahead_enabled=bool(phase_h_lookahead),
+            max_lookahead_per_round=int(phase_h_max_lookahead_per_round),
         )
         info["phases"].append({"name": "phase_h_optimize", **h_info})
 

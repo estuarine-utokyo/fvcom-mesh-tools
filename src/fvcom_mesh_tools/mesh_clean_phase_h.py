@@ -1105,6 +1105,326 @@ def _topology_round(
     return cur, dict(accepts_per_op), len(abandoned)
 
 
+#: Inventory used by ``_lookahead_round`` (Pass C). PoC #44 shows
+#: that on the v3 residual only these two op1 types ever produce an
+#: accepting 2-step pair — every other op1 (edge_swap, edge_split_*)
+#: fails to yield a union-penalty improvement. We hard-code the
+#: restricted inventory as a default; callers can override via the
+#: ``lookahead_op1_inventory`` / ``lookahead_op2_inventory`` kwargs
+#: if they want to explore wider.
+DEFAULT_LOOKAHEAD_OP1_INVENTORY: tuple[str, ...] = (
+    "smooth_node", "vertex_remove",
+)
+DEFAULT_LOOKAHEAD_OP2_INVENTORY: tuple[str, ...] = ("smooth_node",)
+
+
+def _affected_nodes_from_info(info: dict[str, Any]) -> set[int]:
+    """Node IDs whose 1-ring may have been modified by an op. The IDs
+    reference the *resulting* mesh; new-node IDs from splits are
+    included. Used by the 2-step lookahead union-penalty gate.
+    """
+    op = info["operator"]
+    if op == "smooth_node":
+        return {int(info["vertex"])}
+    if op == "edge_swap":
+        return {int(info["edge"][0]), int(info["edge"][1])}
+    if op == "edge_split_interior":
+        return {
+            int(info["edge"][0]),
+            int(info["edge"][1]),
+            int(info["new_node"]),
+        }
+    if op == "edge_split_boundary":
+        return {
+            int(info["edge"][0]),
+            int(info["edge"][1]),
+            int(info["new_node"]),
+        }
+    if op == "vertex_remove":
+        return {int(info["vertex"])}
+    raise ValueError(f"unknown op: {op!r}")
+
+
+def _affected_elements_in_mesh(
+    mesh: Fort14Mesh, info: dict[str, Any],
+) -> list[int]:
+    """Element IDs in the *result* mesh that overlap an op's
+    modified region. Used to enumerate candidate ``e2`` for Pass C
+    op2 search.
+    """
+    op = info["operator"]
+    if op == "smooth_node":
+        return [int(x) for x in info["affected_elements"]]
+    if op == "edge_swap":
+        return [int(x) for x in info["elements_modified"]]
+    if op == "edge_split_interior":
+        ne = int(mesh.n_elements)
+        return list(range(ne - 4, ne))
+    if op == "edge_split_boundary":
+        ne = int(mesh.n_elements)
+        return list(range(ne - 2, ne))
+    if op == "vertex_remove":
+        ne = int(mesh.n_elements)
+        n_new = int(info["n_new_elements"])
+        return list(range(ne - n_new, ne))
+    raise ValueError(f"unknown op: {op!r}")
+
+
+def _union_penalty(
+    mesh: Fort14Mesh, nodes: set[int], *,
+    alpha_target: float, min_angle_target: float,
+) -> float:
+    """Sum penalty over every element in ``mesh`` that touches any
+    node in ``nodes``. IDs outside ``mesh.n_nodes`` are silently
+    skipped (a new-node ID from a future mesh has no incident
+    elements in the initial mesh, contributing zero).
+    """
+    if not nodes:
+        return 0.0
+    n2e = _node_to_elements(mesh.elements, mesh.n_nodes)
+    affected_eids: set[int] = set()
+    for v in nodes:
+        if 0 <= v < mesh.n_nodes:
+            for e in n2e.get(int(v), ()):
+                affected_eids.add(int(e))
+    if not affected_eids:
+        return 0.0
+    eids = np.fromiter(affected_eids, dtype=np.int64)
+    block = mesh.elements[eids]
+    a, m = _per_element_quality(mesh.nodes, block)
+    return float(_penalty(
+        a, m,
+        alpha_target=alpha_target, min_angle_target=min_angle_target,
+    ).sum())
+
+
+def _ctx_for_lookahead(mesh: Fort14Mesh) -> dict[str, Any]:
+    """Bundle the aux dicts ``_iter_op_candidates`` and the operators
+    need. One call per ``_lookahead_round`` accept (mesh changed)."""
+    n2e = _node_to_elements(mesh.elements, mesh.n_nodes)
+    eu = _edge_use_counts(mesh.elements)
+    bnd_node = _boundary_node_mask(mesh)
+    bnd_edges = {k for k, v in eu.items() if len(v) == 1}
+    _bp, _bn, e2s = _boundary_topology(mesh)
+    return {
+        "n2e": n2e,
+        "eu": eu,
+        "bnd_node": bnd_node,
+        "bnd_edges": bnd_edges,
+        "e2s": e2s,
+    }
+
+
+def _iter_op_candidates(
+    mesh: Fort14Mesh, eid: int, op_name: str, *,
+    force: bool, ctx: dict[str, Any],
+    alpha_target: float, min_angle_target: float,
+    coastline_projector: CoastlineProjector | None = None,
+):
+    """Yield ``(new_mesh, info)`` for each local variant of
+    ``op_name`` applied to ``mesh.elements[eid]``. Skips variants the
+    operator rejects (validity or, when ``force=False``, the penalty
+    gate).
+    """
+    if op_name == "smooth_node":
+        for v in mesh.elements[eid]:
+            ring = ctx["n2e"].get(int(v))
+            if ring is None:
+                continue
+            out = _apply_smooth_node(
+                mesh, int(v), ring,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                boundary_node_mask=ctx["bnd_node"],
+                force=force,
+            )
+            if out is not None:
+                yield out
+    elif op_name == "edge_swap":
+        for k in range(3):
+            out = _apply_edge_swap(
+                mesh, int(eid), k,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                edge_uses=ctx["eu"],
+                boundary_edge_keys=ctx["bnd_edges"],
+                force=force,
+            )
+            if out is not None:
+                yield out
+    elif op_name == "edge_split_interior":
+        for k in range(3):
+            out = _apply_edge_split_interior(
+                mesh, int(eid), k,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                edge_uses=ctx["eu"],
+                boundary_edge_keys=ctx["bnd_edges"],
+                force=force,
+            )
+            if out is not None:
+                yield out
+    elif op_name == "edge_split_boundary":
+        for k in range(3):
+            out = _apply_edge_split_boundary(
+                mesh, int(eid), k,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                edge_uses=ctx["eu"],
+                edge_to_segment=ctx["e2s"],
+                coastline_projector=coastline_projector,
+                force=force,
+            )
+            if out is not None:
+                yield out
+    elif op_name == "vertex_remove":
+        for v in mesh.elements[eid]:
+            ring = ctx["n2e"].get(int(v))
+            if ring is None:
+                continue
+            out = _apply_vertex_remove(
+                mesh, int(v), ring,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                boundary_node_mask=ctx["bnd_node"],
+                force=force,
+            )
+            if out is not None:
+                yield out
+    else:
+        raise ValueError(f"unknown op: {op_name!r}")
+
+
+def _try_lookahead_pair(
+    cur: Fort14Mesh, eid: int, ctx: dict[str, Any], *,
+    alpha_target: float, min_angle_target: float,
+    op1_inventory: tuple[str, ...],
+    op2_inventory: tuple[str, ...],
+    coastline_projector: CoastlineProjector | None,
+) -> tuple[Fort14Mesh, str] | None:
+    """Search for an accepting ``(op1, op2)`` pair on fail element
+    ``eid``. op1 is applied with ``force=True`` (validity only),
+    yielding a candidate ``m1``. op2 is searched on the elements
+    overlapping op1's affected region in ``m1`` (those that still
+    fail the per-element gate). Accept iff the union penalty over
+    ``op1.affected ∪ op2.affected`` nodes strictly drops between
+    ``cur`` and the resulting ``m2``. Returns ``(m2, "op1+op2")`` on
+    the first accept (in inventory order), else ``None``.
+    """
+    for op1_name in op1_inventory:
+        for m1, info1 in _iter_op_candidates(
+            cur, eid, op1_name, force=True, ctx=ctx,
+            alpha_target=alpha_target, min_angle_target=min_angle_target,
+            coastline_projector=coastline_projector,
+        ):
+            affected1_nodes = _affected_nodes_from_info(info1)
+            affected1_eids = _affected_elements_in_mesh(m1, info1)
+            if not affected1_eids:
+                continue
+            block = m1.elements[affected1_eids]
+            a_blk, m_blk = _per_element_quality(m1.nodes, block)
+            fail_blk = _is_fail(
+                a_blk, m_blk,
+                alpha_target=alpha_target, min_angle_target=min_angle_target,
+            )
+            cand_e2 = [
+                int(e) for e, f in zip(affected1_eids, fail_blk) if f
+            ]
+            if not cand_e2:
+                continue
+            ctx_m1 = _ctx_for_lookahead(m1)
+            for e2 in cand_e2:
+                for op2_name in op2_inventory:
+                    for m2, info2 in _iter_op_candidates(
+                        m1, e2, op2_name, force=True, ctx=ctx_m1,
+                        alpha_target=alpha_target,
+                        min_angle_target=min_angle_target,
+                        coastline_projector=coastline_projector,
+                    ):
+                        affected2_nodes = _affected_nodes_from_info(info2)
+                        union = affected1_nodes | affected2_nodes
+                        pen_before = _union_penalty(
+                            cur, union,
+                            alpha_target=alpha_target,
+                            min_angle_target=min_angle_target,
+                        )
+                        pen_after = _union_penalty(
+                            m2, union,
+                            alpha_target=alpha_target,
+                            min_angle_target=min_angle_target,
+                        )
+                        if pen_after + 1e-12 < pen_before:
+                            return m2, f"{op1_name}+{op2_name}"
+    return None
+
+
+def _lookahead_round(
+    cur: Fort14Mesh, *,
+    alpha_target: float, min_angle_target: float,
+    op1_inventory: tuple[str, ...],
+    op2_inventory: tuple[str, ...],
+    max_lookahead_accepts: int,
+    coastline_projector: CoastlineProjector | None = None,
+) -> tuple[Fort14Mesh, dict[str, int], int]:
+    """Pass C: 2-step lookahead. Pops fail elements by descending
+    penalty and applies the first accepting ``(op1, op2)`` pair
+    found by :func:`_try_lookahead_pair`. Each accept rebuilds the
+    aux dicts on the new mesh. Returns
+    ``(updated_mesh, accepts_per_pair, n_abandoned)`` where
+    ``accepts_per_pair`` is keyed by ``"op1+op2"``.
+    """
+    accepts_per_pair: dict[str, int] = defaultdict(int)
+    abandoned: set = set()
+    accepts_total = 0
+    while accepts_total < max_lookahead_accepts:
+        a, m = _per_element_quality(cur.nodes, cur.elements)
+        fail = _is_fail(
+            a, m,
+            alpha_target=alpha_target, min_angle_target=min_angle_target,
+        )
+        if not fail.any():
+            break
+        pen = _penalty(
+            a, m,
+            alpha_target=alpha_target, min_angle_target=min_angle_target,
+        )
+        heap: list[tuple[float, int]] = []
+        for eid in np.where(fail)[0]:
+            heapq.heappush(heap, (-float(pen[eid]), int(eid)))
+        ctx = _ctx_for_lookahead(cur)
+
+        progress = False
+        while heap:
+            _neg, eid = heapq.heappop(heap)
+            sig = (
+                int(cur.n_elements),
+                frozenset(int(x) for x in cur.elements[eid]),
+            )
+            if sig in abandoned:
+                continue
+            applied = _try_lookahead_pair(
+                cur, eid, ctx,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                op1_inventory=op1_inventory,
+                op2_inventory=op2_inventory,
+                coastline_projector=coastline_projector,
+            )
+            if applied is None:
+                abandoned.add(sig)
+                continue
+            cur, pair_label = applied
+            accepts_per_pair[pair_label] += 1
+            accepts_total += 1
+            progress = True
+            break  # rebuild aux dicts
+
+        if not progress:
+            break
+
+    return cur, dict(accepts_per_pair), len(abandoned)
+
+
 def phase_h_optimize(
     mesh: Fort14Mesh,
     *,
@@ -1115,9 +1435,13 @@ def phase_h_optimize(
     max_outer_rounds: int = 10,
     operator_order: tuple[str, ...] = DEFAULT_OPERATOR_ORDER,
     coastline_projector: CoastlineProjector | None = None,
+    lookahead_enabled: bool = False,
+    max_lookahead_per_round: int = 10_000,
+    lookahead_op1_inventory: tuple[str, ...] = DEFAULT_LOOKAHEAD_OP1_INVENTORY,
+    lookahead_op2_inventory: tuple[str, ...] = DEFAULT_LOOKAHEAD_OP2_INVENTORY,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
-    """Phase H driver: alternating Pass A (batch smooth) ↔ Pass B
-    (topology operators) until both stop making progress.
+    """Phase H driver: Pass A (batch smooth) ↔ Pass B (1-step topology)
+    ↔ optional Pass C (2-step lookahead) until none make progress.
 
     **Pass A** — batch Gauss-Seidel smooth. Each sweep visits every
     interior vertex, proposes the 1-ring centroid, and accepts the
@@ -1131,14 +1455,28 @@ def phase_h_optimize(
     operator that strictly reduces the local penalty without
     flipping. Each accept rebuilds the aux dicts on the new mesh.
 
-    The two passes alternate: Pass A runs to exhaustion, Pass B
-    runs up to ``max_topology_per_round`` accepts, then Pass A
-    cleans up the local perturbations Pass B introduced. The loop
-    terminates when both passes contribute zero accepts in the
-    same outer round, or when ``max_outer_rounds`` is reached.
+    **Pass C (v4, opt-in via ``lookahead_enabled=True``)** — 2-step
+    lookahead on the residual fail elements that Passes A and B
+    cannot crack. For each fail element it tries (op1, op2) pairs
+    drawn from ``lookahead_op1_inventory`` × ``lookahead_op2_inventory``;
+    op1 is applied with ``force=True`` (validity-only — penalty gate
+    bypassed) so it can act as a "barrier-crosser", then op2 is
+    searched on the elements overlapping op1's affected region. The
+    pair is accepted iff the union penalty over op1 ∪ op2 affected
+    nodes strictly drops vs the round-start mesh. Restricted to the
+    PoC #44 inventory by default (op1 ∈ ``{smooth_node, vertex_remove}``,
+    op2 = ``smooth_node``); 1000-element dry-run extrapolation gave
+    61 % additional fixable on the v3 residual.
+
+    The three passes alternate: Pass A runs to exhaustion, Pass B
+    up to ``max_topology_per_round`` accepts, Pass C up to
+    ``max_lookahead_per_round`` accepts. After Pass C accepts the
+    Pass A loop cleans up perturbations on the next outer round.
+    The loop terminates when every enabled pass contributes zero
+    accepts in the same round, or when ``max_outer_rounds`` is hit.
 
     Returns ``(new_mesh, info)`` with operator histograms, sweep
-    counts, and pre/post quality summaries.
+    counts, lookahead pair-histogram, and pre/post quality summaries.
     """
     cur = Fort14Mesh(
         title=mesh.title,
@@ -1162,6 +1500,12 @@ def phase_h_optimize(
         "n_smooth_sweeps": 0,
         "n_outer_rounds": 0,
         "n_abandoned": 0,
+        "lookahead_enabled": bool(lookahead_enabled),
+        "lookahead_op1_inventory": list(lookahead_op1_inventory),
+        "lookahead_op2_inventory": list(lookahead_op2_inventory),
+        "max_lookahead_per_round": int(max_lookahead_per_round),
+        "lookahead_pairs_applied": defaultdict(int),
+        "n_lookahead_abandoned": 0,
     }
 
     a0, m0 = _per_element_quality(cur.nodes, cur.elements)
@@ -1219,6 +1563,24 @@ def phase_h_optimize(
                 round_accepts += int(n)
             info["n_abandoned"] = n_aband
 
+        # Pass C (v4): 2-step lookahead, opt-in. Runs after Pass B so
+        # it sees the freshest 1-step-exhausted residual.
+        if lookahead_enabled:
+            cur, pair_acc, n_la_aband = _lookahead_round(
+                cur,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                op1_inventory=lookahead_op1_inventory,
+                op2_inventory=lookahead_op2_inventory,
+                max_lookahead_accepts=max_lookahead_per_round,
+                coastline_projector=coastline_projector,
+            )
+            for pair_label, n in pair_acc.items():
+                info["lookahead_pairs_applied"][pair_label] += int(n)
+                info["n_iters"] += int(n)
+                round_accepts += int(n)
+            info["n_lookahead_abandoned"] = n_la_aband
+
         if round_accepts == 0:
             break
 
@@ -1234,12 +1596,15 @@ def phase_h_optimize(
     info["n_nodes"] = int(cur.n_nodes)
     info["n_elements"] = int(cur.n_elements)
     info["operators_applied"] = dict(info["operators_applied"])
+    info["lookahead_pairs_applied"] = dict(info["lookahead_pairs_applied"])
     return cur, info
 
 
 __all__ = [
     "CoastlineProjector",
     "DEFAULT_ALPHA_TARGET",
+    "DEFAULT_LOOKAHEAD_OP1_INVENTORY",
+    "DEFAULT_LOOKAHEAD_OP2_INVENTORY",
     "DEFAULT_MIN_ANGLE_TARGET",
     "DEFAULT_OPERATOR_ORDER",
     "build_coastline_projector",

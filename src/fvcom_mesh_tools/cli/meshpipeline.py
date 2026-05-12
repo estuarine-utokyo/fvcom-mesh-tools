@@ -120,6 +120,9 @@ def _build_rung_overlays(args: argparse.Namespace) -> list[tuple[str, dict]]:
                     list(args.phase_h_coastline) or None,
                 "phase_h_max_snap_distance_m":
                     float(args.phase_h_max_snap_m),
+                "phase_h_lookahead": bool(args.phase_h_lookahead),
+                "phase_h_max_lookahead_per_round":
+                    int(args.phase_h_max_lookahead_per_round),
             },
         ),
     ]
@@ -290,6 +293,23 @@ def build_parser() -> argparse.ArgumentParser:
     g_rung3.add_argument(
         "--phase-h-max-snap-m", type=float, default=500.0,
         help="Phase H coastline snap radius (metres). Default 500.",
+    )
+    g_rung3.add_argument(
+        "--phase-h-lookahead", action="store_true",
+        help=(
+            "Phase H v4 (opt-in): enable Pass C 2-step lookahead "
+            "after every Pass B in rung 3. Restricted inventory "
+            "op1 ∈ {smooth_node, vertex_remove} (force=True) × "
+            "op2 = smooth_node, union-penalty gate. PoC #44 measured "
+            "+61%% fixable on the v3 residual."
+        ),
+    )
+    g_rung3.add_argument(
+        "--phase-h-max-lookahead-per-round", type=int, default=10_000,
+        help=(
+            "Phase H v4 cap on 2-step accepts per Pass C round. "
+            "Default 10000."
+        ),
     )
 
     g_thresh = p.add_argument_group("quality thresholds (any → CI gate)")
