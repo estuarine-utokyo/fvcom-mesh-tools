@@ -28,7 +28,34 @@ per-element gate.
 This is what SMS users do by hand: identify a bad neighbourhood,
 delete the local mesh inside a chosen boundary, re-mesh.
 
-### 1.1 Empirical cluster structure (v3 residual)
+### 1.1 v4.1 theoretical ceiling (PoC #44b)
+
+The companion read-only dry-run
+``notebooks/44b_phase_h_target_exits_dry_run_poc.py`` measured the
+v4.1 ``target_exits_fail`` gate on the same n=1,000 random sample
+of the v3 residual that PoC #44 used. The result is striking:
+
+  partition                                   count   share
+  ------------------------------------------- ------- -------
+  1-step strict fixable (sanity ✓)                 0    0.0 %
+  op1-only (smooth_node alone exits E from fail)  20    2.0 %
+  2-step (smooth_node + smooth_node)              26    2.6 %
+  unfixable                                      954   95.4 %
+
+The v4.1 driver's theoretical ceiling on this benchmark is
+**4.6 %** of the v3 residual — extrapolated to 11,015 fails,
+≈ 510 elements. PoC #45's 61 % "fixable" under the
+``union_penalty`` gate dropped to 4.6 % under the strict
+``target_exits_fail`` gate; the gap shows how many accepts the
+v4 gate let through that did not actually fix the target.
+
+**Implication for Pass D**: Pass C v4.1 closes at most ~510 of the
+11,015 v3 residual fails. The remaining ~10,500 (95.4 %) are the
+real market for Pass D — and the cluster-structure analysis below
+shows 51.4 % of them sit in clusters of size ≥ 3 where no
+sequence of 1-ring edits can help.
+
+### 1.2 Empirical cluster structure (v3 residual)
 
 The cluster-scale assumption was tested directly. Running the
 read-only analysis ``notebooks/47a_cluster_structure_analysis.py``
