@@ -1638,6 +1638,7 @@ def clean_mesh(
     phase_h_max_snap_distance_m: float = 500.0,
     phase_h_lookahead: bool = False,
     phase_h_max_lookahead_per_round: int = 10_000,
+    phase_h_lookahead_gate: str = "target_exits_fail",
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Run Phase A (component pruning) and Phase B (dead-end trimming).
 
@@ -1804,6 +1805,7 @@ def clean_mesh(
             "phase_h_lookahead": bool(phase_h_lookahead),
             "phase_h_max_lookahead_per_round":
                 int(phase_h_max_lookahead_per_round),
+            "phase_h_lookahead_gate": str(phase_h_lookahead_gate),
         },
         "phases": [],
     }
@@ -1933,6 +1935,7 @@ def clean_mesh(
             coastline_projector=projector,
             lookahead_enabled=bool(phase_h_lookahead),
             max_lookahead_per_round=int(phase_h_max_lookahead_per_round),
+            lookahead_gate=str(phase_h_lookahead_gate),
         )
         info["phases"].append({"name": "phase_h_optimize", **h_info})
 

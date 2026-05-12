@@ -305,6 +305,111 @@ def test_lookahead_round_accepts_barrier_crossing_pair() -> None:
     assert (cross > 0).all(), "lookahead must not produce flipped tris"
 
 
+def test_target_exits_fail_returns_true_for_absent_vertex_set() -> None:
+    """v4.1: the target is considered "fixed by elimination" when its
+    vertex set is absent from the post-op mesh — e.g. when op1 was a
+    vertex_remove that deleted one of E's vertices, the triangle that
+    was E no longer exists.
+    """
+    from fvcom_mesh_tools.mesh_clean_phase_h import (  # noqa: PLC0415
+        _target_exits_fail,
+    )
+    nodes = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.5, 0.866]], dtype=float,
+    )
+    elements = np.array([[0, 1, 2]], dtype=np.int64)
+    mesh = Fort14Mesh(
+        title="t", nodes=nodes, depths=np.zeros(3), elements=elements,
+        open_boundaries=[],
+        land_boundaries=[(0, np.array([0, 1, 2, 0], dtype=np.int64))],
+    )
+    # A target vertex set that does not exist in mesh's elements.
+    target = frozenset({0, 1, 99})
+    assert _target_exits_fail(
+        mesh, target, alpha_target=0.95, min_angle_target=20.0,
+    ) is True
+
+
+def test_target_exits_fail_returns_true_for_passing_target() -> None:
+    """v4.1: equilateral triangle has alpha ≈ 1, min_angle 60° → passes."""
+    from fvcom_mesh_tools.mesh_clean_phase_h import (  # noqa: PLC0415
+        _target_exits_fail,
+    )
+    nodes = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.5, 0.866]], dtype=float,
+    )
+    elements = np.array([[0, 1, 2]], dtype=np.int64)
+    mesh = Fort14Mesh(
+        title="t", nodes=nodes, depths=np.zeros(3), elements=elements,
+        open_boundaries=[],
+        land_boundaries=[(0, np.array([0, 1, 2, 0], dtype=np.int64))],
+    )
+    assert _target_exits_fail(
+        mesh, frozenset({0, 1, 2}),
+        alpha_target=0.95, min_angle_target=20.0,
+    ) is True
+
+
+def test_target_exits_fail_returns_false_for_failing_target() -> None:
+    """v4.1: a sliver triangle (alpha low, min_angle small) → fails."""
+    from fvcom_mesh_tools.mesh_clean_phase_h import (  # noqa: PLC0415
+        _target_exits_fail,
+    )
+    # Sliver: vertices (0,0), (1,0), (0.5, 0.05) → min_angle very small.
+    nodes = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.5, 0.05]], dtype=float,
+    )
+    elements = np.array([[0, 1, 2]], dtype=np.int64)
+    mesh = Fort14Mesh(
+        title="t", nodes=nodes, depths=np.zeros(3), elements=elements,
+        open_boundaries=[],
+        land_boundaries=[(0, np.array([0, 1, 2, 0], dtype=np.int64))],
+    )
+    assert _target_exits_fail(
+        mesh, frozenset({0, 1, 2}),
+        alpha_target=0.95, min_angle_target=20.0,
+    ) is False
+
+
+def test_phase_h_optimize_lookahead_gates_round_trip() -> None:
+    """v4.1 / v4: both gates run cleanly under the driver. Smoke
+    test — assert no exceptions, no flipped triangles, info records
+    the gate name.
+    """
+    mesh = _skewed_quad()
+    for gate in ("target_exits_fail", "union_penalty"):
+        out_mesh, info = phase_h_optimize(
+            mesh,
+            alpha_target=0.95, min_angle_target=20.0,
+            max_outer_rounds=3,
+            lookahead_enabled=True,
+            max_lookahead_per_round=32,
+            lookahead_gate=gate,
+        )
+        assert info["lookahead_gate"] == gate
+        # Mesh stays valid.
+        p0 = out_mesh.nodes[out_mesh.elements[:, 0]]
+        p1 = out_mesh.nodes[out_mesh.elements[:, 1]]
+        p2 = out_mesh.nodes[out_mesh.elements[:, 2]]
+        cross = (
+            (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+            - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+        )
+        assert (cross > 0).all(), f"gate={gate} flipped triangles"
+
+
+def test_phase_h_optimize_rejects_unknown_gate() -> None:
+    """Passing an unknown gate string must error early."""
+    mesh = _skewed_quad()
+    import pytest
+    with pytest.raises(ValueError, match="unknown lookahead_gate"):
+        phase_h_optimize(
+            mesh,
+            lookahead_enabled=True,
+            lookahead_gate="not_a_real_gate",
+        )
+
+
 def test_phase_h_optimize_no_op_on_clean_mesh() -> None:
     """A near-equilateral mesh has no fail elements and zero
     iterations."""

@@ -1215,6 +1215,53 @@ def _ctx_for_lookahead(mesh: Fort14Mesh) -> dict[str, Any]:
     }
 
 
+#: Acceptance gates available to :func:`_try_lookahead_pair`. The
+#: PoC #45 negative result motivates the stricter v4.1 default
+#: ``"target_exits_fail"``: each accept guarantees the target
+#: element exits fail status (alpha ≥ alpha_target ∧ min_angle ≥
+#: min_angle_target) on the resulting mesh, or has been removed by
+#: the operator chain (vertex_remove of one of its vertices).
+#: ``"union_penalty"`` reproduces the v4 behaviour (accept iff
+#: penalty over op1 ∪ op2 affected nodes strictly drops); kept for
+#: reproducibility of PoC #45.
+LOOKAHEAD_GATES: tuple[str, ...] = ("target_exits_fail", "union_penalty")
+DEFAULT_LOOKAHEAD_GATE: str = "target_exits_fail"
+
+
+def _target_exits_fail(
+    m_after: Fort14Mesh, target_vset: frozenset[int], *,
+    alpha_target: float, min_angle_target: float,
+) -> bool:
+    """v4.1 acceptance gate. Returns True iff the triangle whose
+    vertex set equals ``target_vset`` either:
+
+    * is absent from ``m_after`` (the operator chain removed it —
+      typically ``op1 = vertex_remove`` of one of its vertices, or
+      an edge_split that replaced it) — "fixed by elimination", or
+    * is present and passes the per-element quality gate
+      (``alpha >= alpha_target ∧ min_angle >= min_angle_target``).
+
+    The target is located by vertex set rather than by element ID
+    because topology ops shift element IDs. Robust to any of the
+    Phase H operators that touch ``E``.
+    """
+    target = set(target_vset)
+    if len(target) != 3:
+        return False
+    v0 = next(iter(target))
+    mask = (m_after.elements == v0).any(axis=1)
+    for eid in np.where(mask)[0]:
+        if set(int(x) for x in m_after.elements[eid]) == target:
+            block = m_after.elements[[int(eid)]]
+            a, m = _per_element_quality(m_after.nodes, block)
+            return bool(
+                float(a[0]) >= alpha_target
+                and float(m[0]) >= min_angle_target
+            )
+    # Vertex set absent ⇒ target was removed by the op chain.
+    return True
+
+
 def _iter_op_candidates(
     mesh: Fort14Mesh, eid: int, op_name: str, *,
     force: bool, ctx: dict[str, Any],
@@ -1301,16 +1348,36 @@ def _try_lookahead_pair(
     op1_inventory: tuple[str, ...],
     op2_inventory: tuple[str, ...],
     coastline_projector: CoastlineProjector | None,
+    gate: str = DEFAULT_LOOKAHEAD_GATE,
 ) -> tuple[Fort14Mesh, str] | None:
-    """Search for an accepting ``(op1, op2)`` pair on fail element
-    ``eid``. op1 is applied with ``force=True`` (validity only),
-    yielding a candidate ``m1``. op2 is searched on the elements
-    overlapping op1's affected region in ``m1`` (those that still
-    fail the per-element gate). Accept iff the union penalty over
-    ``op1.affected ∪ op2.affected`` nodes strictly drops between
-    ``cur`` and the resulting ``m2``. Returns ``(m2, "op1+op2")`` on
-    the first accept (in inventory order), else ``None``.
+    """Search for an accepting ``(op1, op2)`` chain on fail element
+    ``eid``. op1 is applied with ``force=True`` (validity only);
+    op2 is searched on the elements overlapping op1's affected
+    region that still fail the per-element gate in ``m1``.
+
+    Acceptance depends on ``gate``:
+
+    * ``"target_exits_fail"`` (v4.1 default) — accept iff the
+      target element ``E`` (located in ``m_after`` by vertex set)
+      exits fail status, or was removed by the operator chain.
+      Also tries **op1-only** first: if op1 alone makes E exit
+      fail, accept without searching for op2.
+    * ``"union_penalty"`` (v4 reproduction) — accept iff the
+      penalty summed over elements touching
+      ``op1.affected ∪ op2.affected`` nodes strictly drops between
+      ``cur`` and ``m2``. No op1-only path.
+
+    Returns ``(m_after, "op1+op2")`` (or ``"op1+none"`` for an
+    op1-only accept under the ``target_exits_fail`` gate) on the
+    first accept; ``None`` if every candidate is rejected.
     """
+    if gate not in LOOKAHEAD_GATES:
+        raise ValueError(f"unknown lookahead gate: {gate!r}")
+
+    target_vset: frozenset[int] = frozenset(
+        int(v) for v in cur.elements[eid]
+    )
+
     for op1_name in op1_inventory:
         for m1, info1 in _iter_op_candidates(
             cur, eid, op1_name, force=True, ctx=ctx,
@@ -1318,6 +1385,17 @@ def _try_lookahead_pair(
             coastline_projector=coastline_projector,
         ):
             affected1_nodes = _affected_nodes_from_info(info1)
+
+            # v4.1 op1-only fast path. Only meaningful under the
+            # target_exits_fail gate — under union_penalty, op1
+            # alone is already covered by Pass B's strict gate.
+            if gate == "target_exits_fail" and _target_exits_fail(
+                m1, target_vset,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+            ):
+                return m1, f"{op1_name}+none"
+
             affected1_eids = _affected_elements_in_mesh(m1, info1)
             if not affected1_eids:
                 continue
@@ -1341,20 +1419,28 @@ def _try_lookahead_pair(
                         min_angle_target=min_angle_target,
                         coastline_projector=coastline_projector,
                     ):
-                        affected2_nodes = _affected_nodes_from_info(info2)
-                        union = affected1_nodes | affected2_nodes
-                        pen_before = _union_penalty(
-                            cur, union,
-                            alpha_target=alpha_target,
-                            min_angle_target=min_angle_target,
-                        )
-                        pen_after = _union_penalty(
-                            m2, union,
-                            alpha_target=alpha_target,
-                            min_angle_target=min_angle_target,
-                        )
-                        if pen_after + 1e-12 < pen_before:
-                            return m2, f"{op1_name}+{op2_name}"
+                        if gate == "target_exits_fail":
+                            if _target_exits_fail(
+                                m2, target_vset,
+                                alpha_target=alpha_target,
+                                min_angle_target=min_angle_target,
+                            ):
+                                return m2, f"{op1_name}+{op2_name}"
+                        else:  # union_penalty
+                            affected2_nodes = _affected_nodes_from_info(info2)
+                            union = affected1_nodes | affected2_nodes
+                            pen_before = _union_penalty(
+                                cur, union,
+                                alpha_target=alpha_target,
+                                min_angle_target=min_angle_target,
+                            )
+                            pen_after = _union_penalty(
+                                m2, union,
+                                alpha_target=alpha_target,
+                                min_angle_target=min_angle_target,
+                            )
+                            if pen_after + 1e-12 < pen_before:
+                                return m2, f"{op1_name}+{op2_name}"
     return None
 
 
@@ -1365,13 +1451,16 @@ def _lookahead_round(
     op2_inventory: tuple[str, ...],
     max_lookahead_accepts: int,
     coastline_projector: CoastlineProjector | None = None,
+    gate: str = DEFAULT_LOOKAHEAD_GATE,
 ) -> tuple[Fort14Mesh, dict[str, int], int]:
     """Pass C: 2-step lookahead. Pops fail elements by descending
-    penalty and applies the first accepting ``(op1, op2)`` pair
+    penalty and applies the first accepting ``(op1, op2)`` chain
     found by :func:`_try_lookahead_pair`. Each accept rebuilds the
-    aux dicts on the new mesh. Returns
+    aux dicts on the new mesh. ``gate`` selects the acceptance rule
+    (see :func:`_try_lookahead_pair`). Returns
     ``(updated_mesh, accepts_per_pair, n_abandoned)`` where
-    ``accepts_per_pair`` is keyed by ``"op1+op2"``.
+    ``accepts_per_pair`` is keyed by ``"op1+op2"`` (or
+    ``"op1+none"`` for op1-only accepts under the v4.1 gate).
     """
     accepts_per_pair: dict[str, int] = defaultdict(int)
     abandoned: set = set()
@@ -1409,6 +1498,7 @@ def _lookahead_round(
                 op1_inventory=op1_inventory,
                 op2_inventory=op2_inventory,
                 coastline_projector=coastline_projector,
+                gate=gate,
             )
             if applied is None:
                 abandoned.add(sig)
@@ -1439,6 +1529,7 @@ def phase_h_optimize(
     max_lookahead_per_round: int = 10_000,
     lookahead_op1_inventory: tuple[str, ...] = DEFAULT_LOOKAHEAD_OP1_INVENTORY,
     lookahead_op2_inventory: tuple[str, ...] = DEFAULT_LOOKAHEAD_OP2_INVENTORY,
+    lookahead_gate: str = DEFAULT_LOOKAHEAD_GATE,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Phase H driver: Pass A (batch smooth) ↔ Pass B (1-step topology)
     ↔ optional Pass C (2-step lookahead) until none make progress.
@@ -1455,18 +1546,34 @@ def phase_h_optimize(
     operator that strictly reduces the local penalty without
     flipping. Each accept rebuilds the aux dicts on the new mesh.
 
-    **Pass C (v4, opt-in via ``lookahead_enabled=True``)** — 2-step
-    lookahead on the residual fail elements that Passes A and B
-    cannot crack. For each fail element it tries (op1, op2) pairs
-    drawn from ``lookahead_op1_inventory`` × ``lookahead_op2_inventory``;
-    op1 is applied with ``force=True`` (validity-only — penalty gate
-    bypassed) so it can act as a "barrier-crosser", then op2 is
-    searched on the elements overlapping op1's affected region. The
-    pair is accepted iff the union penalty over op1 ∪ op2 affected
-    nodes strictly drops vs the round-start mesh. Restricted to the
-    PoC #44 inventory by default (op1 ∈ ``{smooth_node, vertex_remove}``,
-    op2 = ``smooth_node``); 1000-element dry-run extrapolation gave
-    61 % additional fixable on the v3 residual.
+    **Pass C (v4 / v4.1, opt-in via ``lookahead_enabled=True``)** —
+    2-step lookahead on the residual fail elements that Passes A
+    and B cannot crack. For each fail element it tries op1
+    (``force=True`` — validity-only) drawn from
+    ``lookahead_op1_inventory``, optionally followed by op2 from
+    ``lookahead_op2_inventory`` on the affected region. Acceptance
+    is controlled by ``lookahead_gate``:
+
+    * ``"target_exits_fail"`` (v4.1, default) — accept iff the
+      target element ``E`` exits fail status on the post-op mesh
+      (``alpha(E) >= alpha_target ∧ min_angle(E) >= min_angle_target``)
+      or was removed by the op chain. This is the SMS-manual-edit
+      standard: each accept guarantees the target is fixed.  An
+      **op1-only** path is enabled — op1 alone is accepted if it
+      already takes ``E`` out of fail, without searching op2.
+    * ``"union_penalty"`` (v4 reproduction) — accept iff the
+      penalty summed over elements touching ``op1.affected ∪
+      op2.affected`` nodes strictly drops between the round-start
+      mesh and the post-op mesh. Reproduces the PoC #45 baseline;
+      use only for benchmarking against the v4 negative result.
+
+    The PoC #44 dry-run measured 61 % "fixable" pairs under the
+    ``union_penalty`` gate but PoC #45 showed the v4 driver
+    delivers ≈ 0 net fail-count change due to local-gate thrashing.
+    The ``target_exits_fail`` default sidesteps this by demanding
+    each accept *strictly* fix the failing target. Default
+    inventory restricts op1 ∈ ``{smooth_node, vertex_remove}`` and
+    op2 = ``smooth_node`` from PoC #44's accepted-pair histogram.
 
     The three passes alternate: Pass A runs to exhaustion, Pass B
     up to ``max_topology_per_round`` accepts, Pass C up to
@@ -1503,10 +1610,16 @@ def phase_h_optimize(
         "lookahead_enabled": bool(lookahead_enabled),
         "lookahead_op1_inventory": list(lookahead_op1_inventory),
         "lookahead_op2_inventory": list(lookahead_op2_inventory),
+        "lookahead_gate": str(lookahead_gate),
         "max_lookahead_per_round": int(max_lookahead_per_round),
         "lookahead_pairs_applied": defaultdict(int),
         "n_lookahead_abandoned": 0,
     }
+    if lookahead_gate not in LOOKAHEAD_GATES:
+        raise ValueError(
+            f"unknown lookahead_gate {lookahead_gate!r}; "
+            f"expected one of {LOOKAHEAD_GATES}"
+        )
 
     a0, m0 = _per_element_quality(cur.nodes, cur.elements)
     fail0 = _is_fail(
@@ -1574,6 +1687,7 @@ def phase_h_optimize(
                 op2_inventory=lookahead_op2_inventory,
                 max_lookahead_accepts=max_lookahead_per_round,
                 coastline_projector=coastline_projector,
+                gate=lookahead_gate,
             )
             for pair_label, n in pair_acc.items():
                 info["lookahead_pairs_applied"][pair_label] += int(n)
@@ -1603,10 +1717,12 @@ def phase_h_optimize(
 __all__ = [
     "CoastlineProjector",
     "DEFAULT_ALPHA_TARGET",
+    "DEFAULT_LOOKAHEAD_GATE",
     "DEFAULT_LOOKAHEAD_OP1_INVENTORY",
     "DEFAULT_LOOKAHEAD_OP2_INVENTORY",
     "DEFAULT_MIN_ANGLE_TARGET",
     "DEFAULT_OPERATOR_ORDER",
+    "LOOKAHEAD_GATES",
     "build_coastline_projector",
     "phase_h_optimize",
 ]

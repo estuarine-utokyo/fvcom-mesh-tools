@@ -1,0 +1,27 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=06:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc46
+
+# PoC #46: Phase H v4.1 end-to-end (target-exits-fail gate).
+# Compares to PoC #43 (v3) and PoC #45 (v4 union_penalty).
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+export PYTHONUNBUFFERED=1
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u notebooks/46_phase_h_v4_1_validation_poc.py

@@ -123,6 +123,7 @@ def _build_rung_overlays(args: argparse.Namespace) -> list[tuple[str, dict]]:
                 "phase_h_lookahead": bool(args.phase_h_lookahead),
                 "phase_h_max_lookahead_per_round":
                     int(args.phase_h_max_lookahead_per_round),
+                "phase_h_lookahead_gate": str(args.phase_h_lookahead_gate),
             },
         ),
     ]
@@ -309,6 +310,18 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Phase H v4 cap on 2-step accepts per Pass C round. "
             "Default 10000."
+        ),
+    )
+    g_rung3.add_argument(
+        "--phase-h-lookahead-gate",
+        choices=("target_exits_fail", "union_penalty"),
+        default="target_exits_fail",
+        help=(
+            "Phase H v4 / v4.1 Pass C accept criterion. Default "
+            "'target_exits_fail' (v4.1) requires the failing target "
+            "to exit fail status on the post-op mesh. "
+            "'union_penalty' reproduces v4 / PoC #45 (a known-bad "
+            "baseline; see CHANGELOG)."
         ),
     )
 

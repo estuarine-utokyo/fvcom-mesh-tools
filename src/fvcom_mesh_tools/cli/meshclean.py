@@ -436,6 +436,22 @@ def build_parser() -> argparse.ArgumentParser:
             "~250 ms / accept on a 47 k-element mesh."
         ),
     )
+    p.add_argument(
+        "--phase-h-lookahead-gate",
+        choices=("target_exits_fail", "union_penalty"),
+        default="target_exits_fail",
+        help=(
+            "Phase H v4 / v4.1 Pass C acceptance criterion. "
+            "'target_exits_fail' (v4.1 default, recommended) accepts "
+            "iff the failing target element E exits fail status on "
+            "the post-op mesh — the SMS manual-edit standard. Each "
+            "accept strictly fixes the target. 'union_penalty' "
+            "reproduces the v4 baseline (accept iff penalty over "
+            "op1 ∪ op2 affected nodes strictly drops); PoC #45 "
+            "showed this leads to thrashing and a net 0 fail-count "
+            "improvement on Tokyo Bay. Kept for benchmarking only."
+        ),
+    )
 
     p.add_argument(
         "--summary", type=Path, default=None,
@@ -606,6 +622,7 @@ def main(argv: list[str] | None = None) -> int:
         phase_h_max_snap_distance_m=args.phase_h_max_snap_m,
         phase_h_lookahead=args.phase_h_lookahead,
         phase_h_max_lookahead_per_round=args.phase_h_max_lookahead_per_round,
+        phase_h_lookahead_gate=args.phase_h_lookahead_gate,
     )
     write_fort14(cleaned, args.output)
 
