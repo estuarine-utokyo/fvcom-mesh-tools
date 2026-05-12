@@ -1105,16 +1105,22 @@ def _topology_round(
     return cur, dict(accepts_per_op), len(abandoned)
 
 
-#: Inventory used by ``_lookahead_round`` (Pass C). PoC #44 shows
-#: that on the v3 residual only these two op1 types ever produce an
-#: accepting 2-step pair — every other op1 (edge_swap, edge_split_*)
-#: fails to yield a union-penalty improvement. We hard-code the
-#: restricted inventory as a default; callers can override via the
-#: ``lookahead_op1_inventory`` / ``lookahead_op2_inventory`` kwargs
-#: if they want to explore wider.
-DEFAULT_LOOKAHEAD_OP1_INVENTORY: tuple[str, ...] = (
-    "smooth_node", "vertex_remove",
-)
+#: Default inventory for Pass C op1. Restricted to ``smooth_node``
+#: because:
+#:
+#:   * Under the v4.1 ``target_exits_fail`` gate, destructive ops
+#:     (``vertex_remove``, ``edge_split_*``, ``edge_swap``) erase
+#:     the target's vertex set so the gate rejects them by
+#:     construction. Including them only burns compute.
+#:   * Under the legacy v4 ``union_penalty`` gate, PoC #44 measured
+#:     ``vertex_remove + smooth_node`` to be 53 % of accepted pairs
+#:     in dry-run but only 0.8 % in the iterative driver (PoC #45);
+#:     the productive yield is small enough that defaulting to the
+#:     narrower inventory is a better cost/benefit trade.
+#:
+#: Callers can opt back into the wider inventory via the
+#: ``lookahead_op1_inventory`` kwarg when reproducing PoC #45.
+DEFAULT_LOOKAHEAD_OP1_INVENTORY: tuple[str, ...] = ("smooth_node",)
 DEFAULT_LOOKAHEAD_OP2_INVENTORY: tuple[str, ...] = ("smooth_node",)
 
 
@@ -1232,18 +1238,25 @@ def _target_exits_fail(
     m_after: Fort14Mesh, target_vset: frozenset[int], *,
     alpha_target: float, min_angle_target: float,
 ) -> bool:
-    """v4.1 acceptance gate. Returns True iff the triangle whose
-    vertex set equals ``target_vset`` either:
-
-    * is absent from ``m_after`` (the operator chain removed it —
-      typically ``op1 = vertex_remove`` of one of its vertices, or
-      an edge_split that replaced it) — "fixed by elimination", or
-    * is present and passes the per-element quality gate
-      (``alpha >= alpha_target ∧ min_angle >= min_angle_target``).
+    """v4.1 acceptance gate (strict). Returns True iff the triangle
+    whose vertex set equals ``target_vset`` is **present in
+    ``m_after``** and passes the per-element quality gate
+    (``alpha >= alpha_target ∧ min_angle >= min_angle_target``).
 
     The target is located by vertex set rather than by element ID
-    because topology ops shift element IDs. Robust to any of the
-    Phase H operators that touch ``E``.
+    because topology ops shift element IDs.
+
+    **An absent vertex set returns False, not True.** An earlier
+    "fixed by elimination" interpretation produced PoC #46's
+    catastrophic regression: under the (smooth_node, vertex_remove)
+    inventory, vertex_remove deletes E by construction, so the
+    elimination branch made every valid vertex_remove auto-accept
+    and ~19 600 interior vertices were stripped from the Tokyo-Bay
+    mesh, dropping ``n_elements`` 47 426 → 7 050 with
+    ``alpha_p05`` 0.88 → 0.14 and ``frac<20°`` 0.13 % → 39.5 %.
+    The strict spec demands that ``alpha(E)`` and ``min_angle(E)``
+    actually exist and pass, which is only meaningful when E
+    itself survives the operator chain.
     """
     target = set(target_vset)
     if len(target) != 3:
@@ -1258,8 +1271,7 @@ def _target_exits_fail(
                 float(a[0]) >= alpha_target
                 and float(m[0]) >= min_angle_target
             )
-    # Vertex set absent ⇒ target was removed by the op chain.
-    return True
+    return False
 
 
 def _iter_op_candidates(

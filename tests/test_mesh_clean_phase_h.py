@@ -248,7 +248,7 @@ def test_phase_h_optimize_lookahead_enabled_path() -> None:
     )
     assert info["lookahead_enabled"] is True
     assert isinstance(info["lookahead_pairs_applied"], dict)
-    assert info["lookahead_op1_inventory"] == ["smooth_node", "vertex_remove"]
+    assert info["lookahead_op1_inventory"] == ["smooth_node"]
     assert info["lookahead_op2_inventory"] == ["smooth_node"]
     # Mesh stays valid (no flipped triangles).
     p0 = out_mesh.nodes[out_mesh.elements[:, 0]]
@@ -279,6 +279,18 @@ def test_lookahead_round_accepts_barrier_crossing_pair() -> None:
     )
 
     mesh = _skewed_quad()
+
+    def _n_flipped(m):
+        p0 = m.nodes[m.elements[:, 0]]
+        p1 = m.nodes[m.elements[:, 1]]
+        p2 = m.nodes[m.elements[:, 2]]
+        cross = (
+            (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+            - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+        )
+        return int((cross <= 0).sum())
+
+    n_flipped_before = _n_flipped(mesh)
     cur, accepts, _ = _lookahead_round(
         mesh,
         alpha_target=0.95, min_angle_target=20.0,
@@ -289,27 +301,27 @@ def test_lookahead_round_accepts_barrier_crossing_pair() -> None:
     # The skewed-quad has fail elements that 1-step already fixes
     # (Pass A/B path); the lookahead path may or may not fire on
     # the same fixture depending on which fails 1-step still leaves
-    # behind. We assert only that the round runs cleanly and
-    # returns a well-formed result.
+    # behind. We assert only that the round runs cleanly, returns a
+    # well-formed result, and does not introduce new flipped tris
+    # (the fixture itself has one pre-flipped element by
+    # construction).
     assert isinstance(accepts, dict)
     assert all(
         isinstance(k, str) and "+" in k for k in accepts
     ), "pair labels must be 'op1+op2' strings"
-    p0 = cur.nodes[cur.elements[:, 0]]
-    p1 = cur.nodes[cur.elements[:, 1]]
-    p2 = cur.nodes[cur.elements[:, 2]]
-    cross = (
-        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
-        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    assert _n_flipped(cur) <= n_flipped_before, (
+        "lookahead must not introduce new flipped triangles"
     )
-    assert (cross > 0).all(), "lookahead must not produce flipped tris"
 
 
-def test_target_exits_fail_returns_true_for_absent_vertex_set() -> None:
-    """v4.1: the target is considered "fixed by elimination" when its
-    vertex set is absent from the post-op mesh — e.g. when op1 was a
-    vertex_remove that deleted one of E's vertices, the triangle that
-    was E no longer exists.
+def test_target_exits_fail_rejects_absent_vertex_set() -> None:
+    """v4.1 strict gate: an absent target vertex set is REJECTED, not
+    "fixed by elimination". The earlier permissive interpretation
+    produced PoC #46's catastrophic regression — under the default
+    inventory ``vertex_remove`` deletes E by construction, so the
+    elimination branch made every valid vertex_remove auto-accept
+    and ~19 600 interior vertices were stripped from the Tokyo-Bay
+    mesh.
     """
     from fvcom_mesh_tools.mesh_clean_phase_h import (  # noqa: PLC0415
         _target_exits_fail,
@@ -323,11 +335,10 @@ def test_target_exits_fail_returns_true_for_absent_vertex_set() -> None:
         open_boundaries=[],
         land_boundaries=[(0, np.array([0, 1, 2, 0], dtype=np.int64))],
     )
-    # A target vertex set that does not exist in mesh's elements.
     target = frozenset({0, 1, 99})
     assert _target_exits_fail(
         mesh, target, alpha_target=0.95, min_angle_target=20.0,
-    ) is True
+    ) is False
 
 
 def test_target_exits_fail_returns_true_for_passing_target() -> None:
