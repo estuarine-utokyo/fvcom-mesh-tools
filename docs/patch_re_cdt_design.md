@@ -1,8 +1,11 @@
 # Phase H Pass D — cluster-scale patch re-CDT (design sketch)
 
-**Status:** design only, no implementation. Drafted while waiting on
-PoC #46 (fixed v4.1) so the next operator class is ready to scope
-once v4.1's ceiling is known.
+**Status:** v1 implemented; PoC #47a dry-run confirms 0 accepts at
+``alpha_target=0.95`` with the default boundary-reject policy.
+PoC #47b parameter sweep (below, § 1.3) attributes the failure to
+two structural barriers — Delaunay quality and boundary handling —
+and motivates a v2 with adaptive spine points + boundary segment
+book-keeping.
 
 ## 1. Motivation
 
@@ -91,6 +94,57 @@ distribution is well-bounded (max 20, mean 2.08, median 1) and a
 ``max_cluster_size`` of 100 leaves no cluster unhandled. Pass D's
 upper bound is 74.5 % of residual fails (everything in size ≥ 2);
 the realistic target is the 62.2 % cumulative coverage at size ≥ 3.
+
+### 1.3 PoC #47a dry-run + #47b sweep (v1 result)
+
+PoC #47a (``notebooks/47a_phase_h_pass_d_dry_run_poc.py``) tries
+``_attempt_patch_recdt`` on every fail cluster in
+``[3, 100]`` size range. With the v1 defaults
+(``alpha_target=0.95``, ``reject_boundary_clusters=True``):
+
+* **0 / 1 217 clusters accepted (0.0 %)**
+* Reject reason histogram:
+  * ``rim_on_boundary`` — 685 (56.3 %) — clusters whose rim sits
+    on a Tokyo-Bay coastline segment
+  * ``gate1_alpha`` — 523 (43.0 %) — pure-Delaunay re-mesh of the
+    rim polygon produces at least one triangle below
+    ``alpha_target``
+  * ``rim_walk_failed`` — 9 (0.7 %) — non-simply-connected rim
+  * ``gate2_rim_regression`` — 0 (the strict gate never fires;
+    whenever Gate 1 passes, Gate 2 passes too)
+
+PoC #47b (``notebooks/47b_phase_h_pass_d_sweep.py``) sweeps
+``alpha_target ∈ {0.95, 0.85, 0.75}`` × ``reject_boundary ∈
+{True, False}`` to quantify the two barriers:
+
+    α_target  reject_bnd   accepted   cluster_%   fail_%   top reject
+    -------   ----------   --------   ---------   ------   -----------
+    0.95      True              0       0.0 %     0.0 %   rim_on_boundary=685
+    0.95      False             0       0.0 %     0.0 %   gate1_alpha=1208
+    0.85      True            468      38.5 %    18.9 %   rim_on_boundary=685
+    0.85      False           919      75.5 %    35.5 %   gate1_alpha=289
+    0.75      True            500      41.1 %    21.1 %   rim_on_boundary=685
+    0.75      False         1 125      92.4 %    45.8 %   gate1_alpha=83
+
+**Conclusion: Pass D v1 as designed is non-viable on Tokyo Bay.**
+The pure-Delaunay rim re-mesh cannot lift cluster quality above
+``alpha=0.95`` (43 % of clusters fail Gate 1), and the conservative
+boundary-reject policy blocks another 56 % (rim on coast). The
+intersection blocks the rest.
+
+To unlock the design's projected 51 % addressable share, v2 needs
+both:
+
+* **Adaptive spine points** (Steiner / density-driven interior
+  nodes), borrowed from PoC #37 Stage 2 medial-axis: lifts Gate 1
+  pass rate by densifying the re-mesh away from the rim.
+* **Boundary segment book-keeping**: walk the cluster's rim, track
+  which rim edges coincide with an open / land segment, preserve
+  the segment ordering through the re-mesh so the boundary lists
+  stay valid. Lifts ``rim_on_boundary`` rejections.
+
+Without these v2 enhancements, ``--phase-h-patch-recdt`` is left
+off by default and documented as a known-low-yield baseline.
 
 ## 2. Hypothesis
 

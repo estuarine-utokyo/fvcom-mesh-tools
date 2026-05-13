@@ -124,6 +124,16 @@ def _build_rung_overlays(args: argparse.Namespace) -> list[tuple[str, dict]]:
                 "phase_h_max_lookahead_per_round":
                     int(args.phase_h_max_lookahead_per_round),
                 "phase_h_lookahead_gate": str(args.phase_h_lookahead_gate),
+                "phase_h_patch_recdt": bool(args.phase_h_patch_recdt),
+                "phase_h_patch_min_cluster_size":
+                    int(args.phase_h_patch_min_cluster_size),
+                "phase_h_patch_max_cluster_size":
+                    int(args.phase_h_patch_max_cluster_size),
+                "phase_h_max_patches_per_round":
+                    int(args.phase_h_max_patches_per_round),
+                "phase_h_patch_reject_boundary_clusters": (
+                    not args.phase_h_patch_allow_boundary_clusters
+                ),
             },
         ),
     ]
@@ -322,6 +332,34 @@ def build_parser() -> argparse.ArgumentParser:
             "to exit fail status on the post-op mesh. "
             "'union_penalty' reproduces v4 / PoC #45 (a known-bad "
             "baseline; see CHANGELOG)."
+        ),
+    )
+    g_rung3.add_argument(
+        "--phase-h-patch-recdt", action="store_true",
+        help=(
+            "Phase H Pass D (opt-in): cluster patch re-CDT. Targets "
+            "size>=3 fail clusters where 1-ring lookahead cannot "
+            "help. See docs/patch_re_cdt_design.md."
+        ),
+    )
+    g_rung3.add_argument(
+        "--phase-h-patch-min-cluster-size", type=int, default=3,
+        help="Pass D min cluster size. Default 3.",
+    )
+    g_rung3.add_argument(
+        "--phase-h-patch-max-cluster-size", type=int, default=100,
+        help="Pass D max cluster size. Default 100.",
+    )
+    g_rung3.add_argument(
+        "--phase-h-max-patches-per-round", type=int, default=1_000,
+        help="Pass D patches-per-round cap. Default 1000.",
+    )
+    g_rung3.add_argument(
+        "--phase-h-patch-allow-boundary-clusters", action="store_true",
+        help=(
+            "EXPERIMENTAL: let Pass D attempt clusters whose rim "
+            "touches an open / land boundary segment. May corrupt "
+            "boundary metadata; default disabled."
         ),
     )
 

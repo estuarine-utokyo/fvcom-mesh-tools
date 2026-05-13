@@ -1527,6 +1527,338 @@ def _lookahead_round(
     return cur, dict(accepts_per_pair), len(abandoned)
 
 
+# ---------------------------------------------------------------------------
+# Pass D — cluster-scale patch re-CDT
+#
+# Design rationale: ``docs/patch_re_cdt_design.md``. PoC #47a-prep
+# established that 51 % of the Tokyo-Bay v3 residual sits in
+# face-face-adjacency clusters of size >= 3, which no 1-ring local
+# edit can repair. Pass D extracts the rim polygon of a fail
+# cluster, drops its interior, and re-triangulates the polygon as a
+# pure Delaunay patch. Strict acceptance: every new patch element
+# must pass the per-element gate, and the rim 1-ring outside the
+# cluster must not gain new fails (no 2-ring drift).
+# ---------------------------------------------------------------------------
+
+
+#: Pass D default min cluster size. Below 3, the Pass C lookahead is
+#: the right tool (PoC #44b measured a 4.6 % theoretical ceiling
+#: there). Setting min=3 confines Pass D to its addressable market.
+DEFAULT_PATCH_MIN_CLUSTER_SIZE: int = 3
+
+#: Pass D default max cluster size. The PoC #47a-prep histogram
+#: showed the v3 residual's largest cluster is 20; 100 is a safety
+#: margin for other meshes. Larger clusters indicate a different
+#: failure mode (likely Phase E under-resolved channels) and Pass D
+#: should defer rather than attempt a costly re-CDT.
+DEFAULT_PATCH_MAX_CLUSTER_SIZE: int = 100
+
+
+def _find_fail_clusters(
+    mesh: Fort14Mesh, *,
+    alpha_target: float, min_angle_target: float,
+    min_cluster_size: int = DEFAULT_PATCH_MIN_CLUSTER_SIZE,
+    max_cluster_size: int = DEFAULT_PATCH_MAX_CLUSTER_SIZE,
+) -> list[np.ndarray]:
+    """Identify connected components of fail elements under
+    face-face adjacency. Returns a list of (element-id arrays),
+    sorted by size (largest first). Clusters with size outside
+    ``[min_cluster_size, max_cluster_size]`` are filtered out.
+    Lazy-imports its scipy and diagnostics dependencies to keep the
+    Phase H module's startup cost bounded.
+    """
+    from scipy.sparse.csgraph import (  # noqa: PLC0415
+        connected_components,
+    )
+
+    from fvcom_mesh_tools.diagnostics import (  # noqa: PLC0415
+        face_face_adjacency,
+    )
+
+    a, m = _per_element_quality(mesh.nodes, mesh.elements)
+    fail = _is_fail(
+        a, m,
+        alpha_target=alpha_target, min_angle_target=min_angle_target,
+    )
+    if not fail.any():
+        return []
+    fail_eids = np.where(fail)[0]
+
+    adj = face_face_adjacency(mesh.elements)
+    fail_sub = adj[fail][:, fail]
+    n_components, labels = connected_components(
+        fail_sub, directed=False, return_labels=True,
+    )
+
+    clusters: list[np.ndarray] = []
+    for cid in range(n_components):
+        members = fail_eids[labels == cid]
+        size = int(members.size)
+        if min_cluster_size <= size <= max_cluster_size:
+            clusters.append(members.astype(np.int64))
+    clusters.sort(key=len, reverse=True)
+    return clusters
+
+
+def _external_rim_fail_count(
+    mesh: Fort14Mesh, rim_node_ids: np.ndarray,
+    exclude_eids: set[int], *,
+    alpha_target: float, min_angle_target: float,
+) -> int:
+    """Number of fail elements in ``mesh`` that touch any rim node
+    and are NOT in ``exclude_eids``. Used by Pass D's second gate
+    (no fail regression in the rim 1-ring outside the cluster).
+    """
+    n2e = _node_to_elements(mesh.elements, mesh.n_nodes)
+    affected: set[int] = set()
+    for n in rim_node_ids:
+        nid = int(n)
+        if 0 <= nid < mesh.n_nodes:
+            for e in n2e.get(nid, ()):
+                eid = int(e)
+                if eid not in exclude_eids:
+                    affected.add(eid)
+    if not affected:
+        return 0
+    eids = np.fromiter(affected, dtype=np.int64)
+    block = mesh.elements[eids]
+    a, m = _per_element_quality(mesh.nodes, block)
+    fail = _is_fail(
+        a, m,
+        alpha_target=alpha_target, min_angle_target=min_angle_target,
+    )
+    return int(fail.sum())
+
+
+def _attempt_patch_recdt(
+    mesh: Fort14Mesh, cluster_eids: np.ndarray, *,
+    alpha_target: float, min_angle_target: float,
+    reject_boundary_clusters: bool = True,
+) -> tuple[Fort14Mesh | None, dict[str, Any] | None, str]:
+    """Diagnostic core of Pass D's patch re-CDT operator. Returns
+    ``(new_mesh, info, reason)`` where:
+
+    * on accept: ``(new_mesh, info, "ok")``.
+    * on reject: ``(None, None, reason)`` where ``reason`` is one of
+      ``empty_cluster``, ``rim_walk_failed``, ``rim_on_boundary``,
+      ``retriangulate_failed``, ``gate1_alpha``, ``gate1_min_angle``,
+      ``gate1_flipped``, or ``gate2_rim_regression``.
+
+    The public ``_apply_patch_recdt`` wraps this to provide the
+    ``(mesh, info) | None`` shape expected by ``_patch_recdt_round``.
+    PoC #47a uses the diagnostic form directly to histogram reject
+    causes.
+    """
+    cluster_set = {int(e) for e in cluster_eids}
+    if len(cluster_set) < 1:
+        return None, None, "empty_cluster"
+    cluster_eids_arr = np.array(sorted(cluster_set), dtype=np.int64)
+
+    rim_node_ids = _patch_rim_polygon(mesh.elements, cluster_eids_arr)
+    if rim_node_ids is None:
+        return None, None, "rim_walk_failed"
+
+    if reject_boundary_clusters:
+        bnd = _boundary_node_mask(mesh)
+        if bool(bnd[rim_node_ids].any()):
+            return None, None, "rim_on_boundary"
+
+    n_rim = int(rim_node_ids.size)
+    rim_xy = mesh.nodes[rim_node_ids]
+
+    lat_centre = float(rim_xy[:, 1].mean())
+    deg_per_m_lat = 1.0 / (EARTH_R_M * np.pi / 180.0)
+    deg_per_m_lon = deg_per_m_lat / max(
+        np.cos(np.deg2rad(lat_centre)), 1e-6,
+    )
+    rim_xy_m = np.column_stack([
+        (rim_xy[:, 0] - rim_xy[0, 0]) / deg_per_m_lon,
+        (rim_xy[:, 1] - rim_xy[0, 1]) / deg_per_m_lat,
+    ])
+
+    sx, sy = rim_xy_m[:, 0], rim_xy_m[:, 1]
+    if 0.5 * float(
+        np.sum(sx * np.roll(sy, -1) - np.roll(sx, -1) * sy),
+    ) < 0:
+        rim_node_ids = rim_node_ids[::-1].copy()
+        rim_xy = mesh.nodes[rim_node_ids]
+        rim_xy_m = np.column_stack([
+            (rim_xy[:, 0] - rim_xy[0, 0]) / deg_per_m_lon,
+            (rim_xy[:, 1] - rim_xy[0, 1]) / deg_per_m_lat,
+        ])
+
+    triangles, _reason = _retriangulate_patch(
+        rim_xy_m, np.empty((0, 2), dtype=float), n_rim,
+    )
+    if triangles is None:
+        return None, None, "retriangulate_failed"
+
+    new_block = rim_node_ids[triangles].astype(mesh.elements.dtype)
+
+    # Gate 1: every new patch element passes the per-element gate.
+    a_new, m_new = _per_element_quality(mesh.nodes, new_block)
+    if bool((a_new < alpha_target).any()):
+        return None, None, "gate1_alpha"
+    if bool((m_new < min_angle_target).any()):
+        return None, None, "gate1_min_angle"
+
+    # Signed-area sanity check on the new block (redundant with
+    # _retriangulate_patch's own check, but cheap and defensive).
+    p0 = mesh.nodes[new_block[:, 0]]
+    p1 = mesh.nodes[new_block[:, 1]]
+    p2 = mesh.nodes[new_block[:, 2]]
+    cross = (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+    if bool((cross <= 0).any()):
+        return None, None, "gate1_flipped"
+
+    # Build candidate mesh.
+    keep_mask = np.ones(mesh.n_elements, dtype=bool)
+    keep_mask[cluster_eids_arr] = False
+    new_elements = np.vstack([mesh.elements[keep_mask], new_block])
+    new_mesh = Fort14Mesh(
+        title=mesh.title,
+        nodes=mesh.nodes.copy(),
+        depths=mesh.depths.copy(),
+        elements=new_elements,
+        open_boundaries=[np.asarray(s).copy() for s in mesh.open_boundaries],
+        land_boundaries=[(int(ib), np.asarray(s).copy())
+                         for ib, s in mesh.land_boundaries],
+    )
+
+    # Gate 2: no fail regression in the rim 1-ring outside cluster.
+    fail_before = _external_rim_fail_count(
+        mesh, rim_node_ids, cluster_set,
+        alpha_target=alpha_target, min_angle_target=min_angle_target,
+    )
+    n_patch_new = int(new_block.shape[0])
+    patch_eid_start = new_mesh.n_elements - n_patch_new
+    new_patch_set = set(range(patch_eid_start, new_mesh.n_elements))
+    fail_after = _external_rim_fail_count(
+        new_mesh, rim_node_ids, new_patch_set,
+        alpha_target=alpha_target, min_angle_target=min_angle_target,
+    )
+    if fail_after > fail_before:
+        return None, None, "gate2_rim_regression"
+
+    cluster_nodes = np.unique(mesh.elements[cluster_eids_arr].ravel())
+    rim_set = {int(n) for n in rim_node_ids}
+    interior_node_ids = np.array(
+        [int(n) for n in cluster_nodes if int(n) not in rim_set],
+        dtype=np.int64,
+    )
+
+    return new_mesh, {
+        "operator": "patch_recdt",
+        "cluster_size": int(cluster_eids_arr.size),
+        "rim_size": int(n_rim),
+        "n_new_elements": int(n_patch_new),
+        "n_replaced_elements": int(cluster_eids_arr.size),
+        "n_interior_orphaned": int(interior_node_ids.size),
+        "external_rim_fail_before": int(fail_before),
+        "external_rim_fail_after": int(fail_after),
+    }, "ok"
+
+
+def _apply_patch_recdt(
+    mesh: Fort14Mesh, cluster_eids: np.ndarray, *,
+    alpha_target: float, min_angle_target: float,
+    reject_boundary_clusters: bool = True,
+) -> tuple[Fort14Mesh, dict[str, Any]] | None:
+    """Pass D op: replace a fail cluster's elements with a Delaunay
+    re-triangulation of the cluster's rim polygon. Interior cluster
+    nodes are orphaned (kept in the node array, no longer
+    referenced by any element). Accept iff:
+
+    1. Every new patch element passes the per-element gate
+       (``alpha >= alpha_target ∧ min_angle >= min_angle_target``).
+    2. The rim 1-ring fail count outside the cluster does not
+       increase between ``mesh`` and the post-op mesh (no 2-ring
+       drift).
+
+    v1 rejects clusters whose rim touches a boundary segment to
+    avoid open / land segment book-keeping. Backwards-compatible
+    wrapper over :func:`_attempt_patch_recdt`; returns ``None`` on
+    every rejection. See the diagnostic helper for the reason
+    histogram.
+    """
+    new_mesh, info, _reason = _attempt_patch_recdt(
+        mesh, cluster_eids,
+        alpha_target=alpha_target,
+        min_angle_target=min_angle_target,
+        reject_boundary_clusters=reject_boundary_clusters,
+    )
+    if new_mesh is None or info is None:
+        return None
+    return new_mesh, info
+
+
+def _size_bucket(size: int) -> str:
+    """Histogram bucket label for accept counters."""
+    if size <= 9:
+        return f"size_{size}"
+    decade = (size // 10) * 10
+    return f"size_{decade}_{decade + 9}"
+
+
+def _patch_recdt_round(
+    cur: Fort14Mesh, *,
+    alpha_target: float, min_angle_target: float,
+    min_cluster_size: int,
+    max_cluster_size: int,
+    max_patches: int,
+    reject_boundary_clusters: bool = True,
+) -> tuple[Fort14Mesh, dict[str, int], int]:
+    """Pass D round: process fail clusters in descending size order,
+    apply ``_apply_patch_recdt`` to each, accept under the strict
+    gate. Each accept rebuilds the cluster list. Returns
+    ``(updated_mesh, accepts_per_size_bucket, n_rejected_by_gate)``.
+    """
+    accepts: dict[str, int] = defaultdict(int)
+    abandoned: set = set()
+    n_rejected = 0
+    n_accepted = 0
+
+    while n_accepted < max_patches:
+        clusters = _find_fail_clusters(
+            cur,
+            alpha_target=alpha_target,
+            min_angle_target=min_angle_target,
+            min_cluster_size=min_cluster_size,
+            max_cluster_size=max_cluster_size,
+        )
+        if not clusters:
+            break
+
+        progress = False
+        for cluster in clusters:
+            sig = frozenset(int(e) for e in cluster)
+            if sig in abandoned:
+                continue
+            out = _apply_patch_recdt(
+                cur, cluster,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                reject_boundary_clusters=reject_boundary_clusters,
+            )
+            if out is None:
+                abandoned.add(sig)
+                n_rejected += 1
+                continue
+            cur, info = out
+            accepts[_size_bucket(int(info["cluster_size"]))] += 1
+            n_accepted += 1
+            progress = True
+            break  # restart cluster enumeration on the new mesh
+
+        if not progress:
+            break
+
+    return cur, dict(accepts), n_rejected
+
+
 def phase_h_optimize(
     mesh: Fort14Mesh,
     *,
@@ -1542,9 +1874,15 @@ def phase_h_optimize(
     lookahead_op1_inventory: tuple[str, ...] = DEFAULT_LOOKAHEAD_OP1_INVENTORY,
     lookahead_op2_inventory: tuple[str, ...] = DEFAULT_LOOKAHEAD_OP2_INVENTORY,
     lookahead_gate: str = DEFAULT_LOOKAHEAD_GATE,
+    patch_recdt_enabled: bool = False,
+    patch_min_cluster_size: int = DEFAULT_PATCH_MIN_CLUSTER_SIZE,
+    patch_max_cluster_size: int = DEFAULT_PATCH_MAX_CLUSTER_SIZE,
+    max_patches_per_round: int = 1_000,
+    patch_reject_boundary_clusters: bool = True,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Phase H driver: Pass A (batch smooth) ↔ Pass B (1-step topology)
-    ↔ optional Pass C (2-step lookahead) until none make progress.
+    ↔ optional Pass C (2-step lookahead) ↔ optional Pass D
+    (cluster patch re-CDT) until none make progress.
 
     **Pass A** — batch Gauss-Seidel smooth. Each sweep visits every
     interior vertex, proposes the 1-ring centroid, and accepts the
@@ -1587,9 +1925,23 @@ def phase_h_optimize(
     inventory restricts op1 ∈ ``{smooth_node, vertex_remove}`` and
     op2 = ``smooth_node`` from PoC #44's accepted-pair histogram.
 
-    The three passes alternate: Pass A runs to exhaustion, Pass B
-    up to ``max_topology_per_round`` accepts, Pass C up to
-    ``max_lookahead_per_round`` accepts. After Pass C accepts the
+    **Pass D (opt-in via ``patch_recdt_enabled=True``)** — cluster
+    patch re-CDT. Finds connected components of fail elements under
+    face-face adjacency, filters by
+    ``[patch_min_cluster_size, patch_max_cluster_size]``, walks
+    each cluster's rim polygon, and replaces the cluster with a
+    pure-Delaunay re-triangulation of the rim. Accept iff (i) every
+    new patch element passes the per-element gate, and (ii) the rim
+    1-ring fail count outside the cluster does not increase
+    (no 2-ring drift). Targets the 51 % of v3 residual fails that
+    sit in size ≥ 3 clusters and are unreachable by 1-ring local
+    edits (see ``docs/patch_re_cdt_design.md``).
+
+    The passes alternate in order A → B → C → D each outer round.
+    Pass A runs to exhaustion, Pass B up to
+    ``max_topology_per_round`` accepts, Pass C up to
+    ``max_lookahead_per_round`` accepts, Pass D up to
+    ``max_patches_per_round`` accepts. After Pass D accepts the
     Pass A loop cleans up perturbations on the next outer round.
     The loop terminates when every enabled pass contributes zero
     accepts in the same round, or when ``max_outer_rounds`` is hit.
@@ -1626,6 +1978,13 @@ def phase_h_optimize(
         "max_lookahead_per_round": int(max_lookahead_per_round),
         "lookahead_pairs_applied": defaultdict(int),
         "n_lookahead_abandoned": 0,
+        "patch_recdt_enabled": bool(patch_recdt_enabled),
+        "patch_min_cluster_size": int(patch_min_cluster_size),
+        "patch_max_cluster_size": int(patch_max_cluster_size),
+        "max_patches_per_round": int(max_patches_per_round),
+        "patch_reject_boundary_clusters": bool(patch_reject_boundary_clusters),
+        "patch_recdt_accepts": defaultdict(int),
+        "n_patch_recdt_rejected": 0,
     }
     if lookahead_gate not in LOOKAHEAD_GATES:
         raise ValueError(
@@ -1707,6 +2066,24 @@ def phase_h_optimize(
                 round_accepts += int(n)
             info["n_lookahead_abandoned"] = n_la_aband
 
+        # Pass D (v4.2): cluster patch re-CDT, opt-in. Runs last so it
+        # sees the cluster residual after every cheaper pass had a go.
+        if patch_recdt_enabled:
+            cur, patch_accepts, n_patch_rej = _patch_recdt_round(
+                cur,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                min_cluster_size=patch_min_cluster_size,
+                max_cluster_size=patch_max_cluster_size,
+                max_patches=max_patches_per_round,
+                reject_boundary_clusters=patch_reject_boundary_clusters,
+            )
+            for bucket, n in patch_accepts.items():
+                info["patch_recdt_accepts"][bucket] += int(n)
+                info["n_iters"] += int(n)
+                round_accepts += int(n)
+            info["n_patch_recdt_rejected"] += int(n_patch_rej)
+
         if round_accepts == 0:
             break
 
@@ -1723,6 +2100,7 @@ def phase_h_optimize(
     info["n_elements"] = int(cur.n_elements)
     info["operators_applied"] = dict(info["operators_applied"])
     info["lookahead_pairs_applied"] = dict(info["lookahead_pairs_applied"])
+    info["patch_recdt_accepts"] = dict(info["patch_recdt_accepts"])
     return cur, info
 
 
@@ -1734,6 +2112,8 @@ __all__ = [
     "DEFAULT_LOOKAHEAD_OP2_INVENTORY",
     "DEFAULT_MIN_ANGLE_TARGET",
     "DEFAULT_OPERATOR_ORDER",
+    "DEFAULT_PATCH_MAX_CLUSTER_SIZE",
+    "DEFAULT_PATCH_MIN_CLUSTER_SIZE",
     "LOOKAHEAD_GATES",
     "build_coastline_projector",
     "phase_h_optimize",

@@ -452,6 +452,42 @@ def build_parser() -> argparse.ArgumentParser:
             "improvement on Tokyo Bay. Kept for benchmarking only."
         ),
     )
+    p.add_argument(
+        "--phase-h-patch-recdt", action="store_true",
+        help=(
+            "Phase H Pass D (opt-in): cluster patch re-CDT. After "
+            "Pass C in every outer round, find connected components "
+            "of fail elements under face-face adjacency, walk each "
+            "cluster's rim polygon, and replace the cluster with a "
+            "pure-Delaunay re-triangulation of the rim. Strict gate "
+            "(every new patch element passes per-element gate AND "
+            "no rim 1-ring fail regression). Targets the ~51%% of "
+            "v3 residual fails that sit in size>=3 clusters where "
+            "1-ring lookahead cannot help. See "
+            "docs/patch_re_cdt_design.md."
+        ),
+    )
+    p.add_argument(
+        "--phase-h-patch-min-cluster-size", type=int, default=3,
+        help="Pass D minimum cluster size to attempt. Default 3.",
+    )
+    p.add_argument(
+        "--phase-h-patch-max-cluster-size", type=int, default=100,
+        help="Pass D maximum cluster size to attempt. Default 100.",
+    )
+    p.add_argument(
+        "--phase-h-max-patches-per-round", type=int, default=1_000,
+        help="Pass D cap on patch accepts per round. Default 1000.",
+    )
+    p.add_argument(
+        "--phase-h-patch-allow-boundary-clusters", action="store_true",
+        help=(
+            "Pass D: by default, clusters whose rim touches an open "
+            "/ land boundary segment are rejected to avoid segment "
+            "book-keeping. Set this flag to attempt them anyway "
+            "(EXPERIMENTAL — may corrupt boundary metadata)."
+        ),
+    )
 
     p.add_argument(
         "--summary", type=Path, default=None,
@@ -567,6 +603,28 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        if args.phase_h_patch_min_cluster_size < 1:
+            print(
+                "--phase-h-patch-min-cluster-size must be >= 1.",
+                file=sys.stderr,
+            )
+            return 2
+        if (
+            args.phase_h_patch_max_cluster_size
+            < args.phase_h_patch_min_cluster_size
+        ):
+            print(
+                "--phase-h-patch-max-cluster-size must be >= "
+                "--phase-h-patch-min-cluster-size.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.phase_h_max_patches_per_round < 1:
+            print(
+                "--phase-h-max-patches-per-round must be >= 1.",
+                file=sys.stderr,
+            )
+            return 2
         for coast_path in args.phase_h_coastline:
             if not coast_path.exists():
                 print(
@@ -623,6 +681,13 @@ def main(argv: list[str] | None = None) -> int:
         phase_h_lookahead=args.phase_h_lookahead,
         phase_h_max_lookahead_per_round=args.phase_h_max_lookahead_per_round,
         phase_h_lookahead_gate=args.phase_h_lookahead_gate,
+        phase_h_patch_recdt=args.phase_h_patch_recdt,
+        phase_h_patch_min_cluster_size=args.phase_h_patch_min_cluster_size,
+        phase_h_patch_max_cluster_size=args.phase_h_patch_max_cluster_size,
+        phase_h_max_patches_per_round=args.phase_h_max_patches_per_round,
+        phase_h_patch_reject_boundary_clusters=(
+            not args.phase_h_patch_allow_boundary_clusters
+        ),
     )
     write_fort14(cleaned, args.output)
 

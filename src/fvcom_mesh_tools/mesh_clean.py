@@ -1639,6 +1639,11 @@ def clean_mesh(
     phase_h_lookahead: bool = False,
     phase_h_max_lookahead_per_round: int = 10_000,
     phase_h_lookahead_gate: str = "target_exits_fail",
+    phase_h_patch_recdt: bool = False,
+    phase_h_patch_min_cluster_size: int = 3,
+    phase_h_patch_max_cluster_size: int = 100,
+    phase_h_max_patches_per_round: int = 1_000,
+    phase_h_patch_reject_boundary_clusters: bool = True,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Run Phase A (component pruning) and Phase B (dead-end trimming).
 
@@ -1806,6 +1811,15 @@ def clean_mesh(
             "phase_h_max_lookahead_per_round":
                 int(phase_h_max_lookahead_per_round),
             "phase_h_lookahead_gate": str(phase_h_lookahead_gate),
+            "phase_h_patch_recdt": bool(phase_h_patch_recdt),
+            "phase_h_patch_min_cluster_size":
+                int(phase_h_patch_min_cluster_size),
+            "phase_h_patch_max_cluster_size":
+                int(phase_h_patch_max_cluster_size),
+            "phase_h_max_patches_per_round":
+                int(phase_h_max_patches_per_round),
+            "phase_h_patch_reject_boundary_clusters":
+                bool(phase_h_patch_reject_boundary_clusters),
         },
         "phases": [],
     }
@@ -1936,6 +1950,13 @@ def clean_mesh(
             lookahead_enabled=bool(phase_h_lookahead),
             max_lookahead_per_round=int(phase_h_max_lookahead_per_round),
             lookahead_gate=str(phase_h_lookahead_gate),
+            patch_recdt_enabled=bool(phase_h_patch_recdt),
+            patch_min_cluster_size=int(phase_h_patch_min_cluster_size),
+            patch_max_cluster_size=int(phase_h_patch_max_cluster_size),
+            max_patches_per_round=int(phase_h_max_patches_per_round),
+            patch_reject_boundary_clusters=bool(
+                phase_h_patch_reject_boundary_clusters
+            ),
         )
         info["phases"].append({"name": "phase_h_optimize", **h_info})
 

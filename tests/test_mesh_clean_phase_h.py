@@ -409,6 +409,164 @@ def test_phase_h_optimize_lookahead_gates_round_trip() -> None:
         assert (cross > 0).all(), f"gate={gate} flipped triangles"
 
 
+def test_find_fail_clusters_groups_adjacent_fails() -> None:
+    """Two fail elements sharing an edge should form a single cluster
+    of size 2."""
+    from fvcom_mesh_tools.mesh_clean_phase_h import (  # noqa: PLC0415
+        _find_fail_clusters,
+    )
+    mesh = _skewed_quad()
+    clusters = _find_fail_clusters(
+        mesh,
+        alpha_target=0.95, min_angle_target=20.0,
+        min_cluster_size=1, max_cluster_size=100,
+    )
+    # The fixture's central 4-triangle fan should be detected as a
+    # connected fail cluster.
+    assert len(clusters) >= 1
+    assert max(c.size for c in clusters) >= 2
+
+
+def test_apply_patch_recdt_accepts_interior_cluster() -> None:
+    """A clean equilateral-rim hexagon with a deliberately bad
+    interior vertex: dropping the interior + Delaunay re-mesh should
+    pass every gate. Validates the happy path of Pass D."""
+    import math
+
+    from fvcom_mesh_tools.mesh_clean_phase_h import (  # noqa: PLC0415
+        _apply_patch_recdt,
+    )
+    # 6 rim nodes on a hexagon + 1 interior node offset from centre.
+    r = 1.0
+    rim = np.array(
+        [[r * math.cos(t), r * math.sin(t)]
+         for t in np.linspace(0.0, 2.0 * math.pi, 7)[:-1]],
+        dtype=float,
+    )
+    centre = np.array([[0.2, 0.1]], dtype=float)
+    nodes = np.vstack([rim, centre])
+    centre_id = 6
+    elements = np.array(
+        [[i, (i + 1) % 6, centre_id] for i in range(6)],
+        dtype=np.int64,
+    )
+    mesh = Fort14Mesh(
+        title="hex_patch", nodes=nodes,
+        depths=np.zeros(nodes.shape[0]),
+        elements=elements,
+        open_boundaries=[],
+        land_boundaries=[(
+            0, np.array([0, 1, 2, 3, 4, 5, 0], dtype=np.int64),
+        )],
+    )
+    # All 6 elements form one cluster (their interior node is shared
+    # ⇒ they're face-face-adjacent via the rim edges? No, they share
+    # vertex but not edges with their non-neighbour fan members. The
+    # face-face adjacency uses edge sharing, so the fan is a chain).
+    # Pass cluster_eids explicitly to test the apply function
+    # directly.
+    cluster = np.array([0, 1, 2, 3, 4, 5], dtype=np.int64)
+    # Regular hexagon Delaunay (no interior point) yields 4
+    # isoceles triangles with alpha ≈ 0.75 each — relax the gate so
+    # the patch acceptance is exercised mechanically rather than
+    # gated out on a fixture-specific Delaunay numeric.
+    out = _apply_patch_recdt(
+        mesh, cluster,
+        alpha_target=0.5, min_angle_target=20.0,
+        reject_boundary_clusters=False,  # rim IS the mesh boundary here
+    )
+    assert out is not None, "hexagon patch with bad centre must accept"
+    new_mesh, info = out
+    assert info["operator"] == "patch_recdt"
+    assert info["cluster_size"] == 6
+    assert info["rim_size"] == 6
+    assert info["n_interior_orphaned"] == 1  # the centre node
+    # The new patch should have 4 triangles (Delaunay of a 6-gon).
+    assert info["n_new_elements"] == 4
+    assert new_mesh.n_elements == 4
+    # No flipped tris.
+    p0 = new_mesh.nodes[new_mesh.elements[:, 0]]
+    p1 = new_mesh.nodes[new_mesh.elements[:, 1]]
+    p2 = new_mesh.nodes[new_mesh.elements[:, 2]]
+    cross = (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+    assert (cross > 0).all()
+
+
+def test_apply_patch_recdt_rejects_boundary_rim() -> None:
+    """When ``reject_boundary_clusters=True``, a cluster whose rim
+    sits on an open / land boundary segment must be rejected."""
+    import math
+
+    from fvcom_mesh_tools.mesh_clean_phase_h import (  # noqa: PLC0415
+        _apply_patch_recdt,
+    )
+    rim = np.array(
+        [[math.cos(t), math.sin(t)]
+         for t in np.linspace(0.0, 2.0 * math.pi, 7)[:-1]],
+        dtype=float,
+    )
+    centre = np.array([[0.2, 0.1]], dtype=float)
+    nodes = np.vstack([rim, centre])
+    elements = np.array(
+        [[i, (i + 1) % 6, 6] for i in range(6)],
+        dtype=np.int64,
+    )
+    mesh = Fort14Mesh(
+        title="hex_patch_bnd", nodes=nodes,
+        depths=np.zeros(nodes.shape[0]),
+        elements=elements,
+        open_boundaries=[],
+        land_boundaries=[(
+            0, np.array([0, 1, 2, 3, 4, 5, 0], dtype=np.int64),
+        )],
+    )
+    cluster = np.array([0, 1, 2, 3, 4, 5], dtype=np.int64)
+    out = _apply_patch_recdt(
+        mesh, cluster,
+        alpha_target=0.95, min_angle_target=20.0,
+        reject_boundary_clusters=True,
+    )
+    assert out is None, "boundary-touching cluster must be rejected"
+
+
+def test_phase_h_optimize_pass_d_path_runs_cleanly() -> None:
+    """Smoke test: enabling Pass D should not crash on the
+    skewed-quad fixture (whether or not any patch fires)."""
+    mesh = _skewed_quad()
+    out_mesh, info = phase_h_optimize(
+        mesh,
+        alpha_target=0.95, min_angle_target=20.0,
+        max_outer_rounds=3,
+        patch_recdt_enabled=True,
+        patch_min_cluster_size=1,  # let the fixture's tiny clusters in
+        max_patches_per_round=4,
+    )
+    assert info["patch_recdt_enabled"] is True
+    assert isinstance(info["patch_recdt_accepts"], dict)
+    assert "n_patch_recdt_rejected" in info
+    # No new flips beyond the fixture's pre-flipped element.
+    p0 = out_mesh.nodes[out_mesh.elements[:, 0]]
+    p1 = out_mesh.nodes[out_mesh.elements[:, 1]]
+    p2 = out_mesh.nodes[out_mesh.elements[:, 2]]
+    cross = (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+    n_flipped_out = int((cross <= 0).sum())
+    p0i = mesh.nodes[mesh.elements[:, 0]]
+    p1i = mesh.nodes[mesh.elements[:, 1]]
+    p2i = mesh.nodes[mesh.elements[:, 2]]
+    crossi = (
+        (p1i[:, 0] - p0i[:, 0]) * (p2i[:, 1] - p0i[:, 1])
+        - (p1i[:, 1] - p0i[:, 1]) * (p2i[:, 0] - p0i[:, 0])
+    )
+    n_flipped_in = int((crossi <= 0).sum())
+    assert n_flipped_out <= n_flipped_in
+
+
 def test_phase_h_optimize_rejects_unknown_gate() -> None:
     """Passing an unknown gate string must error early."""
     mesh = _skewed_quad()
