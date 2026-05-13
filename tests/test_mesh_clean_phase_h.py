@@ -15,6 +15,7 @@ import numpy as np
 from fvcom_mesh_tools.algorithms.quality import alpha_quality
 from fvcom_mesh_tools.io import Fort14Mesh
 from fvcom_mesh_tools.mesh_clean_phase_h import (
+    DEFAULT_MAX_ANGLE_TARGET,
     _apply_edge_split_boundary,
     _apply_edge_split_interior,
     _apply_edge_swap,
@@ -24,7 +25,10 @@ from fvcom_mesh_tools.mesh_clean_phase_h import (
     _boundary_node_mask,
     _boundary_topology,
     _edge_use_counts,
+    _is_fail,
     _node_to_elements,
+    _penalty,
+    _per_element_quality,
     phase_h_optimize,
 )
 
@@ -969,3 +973,135 @@ def test_build_coastline_projector_snaps_to_nearest_polyline(tmp_path) -> None:
     # A point 100 km above is far beyond the 5 km snap range → None.
     far = np.array([139.5, 35.0 + 1.0])
     assert proj(far) is None
+
+
+# ---------------------------------------------------------------------------
+# max_angle_target gate (FVCOM manual criterion C2)
+# ---------------------------------------------------------------------------
+
+
+def _obtuse_triangle_pair() -> Fort14Mesh:
+    """4-node mesh: one needle-obtuse triangle (~150° angle at v2) and
+    one well-shaped triangle. Used to exercise the C2 gate."""
+    nodes = np.array(
+        [
+            [0.0, 0.0],   # 0
+            [1.0, 0.0],   # 1
+            [0.5, 0.05],  # 2 (interior, very close to edge 0-1 →
+                          # angle at v2 is highly obtuse)
+            [0.5, 1.0],   # 3 (forms a well-shaped triangle with 0, 1)
+        ],
+        dtype=float,
+    )
+    elements = np.array(
+        [
+            [0, 1, 2],  # obtuse: angle at v2 ~170°
+            [0, 1, 3],  # equilateral-ish, max_angle < 130°
+        ],
+        dtype=np.int64,
+    )
+    return Fort14Mesh(
+        title="obtuse", nodes=nodes,
+        depths=np.zeros(nodes.shape[0]),
+        elements=elements,
+        open_boundaries=[],
+        land_boundaries=[
+            (0, np.array([0, 1, 3], dtype=np.int64)),
+            (0, np.array([0, 2, 1], dtype=np.int64)),
+        ],
+    )
+
+
+def test_per_element_quality_returns_max_angle_in_degrees() -> None:
+    """`_per_element_quality` must return a 3-tuple
+    ``(alpha, min_angle_deg, max_angle_deg)`` so callers can gate on C2.
+    """
+    mesh = _obtuse_triangle_pair()
+    alpha, min_ang, max_ang = _per_element_quality(mesh.nodes, mesh.elements)
+    # The needle triangle (index 0) has a very wide max angle.
+    assert max_ang[0] > 150.0, (
+        f"needle triangle max angle should be > 150°, got {max_ang[0]}"
+    )
+    # The well-shaped triangle (index 1) is bounded under 130°.
+    assert max_ang[1] < 130.0, (
+        f"well-shaped triangle max angle should be < 130°, got {max_ang[1]}"
+    )
+    # min/max consistency.
+    assert (min_ang <= max_ang).all()
+
+
+def test_is_fail_flags_max_angle_violation() -> None:
+    """An element with max_angle > target should be flagged as fail
+    even if alpha and min_angle pass."""
+    alpha = np.array([0.99])
+    min_ang = np.array([45.0])
+    max_ang = np.array([135.0])
+    # Without the max-angle term (max_angle_target=180 default),
+    # this element passes.
+    fail_no_gate = _is_fail(
+        alpha, min_ang, alpha_target=0.95, min_angle_target=30.0,
+    )
+    assert not fail_no_gate.any()
+    # With max_angle_target=130, the same element flips to fail.
+    fail_gated = _is_fail(
+        alpha, min_ang, max_ang,
+        alpha_target=0.95, min_angle_target=30.0,
+        max_angle_target=130.0,
+    )
+    assert fail_gated.all()
+
+
+def test_penalty_adds_max_angle_term_only_when_exceeded() -> None:
+    """The penalty must equal the alpha + min-angle baseline whenever
+    ``max_ang <= max_angle_target``, and rise by a positive amount
+    once ``max_ang > max_angle_target``."""
+    alpha = np.array([0.99, 0.99])
+    min_ang = np.array([45.0, 45.0])
+    max_ang = np.array([125.0, 140.0])  # below and above 130°
+    baseline = _penalty(
+        alpha, min_ang, alpha_target=0.95, min_angle_target=30.0,
+    )
+    gated = _penalty(
+        alpha, min_ang, max_ang,
+        alpha_target=0.95, min_angle_target=30.0,
+        max_angle_target=130.0,
+    )
+    # Element 0 (max_ang=125°): no contribution from max-angle term.
+    np.testing.assert_allclose(gated[0], baseline[0])
+    # Element 1 (max_ang=140°): penalty must rise by (140-130)^2/100 = 1.
+    np.testing.assert_allclose(gated[1] - baseline[1], 1.0, atol=1e-12)
+
+
+def test_phase_h_optimize_accepts_max_angle_target_kwarg() -> None:
+    """`phase_h_optimize` must accept ``max_angle_target`` and surface
+    it in the returned ``info`` dict for downstream summaries."""
+    mesh = _skewed_quad()
+    out_mesh, info = phase_h_optimize(
+        mesh, alpha_target=0.95, min_angle_target=20.0,
+        max_angle_target=130.0,
+        max_outer_rounds=5,
+    )
+    assert info["max_angle_target"] == 130.0
+    # No flipped triangles.
+    p0 = out_mesh.nodes[out_mesh.elements[:, 0]]
+    p1 = out_mesh.nodes[out_mesh.elements[:, 1]]
+    p2 = out_mesh.nodes[out_mesh.elements[:, 2]]
+    cross = (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+    assert (cross > 0).all()
+
+
+def test_phase_h_optimize_default_max_angle_is_disabled() -> None:
+    """The default ``max_angle_target`` (``DEFAULT_MAX_ANGLE_TARGET``,
+    180°) must leave the gate effectively disabled — Phase H's behaviour
+    on a mesh whose max angles never exceed 180° (i.e., every valid
+    triangle) must match the non-gated case."""
+    mesh = _skewed_quad()
+    _, info = phase_h_optimize(
+        mesh, alpha_target=0.95, min_angle_target=20.0,
+        max_outer_rounds=5,
+    )
+    assert info["max_angle_target"] == DEFAULT_MAX_ANGLE_TARGET
+    assert info["max_angle_target"] == 180.0

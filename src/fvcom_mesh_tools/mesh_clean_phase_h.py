@@ -46,10 +46,6 @@ from typing import Any, Callable
 
 import numpy as np
 
-from fvcom_mesh_tools.algorithms.quality import (
-    alpha_quality,
-    min_interior_angle,
-)
 from fvcom_mesh_tools.io import Fort14Mesh
 
 # Re-use the Stage 2 retriangulation helpers.
@@ -168,25 +164,32 @@ def build_coastline_projector(
 # ---------------------------------------------------------------------------
 
 
+#: Default ``max_angle_target``. 180° makes the ``max_ang > target``
+#: check vacuous (every triangle has max angle <= 180°), so the gate
+#: is a no-op unless the caller overrides — preserves backward
+#: compatibility for existing tests / PoCs while exposing the FVCOM
+#: criterion ``max_angle <= 130°`` as a tunable parameter.
+DEFAULT_MAX_ANGLE_TARGET: float = 180.0
+
+
 def _per_element_quality(
     nodes: np.ndarray, elements: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per-element ``(alpha, min_angle_deg)`` arrays."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-element ``(alpha, min_angle_deg, max_angle_deg)`` arrays."""
     if elements.size == 0:
-        return np.empty(0), np.empty(0)
-    mesh = Fort14Mesh(
-        title="phaseh", nodes=nodes,
-        depths=np.zeros(nodes.shape[0]),
-        elements=elements,
-        open_boundaries=[], land_boundaries=[],
-    )
-    return alpha_quality(mesh), min_interior_angle(mesh)
+        return np.empty(0), np.empty(0), np.empty(0)
+    p0 = nodes[elements[:, 0]]
+    p1 = nodes[elements[:, 1]]
+    p2 = nodes[elements[:, 2]]
+    alpha, min_ang, max_ang, _twice = _inline_quality(p0, p1, p2)
+    return alpha, min_ang, max_ang
 
 
 def _inline_quality(
     p0: np.ndarray, p1: np.ndarray, p2: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Vectorised per-triangle ``(alpha, min_angle_deg, twice_signed)``.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorised per-triangle
+    ``(alpha, min_angle_deg, max_angle_deg, twice_signed)``.
 
     Avoids the ``Fort14Mesh`` constructor overhead by operating on raw
     coordinate arrays. Used by the hot batch-smooth sweep.
@@ -204,7 +207,7 @@ def _inline_quality(
         sum_sq > 0, 4.0 * np.sqrt(3.0) * area / np.where(sum_sq > 0, sum_sq, 1.0),
         0.0,
     )
-    # Min interior angle via law of cosines on each vertex.
+    # Interior angles via law of cosines on each vertex.
     def _ang(opp, ea, eb):
         denom = 2.0 * ea * eb
         safe_denom = np.where(denom > 0, denom, 1.0)
@@ -216,26 +219,44 @@ def _inline_quality(
     angle_v1 = _ang(e2, e0, e1)
     angle_v2 = _ang(e0, e1, e2)
     min_ang_rad = np.minimum(np.minimum(angle_v0, angle_v1), angle_v2)
-    return alpha, np.degrees(min_ang_rad), twice_signed
+    max_ang_rad = np.maximum(np.maximum(angle_v0, angle_v1), angle_v2)
+    return (
+        alpha,
+        np.degrees(min_ang_rad),
+        np.degrees(max_ang_rad),
+        twice_signed,
+    )
 
 
 def _penalty(
-    alpha: np.ndarray, min_ang: np.ndarray,
+    alpha: np.ndarray, min_ang: np.ndarray, max_ang: np.ndarray | None = None,
     *, alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
 ) -> np.ndarray:
-    """Element penalty: zero iff both gates met. Squared deficits with
-    the angle term scaled by 1/100 to keep both contributions in the
-    same range."""
+    """Element penalty: zero iff every gate met. Squared deficits with
+    each angle term scaled by 1/100 so all contributions stay in the
+    same dynamic range. ``max_ang`` may be ``None`` for backward-
+    compatible callers that did not yet supply max-angle arrays; the
+    max-angle term is then omitted.
+    """
     a_pen = np.maximum(0.0, alpha_target - alpha) ** 2
     g_pen = np.maximum(0.0, min_angle_target - min_ang) ** 2 / 100.0
-    return a_pen + g_pen
+    pen = a_pen + g_pen
+    if max_ang is not None:
+        G_pen = np.maximum(0.0, max_ang - max_angle_target) ** 2 / 100.0
+        pen = pen + G_pen
+    return pen
 
 
 def _is_fail(
-    alpha: np.ndarray, min_ang: np.ndarray,
+    alpha: np.ndarray, min_ang: np.ndarray, max_ang: np.ndarray | None = None,
     *, alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
 ) -> np.ndarray:
-    return (alpha < alpha_target) | (min_ang < min_angle_target)
+    mask = (alpha < alpha_target) | (min_ang < min_angle_target)
+    if max_ang is not None:
+        mask = mask | (max_ang > max_angle_target)
+    return mask
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +373,7 @@ def _boundary_topology(
 def _apply_smooth_node(
     mesh: Fort14Mesh, vertex_id: int, ring_elem_ids: np.ndarray,
     *, alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     boundary_node_mask: np.ndarray,
     force: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
@@ -375,15 +397,17 @@ def _apply_smooth_node(
     nodes_proposed = mesh.nodes.copy()
     nodes_proposed[vertex_id] = new_xy
 
-    a_before, m_before = _per_element_quality(mesh.nodes, elem_block)
-    a_after, m_after = _per_element_quality(nodes_proposed, elem_block)
+    a_before, m_before, M_before = _per_element_quality(mesh.nodes, elem_block)
+    a_after, m_after, M_after = _per_element_quality(nodes_proposed, elem_block)
     p_before = _penalty(
-        a_before, m_before,
+        a_before, m_before, M_before,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum()
     p_after = _penalty(
-        a_after, m_after,
+        a_after, m_after, M_after,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum()
     if not force and p_after + 1e-12 >= p_before:
         return None
@@ -426,6 +450,7 @@ def _apply_smooth_node(
 def _apply_edge_swap(
     mesh: Fort14Mesh, elem_id: int, edge_local: int,
     *, alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     edge_uses: dict[tuple[int, int], list[int]],
     boundary_edge_keys: set,
     force: bool = False,
@@ -453,15 +478,17 @@ def _apply_edge_swap(
         dtype=mesh.elements.dtype,
     )
     block_before = mesh.elements[[elem_id, buddy_id]]
-    a_b, m_b = _per_element_quality(mesh.nodes, block_before)
-    a_a, m_a = _per_element_quality(mesh.nodes, block_after)
+    a_b, m_b, M_b = _per_element_quality(mesh.nodes, block_before)
+    a_a, m_a, M_a = _per_element_quality(mesh.nodes, block_after)
     p_before = _penalty(
-        a_b, m_b,
+        a_b, m_b, M_b,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum()
     p_after = _penalty(
-        a_a, m_a,
+        a_a, m_a, M_a,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum()
     if not force and p_after + 1e-12 >= p_before:
         return None
@@ -530,6 +557,7 @@ def _split_triangle_at_edge(
 def _apply_edge_split_interior(
     mesh: Fort14Mesh, elem_id: int, edge_local: int,
     *, alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     edge_uses: dict[tuple[int, int], list[int]],
     boundary_edge_keys: set,
     force: bool = False,
@@ -570,15 +598,17 @@ def _apply_edge_split_interior(
     block_after = np.array(new_self + new_other, dtype=mesh.elements.dtype)
     nodes_proposed = np.vstack([mesh.nodes, midpoint[None, :]])
 
-    a_b, m_b = _per_element_quality(mesh.nodes, block_before)
-    a_a, m_a = _per_element_quality(nodes_proposed, block_after)
+    a_b, m_b, M_b = _per_element_quality(mesh.nodes, block_before)
+    a_a, m_a, M_a = _per_element_quality(nodes_proposed, block_after)
     p_before = _penalty(
-        a_b, m_b,
+        a_b, m_b, M_b,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum()
     p_after = _penalty(
-        a_a, m_a,
+        a_a, m_a, M_a,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum()
     if not force and p_after + 1e-12 >= p_before:
         return None
@@ -631,6 +661,7 @@ def _apply_edge_split_interior(
 def _apply_edge_split_boundary(
     mesh: Fort14Mesh, elem_id: int, edge_local: int,
     *, alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     edge_uses: dict[tuple[int, int], list[int]],
     edge_to_segment: dict[tuple[int, int], tuple[str, int, int, int]],
     coastline_projector: CoastlineProjector | None = None,
@@ -679,15 +710,17 @@ def _apply_edge_split_boundary(
     block_after = np.array(new_self, dtype=mesh.elements.dtype)
     nodes_proposed = np.vstack([mesh.nodes, midpoint[None, :]])
 
-    a_b, m_b = _per_element_quality(mesh.nodes, block_before)
-    a_a, m_a = _per_element_quality(nodes_proposed, block_after)
+    a_b, m_b, M_b = _per_element_quality(mesh.nodes, block_before)
+    a_a, m_a, M_a = _per_element_quality(nodes_proposed, block_after)
     p_before = _penalty(
-        a_b, m_b,
+        a_b, m_b, M_b,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum()
     p_after = _penalty(
-        a_a, m_a,
+        a_a, m_a, M_a,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum()
     if not force and p_after + 1e-12 >= p_before:
         return None
@@ -755,6 +788,7 @@ def _apply_edge_split_boundary(
 def _apply_vertex_remove(
     mesh: Fort14Mesh, vertex_id: int, ring_elem_ids: np.ndarray,
     *, alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     boundary_node_mask: np.ndarray,
     force: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
@@ -809,15 +843,17 @@ def _apply_vertex_remove(
 
     # Score new vs old.
     block_before = mesh.elements[ring_elem_ids]
-    a_b, m_b = _per_element_quality(mesh.nodes, block_before)
-    a_a, m_a = _per_element_quality(mesh.nodes, new_block)
+    a_b, m_b, M_b = _per_element_quality(mesh.nodes, block_before)
+    a_a, m_a, M_a = _per_element_quality(mesh.nodes, new_block)
     p_before = _penalty(
-        a_b, m_b,
+        a_b, m_b, M_b,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum()
     p_after = _penalty(
-        a_a, m_a,
+        a_a, m_a, M_a,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum()
     if not force and p_after + 1e-12 >= p_before:
         return None
@@ -880,6 +916,7 @@ BOUNDARY_TANGENT_T_MAX: float = 0.95
 def _batch_smooth_sweep(
     mesh: Fort14Mesh,
     *, alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     boundary_node_mask: np.ndarray,
     n2e: dict[int, np.ndarray],
     boundary_prev: np.ndarray | None = None,
@@ -951,7 +988,7 @@ def _batch_smooth_sweep(
         p0 = nodes[elem_block[:, 0]]
         p1 = nodes[elem_block[:, 1]]
         p2 = nodes[elem_block[:, 2]]
-        a_b, m_b, _ts_b = _inline_quality(p0, p1, p2)
+        a_b, m_b, M_b, _ts_b = _inline_quality(p0, p1, p2)
 
         p0p = p0.copy()
         p1p = p1.copy()
@@ -962,17 +999,19 @@ def _batch_smooth_sweep(
         p0p[m0] = proposed_v
         p1p[m1] = proposed_v
         p2p[m2] = proposed_v
-        a_a, m_a, ts_a = _inline_quality(p0p, p1p, p2p)
+        a_a, m_a, M_a, ts_a = _inline_quality(p0p, p1p, p2p)
         if (ts_a <= 0).any():
             continue
 
         p_b = float(_penalty(
-            a_b, m_b,
+            a_b, m_b, M_b,
             alpha_target=alpha_target, min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
         ).sum())
         p_a = float(_penalty(
-            a_a, m_a,
+            a_a, m_a, M_a,
             alpha_target=alpha_target, min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
         ).sum())
         if p_a + 1e-12 >= p_b:
             continue
@@ -985,6 +1024,7 @@ def _batch_smooth_sweep(
 def _topology_round(
     cur: Fort14Mesh,
     *, alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     operator_order: tuple[str, ...],
     max_topology_accepts: int,
     coastline_projector: CoastlineProjector | None = None,
@@ -999,16 +1039,18 @@ def _topology_round(
     abandoned: set = set()
     accepts_total = 0
     while accepts_total < max_topology_accepts:
-        a, m = _per_element_quality(cur.nodes, cur.elements)
+        a, m, M = _per_element_quality(cur.nodes, cur.elements)
         fail = _is_fail(
-            a, m,
+            a, m, M,
             alpha_target=alpha_target, min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
         )
         if not fail.any():
             break
         pen = _penalty(
-            a, m,
+            a, m, M,
             alpha_target=alpha_target, min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
         )
         heap: list[tuple[float, int]] = []
         for eid in np.where(fail)[0]:
@@ -1039,6 +1081,8 @@ def _topology_round(
                             cur, int(eid), k,
                             alpha_target=alpha_target,
                             min_angle_target=min_angle_target,
+
+                            max_angle_target=max_angle_target,
                             edge_uses=eu,
                             boundary_edge_keys=bnd_edges,
                         )
@@ -1051,6 +1095,8 @@ def _topology_round(
                             cur, int(eid), k,
                             alpha_target=alpha_target,
                             min_angle_target=min_angle_target,
+
+                            max_angle_target=max_angle_target,
                             edge_uses=eu,
                             boundary_edge_keys=bnd_edges,
                         )
@@ -1063,6 +1109,8 @@ def _topology_round(
                             cur, int(eid), k,
                             alpha_target=alpha_target,
                             min_angle_target=min_angle_target,
+
+                            max_angle_target=max_angle_target,
                             edge_uses=eu,
                             edge_to_segment=e2s,
                             coastline_projector=coastline_projector,
@@ -1079,6 +1127,8 @@ def _topology_round(
                             cur, int(v), ring,
                             alpha_target=alpha_target,
                             min_angle_target=min_angle_target,
+
+                            max_angle_target=max_angle_target,
                             boundary_node_mask=bnd_node,
                         )
                         if out is not None:
@@ -1179,6 +1229,7 @@ def _affected_elements_in_mesh(
 def _union_penalty(
     mesh: Fort14Mesh, nodes: set[int], *,
     alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
 ) -> float:
     """Sum penalty over every element in ``mesh`` that touches any
     node in ``nodes``. IDs outside ``mesh.n_nodes`` are silently
@@ -1197,10 +1248,11 @@ def _union_penalty(
         return 0.0
     eids = np.fromiter(affected_eids, dtype=np.int64)
     block = mesh.elements[eids]
-    a, m = _per_element_quality(mesh.nodes, block)
+    a, m, M = _per_element_quality(mesh.nodes, block)
     return float(_penalty(
-        a, m,
+        a, m, M,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     ).sum())
 
 
@@ -1237,6 +1289,7 @@ DEFAULT_LOOKAHEAD_GATE: str = "target_exits_fail"
 def _target_exits_fail(
     m_after: Fort14Mesh, target_vset: frozenset[int], *,
     alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
 ) -> bool:
     """v4.1 acceptance gate (strict). Returns True iff the triangle
     whose vertex set equals ``target_vset`` is **present in
@@ -1266,7 +1319,7 @@ def _target_exits_fail(
     for eid in np.where(mask)[0]:
         if set(int(x) for x in m_after.elements[eid]) == target:
             block = m_after.elements[[int(eid)]]
-            a, m = _per_element_quality(m_after.nodes, block)
+            a, m, M = _per_element_quality(m_after.nodes, block)
             return bool(
                 float(a[0]) >= alpha_target
                 and float(m[0]) >= min_angle_target
@@ -1278,6 +1331,7 @@ def _iter_op_candidates(
     mesh: Fort14Mesh, eid: int, op_name: str, *,
     force: bool, ctx: dict[str, Any],
     alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     coastline_projector: CoastlineProjector | None = None,
 ):
     """Yield ``(new_mesh, info)`` for each local variant of
@@ -1294,6 +1348,8 @@ def _iter_op_candidates(
                 mesh, int(v), ring,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
                 boundary_node_mask=ctx["bnd_node"],
                 force=force,
             )
@@ -1305,6 +1361,8 @@ def _iter_op_candidates(
                 mesh, int(eid), k,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
                 edge_uses=ctx["eu"],
                 boundary_edge_keys=ctx["bnd_edges"],
                 force=force,
@@ -1317,6 +1375,8 @@ def _iter_op_candidates(
                 mesh, int(eid), k,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
                 edge_uses=ctx["eu"],
                 boundary_edge_keys=ctx["bnd_edges"],
                 force=force,
@@ -1329,6 +1389,8 @@ def _iter_op_candidates(
                 mesh, int(eid), k,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
                 edge_uses=ctx["eu"],
                 edge_to_segment=ctx["e2s"],
                 coastline_projector=coastline_projector,
@@ -1345,6 +1407,8 @@ def _iter_op_candidates(
                 mesh, int(v), ring,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
                 boundary_node_mask=ctx["bnd_node"],
                 force=force,
             )
@@ -1357,6 +1421,7 @@ def _iter_op_candidates(
 def _try_lookahead_pair(
     cur: Fort14Mesh, eid: int, ctx: dict[str, Any], *,
     alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     op1_inventory: tuple[str, ...],
     op2_inventory: tuple[str, ...],
     coastline_projector: CoastlineProjector | None,
@@ -1405,6 +1470,8 @@ def _try_lookahead_pair(
                 m1, target_vset,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
             ):
                 return m1, f"{op1_name}+none"
 
@@ -1412,10 +1479,11 @@ def _try_lookahead_pair(
             if not affected1_eids:
                 continue
             block = m1.elements[affected1_eids]
-            a_blk, m_blk = _per_element_quality(m1.nodes, block)
+            a_blk, m_blk, M_blk = _per_element_quality(m1.nodes, block)
             fail_blk = _is_fail(
-                a_blk, m_blk,
+                a_blk, m_blk, M_blk,
                 alpha_target=alpha_target, min_angle_target=min_angle_target,
+                max_angle_target=max_angle_target,
             )
             cand_e2 = [
                 int(e) for e, f in zip(affected1_eids, fail_blk) if f
@@ -1429,6 +1497,8 @@ def _try_lookahead_pair(
                         m1, e2, op2_name, force=True, ctx=ctx_m1,
                         alpha_target=alpha_target,
                         min_angle_target=min_angle_target,
+
+                        max_angle_target=max_angle_target,
                         coastline_projector=coastline_projector,
                     ):
                         if gate == "target_exits_fail":
@@ -1436,6 +1506,8 @@ def _try_lookahead_pair(
                                 m2, target_vset,
                                 alpha_target=alpha_target,
                                 min_angle_target=min_angle_target,
+
+                                max_angle_target=max_angle_target,
                             ):
                                 return m2, f"{op1_name}+{op2_name}"
                         else:  # union_penalty
@@ -1445,11 +1517,15 @@ def _try_lookahead_pair(
                                 cur, union,
                                 alpha_target=alpha_target,
                                 min_angle_target=min_angle_target,
+
+                                max_angle_target=max_angle_target,
                             )
                             pen_after = _union_penalty(
                                 m2, union,
                                 alpha_target=alpha_target,
                                 min_angle_target=min_angle_target,
+
+                                max_angle_target=max_angle_target,
                             )
                             if pen_after + 1e-12 < pen_before:
                                 return m2, f"{op1_name}+{op2_name}"
@@ -1459,6 +1535,7 @@ def _try_lookahead_pair(
 def _lookahead_round(
     cur: Fort14Mesh, *,
     alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     op1_inventory: tuple[str, ...],
     op2_inventory: tuple[str, ...],
     max_lookahead_accepts: int,
@@ -1478,16 +1555,18 @@ def _lookahead_round(
     abandoned: set = set()
     accepts_total = 0
     while accepts_total < max_lookahead_accepts:
-        a, m = _per_element_quality(cur.nodes, cur.elements)
+        a, m, M = _per_element_quality(cur.nodes, cur.elements)
         fail = _is_fail(
-            a, m,
+            a, m, M,
             alpha_target=alpha_target, min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
         )
         if not fail.any():
             break
         pen = _penalty(
-            a, m,
+            a, m, M,
             alpha_target=alpha_target, min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
         )
         heap: list[tuple[float, int]] = []
         for eid in np.where(fail)[0]:
@@ -1507,6 +1586,8 @@ def _lookahead_round(
                 cur, eid, ctx,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
                 op1_inventory=op1_inventory,
                 op2_inventory=op2_inventory,
                 coastline_projector=coastline_projector,
@@ -1557,6 +1638,7 @@ DEFAULT_PATCH_MAX_CLUSTER_SIZE: int = 100
 def _find_fail_clusters(
     mesh: Fort14Mesh, *,
     alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     min_cluster_size: int = DEFAULT_PATCH_MIN_CLUSTER_SIZE,
     max_cluster_size: int = DEFAULT_PATCH_MAX_CLUSTER_SIZE,
 ) -> list[np.ndarray]:
@@ -1575,10 +1657,11 @@ def _find_fail_clusters(
         face_face_adjacency,
     )
 
-    a, m = _per_element_quality(mesh.nodes, mesh.elements)
+    a, m, M = _per_element_quality(mesh.nodes, mesh.elements)
     fail = _is_fail(
-        a, m,
+        a, m, M,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     )
     if not fail.any():
         return []
@@ -1604,6 +1687,7 @@ def _external_rim_fail_count(
     mesh: Fort14Mesh, rim_node_ids: np.ndarray,
     exclude_eids: set[int], *,
     alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
 ) -> int:
     """Number of fail elements in ``mesh`` that touch any rim node
     and are NOT in ``exclude_eids``. Used by Pass D's second gate
@@ -1622,10 +1706,11 @@ def _external_rim_fail_count(
         return 0
     eids = np.fromiter(affected, dtype=np.int64)
     block = mesh.elements[eids]
-    a, m = _per_element_quality(mesh.nodes, block)
+    a, m, M = _per_element_quality(mesh.nodes, block)
     fail = _is_fail(
-        a, m,
+        a, m, M,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     )
     return int(fail.sum())
 
@@ -1633,6 +1718,7 @@ def _external_rim_fail_count(
 def _attempt_patch_recdt(
     mesh: Fort14Mesh, cluster_eids: np.ndarray, *,
     alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     reject_boundary_clusters: bool = True,
 ) -> tuple[Fort14Mesh | None, dict[str, Any] | None, str]:
     """Diagnostic core of Pass D's patch re-CDT operator. Returns
@@ -1696,7 +1782,7 @@ def _attempt_patch_recdt(
     new_block = rim_node_ids[triangles].astype(mesh.elements.dtype)
 
     # Gate 1: every new patch element passes the per-element gate.
-    a_new, m_new = _per_element_quality(mesh.nodes, new_block)
+    a_new, m_new, M_new = _per_element_quality(mesh.nodes, new_block)
     if bool((a_new < alpha_target).any()):
         return None, None, "gate1_alpha"
     if bool((m_new < min_angle_target).any()):
@@ -1765,6 +1851,7 @@ def _attempt_patch_recdt(
 def _apply_patch_recdt(
     mesh: Fort14Mesh, cluster_eids: np.ndarray, *,
     alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     reject_boundary_clusters: bool = True,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
     """Pass D op: replace a fail cluster's elements with a Delaunay
@@ -1788,6 +1875,8 @@ def _apply_patch_recdt(
         mesh, cluster_eids,
         alpha_target=alpha_target,
         min_angle_target=min_angle_target,
+
+        max_angle_target=max_angle_target,
         reject_boundary_clusters=reject_boundary_clusters,
     )
     if new_mesh is None or info is None:
@@ -1806,6 +1895,7 @@ def _size_bucket(size: int) -> str:
 def _patch_recdt_round(
     cur: Fort14Mesh, *,
     alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     min_cluster_size: int,
     max_cluster_size: int,
     max_patches: int,
@@ -1826,6 +1916,8 @@ def _patch_recdt_round(
             cur,
             alpha_target=alpha_target,
             min_angle_target=min_angle_target,
+
+            max_angle_target=max_angle_target,
             min_cluster_size=min_cluster_size,
             max_cluster_size=max_cluster_size,
         )
@@ -1841,6 +1933,8 @@ def _patch_recdt_round(
                 cur, cluster,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
                 reject_boundary_clusters=reject_boundary_clusters,
             )
             if out is None:
@@ -1864,6 +1958,7 @@ def phase_h_optimize(
     *,
     alpha_target: float = DEFAULT_ALPHA_TARGET,
     min_angle_target: float = DEFAULT_MIN_ANGLE_TARGET,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     max_smooth_sweeps: int = DEFAULT_MAX_SMOOTH_SWEEPS,
     max_topology_per_round: int = 10_000,
     max_outer_rounds: int = 10,
@@ -1962,6 +2057,7 @@ def phase_h_optimize(
     info: dict[str, Any] = {
         "alpha_target": float(alpha_target),
         "min_angle_target": float(min_angle_target),
+        "max_angle_target": float(max_angle_target),
         "max_smooth_sweeps": int(max_smooth_sweeps),
         "max_topology_per_round": int(max_topology_per_round),
         "max_outer_rounds": int(max_outer_rounds),
@@ -1992,7 +2088,7 @@ def phase_h_optimize(
             f"expected one of {LOOKAHEAD_GATES}"
         )
 
-    a0, m0 = _per_element_quality(cur.nodes, cur.elements)
+    a0, m0, M0 = _per_element_quality(cur.nodes, cur.elements)
     fail0 = _is_fail(
         a0, m0, alpha_target=alpha_target, min_angle_target=min_angle_target,
     )
@@ -2018,6 +2114,8 @@ def phase_h_optimize(
                     cur,
                     alpha_target=alpha_target,
                     min_angle_target=min_angle_target,
+
+                    max_angle_target=max_angle_target,
                     boundary_node_mask=bnd_node,
                     n2e=n2e,
                     boundary_prev=bnd_prev,
@@ -2037,6 +2135,8 @@ def phase_h_optimize(
                 cur,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
                 operator_order=operator_order,
                 max_topology_accepts=max_topology_per_round,
                 coastline_projector=coastline_projector,
@@ -2054,6 +2154,8 @@ def phase_h_optimize(
                 cur,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
                 op1_inventory=lookahead_op1_inventory,
                 op2_inventory=lookahead_op2_inventory,
                 max_lookahead_accepts=max_lookahead_per_round,
@@ -2073,6 +2175,8 @@ def phase_h_optimize(
                 cur,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
+
+                max_angle_target=max_angle_target,
                 min_cluster_size=patch_min_cluster_size,
                 max_cluster_size=patch_max_cluster_size,
                 max_patches=max_patches_per_round,
@@ -2087,10 +2191,11 @@ def phase_h_optimize(
         if round_accepts == 0:
             break
 
-    a_after, m_after = _per_element_quality(cur.nodes, cur.elements)
+    a_after, m_after, M_after = _per_element_quality(cur.nodes, cur.elements)
     fail_after = _is_fail(
-        a_after, m_after,
+        a_after, m_after, M_after,
         alpha_target=alpha_target, min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
     )
     info["n_output_fail"] = int(fail_after.sum())
     info["alpha_mean_after"] = (

@@ -111,6 +111,7 @@ def _build_rung_overlays(args: argparse.Namespace) -> list[tuple[str, dict]]:
                 "phase_h": bool(args.phase_h),
                 "phase_h_alpha_target": float(args.phase_h_alpha_target),
                 "phase_h_min_angle_target": float(args.phase_h_min_angle_target),
+                "phase_h_max_angle_target": float(args.phase_h_max_angle_target),
                 "phase_h_max_outer_rounds": int(args.phase_h_max_outer_rounds),
                 "phase_h_max_topology_per_round":
                     int(args.phase_h_max_topology_per_round),
@@ -283,6 +284,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Phase H per-element min-angle gate (deg). Default 20.",
     )
     g_rung3.add_argument(
+        "--phase-h-max-angle-target", type=float, default=180.0,
+        help=(
+            "Phase H per-element max-angle gate (deg). FVCOM manual "
+            "criterion C2 is 130. Default 180 (off)."
+        ),
+    )
+    g_rung3.add_argument(
         "--phase-h-max-outer-rounds", type=int, default=10,
         help="Phase H Pass-A/Pass-B alternation cap. Default 10.",
     )
@@ -422,6 +430,18 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if not 0.0 < args.phase_h_min_angle_target < 60.0:
         print("--phase-h-min-angle-target must be in (0, 60).", file=sys.stderr)
+        return 2
+    if not 60.0 < args.phase_h_max_angle_target <= 180.0:
+        print(
+            "--phase-h-max-angle-target must be in (60, 180].",
+            file=sys.stderr,
+        )
+        return 2
+    if args.phase_h_min_angle_target >= args.phase_h_max_angle_target:
+        print(
+            "--phase-h-min-angle-target must be < --phase-h-max-angle-target.",
+            file=sys.stderr,
+        )
         return 2
     if args.phase_h_max_outer_rounds < 1:
         print("--phase-h-max-outer-rounds must be >= 1.", file=sys.stderr)

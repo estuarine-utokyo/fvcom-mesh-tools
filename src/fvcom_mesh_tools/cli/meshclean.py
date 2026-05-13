@@ -369,6 +369,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--phase-h-max-angle-target", type=float, default=180.0,
+        help=(
+            "Phase H per-element maximum-interior-angle gate (degrees). "
+            "An element is 'fail' if any interior angle exceeds this "
+            "value. Default 180 (gate disabled). FVCOM manual "
+            "criterion C2 is 130."
+        ),
+    )
+    p.add_argument(
         "--phase-h-max-outer-rounds", type=int, default=10,
         help=(
             "Phase H: cap on alternations of Pass A (batch smooth) "
@@ -576,6 +585,19 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        if not 60.0 < args.phase_h_max_angle_target <= 180.0:
+            print(
+                "--phase-h-max-angle-target must be in (60, 180].",
+                file=sys.stderr,
+            )
+            return 2
+        if args.phase_h_min_angle_target >= args.phase_h_max_angle_target:
+            print(
+                "--phase-h-min-angle-target must be < "
+                "--phase-h-max-angle-target.",
+                file=sys.stderr,
+            )
+            return 2
         if args.phase_h_max_outer_rounds < 1:
             print(
                 "--phase-h-max-outer-rounds must be >= 1.",
@@ -673,6 +695,7 @@ def main(argv: list[str] | None = None) -> int:
         phase_h=args.phase_h,
         phase_h_alpha_target=args.phase_h_alpha_target,
         phase_h_min_angle_target=args.phase_h_min_angle_target,
+        phase_h_max_angle_target=args.phase_h_max_angle_target,
         phase_h_max_outer_rounds=args.phase_h_max_outer_rounds,
         phase_h_max_topology_per_round=args.phase_h_max_topology_per_round,
         phase_h_max_smooth_sweeps=args.phase_h_max_smooth_sweeps,

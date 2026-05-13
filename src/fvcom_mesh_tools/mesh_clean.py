@@ -1631,6 +1631,7 @@ def clean_mesh(
     phase_h: bool = False,
     phase_h_alpha_target: float = 0.95,
     phase_h_min_angle_target: float = 20.0,
+    phase_h_max_angle_target: float = 180.0,
     phase_h_max_outer_rounds: int = 10,
     phase_h_max_topology_per_round: int = 10_000,
     phase_h_max_smooth_sweeps: int = 200,
@@ -1799,6 +1800,7 @@ def clean_mesh(
             "phase_h": bool(phase_h),
             "phase_h_alpha_target": float(phase_h_alpha_target),
             "phase_h_min_angle_target": float(phase_h_min_angle_target),
+            "phase_h_max_angle_target": float(phase_h_max_angle_target),
             "phase_h_max_outer_rounds": int(phase_h_max_outer_rounds),
             "phase_h_max_topology_per_round":
                 int(phase_h_max_topology_per_round),
@@ -1943,6 +1945,7 @@ def clean_mesh(
             cur,
             alpha_target=float(phase_h_alpha_target),
             min_angle_target=float(phase_h_min_angle_target),
+            max_angle_target=float(phase_h_max_angle_target),
             max_smooth_sweeps=int(phase_h_max_smooth_sweeps),
             max_topology_per_round=int(phase_h_max_topology_per_round),
             max_outer_rounds=int(phase_h_max_outer_rounds),
