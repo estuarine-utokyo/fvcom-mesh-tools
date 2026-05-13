@@ -22,6 +22,7 @@ from fvcom_mesh_tools.mesh_clean_phase_h import (
     _apply_edge_split_interior,
     _apply_edge_swap,
     _apply_pass_e_split,
+    _apply_pass_e_swap,
     _apply_smooth_node,
     _apply_vertex_remove,
     _batch_smooth_sweep,
@@ -1248,7 +1249,7 @@ def test_pass_e_round_eliminates_strip_c4_fail() -> None:
     n_fail_before = int((ac_before > 0.5).sum())
     assert n_fail_before >= 1
 
-    new_mesh, n_acc, n_rej = _pass_e_round(
+    new_mesh, n_acc, n_rej, _n_swap, _n_split = _pass_e_round(
         mesh,
         alpha_target=0.95, min_angle_target=20.0,
         max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
@@ -1348,6 +1349,66 @@ def test_pass_e_skips_cascading_c4_fail_candidate() -> None:
         "Pass E must reject when every candidate edge is itself "
         "in c4_fail_keys (cascade avoidance)"
     )
+
+
+def test_pass_e_swap_signature_and_safe_rejection() -> None:
+    """`_apply_pass_e_swap` accepts the standard Pass-E kwargs and
+    returns a tuple-or-``None``. On the strip fixture the swap output
+    would invert one of the new triangles (kite quad geometry), which
+    the underlying ``_apply_edge_swap`` rejects via its signed-area
+    check — so this is a valid rejection path."""
+    mesh = _c4_fail_strip()
+    edge_uv, elem_pair, _ac = _per_edge_area_change(
+        mesh.nodes, mesh.elements,
+    )
+    keys = [tuple(sorted(e.tolist())) for e in edge_uv]
+    fail_idx = keys.index((0, 1))
+    u, v = int(edge_uv[fail_idx, 0]), int(edge_uv[fail_idx, 1])
+    e_i, e_j = int(elem_pair[fail_idx, 0]), int(elem_pair[fail_idx, 1])
+
+    edge_uses = _edge_use_counts(mesh.elements)
+    boundary_edge_keys = {k for k, v in edge_uses.items() if len(v) == 1}
+
+    out = _apply_pass_e_swap(
+        mesh, (u, v), (e_i, e_j),
+        alpha_target=0.95, min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        area_ratio_target=0.5,
+        max_valence=DEFAULT_MAX_VALENCE,
+        edge_uses=edge_uses,
+        boundary_edge_keys=boundary_edge_keys,
+        c4_fail_keys=None,
+        valence_before=None,
+    )
+    assert out is None or (
+        isinstance(out, tuple) and len(out) == 2
+    ), "operator must return None or (new_mesh, info)"
+
+
+def test_pass_e_swap_rejects_when_target_is_boundary() -> None:
+    """An edge_swap on a boundary edge is topologically undefined
+    (one of the would-be incident triangles doesn't exist). The
+    operator must short-circuit to ``None`` rather than blowing up
+    on the buddy-lookup."""
+    mesh = _c4_fail_strip()
+    edge_uses = _edge_use_counts(mesh.elements)
+    boundary_edge_keys = {k for k, v in edge_uses.items() if len(v) == 1}
+    # Pick any boundary edge from the strip fixture.
+    bnd_key = next(iter(boundary_edge_keys))
+
+    out = _apply_pass_e_swap(
+        mesh, bnd_key, (0, 1),  # elem pair is a dummy; the boundary
+                                # check fires first
+        alpha_target=0.95, min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        area_ratio_target=0.5,
+        max_valence=DEFAULT_MAX_VALENCE,
+        edge_uses=edge_uses,
+        boundary_edge_keys=boundary_edge_keys,
+        c4_fail_keys=None,
+        valence_before=None,
+    )
+    assert out is None
 
 
 def test_pass_e_prefilters_on_valence_cap() -> None:

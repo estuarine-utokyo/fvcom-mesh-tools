@@ -2051,6 +2051,191 @@ def _patch_recdt_round(
 # ---------------------------------------------------------------------------
 
 
+def _apply_pass_e_swap(
+    mesh: Fort14Mesh, fail_edge_uv: tuple[int, int],
+    elem_pair: tuple[int, int], *,
+    alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
+    area_ratio_target: float = DEFAULT_AREA_RATIO_TARGET,
+    max_valence: int = DEFAULT_MAX_VALENCE,
+    edge_uses: dict[tuple[int, int], list[int]],
+    boundary_edge_keys: set,
+    c4_fail_keys: set[tuple[int, int]] | None = None,
+    valence_before: np.ndarray | None = None,
+) -> tuple[Fort14Mesh, dict[str, Any]] | None:
+    """Pass E operator: edge_swap of the C4 fail edge.
+
+    Topologically the quad ``L ∪ S`` is re-triangulated with the
+    other diagonal ``CD`` (where ``C`` is ``L``'s apex not on the
+    fail edge and ``D`` is ``S``'s apex). No vertices are added,
+    so no global element-count growth and no midpoint to smooth.
+    The endpoint valences (``a``, ``b``) drop by 1 each and the
+    opposite valences (``C``, ``D``) rise by 1 each; the net change
+    in mesh valence is zero, but ``C5`` could still regress if
+    ``C`` or ``D`` was already at the cap.
+
+    Accept gates (all required):
+
+    1. The new diagonal ``CD``'s area_change must be at or below
+       ``area_ratio_target``. If the swap merely relocates the
+       violation, reject — we want a strict ``-1`` on the fail count.
+    2. No edge in the local 5-edge block (``CD`` + the four edges
+       ``a-C``, ``a-D``, ``b-C``, ``b-D``) may newly transition from
+       non-fail to fail. Edges already in ``c4_fail_keys`` are
+       counted as pre-existing and not "new".
+    3. No element in ``block_after`` (= the two new triangles
+       ``aCD`` and ``bDC``) may fail C1 (``min_ang >=
+       min_angle_target``) or C2 (``max_ang <= max_angle_target``).
+    4. ``C5`` valence cap: both ``C`` and ``D`` must have
+       ``valence_before < max_valence`` (since each gains +1 from
+       the swap).
+
+    Returns ``(new_mesh, info)`` on accept, else ``None``.
+    """
+    fail_u = int(fail_edge_uv[0])
+    fail_v = int(fail_edge_uv[1])
+    fail_key = (min(fail_u, fail_v), max(fail_u, fail_v))
+    if fail_key in boundary_edge_keys:
+        return None  # edge_swap of a boundary edge is undefined
+
+    e_i, e_j = int(elem_pair[0]), int(elem_pair[1])
+    elem_id = e_i
+    edge_local = -1
+    for el in range(3):
+        u = int(mesh.elements[elem_id, el])
+        v = int(mesh.elements[elem_id, (el + 1) % 3])
+        if (min(u, v), max(u, v)) == fail_key:
+            edge_local = el
+            break
+    if edge_local < 0:
+        # Fall back: the fail key might be ordered the other way
+        # round on e_j — but our routine just needs SOMEONE that
+        # contains it.
+        elem_id = e_j
+        for el in range(3):
+            u = int(mesh.elements[elem_id, el])
+            v = int(mesh.elements[elem_id, (el + 1) % 3])
+            if (min(u, v), max(u, v)) == fail_key:
+                edge_local = el
+                break
+        if edge_local < 0:
+            return None
+    buddy_id = e_j if elem_id == e_i else e_i
+
+    third = int(mesh.elements[elem_id, (edge_local + 2) % 3])
+    buddy_set = {int(x) for x in mesh.elements[buddy_id]}
+    fourth_set = buddy_set - {fail_u, fail_v}
+    if len(fourth_set) != 1:
+        return None
+    fourth = int(next(iter(fourth_set)))
+
+    # Gate (4): C5 prefilter on the gainers.
+    if valence_before is not None:
+        if valence_before[third] >= max_valence:
+            return None
+        if valence_before[fourth] >= max_valence:
+            return None
+
+    # Build the swap directly. The existing ``_apply_edge_swap``
+    # always emits ``[a, c, d]`` / ``[b, d, c]`` for the new pair,
+    # which is CCW only when the quad walks as ``a -> c -> b -> d``
+    # CCW. For "kite" geometries — typical of C4 fails, with ``c``
+    # and ``d`` on opposite sides of the fail edge — the natural
+    # CCW walk is the OPPOSITE rotation, ``a -> d -> b -> c``, so
+    # the operator's emission would be CW and the signed-area check
+    # would reject. Pass E swap tries both orientations and picks
+    # whichever produces two CCW triangles.
+    dtype = mesh.elements.dtype
+    cand_a = np.array(
+        [[fail_u, third, fourth], [fail_v, fourth, third]], dtype=dtype,
+    )
+    cand_b = np.array(
+        [[fail_u, fourth, third], [fail_v, third, fourth]], dtype=dtype,
+    )
+
+    def _all_ccw(block):
+        p0 = mesh.nodes[block[:, 0]]
+        p1 = mesh.nodes[block[:, 1]]
+        p2 = mesh.nodes[block[:, 2]]
+        cross = (
+            (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+            - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+        )
+        return bool((cross > 0).all())
+
+    if _all_ccw(cand_a):
+        block_after = cand_a
+    elif _all_ccw(cand_b):
+        block_after = cand_b
+    else:
+        return None  # concave quad — swap is geometrically invalid
+
+    new_elements = mesh.elements.copy()
+    new_elements[elem_id] = block_after[0]
+    new_elements[buddy_id] = block_after[1]
+    new_mesh = Fort14Mesh(
+        title=mesh.title,
+        nodes=mesh.nodes.copy(),
+        depths=mesh.depths.copy(),
+        elements=new_elements,
+        open_boundaries=[
+            np.asarray(s).copy() for s in mesh.open_boundaries
+        ],
+        land_boundaries=[
+            (int(ib), np.asarray(s).copy())
+            for ib, s in mesh.land_boundaries
+        ],
+    )
+
+    # Gate (3): no new C1 or C2 fail in the new block.
+    new_block = new_mesh.elements[[elem_id, buddy_id]]
+    _a_a, m_a, M_a = _per_element_quality(new_mesh.nodes, new_block)
+    if (m_a < min_angle_target).any():
+        return None
+    if (M_a > max_angle_target).any():
+        return None
+
+    # Gates (1) + (2): C4 status of CD and of the four surviving edges.
+    new_abs_areas = np.abs(_signed_areas(new_mesh.nodes, new_mesh.elements))
+    new_edge_uses = _edge_use_counts(new_mesh.elements)
+
+    def _ac_of(k):
+        bud = new_edge_uses.get(k, [])
+        if len(bud) != 2:
+            return -1.0  # boundary or vanished
+        a1 = float(new_abs_areas[bud[0]])
+        a2 = float(new_abs_areas[bud[1]])
+        return abs(a1 - a2) / max(a1, a2, 1e-30)
+
+    cd_key = (min(third, fourth), max(third, fourth))
+    cd_ac = _ac_of(cd_key)
+    if cd_ac < 0.0 or cd_ac > area_ratio_target:
+        return None  # CD fails C4 (or vanished); swap doesn't help
+
+    surviving_keys = [
+        (min(fail_u, third), max(fail_u, third)),
+        (min(fail_v, third), max(fail_v, third)),
+        (min(fail_u, fourth), max(fail_u, fourth)),
+        (min(fail_v, fourth), max(fail_v, fourth)),
+    ]
+    for k in surviving_keys:
+        new_ac = _ac_of(k)
+        if new_ac > area_ratio_target:
+            was_fail = c4_fail_keys is not None and k in c4_fail_keys
+            if not was_fail:
+                return None  # new fail introduced on a surviving edge
+
+    info_out = {
+        "operator": "pass_e_swap",
+        "fail_edge": [fail_key[0], fail_key[1]],
+        "new_diagonal": [int(cd_key[0]), int(cd_key[1])],
+        "elements_modified": [int(elem_id), int(buddy_id)],
+        "area_change_before": None,
+        "area_change_after": float(cd_ac),
+    }
+    return new_mesh, info_out
+
+
 def _apply_pass_e_split(
     mesh: Fort14Mesh, fail_edge_uv: tuple[int, int],
     elem_pair: tuple[int, int], *,
@@ -2343,14 +2528,16 @@ def _pass_e_round(
     max_valence: int = DEFAULT_MAX_VALENCE,
     max_splits: int,
     coastline_projector: CoastlineProjector | None = None,
-) -> tuple[Fort14Mesh, int, int]:
+) -> tuple[Fort14Mesh, int, int, int, int]:
     """Pass E round: scan internal edges for C4 failures, attempt a
-    Pass-E split on each in descending order of area_change. Each
-    accept rebuilds the edge-buddy structures, current C4 fail set,
-    and per-node valence vector on the new mesh, so cascade
-    avoidance and the C5 prefilter both stay sound.
+    Pass-E swap (and falling back to split) on each in descending
+    order of area_change. Each accept rebuilds the edge-buddy
+    structures, current C4 fail set, and per-node valence vector on
+    the new mesh, so cascade avoidance and the C5 prefilter both
+    stay sound.
 
-    Returns ``(updated_mesh, n_accepted, n_rejected)``.
+    Returns ``(updated_mesh, n_accepted, n_rejected, n_swap_accepts,
+    n_split_accepts)``.
     """
     from fvcom_mesh_tools.diagnostics import (  # noqa: PLC0415
         node_valence,
@@ -2358,6 +2545,8 @@ def _pass_e_round(
 
     n_accepted = 0
     n_rejected = 0
+    n_swap_accepts = 0
+    n_split_accepts = 0
 
     while n_accepted < max_splits:
         edge_uv, elem_pair, area_change = _per_edge_area_change(
@@ -2390,7 +2579,9 @@ def _pass_e_round(
         for idx in fail_indices:
             u, v = int(edge_uv[idx, 0]), int(edge_uv[idx, 1])
             e_i, e_j = int(elem_pair[idx, 0]), int(elem_pair[idx, 1])
-            out = _apply_pass_e_split(
+            # Try edge_swap first — it has no new vertices, no
+            # midpoint to smooth later, and net zero valence change.
+            swap_out = _apply_pass_e_swap(
                 cur, (u, v), (e_i, e_j),
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
@@ -2399,24 +2590,45 @@ def _pass_e_round(
                 max_valence=max_valence,
                 edge_uses=edge_uses,
                 boundary_edge_keys=boundary_edge_keys,
-                edge_to_segment=edge_to_segment,
                 c4_fail_keys=c4_fail_keys,
                 valence_before=valence_before,
-                abs_areas_before=abs_areas_before,
-                coastline_projector=coastline_projector,
             )
+            if swap_out is not None:
+                out = swap_out
+                accepted_op = "swap"
+            else:
+                out = _apply_pass_e_split(
+                    cur, (u, v), (e_i, e_j),
+                    alpha_target=alpha_target,
+                    min_angle_target=min_angle_target,
+                    max_angle_target=max_angle_target,
+                    area_ratio_target=area_ratio_target,
+                    max_valence=max_valence,
+                    edge_uses=edge_uses,
+                    boundary_edge_keys=boundary_edge_keys,
+                    edge_to_segment=edge_to_segment,
+                    c4_fail_keys=c4_fail_keys,
+                    valence_before=valence_before,
+                    abs_areas_before=abs_areas_before,
+                    coastline_projector=coastline_projector,
+                )
+                accepted_op = "split"
             if out is None:
                 n_rejected += 1
                 continue
             cur, _info = out
             n_accepted += 1
+            if accepted_op == "swap":
+                n_swap_accepts += 1
+            else:
+                n_split_accepts += 1
             progress = True
             break  # restart enumeration on the new mesh
 
         if not progress:
             break
 
-    return cur, n_accepted, n_rejected
+    return cur, n_accepted, n_rejected, n_swap_accepts, n_split_accepts
 
 
 def phase_h_optimize(
@@ -2506,10 +2718,15 @@ def phase_h_optimize(
     **Pass E (opt-in via ``pass_e_enabled=True``)** — gradation
     refinement targeting FVCOM manual criterion C4 (adjacent-element
     area_change <= ``pass_e_area_ratio_target``, default 0.5). Scans
-    internal edges worst-area-change-first; for each C4 fail, splits
-    the longest non-shared edge of the larger triangle. Accept iff
-    (i) the original C4 fail edge's area_change strictly drops, and
-    (ii) the 1-ring C1/C2/alpha penalty does not regress.
+    internal edges worst-area-change-first; for each C4 fail, first
+    tries ``edge_swap`` on the fail edge itself (no new vertices,
+    net-zero valence change). If swap fails to reduce the local
+    fail count, falls back to ``edge_split`` on the longest non-
+    shared edge of the larger triangle that is neither itself a
+    C4 fail (cascade avoidance) nor would push a preserved non-
+    shared edge of ``L`` over the C4 threshold (indirect-regression
+    filter). Both operators gate against C1, C2, and C5
+    (``pass_e_max_valence``, default 8 per FVCOM C5).
 
     The passes alternate in order A → B → C → D → E each outer round.
     Pass A runs to exhaustion, Pass B up to
@@ -2567,6 +2784,8 @@ def phase_h_optimize(
         "pass_e_max_valence": int(pass_e_max_valence),
         "max_pass_e_splits_per_round": int(max_pass_e_splits_per_round),
         "pass_e_accepts": 0,
+        "pass_e_swap_accepts": 0,
+        "pass_e_split_accepts": 0,
         "pass_e_rejected": 0,
     }
     if lookahead_gate not in LOOKAHEAD_GATES:
@@ -2681,7 +2900,7 @@ def phase_h_optimize(
         # non-C4-fail edge. C5 (valence) is gated to protect the
         # FVCOM <=8 cap.
         if pass_e_enabled:
-            cur, pe_acc, pe_rej = _pass_e_round(
+            cur, pe_acc, pe_rej, pe_swap, pe_split = _pass_e_round(
                 cur,
                 alpha_target=alpha_target,
                 min_angle_target=min_angle_target,
@@ -2692,6 +2911,8 @@ def phase_h_optimize(
                 coastline_projector=coastline_projector,
             )
             info["pass_e_accepts"] += int(pe_acc)
+            info["pass_e_swap_accepts"] += int(pe_swap)
+            info["pass_e_split_accepts"] += int(pe_split)
             info["pass_e_rejected"] += int(pe_rej)
             info["n_iters"] += int(pe_acc)
             round_accepts += int(pe_acc)
