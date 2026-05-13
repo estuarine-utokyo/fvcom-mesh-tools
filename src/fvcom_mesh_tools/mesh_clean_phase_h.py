@@ -171,6 +171,21 @@ def build_coastline_projector(
 #: criterion ``max_angle <= 130°`` as a tunable parameter.
 DEFAULT_MAX_ANGLE_TARGET: float = 180.0
 
+#: Default per-edge area-change target for Pass E (gradation
+#: refinement). The FVCOM manual lists 0.5 as the upper bound on
+#: ``(max(A_i, A_j) - min(A_i, A_j)) / max(A_i, A_j)`` between
+#: adjacent triangles (criterion C4). 1.0 makes the check vacuous,
+#: so Pass E is a no-op until the caller lowers the target.
+DEFAULT_AREA_RATIO_TARGET: float = 0.5
+
+#: Default upper bound on per-node valence (FVCOM manual criterion
+#: C5: each node may participate in at most 8 elements). Pass E
+#: gates against this because ``edge_split_interior`` raises the
+#: valence of the two "opposite" vertices by 1 (and
+#: ``edge_split_boundary`` raises one), so unconstrained splits at
+#: nodes already at valence 8 would regress C5.
+DEFAULT_MAX_VALENCE: int = 8
+
 
 def _per_element_quality(
     nodes: np.ndarray, elements: np.ndarray,
@@ -257,6 +272,83 @@ def _is_fail(
     if max_ang is not None:
         mask = mask | (max_ang > max_angle_target)
     return mask
+
+
+def _signed_areas(nodes: np.ndarray, elements: np.ndarray) -> np.ndarray:
+    """Per-element signed area (positive for CCW)."""
+    if elements.size == 0:
+        return np.empty(0)
+    p0 = nodes[elements[:, 0]]
+    p1 = nodes[elements[:, 1]]
+    p2 = nodes[elements[:, 2]]
+    return 0.5 * (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+
+
+def _internal_edge_buddies(
+    elements: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(edge_uv, elem_pair)`` for every internal edge.
+
+    An "internal" edge is shared by exactly two elements. ``edge_uv``
+    is an ``(N_int, 2)`` sorted-vertex array; ``elem_pair`` is the
+    ``(N_int, 2)`` element-id pair sharing that edge. Boundary edges
+    (incident on exactly one element) are skipped.
+    """
+    if elements.size == 0:
+        empty_uv = np.empty((0, 2), dtype=np.int64)
+        empty_pair = np.empty((0, 2), dtype=np.int64)
+        return empty_uv, empty_pair
+    NE = elements.shape[0]
+    edges = np.vstack([
+        elements[:, [0, 1]],
+        elements[:, [1, 2]],
+        elements[:, [2, 0]],
+    ])
+    edges_sorted = np.sort(edges, axis=1)
+    elem_ids = np.tile(np.arange(NE, dtype=np.int64), 3)
+    # Lex-sort by (u, v) so duplicate edges sit adjacent.
+    order = np.lexsort((edges_sorted[:, 1], edges_sorted[:, 0]))
+    edges_sorted = edges_sorted[order]
+    elem_ids = elem_ids[order]
+    # Two consecutive rows with identical (u, v) = one internal edge.
+    same = (
+        (edges_sorted[:-1, 0] == edges_sorted[1:, 0])
+        & (edges_sorted[:-1, 1] == edges_sorted[1:, 1])
+    )
+    internal_idx = np.where(same)[0]
+    edge_uv = edges_sorted[internal_idx]
+    elem_pair = np.stack(
+        [elem_ids[internal_idx], elem_ids[internal_idx + 1]], axis=1,
+    )
+    return edge_uv.astype(np.int64), elem_pair.astype(np.int64)
+
+
+def _per_edge_area_change(
+    nodes: np.ndarray, elements: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute ``(edge_uv, elem_pair, area_change)`` for every
+    internal edge.
+
+    Formula matches PoC #48 / the FVCOM manual:
+        area_change = (max(|A_i|, |A_j|) - min(|A_i|, |A_j|))
+                      / max(|A_i|, |A_j|)
+    where ``A_i`` and ``A_j`` are the signed areas of the two
+    adjacent elements. Result is in ``[0, 1]``; 0 = same size, 1 =
+    one element vanishingly small.
+    """
+    edge_uv, elem_pair = _internal_edge_buddies(elements)
+    if edge_uv.shape[0] == 0:
+        return edge_uv, elem_pair, np.empty(0)
+    areas = np.abs(_signed_areas(nodes, elements))
+    a_i = areas[elem_pair[:, 0]]
+    a_j = areas[elem_pair[:, 1]]
+    larger = np.maximum(a_i, a_j)
+    smaller = np.minimum(a_i, a_j)
+    area_change = (larger - smaller) / np.maximum(larger, 1e-30)
+    return edge_uv, elem_pair, area_change
 
 
 # ---------------------------------------------------------------------------
@@ -1953,6 +2045,380 @@ def _patch_recdt_round(
     return cur, dict(accepts), n_rejected
 
 
+# ---------------------------------------------------------------------------
+# Pass E — gradation refinement (FVCOM manual criterion C4,
+# adjacent-element area change <= area_ratio_target)
+# ---------------------------------------------------------------------------
+
+
+def _apply_pass_e_split(
+    mesh: Fort14Mesh, fail_edge_uv: tuple[int, int],
+    elem_pair: tuple[int, int], *,
+    alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
+    area_ratio_target: float = DEFAULT_AREA_RATIO_TARGET,
+    max_valence: int = DEFAULT_MAX_VALENCE,
+    edge_uses: dict[tuple[int, int], list[int]],
+    boundary_edge_keys: set,
+    edge_to_segment: dict[tuple[int, int], tuple[str, int, int, int]],
+    c4_fail_keys: set[tuple[int, int]] | None = None,
+    valence_before: np.ndarray | None = None,
+    abs_areas_before: np.ndarray | None = None,
+    coastline_projector: CoastlineProjector | None = None,
+) -> tuple[Fort14Mesh, dict[str, Any]] | None:
+    """Pass E operator: split the longest non-shared edge of the
+    larger triangle adjacent to a C4-fail edge.
+
+    Strategy: let ``L`` be the larger of the two triangles incident on
+    the fail edge and ``S`` the smaller. Splitting an edge of ``L``
+    (other than the shared fail edge) at its midpoint halves ``L``'s
+    area, which reduces the area_change against ``S`` by roughly a
+    factor of two while leaving ``S`` untouched. Splitting the shared
+    edge instead halves *both* areas symmetrically and does not change
+    the ratio — that is why the operator picks a non-shared edge.
+
+    Candidate selection (cascade + indirect-regression avoidance):
+    the three edges of ``L`` are filtered down to those that are
+    (a) not the shared C4 fail edge itself, and (b) not themselves
+    in the current C4 fail set (``c4_fail_keys``). Splitting an
+    edge that is itself a C4 fail cascades the violation onto the
+    two new edges (each inheriting the same area_change), so no
+    net C4 reduction would result.
+
+    A further geometric filter rejects candidates where halving
+    ``L`` would introduce a *new* C4 fail on one of ``L``'s
+    preserved non-shared edges (and, for interior splits, on the
+    buddy triangle ``T``'s preserved non-shared edges). Concretely,
+    after splitting an edge of ``L`` at its midpoint both halves
+    have area ``L/2``, so any non-split edge of ``L`` previously
+    matched against an external neighbour of area ``A_n`` now sits
+    between an ``L/2`` triangle and ``A_n``; if ``L < A_n`` this
+    asymmetry strictly worsens and may flip the edge into fail.
+    The remaining candidates are sorted by length (longest first).
+
+    Acceptance gate (all required):
+
+    1. The original C4 fail edge's area_change must strictly drop.
+       Without this we are doing topology churn for nothing.
+    2. No element in the affected block may newly fail C1 or C2 —
+       i.e., every post-split element must have
+       ``min_ang >= min_angle_target`` AND
+       ``max_ang <= max_angle_target``. The alpha quality metric is
+       deliberately *not* part of this gate: it is a proxy for angle
+       quality, and the FVCOM manual lists C1 and C2 directly, so
+       Pass E gates against the real criteria. Alpha may degrade
+       slightly because refining a coarse triangle into smaller ones
+       changes its edge-length distribution.
+    3. No node's valence may exceed ``max_valence`` (FVCOM manual
+       criterion C5). ``edge_split_interior`` raises the valence of
+       each "opposite" vertex (the third vertex of each incident
+       triangle, not on the split edge) by 1, so a vertex at the
+       limit before the split would regress C5 if split anyway.
+       ``valence_before`` short-circuits this check without rebuilding
+       the new mesh.
+
+    Returns ``(new_mesh, info)`` on accept, else ``None``. ``info``
+    matches the operator-info dict shape used by Pass B so the
+    standard accept bookkeeping can chain through.
+    """
+    fail_u, fail_v = int(fail_edge_uv[0]), int(fail_edge_uv[1])
+    fail_key = (min(fail_u, fail_v), max(fail_u, fail_v))
+
+    a_pair = _signed_areas(mesh.nodes, mesh.elements[list(elem_pair)])
+    if a_pair.size != 2:
+        return None
+    abs_a = np.abs(a_pair)
+    if abs_a[0] >= abs_a[1]:
+        larger, smaller = int(elem_pair[0]), int(elem_pair[1])
+        A_L_before, A_S_before = float(abs_a[0]), float(abs_a[1])
+    else:
+        larger, smaller = int(elem_pair[1]), int(elem_pair[0])
+        A_L_before, A_S_before = float(abs_a[1]), float(abs_a[0])
+
+    # All three edges of the larger triangle, with their lengths.
+    # Exclude the fail edge itself and any other C4-fail edge in L
+    # (cascade avoidance — splitting a fail edge merely re-locates
+    # the violation onto the two new edges).
+    verts_L = mesh.elements[larger]
+    candidates = []  # (edge_local, length, is_boundary)
+    for el in range(3):
+        u = int(verts_L[el])
+        v = int(verts_L[(el + 1) % 3])
+        key = (min(u, v), max(u, v))
+        if key == fail_key:
+            continue
+        if c4_fail_keys is not None and key in c4_fail_keys:
+            continue
+        length = float(np.linalg.norm(mesh.nodes[u] - mesh.nodes[v]))
+        candidates.append((el, length, key in boundary_edge_keys))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[1], reverse=True)
+
+    ac_before = (
+        (max(A_L_before, A_S_before) - min(A_L_before, A_S_before))
+        / max(A_L_before, A_S_before, 1e-30)
+    )
+
+    for edge_local, _length, is_boundary in candidates:
+        # Gate (3) prefilter — C5 valence. ``edge_split_interior``
+        # raises the valence of the opposite vertex of L AND the
+        # opposite vertex of the buddy triangle T (each by 1).
+        # ``edge_split_boundary`` raises only L's opposite vertex.
+        # If either is already at the cap, skip without paying the
+        # cost of a full split + rebuild.
+        c_self = int(verts_L[(edge_local + 2) % 3])
+        if (
+            valence_before is not None
+            and valence_before[c_self] >= max_valence
+        ):
+            continue
+        if not is_boundary:
+            u = int(verts_L[edge_local])
+            v = int(verts_L[(edge_local + 1) % 3])
+            key = (min(u, v), max(u, v))
+            incident = edge_uses.get(key, [])
+            if len(incident) != 2:
+                continue
+            other_eid = (
+                incident[0] if incident[1] == larger else incident[1]
+            )
+            other_verts = mesh.elements[other_eid]
+            edge_set = {u, v}
+            c_other = -1
+            for ov in other_verts:
+                ov_i = int(ov)
+                if ov_i not in edge_set:
+                    c_other = ov_i
+                    break
+            if c_other < 0:
+                continue
+            if (
+                valence_before is not None
+                and valence_before[c_other] >= max_valence
+            ):
+                continue
+
+        # Indirect-regression filter — would halving L push any of L's
+        # preserved non-shared edges (or, for interior splits, any of
+        # T's preserved non-shared edges) over the C4 threshold?
+        # The check is geometric: after a midpoint split both halves
+        # have area_before / 2, so each preserved edge sits between an
+        # ``area/2`` triangle and the unchanged external neighbour.
+        if abs_areas_before is not None:
+            split_u = int(verts_L[edge_local])
+            split_v = int(verts_L[(edge_local + 1) % 3])
+            split_key = (min(split_u, split_v), max(split_u, split_v))
+
+            def _would_create_new_fail(
+                eid: int, eid_area_after: float,
+            ) -> bool:
+                v_eid = mesh.elements[eid]
+                for ell in range(3):
+                    a = int(v_eid[ell])
+                    b = int(v_eid[(ell + 1) % 3])
+                    k = (min(a, b), max(a, b))
+                    if k == fail_key:
+                        continue  # gated separately by C4-drop check
+                    if k == split_key:
+                        continue  # being split, not "preserved"
+                    if k in boundary_edge_keys:
+                        continue
+                    if (
+                        c4_fail_keys is not None
+                        and k in c4_fail_keys
+                    ):
+                        continue  # already a fail, not a *new* one
+                    buddies = edge_uses.get(k, [])
+                    if len(buddies) != 2:
+                        continue
+                    other_eid = (
+                        buddies[0] if buddies[1] == eid else buddies[1]
+                    )
+                    a_other = float(abs_areas_before[other_eid])
+                    denom = max(eid_area_after, a_other, 1e-30)
+                    new_ac = (
+                        abs(eid_area_after - a_other) / denom
+                    )
+                    if new_ac > area_ratio_target:
+                        return True
+                return False
+
+            if _would_create_new_fail(larger, A_L_before / 2.0):
+                continue
+            if not is_boundary:
+                t_eid = other_eid
+                t_area_before = float(abs_areas_before[t_eid])
+                if _would_create_new_fail(t_eid, t_area_before / 2.0):
+                    continue
+
+        # Force=True invocation of the existing split operator gives us
+        # the new mesh without the C1/C2/alpha penalty gate firing; the
+        # bespoke Pass E gates are checked below.
+        if is_boundary:
+            out = _apply_edge_split_boundary(
+                mesh, larger, edge_local,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                max_angle_target=max_angle_target,
+                edge_uses=edge_uses,
+                edge_to_segment=edge_to_segment,
+                coastline_projector=coastline_projector,
+                force=True,
+            )
+        else:
+            out = _apply_edge_split_interior(
+                mesh, larger, edge_local,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                max_angle_target=max_angle_target,
+                edge_uses=edge_uses,
+                boundary_edge_keys=boundary_edge_keys,
+                force=True,
+            )
+        if out is None:
+            continue
+        new_mesh, split_info = out
+
+        # Gate (1): area_change at the original fail edge must drop.
+        # The fail edge is still present in the new mesh (we split a
+        # non-shared edge), but its two incident elements have changed.
+        # Re-locate the new buddy pair for ``fail_key``.
+        new_edge_uses = _edge_use_counts(new_mesh.elements)
+        new_buddies = new_edge_uses.get(fail_key, [])
+        if len(new_buddies) != 2:
+            # The fail edge became a boundary edge or disappeared —
+            # would be a topological bug here, so skip.
+            continue
+        areas_new = np.abs(
+            _signed_areas(new_mesh.nodes, new_mesh.elements[new_buddies]),
+        )
+        A_L_after = float(areas_new.max())
+        A_S_after = float(areas_new.min())
+        ac_after = (
+            (A_L_after - A_S_after) / max(A_L_after, 1e-30)
+        )
+        if ac_after + 1e-12 >= ac_before:
+            continue  # no improvement on the target C4 fail
+
+        # Gate (2): no new C1 or C2 fail in the affected block.
+        # ``force=True`` skipped the standard penalty gate; check
+        # the explicit min/max-angle thresholds here. Alpha is
+        # deliberately not gated — see docstring.
+        removed = split_info.get("removed_elements", [])
+        if not removed:
+            removed = [larger]
+        n_new_tris = 2 * len(removed)
+        new_eids = list(range(
+            new_mesh.n_elements - n_new_tris, new_mesh.n_elements,
+        ))
+        block_after = new_mesh.elements[new_eids]
+        _a_a, m_a, M_a = _per_element_quality(new_mesh.nodes, block_after)
+        if (m_a < min_angle_target).any():
+            continue  # would introduce a C1 fail
+        if (M_a > max_angle_target).any():
+            continue  # would introduce a C2 fail
+
+        info_out = {
+            "operator": "pass_e_split",
+            "underlying": split_info["operator"],
+            "fail_edge": [fail_key[0], fail_key[1]],
+            "split_edge": split_info.get("edge"),
+            "new_node": split_info.get("new_node"),
+            "removed_elements": removed,
+            "affected_elements": new_eids,
+            "area_change_before": float(ac_before),
+            "area_change_after": float(ac_after),
+        }
+        return new_mesh, info_out
+
+    return None
+
+
+def _pass_e_round(
+    cur: Fort14Mesh, *,
+    alpha_target: float, min_angle_target: float,
+    max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
+    area_ratio_target: float = DEFAULT_AREA_RATIO_TARGET,
+    max_valence: int = DEFAULT_MAX_VALENCE,
+    max_splits: int,
+    coastline_projector: CoastlineProjector | None = None,
+) -> tuple[Fort14Mesh, int, int]:
+    """Pass E round: scan internal edges for C4 failures, attempt a
+    Pass-E split on each in descending order of area_change. Each
+    accept rebuilds the edge-buddy structures, current C4 fail set,
+    and per-node valence vector on the new mesh, so cascade
+    avoidance and the C5 prefilter both stay sound.
+
+    Returns ``(updated_mesh, n_accepted, n_rejected)``.
+    """
+    from fvcom_mesh_tools.diagnostics import (  # noqa: PLC0415
+        node_valence,
+    )
+
+    n_accepted = 0
+    n_rejected = 0
+
+    while n_accepted < max_splits:
+        edge_uv, elem_pair, area_change = _per_edge_area_change(
+            cur.nodes, cur.elements,
+        )
+        if area_change.size == 0:
+            break
+        fail_mask = area_change > area_ratio_target
+        if not fail_mask.any():
+            break
+        fail_indices = np.where(fail_mask)[0]
+        # Worst-first ordering — go after the largest area_change first.
+        fail_indices = fail_indices[
+            np.argsort(-area_change[fail_indices])
+        ]
+
+        edge_uses = _edge_use_counts(cur.elements)
+        boundary_edge_keys = {
+            k for k, v in edge_uses.items() if len(v) == 1
+        }
+        _bp, _bn, edge_to_segment = _boundary_topology(cur)
+        valence_before = node_valence(cur.elements, cur.n_nodes)
+        abs_areas_before = np.abs(_signed_areas(cur.nodes, cur.elements))
+        c4_fail_keys = {
+            (int(edge_uv[i, 0]), int(edge_uv[i, 1]))
+            for i in fail_indices
+        }
+
+        progress = False
+        for idx in fail_indices:
+            u, v = int(edge_uv[idx, 0]), int(edge_uv[idx, 1])
+            e_i, e_j = int(elem_pair[idx, 0]), int(elem_pair[idx, 1])
+            out = _apply_pass_e_split(
+                cur, (u, v), (e_i, e_j),
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                max_angle_target=max_angle_target,
+                area_ratio_target=area_ratio_target,
+                max_valence=max_valence,
+                edge_uses=edge_uses,
+                boundary_edge_keys=boundary_edge_keys,
+                edge_to_segment=edge_to_segment,
+                c4_fail_keys=c4_fail_keys,
+                valence_before=valence_before,
+                abs_areas_before=abs_areas_before,
+                coastline_projector=coastline_projector,
+            )
+            if out is None:
+                n_rejected += 1
+                continue
+            cur, _info = out
+            n_accepted += 1
+            progress = True
+            break  # restart enumeration on the new mesh
+
+        if not progress:
+            break
+
+    return cur, n_accepted, n_rejected
+
+
 def phase_h_optimize(
     mesh: Fort14Mesh,
     *,
@@ -1974,10 +2440,15 @@ def phase_h_optimize(
     patch_max_cluster_size: int = DEFAULT_PATCH_MAX_CLUSTER_SIZE,
     max_patches_per_round: int = 1_000,
     patch_reject_boundary_clusters: bool = True,
+    pass_e_enabled: bool = False,
+    pass_e_area_ratio_target: float = DEFAULT_AREA_RATIO_TARGET,
+    pass_e_max_valence: int = DEFAULT_MAX_VALENCE,
+    max_pass_e_splits_per_round: int = 10_000,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Phase H driver: Pass A (batch smooth) ↔ Pass B (1-step topology)
     ↔ optional Pass C (2-step lookahead) ↔ optional Pass D
-    (cluster patch re-CDT) until none make progress.
+    (cluster patch re-CDT) ↔ optional Pass E (gradation refinement)
+    until none make progress.
 
     **Pass A** — batch Gauss-Seidel smooth. Each sweep visits every
     interior vertex, proposes the 1-ring centroid, and accepts the
@@ -2032,14 +2503,24 @@ def phase_h_optimize(
     sit in size ≥ 3 clusters and are unreachable by 1-ring local
     edits (see ``docs/patch_re_cdt_design.md``).
 
-    The passes alternate in order A → B → C → D each outer round.
+    **Pass E (opt-in via ``pass_e_enabled=True``)** — gradation
+    refinement targeting FVCOM manual criterion C4 (adjacent-element
+    area_change <= ``pass_e_area_ratio_target``, default 0.5). Scans
+    internal edges worst-area-change-first; for each C4 fail, splits
+    the longest non-shared edge of the larger triangle. Accept iff
+    (i) the original C4 fail edge's area_change strictly drops, and
+    (ii) the 1-ring C1/C2/alpha penalty does not regress.
+
+    The passes alternate in order A → B → C → D → E each outer round.
     Pass A runs to exhaustion, Pass B up to
     ``max_topology_per_round`` accepts, Pass C up to
     ``max_lookahead_per_round`` accepts, Pass D up to
-    ``max_patches_per_round`` accepts. After Pass D accepts the
-    Pass A loop cleans up perturbations on the next outer round.
-    The loop terminates when every enabled pass contributes zero
-    accepts in the same round, or when ``max_outer_rounds`` is hit.
+    ``max_patches_per_round`` accepts, Pass E up to
+    ``max_pass_e_splits_per_round`` accepts. After Pass D / Pass E
+    accepts the Pass A loop cleans up perturbations on the next outer
+    round. The loop terminates when every enabled pass contributes
+    zero accepts in the same round, or when ``max_outer_rounds`` is
+    hit.
 
     Returns ``(new_mesh, info)`` with operator histograms, sweep
     counts, lookahead pair-histogram, and pre/post quality summaries.
@@ -2081,6 +2562,12 @@ def phase_h_optimize(
         "patch_reject_boundary_clusters": bool(patch_reject_boundary_clusters),
         "patch_recdt_accepts": defaultdict(int),
         "n_patch_recdt_rejected": 0,
+        "pass_e_enabled": bool(pass_e_enabled),
+        "pass_e_area_ratio_target": float(pass_e_area_ratio_target),
+        "pass_e_max_valence": int(pass_e_max_valence),
+        "max_pass_e_splits_per_round": int(max_pass_e_splits_per_round),
+        "pass_e_accepts": 0,
+        "pass_e_rejected": 0,
     }
     if lookahead_gate not in LOOKAHEAD_GATES:
         raise ValueError(
@@ -2188,6 +2675,27 @@ def phase_h_optimize(
                 round_accepts += int(n)
             info["n_patch_recdt_rejected"] += int(n_patch_rej)
 
+        # Pass E: gradation refinement (FVCOM C4). Targets internal
+        # edges where adjacent-element area ratio exceeds the target;
+        # splits the larger triangle's longest non-shared,
+        # non-C4-fail edge. C5 (valence) is gated to protect the
+        # FVCOM <=8 cap.
+        if pass_e_enabled:
+            cur, pe_acc, pe_rej = _pass_e_round(
+                cur,
+                alpha_target=alpha_target,
+                min_angle_target=min_angle_target,
+                max_angle_target=max_angle_target,
+                area_ratio_target=pass_e_area_ratio_target,
+                max_valence=pass_e_max_valence,
+                max_splits=max_pass_e_splits_per_round,
+                coastline_projector=coastline_projector,
+            )
+            info["pass_e_accepts"] += int(pe_acc)
+            info["pass_e_rejected"] += int(pe_rej)
+            info["n_iters"] += int(pe_acc)
+            round_accepts += int(pe_acc)
+
         if round_accepts == 0:
             break
 
@@ -2212,9 +2720,12 @@ def phase_h_optimize(
 __all__ = [
     "CoastlineProjector",
     "DEFAULT_ALPHA_TARGET",
+    "DEFAULT_AREA_RATIO_TARGET",
     "DEFAULT_LOOKAHEAD_GATE",
     "DEFAULT_LOOKAHEAD_OP1_INVENTORY",
     "DEFAULT_LOOKAHEAD_OP2_INVENTORY",
+    "DEFAULT_MAX_ANGLE_TARGET",
+    "DEFAULT_MAX_VALENCE",
     "DEFAULT_MIN_ANGLE_TARGET",
     "DEFAULT_OPERATOR_ORDER",
     "DEFAULT_PATCH_MAX_CLUSTER_SIZE",

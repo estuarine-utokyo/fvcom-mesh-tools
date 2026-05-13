@@ -15,20 +15,27 @@ import numpy as np
 from fvcom_mesh_tools.algorithms.quality import alpha_quality
 from fvcom_mesh_tools.io import Fort14Mesh
 from fvcom_mesh_tools.mesh_clean_phase_h import (
+    DEFAULT_AREA_RATIO_TARGET,
     DEFAULT_MAX_ANGLE_TARGET,
+    DEFAULT_MAX_VALENCE,
     _apply_edge_split_boundary,
     _apply_edge_split_interior,
     _apply_edge_swap,
+    _apply_pass_e_split,
     _apply_smooth_node,
     _apply_vertex_remove,
     _batch_smooth_sweep,
     _boundary_node_mask,
     _boundary_topology,
     _edge_use_counts,
+    _internal_edge_buddies,
     _is_fail,
     _node_to_elements,
+    _pass_e_round,
     _penalty,
+    _per_edge_area_change,
     _per_element_quality,
+    _signed_areas,
     phase_h_optimize,
 )
 
@@ -1105,3 +1112,280 @@ def test_phase_h_optimize_default_max_angle_is_disabled() -> None:
     )
     assert info["max_angle_target"] == DEFAULT_MAX_ANGLE_TARGET
     assert info["max_angle_target"] == 180.0
+
+
+# ---------------------------------------------------------------------------
+# Pass E: gradation refinement (FVCOM manual criterion C4)
+# ---------------------------------------------------------------------------
+
+
+def _c4_fail_strip() -> Fort14Mesh:
+    """5-node strip with one equilateral-ish triangle next to a
+    much smaller one, triggering area_change > 0.5 on the shared
+    edge while keeping each new sub-triangle's min angle >= 20°.
+
+    Triangles:
+      T0 = (0, 1, 2): equilateral, side 2, area = sqrt(3) ≈ 1.732
+      T1 = (1, 0, 3): thin sliver, area = 0.5  → area_change(0-1)
+                       = (1.732 - 0.5)/1.732 ≈ 0.711 (fails C4)
+      T2 = (0, 2, 4): keeps edge 0-2 internal so Pass E has two
+                       candidate edges to choose from
+    """
+    sqrt3 = float(np.sqrt(3.0))
+    nodes = np.array(
+        [
+            [0.0, 0.0],     # 0
+            [2.0, 0.0],     # 1   (equilateral base)
+            [1.0, sqrt3],   # 2   (equilateral apex)
+            [1.0, -0.5],    # 3   (sliver apex below 0-1)
+            [-1.0, 2.0],    # 4   (gives T2)
+        ],
+        dtype=float,
+    )
+    elements = np.array(
+        [
+            [0, 1, 2],
+            [1, 0, 3],
+            [0, 2, 4],
+        ],
+        dtype=np.int64,
+    )
+    return Fort14Mesh(
+        title="c4_strip", nodes=nodes,
+        depths=np.zeros(nodes.shape[0]),
+        elements=elements,
+        open_boundaries=[],
+        land_boundaries=[
+            (0, np.array([4, 2, 1, 3, 0], dtype=np.int64)),
+        ],
+    )
+
+
+def test_internal_edge_buddies_finds_shared_edges() -> None:
+    """The C4-fail strip has 3 elements; the boundary walk has 5
+    edges, the strip has 3*3 = 9 edge slots, so 2 internal edges
+    (edges 0-1 and 0-2)."""
+    mesh = _c4_fail_strip()
+    edge_uv, elem_pair = _internal_edge_buddies(mesh.elements)
+    assert edge_uv.shape == (2, 2)
+    assert elem_pair.shape == (2, 2)
+    # Both internal edges include node 0.
+    edge_sets = [frozenset(e.tolist()) for e in edge_uv]
+    assert frozenset([0, 1]) in edge_sets
+    assert frozenset([0, 2]) in edge_sets
+
+
+def test_per_edge_area_change_matches_manual_formula() -> None:
+    """The 0-1 shared edge sits between T0 (area=sqrt(3)) and T1
+    (area=0.5), so area_change = (sqrt(3) - 0.5) / sqrt(3) ≈ 0.711
+    → fails C4. The 0-2 shared edge between T0 and T2 fits the same
+    formula on its respective pair."""
+    mesh = _c4_fail_strip()
+    edge_uv, _elem_pair, ac = _per_edge_area_change(
+        mesh.nodes, mesh.elements,
+    )
+    keys = [tuple(sorted(e.tolist())) for e in edge_uv]
+    idx_01 = keys.index((0, 1))
+    expected_01 = (np.sqrt(3.0) - 0.5) / np.sqrt(3.0)
+    np.testing.assert_allclose(ac[idx_01], expected_01, atol=1e-12)
+    assert ac[idx_01] > 0.5  # confirms this fixture trips C4
+
+
+def test_apply_pass_e_split_drops_c4_violation() -> None:
+    """The 0-1 internal edge fails C4 (area_change=0.75). Pass E
+    should split the longest non-shared edge of T0 (the larger of the
+    two incident triangles), dropping area_change at edge 0-1
+    strictly below the 0.5 target."""
+    mesh = _c4_fail_strip()
+    edge_uv, elem_pair, ac = _per_edge_area_change(
+        mesh.nodes, mesh.elements,
+    )
+    # Pick the 0-1 fail edge.
+    keys = [tuple(sorted(e.tolist())) for e in edge_uv]
+    fail_idx = keys.index((0, 1))
+    u, v = int(edge_uv[fail_idx, 0]), int(edge_uv[fail_idx, 1])
+    e_i, e_j = int(elem_pair[fail_idx, 0]), int(elem_pair[fail_idx, 1])
+
+    edge_uses = _edge_use_counts(mesh.elements)
+    boundary_edge_keys = {k for k, v in edge_uses.items() if len(v) == 1}
+    _bp, _bn, edge_to_segment = _boundary_topology(mesh)
+
+    out = _apply_pass_e_split(
+        mesh, (u, v), (e_i, e_j),
+        alpha_target=0.95, min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        area_ratio_target=0.5,
+        edge_uses=edge_uses,
+        boundary_edge_keys=boundary_edge_keys,
+        edge_to_segment=edge_to_segment,
+        coastline_projector=None,
+    )
+    assert out is not None, "Pass E should accept the strip split"
+    new_mesh, info = out
+    assert info["operator"] == "pass_e_split"
+    assert info["area_change_after"] < info["area_change_before"]
+    # After halving T0 (area sqrt(3) ≈ 1.732 → ~0.866) the shared
+    # edge's new ratio is (0.866 - 0.5)/0.866 ≈ 0.42 → below the 0.5
+    # target.
+    assert info["area_change_after"] <= 0.5 + 1e-12
+    # Mesh sanity: no flipped triangles.
+    p0 = new_mesh.nodes[new_mesh.elements[:, 0]]
+    p1 = new_mesh.nodes[new_mesh.elements[:, 1]]
+    p2 = new_mesh.nodes[new_mesh.elements[:, 2]]
+    cross = (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+    assert (cross > 0).all()
+
+
+def test_pass_e_round_eliminates_strip_c4_fail() -> None:
+    """End-to-end ``_pass_e_round``: the strip fixture has 1 (or 2)
+    C4 fails before; after the round, zero C4 fails should remain
+    (or the round should converge to a fixed point)."""
+    mesh = _c4_fail_strip()
+    _, _, ac_before = _per_edge_area_change(mesh.nodes, mesh.elements)
+    n_fail_before = int((ac_before > 0.5).sum())
+    assert n_fail_before >= 1
+
+    new_mesh, n_acc, n_rej = _pass_e_round(
+        mesh,
+        alpha_target=0.95, min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        area_ratio_target=0.5,
+        max_splits=20,
+        coastline_projector=None,
+    )
+    assert n_acc >= 1
+    _, _, ac_after = _per_edge_area_change(
+        new_mesh.nodes, new_mesh.elements,
+    )
+    n_fail_after = int((ac_after > 0.5).sum())
+    assert n_fail_after < n_fail_before, (
+        f"Pass E should reduce C4 fails: {n_fail_before} -> {n_fail_after}"
+    )
+
+
+def test_phase_h_optimize_pass_e_path_runs_cleanly() -> None:
+    """`phase_h_optimize` must accept ``pass_e_enabled=True`` and
+    surface Pass E bookkeeping in ``info``."""
+    mesh = _skewed_quad()
+    out_mesh, info = phase_h_optimize(
+        mesh, alpha_target=0.95, min_angle_target=20.0,
+        max_outer_rounds=3,
+        pass_e_enabled=True,
+        pass_e_area_ratio_target=0.5,
+    )
+    assert info["pass_e_enabled"] is True
+    assert "pass_e_accepts" in info
+    assert "pass_e_rejected" in info
+    # Mesh stays valid (no flipped triangles).
+    p0 = out_mesh.nodes[out_mesh.elements[:, 0]]
+    p1 = out_mesh.nodes[out_mesh.elements[:, 1]]
+    p2 = out_mesh.nodes[out_mesh.elements[:, 2]]
+    cross = (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+    assert (cross > 0).all()
+
+
+def test_phase_h_optimize_pass_e_disabled_by_default() -> None:
+    """Pass E must stay off unless explicitly enabled — preserves
+    backward compatibility for existing callers."""
+    mesh = _skewed_quad()
+    _, info = phase_h_optimize(
+        mesh, alpha_target=0.95, min_angle_target=20.0,
+        max_outer_rounds=3,
+    )
+    assert info["pass_e_enabled"] is False
+    assert info["pass_e_accepts"] == 0
+    assert info["pass_e_rejected"] == 0
+    assert info["pass_e_area_ratio_target"] == DEFAULT_AREA_RATIO_TARGET
+
+
+def test_pass_e_skips_cascading_c4_fail_candidate() -> None:
+    """If the longest non-shared edge of L is itself a C4 fail edge,
+    splitting it cascades the violation onto two new edges (each
+    inheriting the same area_change). Pass E must skip such
+    candidates when ``c4_fail_keys`` is provided. We verify by
+    constructing a fixture where the only acceptable candidate is
+    skipped and the operator returns ``None``."""
+    mesh = _c4_fail_strip()
+    edge_uv, elem_pair, ac = _per_edge_area_change(
+        mesh.nodes, mesh.elements,
+    )
+    keys = [tuple(sorted(e.tolist())) for e in edge_uv]
+    fail_idx = keys.index((0, 1))
+    u, v = int(edge_uv[fail_idx, 0]), int(edge_uv[fail_idx, 1])
+    e_i, e_j = int(elem_pair[fail_idx, 0]), int(elem_pair[fail_idx, 1])
+
+    edge_uses = _edge_use_counts(mesh.elements)
+    boundary_edge_keys = {k for k, v in edge_uses.items() if len(v) == 1}
+    _bp, _bn, edge_to_segment = _boundary_topology(mesh)
+
+    # Artificially mark every other internal edge AND every boundary
+    # edge of L as a C4 fail. ``L`` is the larger triangle T0 =
+    # (0, 1, 2). Its three edges are (0,1) [the fail edge itself],
+    # (1,2) [boundary], (0,2) [internal, shared with T2]. Mark
+    # (1,2) and (0,2) as cascading fails — Pass E must reject.
+    cascading_fail_keys = {(0, 1), (1, 2), (0, 2)}
+
+    out = _apply_pass_e_split(
+        mesh, (u, v), (e_i, e_j),
+        alpha_target=0.95, min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        area_ratio_target=0.5,
+        max_valence=DEFAULT_MAX_VALENCE,
+        edge_uses=edge_uses,
+        boundary_edge_keys=boundary_edge_keys,
+        edge_to_segment=edge_to_segment,
+        c4_fail_keys=cascading_fail_keys,
+        valence_before=None,
+        coastline_projector=None,
+    )
+    assert out is None, (
+        "Pass E must reject when every candidate edge is itself "
+        "in c4_fail_keys (cascade avoidance)"
+    )
+
+
+def test_pass_e_prefilters_on_valence_cap() -> None:
+    """If the C5 prefilter sees the larger triangle's opposite
+    vertex already at ``max_valence``, splitting any non-shared edge
+    would push the opposite vertex to ``max_valence + 1``, regressing
+    C5. Pass E must reject. We simulate by passing a synthetic
+    ``valence_before`` array that pins every node at the cap."""
+    mesh = _c4_fail_strip()
+    edge_uv, elem_pair, _ac = _per_edge_area_change(
+        mesh.nodes, mesh.elements,
+    )
+    keys = [tuple(sorted(e.tolist())) for e in edge_uv]
+    fail_idx = keys.index((0, 1))
+    u, v = int(edge_uv[fail_idx, 0]), int(edge_uv[fail_idx, 1])
+    e_i, e_j = int(elem_pair[fail_idx, 0]), int(elem_pair[fail_idx, 1])
+
+    edge_uses = _edge_use_counts(mesh.elements)
+    boundary_edge_keys = {k for k, v in edge_uses.items() if len(v) == 1}
+    _bp, _bn, edge_to_segment = _boundary_topology(mesh)
+
+    # Every node already at max_valence — any split would regress C5.
+    valence_pinned = np.full(mesh.n_nodes, DEFAULT_MAX_VALENCE, dtype=np.int64)
+
+    out = _apply_pass_e_split(
+        mesh, (u, v), (e_i, e_j),
+        alpha_target=0.95, min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        area_ratio_target=0.5,
+        max_valence=DEFAULT_MAX_VALENCE,
+        edge_uses=edge_uses,
+        boundary_edge_keys=boundary_edge_keys,
+        edge_to_segment=edge_to_segment,
+        c4_fail_keys=None,
+        valence_before=valence_pinned,
+        coastline_projector=None,
+    )
+    assert out is None, (
+        "Pass E must reject when the C5 prefilter would push the "
+        "opposite vertex over max_valence"
+    )
