@@ -1,0 +1,30 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=01:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc50
+
+# PoC #50 (I1+I2): Phase H with the full FVCOM gate
+# alpha_target=0.95, min_angle_target=30°, max_angle_target=130°.
+# Targets criteria C1 and C2 of the FVCOM manual simultaneously,
+# while keeping v3's strict alpha gate that PoC #49 showed is
+# load-bearing for indirect C1 lift.
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+export PYTHONUNBUFFERED=1
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u notebooks/50_phase_h_fvcom_full_gate_poc.py
