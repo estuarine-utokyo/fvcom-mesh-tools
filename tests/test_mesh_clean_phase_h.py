@@ -42,6 +42,7 @@ from fvcom_mesh_tools.mesh_clean_phase_h import (
     _penalty,
     _per_edge_area_change,
     _per_element_quality,
+    phase_h_finish,
     phase_h_optimize,
 )
 
@@ -1885,3 +1886,130 @@ def test_phase_h_optimize_pass_g_disabled_by_default() -> None:
     assert info["pass_g_enabled"] is False
     assert info["pass_g_accepts"] == 0
     assert info["pass_g_sweeps"] == 0
+
+
+# ---------------------------------------------------------------------------
+# phase_h_finish: stochastic local fixer + vertex_remove chain (PoC #58d/j/k)
+# ---------------------------------------------------------------------------
+
+
+def test_phase_h_finish_clears_c4_fan_at_threshold() -> None:
+    """The C4-fail fan (2 marginal C4 fails at the 30°-min-angle
+    threshold) is clearable by the stochastic local fixer's Stage 1
+    alone — `phase_h_finish` should drive the residual to zero.
+    """
+    mesh = _c4_fail_fan()
+    _uv, _ep, ac_b = _per_edge_area_change(mesh.nodes, mesh.elements)
+    assert int((ac_b > 0.5).sum()) == 2
+
+    out_mesh, info = phase_h_finish(
+        mesh,
+        seed=42,
+        min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        area_ratio_target=0.5,
+        max_outer_passes=3,
+        max_tries_per_fail=200,
+    )
+    assert info["before"]["C4"] == 2
+    assert info["after"]["C1"] == 0
+    assert info["after"]["C4"] == 0
+    assert info["delta_total"] <= 0
+    _uv2, _ep2, ac_a = _per_edge_area_change(
+        out_mesh.nodes, out_mesh.elements,
+    )
+    assert int((ac_a > 0.5).sum()) == 0
+
+
+def test_phase_h_finish_zero_residual_input_is_no_op() -> None:
+    """Running the finisher on an input with no FVCOM violations
+    must not modify the mesh or its element count, and must report
+    zero work."""
+    mesh = _c4_fail_fan()
+    # Pre-balance node 4 → all four triangles isoceles right (45/45/90).
+    mesh.nodes[4] = np.array([2.0, 2.0])
+    out_mesh, info = phase_h_finish(
+        mesh, seed=42,
+        min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        max_outer_passes=2, max_tries_per_fail=50,
+    )
+    assert info["before"]["C1"] == 0
+    assert info["before"]["C2"] == 0
+    assert info["before"]["C4"] == 0
+    assert info["before"]["C5"] == 0
+    assert info["after"] == info["before"]
+    assert info["stage1_stochastic"]["n_fixed"] == 0
+    assert info["stage1_stochastic"]["n_stuck"] == 0
+    assert info["stage2_c1_vertex_remove"] == []
+    assert info["stage3_c4_vertex_remove"] == []
+    assert out_mesh.n_elements == mesh.n_elements
+    assert out_mesh.n_nodes == mesh.n_nodes
+
+
+def test_phase_h_finish_is_seed_reproducible() -> None:
+    """Two `phase_h_finish` runs with the same seed must produce
+    bit-identical meshes (same node positions, same element list,
+    same final counts)."""
+    mesh = _c4_fail_fan()
+    out_a, info_a = phase_h_finish(
+        mesh, seed=42,
+        min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        max_outer_passes=2, max_tries_per_fail=100,
+    )
+    out_b, info_b = phase_h_finish(
+        mesh, seed=42,
+        min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        max_outer_passes=2, max_tries_per_fail=100,
+    )
+    np.testing.assert_array_equal(out_a.nodes, out_b.nodes)
+    np.testing.assert_array_equal(out_a.elements, out_b.elements)
+    assert info_a["after"] == info_b["after"]
+
+
+def test_phase_h_finish_does_not_mutate_input_mesh() -> None:
+    """`phase_h_finish` must operate on a deep copy of the input;
+    the caller's mesh object must remain unchanged."""
+    mesh = _c4_fail_fan()
+    nodes_before = mesh.nodes.copy()
+    elements_before = mesh.elements.copy()
+    _out, _info = phase_h_finish(
+        mesh, seed=42,
+        min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        max_outer_passes=2, max_tries_per_fail=50,
+    )
+    np.testing.assert_array_equal(mesh.nodes, nodes_before)
+    np.testing.assert_array_equal(mesh.elements, elements_before)
+
+
+def test_phase_h_finish_records_per_stage_info() -> None:
+    """The info dict must surface per-stage bookkeeping: stage 1
+    stochastic stats, stage 2 / 3 vertex_remove records, before /
+    after / after-stage1 / after-stage2 counts, and the delta."""
+    mesh = _c4_fail_fan()
+    _out, info = phase_h_finish(
+        mesh, seed=42,
+        min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        max_outer_passes=2, max_tries_per_fail=100,
+    )
+    assert "stage1_stochastic" in info
+    assert "stage2_c1_vertex_remove" in info
+    assert "stage3_c4_vertex_remove" in info
+    assert "before" in info
+    assert "after_stage1" in info
+    assert "after_stage2" in info
+    assert "after" in info
+    assert "delta_total" in info
+    assert isinstance(info["stage2_c1_vertex_remove"], list)
+    assert isinstance(info["stage3_c4_vertex_remove"], list)
+    # Per-stage counts must monotonically not increase (each stage
+    # can only fix fails, never introduce them at the global gate).
+    def _total(c: dict) -> int:
+        return c["C1"] + c["C2"] + c["C4"] + c["C5"]
+    assert _total(info["after_stage1"]) <= _total(info["before"])
+    assert _total(info["after_stage2"]) <= _total(info["after_stage1"])
+    assert _total(info["after"]) <= _total(info["after_stage2"])

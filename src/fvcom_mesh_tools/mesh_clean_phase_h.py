@@ -3465,10 +3465,726 @@ def phase_h_optimize(
     return cur, info
 
 
+# ---------------------------------------------------------------------------
+# Phase H finishing chain (PoC #58d / #58j / #58k):
+#   stochastic local fixer + iterative vertex_remove + cleanup
+# ---------------------------------------------------------------------------
+
+DEFAULT_FINISH_SEED: int = 42
+DEFAULT_FINISH_MAX_TRIES_PER_FAIL: int = 500
+DEFAULT_FINISH_PERTURBATION_SIGMA: float = 0.30
+DEFAULT_FINISH_MAX_OUTER_PASSES: int = 5
+DEFAULT_FINISH_MIN_ANGLE: float = 30.0
+DEFAULT_FINISH_MAX_ANGLE: float = 130.0
+
+
+def _finish_clone(mesh: Fort14Mesh) -> Fort14Mesh:
+    """Deep copy of ``mesh`` so callers can probe a candidate update
+    without mutating the input."""
+    return Fort14Mesh(
+        title=mesh.title,
+        nodes=mesh.nodes.copy(),
+        depths=mesh.depths.copy(),
+        elements=mesh.elements.copy(),
+        open_boundaries=[
+            np.asarray(s).copy() for s in mesh.open_boundaries
+        ],
+        land_boundaries=[
+            (int(ib), np.asarray(s).copy())
+            for ib, s in mesh.land_boundaries
+        ],
+    )
+
+
+def _finish_max_interior_angle(mesh: Fort14Mesh) -> np.ndarray:
+    """Per-element maximum interior angle in degrees."""
+    p0 = mesh.nodes[mesh.elements[:, 0]]
+    p1 = mesh.nodes[mesh.elements[:, 1]]
+    p2 = mesh.nodes[mesh.elements[:, 2]]
+    e0 = np.linalg.norm(p1 - p0, axis=1)
+    e1 = np.linalg.norm(p2 - p1, axis=1)
+    e2 = np.linalg.norm(p0 - p2, axis=1)
+
+    def _ang(opp, ea, eb):
+        denom = 2.0 * ea * eb
+        safe = np.where(denom > 0, denom, 1.0)
+        cos = np.where(
+            denom > 0, (ea * ea + eb * eb - opp * opp) / safe, 0.0,
+        )
+        return np.arccos(np.clip(cos, -1.0, 1.0))
+
+    return np.degrees(
+        np.maximum(
+            np.maximum(_ang(e1, e2, e0), _ang(e2, e0, e1)),
+            _ang(e0, e1, e2),
+        ),
+    )
+
+
+def _finish_global_counts(
+    mesh: Fort14Mesh,
+    *,
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+    max_valence: int,
+) -> dict[str, int]:
+    """Global FVCOM-criterion violation counts."""
+    from fvcom_mesh_tools.algorithms.quality import (  # noqa: PLC0415
+        min_interior_angle,
+    )
+    from fvcom_mesh_tools.diagnostics import (  # noqa: PLC0415
+        node_valence,
+    )
+    m = min_interior_angle(mesh)
+    M = _finish_max_interior_angle(mesh)
+    _u, _p, ac = _per_edge_area_change(mesh.nodes, mesh.elements)
+    val = node_valence(mesh.elements, mesh.n_nodes)
+    return {
+        "NP": int(mesh.n_nodes),
+        "NE": int(mesh.n_elements),
+        "C1": int((m < min_angle_target).sum()),
+        "C2": int((M > max_angle_target).sum()),
+        "C4": int((ac > area_ratio_target).sum()),
+        "C5": int((val > max_valence).sum()),
+    }
+
+
+def _finish_total(counts: dict[str, int]) -> int:
+    return counts["C1"] + counts["C2"] + counts["C4"] + counts["C5"]
+
+
+def _finish_local_ok(
+    mesh: Fort14Mesh,
+    patch_eids: np.ndarray,
+    affected_pairs: np.ndarray,
+    valence: np.ndarray,
+    *,
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+    max_valence: int,
+) -> bool:
+    """Check signed area + C1 / C2 / C4 / C5 on the local patch
+    (= 1-ring of the moved vertex). Exact: any criterion fail in the
+    patch globally manifests within ``patch_eids`` /
+    ``affected_pairs``, so a clean local check is a clean global
+    check (for non-topology-changing moves)."""
+    if patch_eids.size == 0:
+        return True
+    block = mesh.elements[patch_eids]
+    p0 = mesh.nodes[block[:, 0]]
+    p1 = mesh.nodes[block[:, 1]]
+    p2 = mesh.nodes[block[:, 2]]
+    cross = (
+        (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+        - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+    )
+    if (cross <= 0).any():
+        return False
+    _alpha, min_ang, max_ang = _per_element_quality(mesh.nodes, block)
+    if (min_ang < min_angle_target).any():
+        return False
+    if (max_ang > max_angle_target).any():
+        return False
+    if affected_pairs.shape[0]:
+        ar = _local_area_changes(mesh.nodes, mesh.elements, affected_pairs)
+        if (ar > area_ratio_target).any():
+            return False
+    patch_verts = np.unique(block.ravel())
+    if (valence[patch_verts] > max_valence).any():
+        return False
+    return True
+
+
+def _finish_eid_still_fails(
+    mesh: Fort14Mesh, eid: int,
+    edge_uses: dict[tuple[int, int], list[int]],
+    *,
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+) -> bool:
+    """Element-level fail check used by the stochastic fixer to
+    decide whether to keep trying on ``eid``."""
+    block = mesh.elements[[int(eid)]]
+    _a, m, M = _per_element_quality(mesh.nodes, block)
+    if float(m[0]) < min_angle_target:
+        return True
+    if float(M[0]) > max_angle_target:
+        return True
+    tri = mesh.elements[int(eid)]
+    for k in range(3):
+        a = int(tri[k])
+        b = int(tri[(k + 1) % 3])
+        key = (min(a, b), max(a, b))
+        buds = edge_uses.get(key, [])
+        if len(buds) != 2:
+            continue
+        be = buds[0] if buds[1] == int(eid) else buds[1]
+        block2 = mesh.elements[[int(eid), int(be)]]
+        p0 = mesh.nodes[block2[:, 0]]
+        p1 = mesh.nodes[block2[:, 1]]
+        p2 = mesh.nodes[block2[:, 2]]
+        areas = np.abs(0.5 * (
+            (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+            - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+        ))
+        larger = areas.max()
+        smaller = areas.min()
+        if (larger - smaller) / max(larger, 1e-30) > area_ratio_target:
+            return True
+    return False
+
+
+def _finish_process_fail(
+    mesh: Fort14Mesh, eid: int, rng: np.random.Generator,
+    *,
+    boundary_node_mask: np.ndarray,
+    boundary_prev: np.ndarray | None,
+    boundary_next: np.ndarray | None,
+    coastline_projector: CoastlineProjector | None,
+    valence: np.ndarray,
+    n2e: dict[int, np.ndarray],
+    edge_uses: dict[tuple[int, int], list[int]],
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+    max_valence: int,
+    max_tries: int,
+    perturbation_sigma: float,
+) -> tuple[bool, int]:
+    """Process one fail element with up to ``max_tries`` random
+    Gaussian perturbations of a randomly-chosen vertex of the
+    triangle.  Each try recomputes the patch as the 1-ring of the
+    chosen vertex (the exact set of elements whose geometry changes)
+    and accepts iff the patch satisfies every FVCOM criterion AND
+    ``eid`` itself no longer fails.
+    """
+    if not _finish_eid_still_fails(
+        mesh, eid, edge_uses,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        area_ratio_target=area_ratio_target,
+    ):
+        return True, 0
+    has_tangent = (
+        boundary_prev is not None and boundary_next is not None
+    )
+    for try_i in range(1, max_tries + 1):
+        tri = mesh.elements[int(eid)]
+        v = int(rng.choice(tri))
+        ring_eids = n2e.get(v)
+        if ring_eids is None or ring_eids.size == 0:
+            continue
+        block = mesh.elements[ring_eids]
+        pa = mesh.nodes[block[:, 0]]
+        pb = mesh.nodes[block[:, 1]]
+        pc = mesh.nodes[block[:, 2]]
+        edge_lens = np.concatenate([
+            np.linalg.norm(pb - pa, axis=1),
+            np.linalg.norm(pc - pb, axis=1),
+            np.linalg.norm(pa - pc, axis=1),
+        ])
+        local_h = float(edge_lens.mean())
+        if local_h <= 0:
+            continue
+        sigma = perturbation_sigma * local_h
+        if boundary_node_mask[v]:
+            if not has_tangent:
+                continue
+            pv = int(boundary_prev[v])
+            nv = int(boundary_next[v])
+            if pv < 0 or nv < 0:
+                continue
+            a_pos = mesh.nodes[pv]
+            b_pos = mesh.nodes[nv]
+            ab = b_pos - a_pos
+            ab_dot = float(ab @ ab)
+            if ab_dot < 1e-20:
+                continue
+            t_now = float(((mesh.nodes[v] - a_pos) @ ab) / ab_dot)
+            ab_len = float(np.sqrt(ab_dot))
+            delta_t = float(rng.standard_normal()) * (sigma / ab_len)
+            t_new = max(
+                BOUNDARY_TANGENT_T_MIN,
+                min(BOUNDARY_TANGENT_T_MAX, t_now + delta_t),
+            )
+            new_pos = a_pos + t_new * ab
+            if coastline_projector is not None:
+                snapped = coastline_projector(new_pos)
+                if snapped is not None:
+                    new_pos = snapped
+        else:
+            new_pos = mesh.nodes[v] + rng.standard_normal(2) * sigma
+        affected_pairs = _affected_internal_edges_around(
+            mesh.elements, edge_uses, ring_eids,
+        )[1]
+        old_pos = mesh.nodes[v].copy()
+        mesh.nodes[v] = np.asarray(new_pos, dtype=mesh.nodes.dtype)
+        ok = _finish_local_ok(
+            mesh, ring_eids, affected_pairs, valence,
+            min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
+            area_ratio_target=area_ratio_target,
+            max_valence=max_valence,
+        )
+        if ok and not _finish_eid_still_fails(
+            mesh, eid, edge_uses,
+            min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
+            area_ratio_target=area_ratio_target,
+        ):
+            return True, try_i
+        mesh.nodes[v] = old_pos
+    return False, max_tries
+
+
+def _stochastic_local_fix_round(
+    mesh: Fort14Mesh, rng: np.random.Generator,
+    *,
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+    max_valence: int,
+    max_tries_per_fail: int,
+    perturbation_sigma: float,
+    max_outer_passes: int,
+    coastline_projector: CoastlineProjector | None,
+) -> dict[str, Any]:
+    """Run the stochastic local fixer outer-pass loop on ``mesh``
+    in place.  Each outer pass identifies the current fail set,
+    sequentially tries to fix each fail via random moves on a
+    randomly chosen vertex, and terminates the outer pass when
+    zero fails were fixed (no-progress).  Returns a stats dict.
+    """
+    from fvcom_mesh_tools.algorithms.quality import (  # noqa: PLC0415
+        min_interior_angle,
+    )
+    from fvcom_mesh_tools.diagnostics import (  # noqa: PLC0415
+        node_valence,
+    )
+    n_fixed_total = 0
+    n_stuck_total = 0
+    n_outer_passes = 0
+    for outer in range(1, max_outer_passes + 1):
+        n_outer_passes += 1
+        m = min_interior_angle(mesh)
+        M = _finish_max_interior_angle(mesh)
+        edge_uv, elem_pair, ac = _per_edge_area_change(
+            mesh.nodes, mesh.elements,
+        )
+        c1_fail = m < min_angle_target
+        c2_fail = M > max_angle_target
+        c4_fail = ac > area_ratio_target
+        c4_fail_elems: set[int] = set()
+        for pair in elem_pair[c4_fail]:
+            c4_fail_elems.add(int(pair[0]))
+            c4_fail_elems.add(int(pair[1]))
+        fail_set = (
+            set(int(e) for e in np.where(c1_fail)[0])
+            | set(int(e) for e in np.where(c2_fail)[0])
+            | c4_fail_elems
+        )
+        if not fail_set:
+            break
+        fail_list = sorted(fail_set)
+        bnd_node = _boundary_node_mask(mesh)
+        bnd_prev, bnd_next, _ = _boundary_topology(mesh)
+        valence_arr = node_valence(mesh.elements, mesh.n_nodes)
+        edge_uses = _edge_use_counts(mesh.elements)
+        n2e_map = _node_to_elements(mesh.elements, mesh.n_nodes)
+        outer_fixed = 0
+        outer_stuck = 0
+        for eid in fail_list:
+            fixed, _n_tries = _finish_process_fail(
+                mesh, eid, rng,
+                boundary_node_mask=bnd_node,
+                boundary_prev=bnd_prev,
+                boundary_next=bnd_next,
+                coastline_projector=coastline_projector,
+                valence=valence_arr,
+                n2e=n2e_map,
+                edge_uses=edge_uses,
+                min_angle_target=min_angle_target,
+                max_angle_target=max_angle_target,
+                area_ratio_target=area_ratio_target,
+                max_valence=max_valence,
+                max_tries=max_tries_per_fail,
+                perturbation_sigma=perturbation_sigma,
+            )
+            if fixed:
+                outer_fixed += 1
+            else:
+                outer_stuck += 1
+        n_fixed_total += outer_fixed
+        n_stuck_total += outer_stuck
+        if outer_fixed == 0:
+            break
+    return {
+        "n_outer_passes": int(n_outer_passes),
+        "n_fixed": int(n_fixed_total),
+        "n_stuck": int(n_stuck_total),
+    }
+
+
+def _try_vertex_remove_then_clean(
+    mesh: Fort14Mesh, vertex_id: int, rng: np.random.Generator,
+    *,
+    coastline_projector: CoastlineProjector | None,
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+    max_valence: int,
+    alpha_target: float,
+    max_tries_per_fail: int,
+    perturbation_sigma: float,
+    max_outer_passes: int,
+) -> tuple[Fort14Mesh, dict[str, int], dict[str, Any]] | None:
+    """Try ``_apply_vertex_remove(force=True)`` on ``vertex_id``,
+    run the stochastic cleanup on the result, and return
+    ``(new_mesh, new_counts, info)`` or ``None`` if the vertex is
+    boundary / the rim is degenerate / Delaunay failed.
+    """
+    trial = _finish_clone(mesh)
+    bnd_node = _boundary_node_mask(trial)
+    n2e_map = _node_to_elements(trial.elements, trial.n_nodes)
+    ring = n2e_map.get(int(vertex_id))
+    if ring is None or ring.size < 3:
+        return None
+    out = _apply_vertex_remove(
+        trial, int(vertex_id), ring,
+        alpha_target=alpha_target,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        boundary_node_mask=bnd_node,
+        force=True,
+    )
+    if out is None:
+        return None
+    trial, vr_info = out
+    fix_stats = _stochastic_local_fix_round(
+        trial, rng,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        area_ratio_target=area_ratio_target,
+        max_valence=max_valence,
+        max_tries_per_fail=max_tries_per_fail,
+        perturbation_sigma=perturbation_sigma,
+        max_outer_passes=max_outer_passes,
+        coastline_projector=coastline_projector,
+    )
+    counts = _finish_global_counts(
+        trial,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        area_ratio_target=area_ratio_target,
+        max_valence=max_valence,
+    )
+    return trial, counts, {
+        "vertex_removed": int(vertex_id),
+        "rim_size": int(vr_info["rim_size"]),
+        "n_new_elements": int(vr_info["n_new_elements"]),
+        "cleanup_stats": fix_stats,
+    }
+
+
+def _vertex_remove_chain_round(
+    mesh: Fort14Mesh,
+    seed: int,
+    *,
+    target_kind: str,
+    coastline_projector: CoastlineProjector | None,
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+    max_valence: int,
+    alpha_target: float,
+    max_tries_per_fail: int,
+    perturbation_sigma: float,
+    max_outer_passes: int,
+) -> tuple[Fort14Mesh, list[dict[str, Any]]]:
+    """Greedy iterative vertex_remove + stochastic cleanup on the
+    interior vertices of every current fail pair of kind
+    ``target_kind`` (``"C1"`` or ``"C4"``).  Iterates until no
+    candidate strictly decreases the global total.
+
+    Each iteration re-seeds the cleanup RNG from ``seed`` so that
+    candidates compete on an apples-to-apples cleanup budget.
+    """
+    from fvcom_mesh_tools.algorithms.quality import (  # noqa: PLC0415
+        min_interior_angle,
+    )
+    from fvcom_mesh_tools.diagnostics import (  # noqa: PLC0415
+        node_valence,
+    )
+    records: list[dict[str, Any]] = []
+    while True:
+        cur_counts = _finish_global_counts(
+            mesh,
+            min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
+            area_ratio_target=area_ratio_target,
+            max_valence=max_valence,
+        )
+        cur_total = _finish_total(cur_counts)
+        # Identify candidate interior vertices.
+        candidates: set[int] = set()
+        bnd_node = _boundary_node_mask(mesh)
+        if target_kind == "C1":
+            m = min_interior_angle(mesh)
+            c1_eids = np.where(m < min_angle_target)[0]
+            if c1_eids.size == 0:
+                break
+            for eid in c1_eids:
+                for v in mesh.elements[int(eid)]:
+                    if not bnd_node[int(v)]:
+                        candidates.add(int(v))
+        elif target_kind == "C4":
+            edge_uv, elem_pair, ac = _per_edge_area_change(
+                mesh.nodes, mesh.elements,
+            )
+            mask = ac > area_ratio_target
+            if not mask.any():
+                break
+            for idx in np.where(mask)[0]:
+                for eid in elem_pair[idx]:
+                    for v in mesh.elements[int(eid)]:
+                        if not bnd_node[int(v)]:
+                            candidates.add(int(v))
+        else:
+            raise ValueError(
+                f"target_kind must be 'C1' or 'C4', not {target_kind!r}",
+            )
+        if not candidates:
+            break
+        # Try candidates in descending-valence order; accept the
+        # first one that strictly decreases the total.
+        valence_arr = node_valence(mesh.elements, mesh.n_nodes)
+        ordered = sorted(
+            candidates, key=lambda v: -int(valence_arr[v]),
+        )
+        accepted = False
+        for v in ordered:
+            rng = np.random.default_rng(seed)
+            result = _try_vertex_remove_then_clean(
+                mesh, v, rng,
+                coastline_projector=coastline_projector,
+                min_angle_target=min_angle_target,
+                max_angle_target=max_angle_target,
+                area_ratio_target=area_ratio_target,
+                max_valence=max_valence,
+                alpha_target=alpha_target,
+                max_tries_per_fail=max_tries_per_fail,
+                perturbation_sigma=perturbation_sigma,
+                max_outer_passes=max_outer_passes,
+            )
+            if result is None:
+                records.append({
+                    "target_kind": target_kind,
+                    "vertex": int(v),
+                    "result": "rejected_or_degenerate",
+                    "before_total": int(cur_total),
+                })
+                continue
+            cand_mesh, cand_counts, info = result
+            cand_total = _finish_total(cand_counts)
+            records.append({
+                "target_kind": target_kind,
+                "vertex": int(v),
+                "result": "applied",
+                "before_total": int(cur_total),
+                "after_total": int(cand_total),
+                "after_counts": cand_counts,
+                "info": info,
+            })
+            if cand_total < cur_total:
+                mesh = cand_mesh
+                accepted = True
+                break
+        if not accepted:
+            break
+    return mesh, records
+
+
+def phase_h_finish(
+    mesh: Fort14Mesh,
+    *,
+    seed: int = DEFAULT_FINISH_SEED,
+    min_angle_target: float = DEFAULT_FINISH_MIN_ANGLE,
+    max_angle_target: float = DEFAULT_FINISH_MAX_ANGLE,
+    area_ratio_target: float = DEFAULT_AREA_RATIO_TARGET,
+    max_valence: int = DEFAULT_MAX_VALENCE,
+    alpha_target: float = DEFAULT_ALPHA_TARGET,
+    max_tries_per_fail: int = DEFAULT_FINISH_MAX_TRIES_PER_FAIL,
+    perturbation_sigma: float = DEFAULT_FINISH_PERTURBATION_SIGMA,
+    max_outer_passes: int = DEFAULT_FINISH_MAX_OUTER_PASSES,
+    coastline_projector: CoastlineProjector | None = None,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Phase H finishing chain — drive any Phase H A-G residual to
+    the structural floor with a stochastic local fixer + iterative
+    targeted ``vertex_remove`` + stochastic cleanup.
+
+    **Validated on Tokyo-Bay**: 77 → 1 violation (87 k elements),
+    C1 = C2 = C5 = 0, one residual C4 fail at ratio 0.536 on an
+    all-boundary concave coastline pair (PoC #58l confirms this
+    last fail cannot be cleared by ``edge_swap`` — the alternate
+    diagonal yields CW signed area).  See
+    ``docs/phase_h_finishing_chain.md`` for the design rationale.
+
+    Pipeline (each stage runs the previous one's output):
+
+      1. Stochastic local fixer.  For each current fail element,
+         try up to ``max_tries_per_fail`` Gaussian-perturbed moves
+         of a random vertex of the triangle.  Accept under the
+         strict-count gate on the moved vertex's 1-ring + the
+         affected internal edges' C4 metric.  Boundary nodes get
+         a tangent-clamped 1-D Gaussian, projected onto the
+         coastline if a ``coastline_projector`` is supplied.
+
+      2. Iterative ``vertex_remove`` on C1 fail-pair interior
+         vertices (descending valence; first improving candidate
+         is accepted) + stochastic cleanup after each accept.
+         Cleared C1 residuals on the Tokyo-Bay benchmark.
+
+      3. Same as (2) but targeting C4 fail pairs.
+
+    The seed is fixed throughout so the entire chain is bit-
+    reproducible.  Cleanup RNG is re-seeded from ``seed`` before
+    each vertex_remove candidate evaluation so candidates compete
+    on equal cleanup budgets.
+
+    Args:
+        mesh: Phase H A-G output (the chain expects most of the
+            obvious deterministic moves to already be applied).
+        seed: RNG seed; every random draw flows from this single
+            seed via ``numpy.random.default_rng``.
+        min_angle_target: FVCOM C1 (default 30°).
+        max_angle_target: FVCOM C2 (default 130°).
+        area_ratio_target: FVCOM C4 (default 0.5).
+        max_valence: FVCOM C5 (default 8).
+        alpha_target: alpha quality target used by
+            ``_apply_vertex_remove`` (only meaningful for the
+            internal penalty gate, which we bypass via
+            ``force=True``).
+        max_tries_per_fail: per-element random-move budget.
+        perturbation_sigma: Gaussian sigma as a fraction of mean
+            local edge length.
+        max_outer_passes: stochastic-fixer outer-pass cap (each
+            outer pass walks every current fail once).
+        coastline_projector: optional callable that maps a
+            proposed 2-D position to the coastline polyline; used
+            for boundary-tangent moves.
+
+    Returns:
+        ``(updated_mesh, info)``.  ``info`` records the before /
+        after global counts, per-stage stats, and the vertex_remove
+        history (one record per attempted candidate).
+    """
+    cur = _finish_clone(mesh)
+    before = _finish_global_counts(
+        cur,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        area_ratio_target=area_ratio_target,
+        max_valence=max_valence,
+    )
+    info: dict[str, Any] = {
+        "seed": int(seed),
+        "min_angle_target": float(min_angle_target),
+        "max_angle_target": float(max_angle_target),
+        "area_ratio_target": float(area_ratio_target),
+        "max_valence": int(max_valence),
+        "alpha_target": float(alpha_target),
+        "max_tries_per_fail": int(max_tries_per_fail),
+        "perturbation_sigma": float(perturbation_sigma),
+        "max_outer_passes": int(max_outer_passes),
+        "before": before,
+    }
+
+    # Stage 1: stochastic local fixer.
+    rng = np.random.default_rng(seed)
+    stage1_stats = _stochastic_local_fix_round(
+        cur, rng,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        area_ratio_target=area_ratio_target,
+        max_valence=max_valence,
+        max_tries_per_fail=max_tries_per_fail,
+        perturbation_sigma=perturbation_sigma,
+        max_outer_passes=max_outer_passes,
+        coastline_projector=coastline_projector,
+    )
+    info["stage1_stochastic"] = stage1_stats
+    info["after_stage1"] = _finish_global_counts(
+        cur,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        area_ratio_target=area_ratio_target,
+        max_valence=max_valence,
+    )
+
+    # Stage 2: vertex_remove chain on C1.
+    cur, c1_records = _vertex_remove_chain_round(
+        cur, seed,
+        target_kind="C1",
+        coastline_projector=coastline_projector,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        area_ratio_target=area_ratio_target,
+        max_valence=max_valence,
+        alpha_target=alpha_target,
+        max_tries_per_fail=max_tries_per_fail,
+        perturbation_sigma=perturbation_sigma,
+        max_outer_passes=max_outer_passes,
+    )
+    info["stage2_c1_vertex_remove"] = c1_records
+    info["after_stage2"] = _finish_global_counts(
+        cur,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        area_ratio_target=area_ratio_target,
+        max_valence=max_valence,
+    )
+
+    # Stage 3: vertex_remove chain on C4.
+    cur, c4_records = _vertex_remove_chain_round(
+        cur, seed,
+        target_kind="C4",
+        coastline_projector=coastline_projector,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        area_ratio_target=area_ratio_target,
+        max_valence=max_valence,
+        alpha_target=alpha_target,
+        max_tries_per_fail=max_tries_per_fail,
+        perturbation_sigma=perturbation_sigma,
+        max_outer_passes=max_outer_passes,
+    )
+    info["stage3_c4_vertex_remove"] = c4_records
+    info["after"] = _finish_global_counts(
+        cur,
+        min_angle_target=min_angle_target,
+        max_angle_target=max_angle_target,
+        area_ratio_target=area_ratio_target,
+        max_valence=max_valence,
+    )
+    info["delta_total"] = (
+        _finish_total(info["after"]) - _finish_total(before)
+    )
+    return cur, info
+
+
 __all__ = [
     "CoastlineProjector",
     "DEFAULT_ALPHA_TARGET",
     "DEFAULT_AREA_RATIO_TARGET",
+    "DEFAULT_FINISH_MAX_OUTER_PASSES",
+    "DEFAULT_FINISH_MAX_TRIES_PER_FAIL",
+    "DEFAULT_FINISH_MAX_ANGLE",
+    "DEFAULT_FINISH_MIN_ANGLE",
+    "DEFAULT_FINISH_PERTURBATION_SIGMA",
+    "DEFAULT_FINISH_SEED",
     "DEFAULT_LOOKAHEAD_GATE",
     "DEFAULT_LOOKAHEAD_OP1_INVENTORY",
     "DEFAULT_LOOKAHEAD_OP2_INVENTORY",
@@ -3480,5 +4196,6 @@ __all__ = [
     "DEFAULT_PATCH_MIN_CLUSTER_SIZE",
     "LOOKAHEAD_GATES",
     "build_coastline_projector",
+    "phase_h_finish",
     "phase_h_optimize",
 ]
