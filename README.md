@@ -251,6 +251,45 @@ maximises `alpha_mean` (ties broken in favour of the lighter
 repair). Useful when one wants the maximum quality the pipeline can
 produce, not just the first acceptable mesh.
 
+### Drive the residual to the structural floor (`phase_h_finish`)
+
+After `phase_h_optimize` (rung 3) converges, the remaining FVCOM-
+criterion violations are at the local fixed point of every
+deterministic operator. `phase_h_finish` is the Python entry
+point for the **stochastic local fixer + targeted
+`vertex_remove` + cleanup** chain that breaks that fixed point
+and drives the residual to the structural coastline floor
+(typically 1-2 violations on an 87 k-element Tokyo-Bay-class
+mesh, ≈ 0.001 % of elements). It is bit-reproducible at a fixed
+seed, fits in 2-3 minutes of single-core wall time on a
+mesh of that size, and is validated end-to-end on the Tokyo-Bay
+benchmark (77 → 1 violations).
+
+```python
+from fvcom_mesh_tools.io import read_fort14, write_fort14
+from fvcom_mesh_tools.mesh_clean_phase_h import (
+    build_coastline_projector, phase_h_finish,
+)
+
+mesh = read_fort14("after_phase_h_optimize.14")
+projector = build_coastline_projector(
+    ["data/coastline/tokyo_bay/MLIT_C23/C23-06_TOKYOBAY.shp"],
+    max_snap_distance_m=500.0,
+    mean_latitude_deg=float(mesh.nodes[:, 1].mean()),
+)
+out, info = phase_h_finish(mesh, seed=42, coastline_projector=projector)
+write_fort14(out, "finished.14")
+```
+
+The user-facing guide ([`docs/phase_h_user_guide.md`](docs/phase_h_user_guide.md))
+documents the parameters, the diagnostics in `info`, the known
+limitations (structural coastline floor, greedy ordering, insert
+operator's 0-accept gate), and the prioritised list of open
+follow-up work — including FVCOM run-time tolerance validation,
+generality checks on other basins, and an eventual
+`fmesh-phase-h-finish` CLI. The design-rationale companion is
+[`docs/phase_h_finishing_chain.md`](docs/phase_h_finishing_chain.md).
+
 `docs/architecture.md` is the full decision tree for engine choice and
 combine strategy; `docs/python_pipeline_gap_analysis.md` has the
 quality / runtime numbers vs. the OceanMesh2D MATLAB reference;
