@@ -1,0 +1,26 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=02:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc52
+
+# PoC #52: full Phase H (Pass A + B + C + D + E) on I1+I2 output.
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+export PYTHONUNBUFFERED=1
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u notebooks/52_phase_h_full_pipeline_poc.py
