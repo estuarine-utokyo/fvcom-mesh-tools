@@ -37,6 +37,8 @@ from fvcom_mesh_tools.mesh_clean_phase_h import (
     _pass_e_round,
     _pass_f_c4_smooth_sweep,
     _pass_f_round,
+    _pass_g_c1_smooth_sweep,
+    _pass_g_round,
     _penalty,
     _per_edge_area_change,
     _per_element_quality,
@@ -1705,3 +1707,181 @@ def test_phase_h_optimize_pass_f_disabled_by_default() -> None:
     assert info["pass_f_enabled"] is False
     assert info["pass_f_accepts"] == 0
     assert info["pass_f_sweeps"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Pass G: C1-aware smoothing (Laplacian + count-gate, C1 fail neighbourhoods)
+# ---------------------------------------------------------------------------
+
+
+def _c1_fail_fan() -> Fort14Mesh:
+    """4-element fan around an interior node placed at (2.0, 0.8) so
+    that T0 = (0, 1, 4) has min_angle ~21.78° and max_angle ~136.4°
+    (failing C1 at the 30° gate and C2 at the 130° gate). Moving the
+    interior node to its 1-ring centroid (2, 2) produces four
+    45-45-90 right-isoceles triangles that pass C1 and C2.
+
+    Square corners 0=(0,0), 1=(4,0), 2=(4,4), 3=(0,4) sit on the
+    land boundary."""
+    nodes = np.array(
+        [
+            [0.0, 0.0],   # 0
+            [4.0, 0.0],   # 1
+            [4.0, 4.0],   # 2
+            [0.0, 4.0],   # 3
+            [2.0, 0.8],   # 4 — interior, thin angle in T0
+        ],
+        dtype=float,
+    )
+    elements = np.array(
+        [
+            [0, 1, 4],
+            [1, 2, 4],
+            [2, 3, 4],
+            [3, 0, 4],
+        ],
+        dtype=np.int64,
+    )
+    return Fort14Mesh(
+        title="c1_fan", nodes=nodes,
+        depths=np.zeros(nodes.shape[0]),
+        elements=elements,
+        open_boundaries=[],
+        land_boundaries=[
+            (0, np.array([3, 2, 1, 0], dtype=np.int64)),
+        ],
+    )
+
+
+def test_pass_g_sweep_moves_interior_node_to_centroid() -> None:
+    """Restricting target_nodes to the interior node #4 of the C1 fan
+    fixture, Pass G's Laplacian proposal places it at (2, 2), the
+    1-ring centroid that gives every triangle a 45° / 45° / 90°
+    profile (C1 = 0, C2 = 0)."""
+    mesh = _c1_fail_fan()
+    _aq, m_b, M_b = _per_element_quality(mesh.nodes, mesh.elements)
+    assert int((m_b < 30.0).sum()) >= 1
+    assert int((m_b < 30.0).sum()) >= int((M_b > 130.0).sum())
+
+    bnd_node = _boundary_node_mask(mesh)
+    n2e = _node_to_elements(mesh.elements, mesh.n_nodes)
+    edge_uses = _edge_use_counts(mesh.elements)
+    bnd_prev, bnd_next, _ = _boundary_topology(mesh)
+    n_acc = _pass_g_c1_smooth_sweep(
+        mesh,
+        min_angle_target=30.0,
+        max_angle_target=130.0,
+        area_ratio_target=0.5,
+        boundary_node_mask=bnd_node,
+        n2e=n2e,
+        edge_uses=edge_uses,
+        boundary_prev=bnd_prev,
+        boundary_next=bnd_next,
+        coastline_projector=None,
+        target_nodes=np.array([4], dtype=np.int64),
+    )
+    assert n_acc == 1
+    np.testing.assert_allclose(mesh.nodes[4], [2.0, 2.0], atol=1e-9)
+    _aq2, m_a, M_a = _per_element_quality(mesh.nodes, mesh.elements)
+    assert int((m_a < 30.0).sum()) == 0
+    assert int((M_a > 130.0).sum()) == 0
+
+
+def test_pass_g_round_clears_c1_fails_in_fan() -> None:
+    """End-to-end ``_pass_g_round``: starting from the C1 fan fixture
+    with at least 1 C1 fail, terminate with 0 C1 fails. C2 / C4 must
+    not regress."""
+    mesh = _c1_fail_fan()
+    _aq_b, m_b, _M_b = _per_element_quality(mesh.nodes, mesh.elements)
+    _uv, _ep, ac_b = _per_edge_area_change(mesh.nodes, mesh.elements)
+    c1_b = int((m_b < 30.0).sum())
+    c4_b = int((ac_b > 0.5).sum())
+    assert c1_b >= 1
+
+    new_mesh, n_acc, n_sw = _pass_g_round(
+        mesh,
+        min_angle_target=30.0,
+        max_angle_target=130.0,
+        area_ratio_target=0.5,
+        max_sweeps=10,
+    )
+    assert n_acc >= 1
+    assert n_sw >= 1
+    _aq_a, m_a, M_a = _per_element_quality(
+        new_mesh.nodes, new_mesh.elements,
+    )
+    _uv2, _ep2, ac_a = _per_edge_area_change(
+        new_mesh.nodes, new_mesh.elements,
+    )
+    assert int((m_a < 30.0).sum()) == 0, (
+        f"Pass G should clear all C1 fails: "
+        f"{c1_b} -> {int((m_a < 30.0).sum())}"
+    )
+    # C2 / C4 must not regress under Pass G's gate.
+    assert int((M_a > 130.0).sum()) == 0  # before was 1
+    assert int((ac_a > 0.5).sum()) <= c4_b
+
+
+def test_pass_g_sweep_rejects_when_c1_unchanged() -> None:
+    """If Pass G is run on a mesh that has no C1 fails (e.g. the
+    fan already at its area-balancing centroid), no node should
+    move — the strict-decrease gate rejects every candidate."""
+    mesh = _c1_fail_fan()
+    mesh.nodes[4] = np.array([2.0, 2.0])  # pre-balance
+    _aq, m, _M = _per_element_quality(mesh.nodes, mesh.elements)
+    assert int((m < 30.0).sum()) == 0
+
+    bnd_node = _boundary_node_mask(mesh)
+    n2e = _node_to_elements(mesh.elements, mesh.n_nodes)
+    edge_uses = _edge_use_counts(mesh.elements)
+    bnd_prev, bnd_next, _ = _boundary_topology(mesh)
+    n_acc = _pass_g_c1_smooth_sweep(
+        mesh,
+        min_angle_target=30.0,
+        max_angle_target=130.0,
+        area_ratio_target=0.5,
+        boundary_node_mask=bnd_node,
+        n2e=n2e,
+        edge_uses=edge_uses,
+        boundary_prev=bnd_prev,
+        boundary_next=bnd_next,
+        coastline_projector=None,
+        target_nodes=np.array([4], dtype=np.int64),
+    )
+    assert n_acc == 0
+
+
+def test_phase_h_optimize_pass_g_path_runs_cleanly() -> None:
+    """`phase_h_optimize` must accept ``pass_g_enabled=True`` and
+    surface Pass G bookkeeping in ``info``. ``operator_order = ()``
+    keeps Pass A from clearing the fixture first."""
+    mesh = _c1_fail_fan()
+    out_mesh, info = phase_h_optimize(
+        mesh, alpha_target=0.95, min_angle_target=30.0,
+        max_angle_target=130.0,
+        max_outer_rounds=2,
+        operator_order=(),
+        pass_g_enabled=True,
+        pass_g_min_angle_target=30.0,
+        pass_g_area_ratio_target=0.5,
+        max_pass_g_sweeps_per_round=10,
+    )
+    assert info["pass_g_enabled"] is True
+    assert info["pass_g_accepts"] >= 1
+    assert info["pass_g_sweeps"] >= 1
+    _aq, m, _M = _per_element_quality(out_mesh.nodes, out_mesh.elements)
+    assert int((m < 30.0).sum()) == 0
+
+
+def test_phase_h_optimize_pass_g_disabled_by_default() -> None:
+    """`phase_h_optimize` without ``pass_g_enabled`` must leave the
+    bookkeeping at zero and not call into Pass G."""
+    mesh = _c1_fail_fan()
+    _out, info = phase_h_optimize(
+        mesh, alpha_target=0.95, min_angle_target=20.0,
+        max_angle_target=DEFAULT_MAX_ANGLE_TARGET,
+        max_outer_rounds=1,
+    )
+    assert info["pass_g_enabled"] is False
+    assert info["pass_g_accepts"] == 0
+    assert info["pass_g_sweeps"] == 0

@@ -2890,6 +2890,191 @@ def _pass_f_round(
     return cur, n_accepted_total, n_sweeps
 
 
+# ---------------------------------------------------------------------------
+# Pass G: C1-aware smoothing (Laplacian + count-gate, C1 fail neighbourhoods)
+# ---------------------------------------------------------------------------
+
+
+def _pass_g_c1_smooth_sweep(
+    mesh: Fort14Mesh,
+    *,
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+    boundary_node_mask: np.ndarray,
+    n2e: dict[int, np.ndarray],
+    edge_uses: dict[tuple[int, int], list[int]],
+    boundary_prev: np.ndarray | None,
+    boundary_next: np.ndarray | None,
+    coastline_projector: CoastlineProjector | None,
+    target_nodes: np.ndarray,
+) -> int:
+    """One Gauss-Seidel sweep over ``target_nodes`` (the vertices of
+    C1 fail elements).
+
+    Proposal mechanism matches :func:`_batch_smooth_sweep` /
+    :func:`_pass_f_c4_smooth_sweep`: 1-ring centroid for interior
+    nodes, boundary-tangent-projected centroid for boundary nodes
+    with a defined tangent (corners are skipped).
+
+    Acceptance is a **count gate**, not a penalty gate:
+
+    * no flipped triangle in the 1-ring
+    * local C1 fail count strictly decreases (1-ring elements)
+    * local C2 fail count does not increase (1-ring elements)
+    * local C4 fail count does not increase (internal edges with at
+      least one side in the 1-ring)
+
+    C5 is invariant under smoothing. Pass A's penalty gate sometimes
+    rejects a move that would clear a thin angle when the
+    accompanying alpha change is non-monotone; Pass G accepts those
+    moves whenever the C1 win is real and C2 / C4 don't regress.
+
+    Mutates ``mesh.nodes`` in place. Returns the number of accepted
+    moves.
+    """
+    accepts = 0
+    nodes = mesh.nodes  # mutable view
+    has_tangent = (
+        boundary_prev is not None and boundary_next is not None
+    )
+
+    for v_raw in target_nodes:
+        v = int(v_raw)
+        ring = n2e.get(v)
+        if ring is None:
+            continue
+        elem_block = mesh.elements[ring]
+        nbrs = np.unique(elem_block.ravel())
+        nbrs = nbrs[nbrs != v]
+        if nbrs.size == 0:
+            continue
+
+        is_bnd = bool(boundary_node_mask[v])
+        if is_bnd:
+            if not has_tangent:
+                continue
+            pv = int(boundary_prev[v])
+            nv = int(boundary_next[v])
+            if pv < 0 or nv < 0:
+                continue
+            a_pos = nodes[pv]
+            b_pos = nodes[nv]
+            ab = b_pos - a_pos
+            ab_len_sq = float((ab * ab).sum())
+            if ab_len_sq < 1e-20:
+                continue
+            ring_centroid = nodes[nbrs].mean(axis=0)
+            t = float(((ring_centroid - a_pos) @ ab) / ab_len_sq)
+            t = max(BOUNDARY_TANGENT_T_MIN, min(BOUNDARY_TANGENT_T_MAX, t))
+            proposed_v = a_pos + t * ab
+            if coastline_projector is not None:
+                snapped = coastline_projector(proposed_v)
+                if snapped is not None:
+                    proposed_v = snapped
+        else:
+            proposed_v = nodes[nbrs].mean(axis=0)
+
+        # Measure BEFORE on current nodes.
+        a_b, m_b, M_b = _per_element_quality(nodes, elem_block)
+        c1_b = int((m_b < min_angle_target).sum())
+        c2_b = int((M_b > max_angle_target).sum())
+        affected_uv, affected_pair = _affected_internal_edges_around(
+            mesh.elements, edge_uses, ring,
+        )
+        ar_b = _local_area_changes(nodes, mesh.elements, affected_pair)
+        c4_b = int((ar_b > area_ratio_target).sum())
+
+        # Apply tentative move.
+        old_pos = nodes[v].copy()
+        nodes[v] = proposed_v
+
+        # Signed-area check on the 1-ring.
+        p0 = nodes[elem_block[:, 0]]
+        p1 = nodes[elem_block[:, 1]]
+        p2 = nodes[elem_block[:, 2]]
+        cross = (
+            (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+            - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+        )
+        if (cross <= 0).any():
+            nodes[v] = old_pos
+            continue
+
+        # Measure AFTER.
+        a_a, m_a, M_a = _per_element_quality(nodes, elem_block)
+        c1_a = int((m_a < min_angle_target).sum())
+        c2_a = int((M_a > max_angle_target).sum())
+        ar_a = _local_area_changes(nodes, mesh.elements, affected_pair)
+        c4_a = int((ar_a > area_ratio_target).sum())
+
+        # Count gate: C1 must strictly drop, C2 / C4 must not regress.
+        if c1_a >= c1_b or c2_a > c2_b or c4_a > c4_b:
+            nodes[v] = old_pos
+            continue
+
+        accepts += 1
+    return accepts
+
+
+def _pass_g_round(
+    cur: Fort14Mesh, *,
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+    max_sweeps: int,
+    coastline_projector: CoastlineProjector | None = None,
+) -> tuple[Fort14Mesh, int, int]:
+    """Pass G round: identify the target node set (vertices of every
+    C1 fail element) and run Gauss-Seidel C1-aware smoothing until no
+    sweep accepts a move, or ``max_sweeps`` is reached.
+
+    The target node set is recomputed each sweep so newly-cleared
+    thin triangles drop out and any incidental C1 regressions caused
+    by an earlier move pick up immediately.
+
+    Returns ``(updated_mesh, n_accepted, n_sweeps)``.
+    """
+    n_accepted_total = 0
+    n_sweeps = 0
+    bnd_node = _boundary_node_mask(cur)
+    bnd_prev, bnd_next, _ = _boundary_topology(cur)
+
+    for _sw in range(max_sweeps):
+        _aq, min_ang, _Mang = _per_element_quality(cur.nodes, cur.elements)
+        c1_mask = min_ang < min_angle_target
+        if not c1_mask.any():
+            break
+        fail_elems = np.where(c1_mask)[0]
+        target_set: set[int] = set()
+        for fe in fail_elems:
+            for v in cur.elements[int(fe)]:
+                target_set.add(int(v))
+        target_nodes = np.array(sorted(target_set), dtype=np.int64)
+
+        edge_uses = _edge_use_counts(cur.elements)
+        n2e = _node_to_elements(cur.elements, cur.n_nodes)
+        n_acc = _pass_g_c1_smooth_sweep(
+            cur,
+            min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
+            area_ratio_target=area_ratio_target,
+            boundary_node_mask=bnd_node,
+            n2e=n2e,
+            edge_uses=edge_uses,
+            boundary_prev=bnd_prev,
+            boundary_next=bnd_next,
+            coastline_projector=coastline_projector,
+            target_nodes=target_nodes,
+        )
+        n_sweeps += 1
+        n_accepted_total += int(n_acc)
+        if n_acc == 0:
+            break
+
+    return cur, n_accepted_total, n_sweeps
+
+
 def phase_h_optimize(
     mesh: Fort14Mesh,
     *,
@@ -2918,6 +3103,10 @@ def phase_h_optimize(
     pass_f_enabled: bool = False,
     pass_f_area_ratio_target: float = DEFAULT_AREA_RATIO_TARGET,
     max_pass_f_sweeps_per_round: int = 50,
+    pass_g_enabled: bool = False,
+    pass_g_min_angle_target: float = DEFAULT_MIN_ANGLE_TARGET,
+    pass_g_area_ratio_target: float = DEFAULT_AREA_RATIO_TARGET,
+    max_pass_g_sweeps_per_round: int = 50,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Phase H driver: Pass A (batch smooth) ↔ Pass B (1-step topology)
     ↔ optional Pass C (2-step lookahead) ↔ optional Pass D
@@ -3003,17 +3192,29 @@ def phase_h_optimize(
     threshold) and resolvable by small node displacements rather than
     by further topology operations.
 
-    The passes alternate in order A → B → C → D → E → F each outer
-    round. Pass A runs to exhaustion, Pass B up to
+    **Pass G (opt-in via ``pass_g_enabled=True``)** — C1-aware
+    smoothing, the C1 mirror of Pass F. Identifies the vertices of
+    every C1 fail element and proposes the same Laplacian / tangent
+    move. Acceptance gate is: C1 must **strictly** decrease in the
+    1-ring, while C2 and C4 must not increase. Designed for the thin
+    triangles that Pass A's penalty gate rejects because their alpha
+    trajectory is non-monotone — count-gate is permissive enough to
+    accept any geometrically valid move that widens the thin angle
+    while preserving the other criteria.
+
+    The passes alternate in order A → B → C → D → E → F → G each
+    outer round. Pass A runs to exhaustion, Pass B up to
     ``max_topology_per_round`` accepts, Pass C up to
     ``max_lookahead_per_round`` accepts, Pass D up to
     ``max_patches_per_round`` accepts, Pass E up to
     ``max_pass_e_splits_per_round`` accepts, Pass F up to
-    ``max_pass_f_sweeps_per_round`` sweeps (or earlier on zero-accept
-    convergence). After any topology-changing pass accepts, the
-    Pass A loop cleans up perturbations on the next outer round. The
-    loop terminates when every enabled pass contributes zero accepts
-    in the same round, or when ``max_outer_rounds`` is hit.
+    ``max_pass_f_sweeps_per_round`` sweeps, Pass G up to
+    ``max_pass_g_sweeps_per_round`` sweeps (each capped by
+    zero-accept convergence). After any topology-changing pass
+    accepts, the Pass A loop cleans up perturbations on the next
+    outer round. The loop terminates when every enabled pass
+    contributes zero accepts in the same round, or when
+    ``max_outer_rounds`` is hit.
 
     Returns ``(new_mesh, info)`` with operator histograms, sweep
     counts, lookahead pair-histogram, and pre/post quality summaries.
@@ -3068,6 +3269,12 @@ def phase_h_optimize(
         "max_pass_f_sweeps_per_round": int(max_pass_f_sweeps_per_round),
         "pass_f_accepts": 0,
         "pass_f_sweeps": 0,
+        "pass_g_enabled": bool(pass_g_enabled),
+        "pass_g_min_angle_target": float(pass_g_min_angle_target),
+        "pass_g_area_ratio_target": float(pass_g_area_ratio_target),
+        "max_pass_g_sweeps_per_round": int(max_pass_g_sweeps_per_round),
+        "pass_g_accepts": 0,
+        "pass_g_sweeps": 0,
     }
     if lookahead_gate not in LOOKAHEAD_GATES:
         raise ValueError(
@@ -3217,6 +3424,25 @@ def phase_h_optimize(
             info["pass_f_sweeps"] += int(pf_sw)
             info["n_iters"] += int(pf_acc)
             round_accepts += int(pf_acc)
+
+        # Pass G: C1-aware smoothing. Targets stuck thin triangles
+        # that survive Pass A's penalty gate (alpha-driven, can reject
+        # moves that clear C1 when their alpha trace is non-monotone)
+        # by accepting any Laplacian / tangent move that strictly
+        # decreases local C1 fail count without raising C2 or C4.
+        if pass_g_enabled:
+            cur, pg_acc, pg_sw = _pass_g_round(
+                cur,
+                min_angle_target=pass_g_min_angle_target,
+                max_angle_target=max_angle_target,
+                area_ratio_target=pass_g_area_ratio_target,
+                max_sweeps=max_pass_g_sweeps_per_round,
+                coastline_projector=coastline_projector,
+            )
+            info["pass_g_accepts"] += int(pg_acc)
+            info["pass_g_sweeps"] += int(pg_sw)
+            info["n_iters"] += int(pg_acc)
+            round_accepts += int(pg_acc)
 
         if round_accepts == 0:
             break
