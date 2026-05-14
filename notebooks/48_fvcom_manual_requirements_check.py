@@ -257,7 +257,6 @@ def _format_block(label: str, r: dict) -> list[str]:
 
 
 def _format_report(path: Path, r: dict) -> str:
-    n = r["n_elements"]
     lines: list[str] = [
         f"PoC #48 — FVCOM manual requirements check on {path.name}",
         f"  NP={r['n_nodes']:,}  NE={r['n_elements']:,}",

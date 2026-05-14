@@ -36,7 +36,6 @@ from fvcom_mesh_tools.mesh_clean_phase_h import (
     _penalty,
     _per_edge_area_change,
     _per_element_quality,
-    _signed_areas,
     phase_h_optimize,
 )
 

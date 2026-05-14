@@ -39,7 +39,6 @@ from pathlib import Path
 import numpy as np
 
 from fvcom_mesh_tools.algorithms.quality import (
-    alpha_quality,
     min_interior_angle,
 )
 from fvcom_mesh_tools.diagnostics import node_valence

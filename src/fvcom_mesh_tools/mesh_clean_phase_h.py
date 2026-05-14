@@ -2314,10 +2314,10 @@ def _apply_pass_e_split(
         return None
     abs_a = np.abs(a_pair)
     if abs_a[0] >= abs_a[1]:
-        larger, smaller = int(elem_pair[0]), int(elem_pair[1])
+        larger = int(elem_pair[0])
         A_L_before, A_S_before = float(abs_a[0]), float(abs_a[1])
     else:
-        larger, smaller = int(elem_pair[1]), int(elem_pair[0])
+        larger = int(elem_pair[1])
         A_L_before, A_S_before = float(abs_a[1]), float(abs_a[0])
 
     # All three edges of the larger triangle, with their lengths.

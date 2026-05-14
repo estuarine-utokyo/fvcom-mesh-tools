@@ -36,7 +36,6 @@ from pathlib import Path
 import numpy as np
 
 from fvcom_mesh_tools.algorithms.quality import (
-    alpha_quality,
     min_interior_angle,
 )
 from fvcom_mesh_tools.diagnostics import node_valence
@@ -193,7 +192,6 @@ def main() -> int:
         flush=True,
     )
 
-    a_after = alpha_quality(mesh_out)
     m_after = min_interior_angle(mesh_out)
     M_after = _max_interior_angle(mesh_out)
     n_c1_after = int((m_after < MIN_ANGLE_TARGET).sum())
