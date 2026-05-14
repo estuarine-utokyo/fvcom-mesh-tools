@@ -2631,6 +2631,265 @@ def _pass_e_round(
     return cur, n_accepted, n_rejected, n_swap_accepts, n_split_accepts
 
 
+# ---------------------------------------------------------------------------
+# Pass F: C4-aware smoothing (Laplacian + count-gate, target nodes only)
+# ---------------------------------------------------------------------------
+
+
+def _affected_internal_edges_around(
+    elements: np.ndarray,
+    edge_uses: dict[tuple[int, int], list[int]],
+    ring_elem_ids: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(edge_uv, elem_pair)`` for every internal edge whose
+    incident pair includes at least one element in ``ring_elem_ids``.
+    Used by Pass F to recompute area-change ratios on just the local
+    block (no full-mesh rebuild per node).
+    """
+    affected_uv: list[tuple[int, int]] = []
+    affected_pair: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for e in ring_elem_ids:
+        tri = elements[int(e)]
+        for k in range(3):
+            a = int(tri[k])
+            b = int(tri[(k + 1) % 3])
+            key = (min(a, b), max(a, b))
+            if key in seen:
+                continue
+            buds = edge_uses.get(key, [])
+            if len(buds) != 2:
+                continue
+            seen.add(key)
+            affected_uv.append(key)
+            affected_pair.append((int(buds[0]), int(buds[1])))
+    if not affected_uv:
+        return (
+            np.empty((0, 2), dtype=np.int64),
+            np.empty((0, 2), dtype=np.int64),
+        )
+    return (
+        np.array(affected_uv, dtype=np.int64),
+        np.array(affected_pair, dtype=np.int64),
+    )
+
+
+def _local_area_changes(
+    nodes: np.ndarray, elements: np.ndarray, elem_pair: np.ndarray,
+) -> np.ndarray:
+    """Compute area_change ratio for each ``(e_i, e_j)`` pair."""
+    if elem_pair.shape[0] == 0:
+        return np.empty(0)
+    pair_elems = elements[elem_pair.ravel()].reshape(
+        elem_pair.shape[0], 2, 3,
+    )
+    # Per-pair signed area of each element.
+    p0_i = nodes[pair_elems[:, 0, 0]]
+    p1_i = nodes[pair_elems[:, 0, 1]]
+    p2_i = nodes[pair_elems[:, 0, 2]]
+    a_i = np.abs(0.5 * (
+        (p1_i[:, 0] - p0_i[:, 0]) * (p2_i[:, 1] - p0_i[:, 1])
+        - (p1_i[:, 1] - p0_i[:, 1]) * (p2_i[:, 0] - p0_i[:, 0])
+    ))
+    p0_j = nodes[pair_elems[:, 1, 0]]
+    p1_j = nodes[pair_elems[:, 1, 1]]
+    p2_j = nodes[pair_elems[:, 1, 2]]
+    a_j = np.abs(0.5 * (
+        (p1_j[:, 0] - p0_j[:, 0]) * (p2_j[:, 1] - p0_j[:, 1])
+        - (p1_j[:, 1] - p0_j[:, 1]) * (p2_j[:, 0] - p0_j[:, 0])
+    ))
+    larger = np.maximum(a_i, a_j)
+    smaller = np.minimum(a_i, a_j)
+    return (larger - smaller) / np.maximum(larger, 1e-30)
+
+
+def _pass_f_c4_smooth_sweep(
+    mesh: Fort14Mesh,
+    *,
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+    boundary_node_mask: np.ndarray,
+    n2e: dict[int, np.ndarray],
+    edge_uses: dict[tuple[int, int], list[int]],
+    boundary_prev: np.ndarray | None,
+    boundary_next: np.ndarray | None,
+    coastline_projector: CoastlineProjector | None,
+    target_nodes: np.ndarray,
+) -> int:
+    """One Gauss-Seidel sweep over ``target_nodes`` (the vertices of
+    C4 fail elements).
+
+    Proposal mechanism matches :func:`_batch_smooth_sweep`:
+    1-ring centroid for interior nodes, boundary-tangent-projected
+    centroid for boundary nodes (skipped if no tangent data).
+
+    Acceptance is a **count gate**, not a penalty gate:
+
+    * no flipped triangle in the 1-ring
+    * local C1 fail count does not increase (1-ring elements)
+    * local C2 fail count does not increase (1-ring elements)
+    * local C4 fail count strictly decreases (internal edges with at
+      least one side in the 1-ring)
+
+    C5 is unaffected (smoothing is topology-invariant). Moves that
+    Pass A's penalty gate would reject because alpha slightly worsens
+    can be accepted here as long as a C4 fail clears in the local
+    block — which is the whole point of Pass F.
+
+    Mutates ``mesh.nodes`` in place. Returns the number of accepted
+    moves.
+    """
+    accepts = 0
+    nodes = mesh.nodes  # mutable view
+    has_tangent = (
+        boundary_prev is not None and boundary_next is not None
+    )
+
+    for v_raw in target_nodes:
+        v = int(v_raw)
+        ring = n2e.get(v)
+        if ring is None:
+            continue
+        elem_block = mesh.elements[ring]
+        nbrs = np.unique(elem_block.ravel())
+        nbrs = nbrs[nbrs != v]
+        if nbrs.size == 0:
+            continue
+
+        is_bnd = bool(boundary_node_mask[v])
+        if is_bnd:
+            if not has_tangent:
+                continue
+            pv = int(boundary_prev[v])
+            nv = int(boundary_next[v])
+            if pv < 0 or nv < 0:
+                continue
+            a_pos = nodes[pv]
+            b_pos = nodes[nv]
+            ab = b_pos - a_pos
+            ab_len_sq = float((ab * ab).sum())
+            if ab_len_sq < 1e-20:
+                continue
+            ring_centroid = nodes[nbrs].mean(axis=0)
+            t = float(((ring_centroid - a_pos) @ ab) / ab_len_sq)
+            t = max(BOUNDARY_TANGENT_T_MIN, min(BOUNDARY_TANGENT_T_MAX, t))
+            proposed_v = a_pos + t * ab
+            if coastline_projector is not None:
+                snapped = coastline_projector(proposed_v)
+                if snapped is not None:
+                    proposed_v = snapped
+        else:
+            proposed_v = nodes[nbrs].mean(axis=0)
+
+        # Measure BEFORE on current nodes.
+        a_b, m_b, M_b = _per_element_quality(nodes, elem_block)
+        c1_b = int((m_b < min_angle_target).sum())
+        c2_b = int((M_b > max_angle_target).sum())
+        affected_uv, affected_pair = _affected_internal_edges_around(
+            mesh.elements, edge_uses, ring,
+        )
+        ar_b = _local_area_changes(nodes, mesh.elements, affected_pair)
+        c4_b = int((ar_b > area_ratio_target).sum())
+
+        # Apply tentative move.
+        old_pos = nodes[v].copy()
+        nodes[v] = proposed_v
+
+        # Signed-area check on the 1-ring.
+        p0 = nodes[elem_block[:, 0]]
+        p1 = nodes[elem_block[:, 1]]
+        p2 = nodes[elem_block[:, 2]]
+        cross = (
+            (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+            - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+        )
+        if (cross <= 0).any():
+            nodes[v] = old_pos
+            continue
+
+        # Measure AFTER.
+        a_a, m_a, M_a = _per_element_quality(nodes, elem_block)
+        c1_a = int((m_a < min_angle_target).sum())
+        c2_a = int((M_a > max_angle_target).sum())
+        ar_a = _local_area_changes(nodes, mesh.elements, affected_pair)
+        c4_a = int((ar_a > area_ratio_target).sum())
+
+        # Count gate: C1/C2 must not increase, C4 must strictly drop.
+        if c1_a > c1_b or c2_a > c2_b or c4_a >= c4_b:
+            nodes[v] = old_pos
+            continue
+
+        accepts += 1
+    return accepts
+
+
+def _pass_f_round(
+    cur: Fort14Mesh, *,
+    min_angle_target: float,
+    max_angle_target: float,
+    area_ratio_target: float,
+    max_sweeps: int,
+    coastline_projector: CoastlineProjector | None = None,
+) -> tuple[Fort14Mesh, int, int]:
+    """Pass F round: identify the target node set (vertices of every
+    C4 fail element) and run Gauss-Seidel C4-aware smoothing until no
+    sweep accepts a move, or ``max_sweeps`` is reached.
+
+    The target node set is recomputed each sweep so that nodes whose
+    1-ring lost its C4 fail drop out of subsequent sweeps (avoids
+    unnecessary work) and nodes that newly entered the C4-fail
+    neighbourhood pick up.
+
+    Returns ``(updated_mesh, n_accepted, n_sweeps)``.
+    """
+    n_accepted_total = 0
+    n_sweeps = 0
+    bnd_node = _boundary_node_mask(cur)
+    bnd_prev, bnd_next, _ = _boundary_topology(cur)
+
+    for _sw in range(max_sweeps):
+        edge_uses = _edge_use_counts(cur.elements)
+        edge_uv, elem_pair, area_change = _per_edge_area_change(
+            cur.nodes, cur.elements,
+        )
+        if area_change.size == 0:
+            break
+        fail_mask = area_change > area_ratio_target
+        if not fail_mask.any():
+            break
+        fail_pairs = elem_pair[fail_mask]
+        # Target nodes = vertices of every element that touches a C4
+        # fail edge.
+        fail_elems = np.unique(fail_pairs.ravel())
+        target_set: set[int] = set()
+        for fe in fail_elems:
+            for v in cur.elements[int(fe)]:
+                target_set.add(int(v))
+        target_nodes = np.array(sorted(target_set), dtype=np.int64)
+
+        n2e = _node_to_elements(cur.elements, cur.n_nodes)
+        n_acc = _pass_f_c4_smooth_sweep(
+            cur,
+            min_angle_target=min_angle_target,
+            max_angle_target=max_angle_target,
+            area_ratio_target=area_ratio_target,
+            boundary_node_mask=bnd_node,
+            n2e=n2e,
+            edge_uses=edge_uses,
+            boundary_prev=bnd_prev,
+            boundary_next=bnd_next,
+            coastline_projector=coastline_projector,
+            target_nodes=target_nodes,
+        )
+        n_sweeps += 1
+        n_accepted_total += int(n_acc)
+        if n_acc == 0:
+            break
+
+    return cur, n_accepted_total, n_sweeps
+
+
 def phase_h_optimize(
     mesh: Fort14Mesh,
     *,
@@ -2656,6 +2915,9 @@ def phase_h_optimize(
     pass_e_area_ratio_target: float = DEFAULT_AREA_RATIO_TARGET,
     pass_e_max_valence: int = DEFAULT_MAX_VALENCE,
     max_pass_e_splits_per_round: int = 10_000,
+    pass_f_enabled: bool = False,
+    pass_f_area_ratio_target: float = DEFAULT_AREA_RATIO_TARGET,
+    max_pass_f_sweeps_per_round: int = 50,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Phase H driver: Pass A (batch smooth) ↔ Pass B (1-step topology)
     ↔ optional Pass C (2-step lookahead) ↔ optional Pass D
@@ -2728,16 +2990,30 @@ def phase_h_optimize(
     filter). Both operators gate against C1, C2, and C5
     (``pass_e_max_valence``, default 8 per FVCOM C5).
 
-    The passes alternate in order A → B → C → D → E each outer round.
-    Pass A runs to exhaustion, Pass B up to
+    **Pass F (opt-in via ``pass_f_enabled=True``)** — C4-aware
+    smoothing. Identifies the set of vertices that touch any current
+    C4 fail edge and runs a Gauss-Seidel sweep over just those nodes
+    (interior nodes propose the 1-ring centroid, boundary nodes the
+    boundary-tangent-projected centroid). Acceptance is a
+    **count-comparison gate** local to each node's 1-ring: C1 and C2
+    fail counts must not increase, and the C4 fail count over
+    affected internal edges must strictly decrease. C5 is invariant
+    under smoothing. Designed for the residual after Pass E, where
+    most remaining C4 fails are marginal (ratio just over the
+    threshold) and resolvable by small node displacements rather than
+    by further topology operations.
+
+    The passes alternate in order A → B → C → D → E → F each outer
+    round. Pass A runs to exhaustion, Pass B up to
     ``max_topology_per_round`` accepts, Pass C up to
     ``max_lookahead_per_round`` accepts, Pass D up to
     ``max_patches_per_round`` accepts, Pass E up to
-    ``max_pass_e_splits_per_round`` accepts. After Pass D / Pass E
-    accepts the Pass A loop cleans up perturbations on the next outer
-    round. The loop terminates when every enabled pass contributes
-    zero accepts in the same round, or when ``max_outer_rounds`` is
-    hit.
+    ``max_pass_e_splits_per_round`` accepts, Pass F up to
+    ``max_pass_f_sweeps_per_round`` sweeps (or earlier on zero-accept
+    convergence). After any topology-changing pass accepts, the
+    Pass A loop cleans up perturbations on the next outer round. The
+    loop terminates when every enabled pass contributes zero accepts
+    in the same round, or when ``max_outer_rounds`` is hit.
 
     Returns ``(new_mesh, info)`` with operator histograms, sweep
     counts, lookahead pair-histogram, and pre/post quality summaries.
@@ -2787,6 +3063,11 @@ def phase_h_optimize(
         "pass_e_swap_accepts": 0,
         "pass_e_split_accepts": 0,
         "pass_e_rejected": 0,
+        "pass_f_enabled": bool(pass_f_enabled),
+        "pass_f_area_ratio_target": float(pass_f_area_ratio_target),
+        "max_pass_f_sweeps_per_round": int(max_pass_f_sweeps_per_round),
+        "pass_f_accepts": 0,
+        "pass_f_sweeps": 0,
     }
     if lookahead_gate not in LOOKAHEAD_GATES:
         raise ValueError(
@@ -2916,6 +3197,26 @@ def phase_h_optimize(
             info["pass_e_rejected"] += int(pe_rej)
             info["n_iters"] += int(pe_acc)
             round_accepts += int(pe_acc)
+
+        # Pass F: C4-aware smoothing. Targets the marginal C4 fails
+        # that Pass E's topology operators cannot clear by nudging
+        # nodes adjacent to fail edges under a count-comparison gate
+        # (C1/C2 must not increase, C4 must strictly decrease in the
+        # local block). Runs after Pass E so it acts on the cleanest
+        # residual.
+        if pass_f_enabled:
+            cur, pf_acc, pf_sw = _pass_f_round(
+                cur,
+                min_angle_target=min_angle_target,
+                max_angle_target=max_angle_target,
+                area_ratio_target=pass_f_area_ratio_target,
+                max_sweeps=max_pass_f_sweeps_per_round,
+                coastline_projector=coastline_projector,
+            )
+            info["pass_f_accepts"] += int(pf_acc)
+            info["pass_f_sweeps"] += int(pf_sw)
+            info["n_iters"] += int(pf_acc)
+            round_accepts += int(pf_acc)
 
         if round_accepts == 0:
             break
