@@ -41,6 +41,16 @@ together close the case); ocsmesh remains a library dependency for
 
 ### Added — CLIs
 
+- **`fmesh-export-fvcom`** — fort.14 -> FVCOM native input set:
+  `<case>_grd.dat` / `_dep.dat` / `_obc.dat` (+ `_cor.dat` from node
+  y or inverse-projected latitude via `--cor y|crs`, `_spg.dat`
+  hook) and an SMS `.2dm` (E3T/ND + NS nodestrings per open segment,
+  `--z-convention depth|elevation`). Formats follow the FVCOM 5.1
+  readers as documented in `docs/fvcom_source_constraints.md`
+  (CCW connectivity in the file — FVCOM swaps to internal CW on
+  read). Writers refuse flipped/zero-area elements and unreferenced
+  nodes (`mesh_clean.compact_nodes` fixes the latter). Backed by
+  `fvcom_mesh_tools.io.fvcom_native.export_fvcom_case`.
 - **`fmesh-mesh-qa`** — the unified FVCOM acceptance gate (one
   command, one pass/fail table, exit 0 only on all-pass). Encodes the
   FVCOM-source-derived startup constraints from

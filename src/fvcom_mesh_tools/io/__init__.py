@@ -9,14 +9,30 @@ ground. shapely / geopandas / pyproj are imported lazily by
 
 from fvcom_mesh_tools.io.coastline import load_coastline_as_lines
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14, write_fort14
+from fvcom_mesh_tools.io.fvcom_native import (
+    export_fvcom_case,
+    write_2dm,
+    write_cor,
+    write_dep,
+    write_grd,
+    write_obc,
+    write_spg,
+)
 from fvcom_mesh_tools.io.geom_filter import filter_multipolygon_by_area
 from fvcom_mesh_tools.io.rivers import load_river_points
 
 __all__ = [
     "Fort14Mesh",
+    "export_fvcom_case",
     "filter_multipolygon_by_area",
     "load_coastline_as_lines",
     "load_river_points",
     "read_fort14",
+    "write_2dm",
+    "write_cor",
+    "write_dep",
     "write_fort14",
+    "write_grd",
+    "write_obc",
+    "write_spg",
 ]

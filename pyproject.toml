@@ -49,6 +49,7 @@ fmesh-mesh-check = "fvcom_mesh_tools.cli.meshcheck:main"
 fmesh-mesh-clean = "fvcom_mesh_tools.cli.meshclean:main"
 fmesh-mesh-quality = "fvcom_mesh_tools.cli.meshquality:main"
 fmesh-mesh-qa = "fvcom_mesh_tools.cli.meshqa:main"
+fmesh-export-fvcom = "fvcom_mesh_tools.cli.exportfvcom:main"
 fmesh-mesh-pipeline = "fvcom_mesh_tools.cli.meshpipeline:main"
 
 [project.urls]
