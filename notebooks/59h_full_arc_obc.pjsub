@@ -1,0 +1,27 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=01:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc59h
+
+# PoC #59h: full west+south artificial-arc OBC + QA convergence +
+# tokyo_bay_v2 export for the M2 tidal test.
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+export PYTHONUNBUFFERED=1
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u notebooks/59h_full_arc_obc.py

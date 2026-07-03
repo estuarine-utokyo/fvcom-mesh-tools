@@ -1,0 +1,29 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L node=1
+#PJM -L elapse=04:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc59i
+
+# PoC #59i (stage 2): tokyo_bay_v2 synthetic-M2 tidal test.
+# 3 simulated days, EXTSTEP 0.5 s / ISPLIT 10, 12 h ramp, hourly NC
+# output. Heavy/long compute -> exclusive node per the GENKAI rules.
+
+set -euo pipefail
+
+: "${HOME:?HOME not set}"
+
+SHARE_DIR="${HOME%/*}/share"
+module load intel/2025.1.3 impi/2021.15 netcdf/4.9.2 netcdf-fortran/4.6.1 hdf5/1.14.4
+export LD_LIBRARY_PATH=${SHARE_DIR}/local/fvcom/libs/install-oneapi-2025.1.3/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=${SHARE_DIR}/local/fvcom/libs/install-oneapi-2025.1.3/lib64:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=${SHARE_DIR}/local/fvcom/libs/proj4_modern:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=${SHARE_DIR}/local/lib64:$LD_LIBRARY_PATH
+export PROJ_DATA=${SHARE_DIR}/local/share/proj
+export PROJ_LIB=${SHARE_DIR}/local/share/proj
+ulimit -s unlimited
+
+cd "${HOME}/Github/fvcom-mesh-tools/outputs/fvcom_tide"
+
+mpiexec -np 32 ./fvcom --casename=tokyo_bay_v2_tide
