@@ -9,6 +9,7 @@ high-quality FVCOM-ready unstructured meshes (`fort.14`), with a focus on:
 
 - **Open-boundary edge orthogonalization** — enforce edges perpendicular to open boundaries
 - **Mesh defect detection** — `fmesh-mesh-check` flags disjoint wet pools, dead-ends, 1-cell-wide channels (`thin_chain`), under-resolved 2-3 cell channels (medial-axis-style `w/h` ratio), over-connected nodes, and open-boundary-unreachable elements (no repair, JSON + map output)
+- **FVCOM acceptance gate** — `fmesh-mesh-qa` runs the full acceptance battery in one command: FVCOM-source startup constraints (see `docs/fvcom_source_constraints.md`, incl. the R4 mixed-boundary stop), manual criteria C1/C2/C4/C5, open-boundary perpendicularity and ordering, connectivity, min-depth clip; one pass/fail table (Japanese default, `--lang en`), JSON offender dump, exit 0 only on all-pass
 - **Safe automated repair** — `fmesh-mesh-clean` prunes disjoint pools, trims dead-end "spits", and widens 1-cell channels to 2 cells via centroid insertion
 - **Mesh quality inspection and visualization** — element quality, boundary classification, fort.14 plots
 
@@ -208,6 +209,27 @@ fmesh-mesh-quality tokyo.14 tokyo_clean.14 --labels before after
 fmesh-mesh-quality tokyo_clean.14 \
     --min-alpha 0.95 --max-frac-lt-20deg 0.005 \
     --max-valence 8 --max-flipped 0
+```
+
+`fmesh-mesh-qa` is the **acceptance gate**: where
+`fmesh-mesh-quality` reports tunable metrics, `fmesh-mesh-qa` answers
+one question — *will FVCOM start on this mesh, and does it meet the
+project criteria?* — with a fixed battery derived from the FVCOM 5.1
+source (`docs/fvcom_source_constraints.md`) plus the manual criteria
+C1/C2/C4/C5, OBC perpendicularity/ordering, connectivity, and the
+min-depth clip. Angles and areas are evaluated in a local metric
+projection for lon/lat meshes (FVCOM production builds are
+CARTESIAN), so expect small differences vs the raw-lon/lat
+`fmesh-mesh-quality` numbers. Exit 0 only when every gated check
+passes; a JSON report with per-check offender records is always
+written:
+
+```bash
+# Full gate, Japanese table (default)
+fmesh-mesh-qa tokyo_final.14
+
+# English, skip the slow channel metric, custom OBC tolerance
+fmesh-mesh-qa tokyo_final.14 --lang en --no-channel --max-obc-perp-dev 15
 ```
 
 `fmesh-mesh-pipeline` chains the clean / quality steps into a

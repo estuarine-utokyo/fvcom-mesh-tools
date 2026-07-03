@@ -379,6 +379,7 @@ def channel_width_metric(
     arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
     opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
     k_far: int = 50,
+    coords: str = "lonlat",
 ) -> dict[str, np.ndarray]:
     """Per-element channel width (m), local h (m), and the w/h ratio.
 
@@ -407,7 +408,13 @@ def channel_width_metric(
     Returns a dict with keys ``"channel_width_m"``, ``"h_local_m"``,
     ``"w_h_ratio"``, and ``"sample_count"`` (total boundary samples).
     The ratio is set to ``+inf`` when the mesh has no boundary at all.
+
+    ``coords`` selects the node-coordinate interpretation: ``"lonlat"``
+    (default, legacy behaviour — flat-earth projection to metres) or
+    ``"metric"`` (coordinates are already metres, e.g. UTM; used as-is).
     """
+    if coords not in ("lonlat", "metric"):
+        raise ValueError(f"coords must be 'lonlat' or 'metric', got {coords!r}")
     if mesh.n_elements == 0:
         return {
             "channel_width_m": np.zeros(0),
@@ -423,9 +430,12 @@ def channel_width_metric(
             "sample_count": 0,
         }
 
-    lat0 = float(mesh.nodes[:, 1].mean())
-    lon0 = float(mesh.nodes[:, 0].mean())
-    nodes_m = _to_metric(mesh.nodes, lat0=lat0, lon0=lon0)
+    if coords == "metric":
+        nodes_m = np.asarray(mesh.nodes, dtype=np.float64)
+    else:
+        lat0 = float(mesh.nodes[:, 1].mean())
+        lon0 = float(mesh.nodes[:, 0].mean())
+        nodes_m = _to_metric(mesh.nodes, lat0=lat0, lon0=lon0)
 
     polylines: list[tuple[np.ndarray, np.ndarray]] = []
     for seg in mesh.open_boundaries:
@@ -517,6 +527,7 @@ def under_resolved_channels_flag(
     arc_separation_factor: float = DEFAULT_ARC_SEPARATION_FACTOR,
     opposite_bank_cos_max: float = DEFAULT_OPPOSITE_BANK_COS_MAX,
     min_channel_elements: int = DEFAULT_MIN_CHANNEL_ELEMENTS,
+    coords: str = "lonlat",
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     """Element-level flag: True if ``w_h_ratio < min_w_h``.
 
@@ -538,6 +549,7 @@ def under_resolved_channels_flag(
         sample_ds_m=sample_ds_m,
         arc_separation_factor=arc_separation_factor,
         opposite_bank_cos_max=opposite_bank_cos_max,
+        coords=coords,
     )
     flag = info["w_h_ratio"] < min_w_h
     if min_channel_elements <= 1 or not flag.any():

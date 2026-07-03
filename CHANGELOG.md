@@ -41,6 +41,29 @@ together close the case); ocsmesh remains a library dependency for
 
 ### Added — CLIs
 
+- **`fmesh-mesh-qa`** — the unified FVCOM acceptance gate (one
+  command, one pass/fail table, exit 0 only on all-pass). Encodes the
+  FVCOM-source-derived startup constraints from
+  `docs/fvcom_source_constraints.md` (CCW over ALL elements, isolated
+  elements, the R4 mixed-boundary PSTOP `tge.F:558-581` via an exact
+  ISONB recomputation, OBC adjacency chains, manifold topology) plus
+  the hazards FVCOM never checks (duplicate/orphan nodes, tiny areas,
+  fake ISBCE=2, OBC necks), the manual criteria C1/C2/C4/C5, per-node
+  best-edge OBC perpendicularity, OBC node-list ordering,
+  connectivity, and the min-depth clip. Advisory (non-gating unless
+  flagged): channel w/h, local Delaunay fraction, implied
+  external-mode Δt. Report language defaults to Japanese
+  (`--lang en` available); a JSON dump with per-check offender
+  records is always written. Geometry is evaluated in a local metric
+  projection for lon/lat meshes because FVCOM production builds are
+  CARTESIAN — expect small angle differences vs the raw-lon/lat
+  numbers from `fmesh-mesh-quality` (on the Tokyo-Bay 58l mesh this
+  surfaces 55 metric-space C1 violations that are invisible in
+  lon/lat space). Backed by `fvcom_mesh_tools.qa.run_qa` /
+  `format_report`. `channel_width_metric` /
+  `under_resolved_channels_flag` gained a backward-compatible
+  `coords="lonlat"|"metric"` parameter so the channel detector works
+  on projected meshes.
 - **`fmesh-mesh-quality`** — unified quality metrics (alpha mean /
   p05 / p50, min-angle p05 / p50, frac<20°, max valence,
   n_overconnected, n_flipped, n_components, n_disjoint_elems) for
