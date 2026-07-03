@@ -65,15 +65,40 @@ Deliverables: `outputs/fvcom_inputs/tokyo_bay_v1_{grd,dep,obc,cor,spg}.dat`
   real transect. The recipe layer must carry an explicit
   open-boundary specification.
 
+## FVCOM run-time acceptance — PASSED (PoC #59g)
+
+Cold-start, zero-forcing smoke run of the exported `tokyo_bay_v1`
+inputs on the TB-FVCOM hydro binary (FVCOM 5.1 lineage, 4 MPI ranks,
+EXTSTEP 0.5 s ≤ the QA-implied 1.05 s, 2 simulated minutes,
+`OBC_ELEVATION_FORCING_ON=F`, `BOTTOM_ROUGHNESS_KIND='constant'`,
+2-line uniform `sigma.dat`, nml cloned from
+`hydro/tuning/new_bc/tb_pge_run.nml`):
+
+* `ISONB SETTING / NISBCE/LISBCE/EPOR: COMPLETE` — every `tge.F` and
+  `SETUP_OBC` PSTOP that `fmesh-mesh-qa` gates on was accepted;
+* all 24 internal steps ran to `END_DATE`, normal completion
+  (`TADA!`), no NaN;
+* at-rest flow stats sane (max internal velocity ~2 cm/s = the
+  expected sigma-PGE truncation signal, free surface ≤ 1 cm).
+
+The mesh-QA gate's prediction of FVCOM startup acceptance is now
+verified against the real binary; the auto-pipeline mesh runs with
+**no manual SMS step anywhere in the chain**. Case directory:
+`outputs/fvcom_smoke/` (job script `notebooks/59g_fvcom_smoke.pjsub`).
+Note the production namelist confirms `PROJECTION_REFERENCE =
+'proj=utm +zone=54 +datum=WGS84'` — the EPSG:32654 datum choice
+matches the existing TB-FVCOM convention.
+
 ## Open items toward the kickoff Definition of Done
 
 * **User decisions to confirm** (also in the provenance file):
   eastern 140.10E clip closed as land wall (vs secondary clamped
-  OBC); UTM 54N datum = WGS84 (EPSG:32654); OBC type 1 uniform.
-* FVCOM run-time acceptance test (cold-start smoke on the production
-  binary) — grid-stage PSTOPs are what `fmesh-mesh-qa` predicts;
-  a real startup is the ground truth.
+  OBC); whether the OBC should span the entire southern 35.10N cut
+  (incl. the shallow Sagami-side shelf) instead of only the deep
+  channel run; OBC type 1 uniform.
 * recipe.yaml layer (§3), depth-field regeneration from the
   DATA_INVENTORY precedence stack (the current depths predate it),
   narrow-channel inclusion criterion (§7.4 — w/h currently
-  advisory), boundary conformity vs coastline polygons (§9-2).
+  advisory), boundary conformity vs coastline polygons (§9-2),
+  OBC-line straightening (one ~200 m notch remains at x≈390.5 km —
+  gate-passing but §7.2 prefers a smooth arc).
