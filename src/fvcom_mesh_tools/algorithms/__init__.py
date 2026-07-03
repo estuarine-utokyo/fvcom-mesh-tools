@@ -11,6 +11,7 @@ from fvcom_mesh_tools.algorithms.edge_swap import (
     swap_edges_for_quality,
     swap_edges_for_valence,
 )
+from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
 from fvcom_mesh_tools.algorithms.perpendicularity import (
     align_open_boundary_first_ring,
     open_bdy_perpendicularity,
@@ -29,6 +30,7 @@ from fvcom_mesh_tools.algorithms.smoothing import laplacian_smooth
 __all__ = [
     "add_river_inflow_segments",
     "align_open_boundary_first_ring",
+    "align_open_boundary_local",
     "alpha_quality",
     "boundary_edges_from_tris",
     "chain_edges_to_loops",

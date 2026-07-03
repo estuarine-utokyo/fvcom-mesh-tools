@@ -140,3 +140,79 @@ def test_align_improves_reference_mesh() -> None:
     assert info["moved"] > 0
     assert perp_after.mean() < perp_before.mean()
     assert (signed_areas(after) > 0).all()
+
+
+# ---------------------------------------------------------------------------
+# align_open_boundary_local (promoted from PoC #59e)
+# ---------------------------------------------------------------------------
+
+
+def _offset_grid_mesh(offset: float = 400.0):
+    """4x4-node right-triangle grid; OBC = bottom-row nodes [1, 2].
+
+    The first-ring interior nodes 5 and 6 are shifted +``offset`` in x,
+    so each OBC node's best interior edge deviates
+    ``atan(offset/1000)`` (~21.8 deg at 400) from perpendicular while
+    the surrounding triangles keep enough C1 headroom for a local fix.
+    (A uniformly SHEARED grid is the wrong fixture: every triangle
+    sits ~2.7 deg above the 30 deg gate, so any perpendicularizing
+    move is infeasible — the fixer correctly refuses it.)
+    """
+    n = 4
+    sp = 1000.0
+    nodes = np.array(
+        [[i * sp, j * sp] for j in range(n) for i in range(n)],
+        dtype=np.float64,
+    )
+    nodes[5, 0] += offset
+    nodes[6, 0] += offset
+    elements = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            a, b = j * n + i, j * n + i + 1
+            c, d = (j + 1) * n + i + 1, (j + 1) * n + i
+            elements.append([a, b, c])
+            elements.append([a, c, d])
+    land = [2, 3, 7, 11, 15, 14, 13, 12, 8, 4, 0, 1]
+    return Fort14Mesh(
+        title="perp-local-test",
+        nodes=nodes,
+        depths=np.full(n * n, 5.0),
+        elements=np.asarray(elements),
+        open_boundaries=[np.array([1, 2])],
+        land_boundaries=[(20, np.asarray(land))],
+    )
+
+
+def test_align_open_boundary_local_fixes_without_breaking_quality():
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+    from fvcom_mesh_tools.qa import run_qa
+
+    mesh = _offset_grid_mesh()
+    before = run_qa(mesh, channel_check=False)
+    perp_before = [c for c in before.checks
+                   if c.check_id == "obc_perpendicularity"][0]
+    assert not perp_before.passed
+
+    fixed, info = align_open_boundary_local(mesh, seed=7)
+    assert info["remaining"] == []
+    assert info["accepted_total"] >= 1
+
+    after = run_qa(fixed, channel_check=False)
+    by_id = {c.check_id: c for c in after.checks}
+    assert by_id["obc_perpendicularity"].passed
+    for cid in ("c1_min_angle", "c2_max_angle", "c4_area_change",
+                "c5_valence", "ccw_all_elements"):
+        assert by_id[cid].passed, cid
+    # Input mesh untouched (pure function).
+    assert np.array_equal(mesh.nodes, _offset_grid_mesh().nodes)
+
+
+def test_align_open_boundary_local_noop_when_already_perpendicular():
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+
+    mesh = _offset_grid_mesh(offset=0.0)
+    fixed, info = align_open_boundary_local(mesh, seed=7)
+    assert info["accepted_total"] == 0
+    assert info["passes"][0]["violations"] == 0
+    assert np.array_equal(fixed.nodes, mesh.nodes)
