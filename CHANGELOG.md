@@ -41,6 +41,15 @@ together close the case); ocsmesh remains a library dependency for
 
 ### Added — CLIs
 
+- **`fmesh-plot-mesh`** — kickoff §10 figures: whole-domain mesh with
+  xcoast land rendered behind it (preset or lon/lat bbox; degrades
+  gracefully without xcoast), a labeled square reference grid in the
+  projected CRS (default 5 km; columns A, B, C… west->east, rows
+  1, 2, 3… north->south), open-boundary highlight, and zoom panels
+  addressed by grid references ("C4", ranges "C4-D5") or named
+  aliases (`--alias Banzu=...`). `plotting.ReferenceGrid.parse_ref`
+  is the prose-addressing primitive ("raise C4 to 50 m" -> CRS
+  polygon) the interactive Phase-2 workflow builds on.
 - **`fmesh-export-fvcom`** — fort.14 -> FVCOM native input set:
   `<case>_grd.dat` / `_dep.dat` / `_obc.dat` (+ `_cor.dat` from node
   y or inverse-projected latitude via `--cor y|crs`, `_spg.dat`

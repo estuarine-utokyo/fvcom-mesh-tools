@@ -11,6 +11,7 @@ high-quality FVCOM-ready unstructured meshes (`fort.14`), with a focus on:
 - **Mesh defect detection** — `fmesh-mesh-check` flags disjoint wet pools, dead-ends, 1-cell-wide channels (`thin_chain`), under-resolved 2-3 cell channels (medial-axis-style `w/h` ratio), over-connected nodes, and open-boundary-unreachable elements (no repair, JSON + map output)
 - **FVCOM acceptance gate** — `fmesh-mesh-qa` runs the full acceptance battery in one command: FVCOM-source startup constraints (see `docs/fvcom_source_constraints.md`, incl. the R4 mixed-boundary stop), manual criteria C1/C2/C4/C5, open-boundary perpendicularity and ordering, connectivity, min-depth clip; one pass/fail table (Japanese default, `--lang en`), JSON offender dump, exit 0 only on all-pass
 - **FVCOM native export** — `fmesh-export-fvcom` writes `<case>_grd.dat` / `_dep.dat` / `_obc.dat` (+ `_cor.dat` / `_spg.dat` hooks) and an SMS `.2dm` from a gate-passing fort.14, matching the FVCOM 5.1 reader formats
+- **Reference-grid figures** — `fmesh-plot-mesh` renders the whole-domain mesh with xcoast land, a labeled 5 km reference grid (cells "C4" etc.), the open boundary highlighted, and zoom panels addressed by cell references or named aliases
 - **Safe automated repair** — `fmesh-mesh-clean` prunes disjoint pools, trims dead-end "spits", and widens 1-cell channels to 2 cells via centroid insertion
 - **Mesh quality inspection and visualization** — element quality, boundary classification, fort.14 plots
 

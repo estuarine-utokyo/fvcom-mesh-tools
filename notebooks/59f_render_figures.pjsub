@@ -1,0 +1,33 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc59f
+
+# PoC #59f: kickoff §10 figures for the gate-passed 59e mesh —
+# whole-domain overview (xcoast land + 5 km labeled grid + OBC) and
+# zoom panels (F14 = Uraga OBC transect, G7 = mid-bay).
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+export PYTHONUNBUFFERED=1
+export MPLBACKEND=Agg
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u -m fvcom_mesh_tools.cli.meshplot outputs/59e_gate_passed.14 \
+    --out outputs/figures/tokyo_bay_v1_overview.png \
+    --coast-bbox 139.4 35.05 140.4 35.85 \
+    --zoom F14 --zoom G7 \
+    --dpi 400
