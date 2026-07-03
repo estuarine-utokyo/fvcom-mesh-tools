@@ -152,6 +152,57 @@ def remove_elements(
     )
 
 
+def compact_nodes(mesh: Fort14Mesh) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Drop nodes referenced by no element, remapping element and
+    boundary node ids (boundaries are PRESERVED, unlike
+    :func:`remove_elements`).
+
+    Vertex-removal operators (e.g. ``phase_h_finish``'s targeted
+    ``vertex_remove``) can leave unreferenced nodes behind. FVCOM never
+    checks for them at startup but builds a degenerate control volume
+    (see ``docs/fvcom_source_constraints.md``), so meshes should be
+    compacted before export. Boundary entries pointing at a dropped
+    node (should not happen on a valid mesh) are removed and counted
+    in ``info["n_boundary_refs_dropped"]``.
+    """
+    used = np.unique(mesh.elements) if mesh.n_elements else np.empty(0, np.int64)
+    n_orphans = int(mesh.n_nodes - used.size)
+    if n_orphans == 0:
+        return mesh, {"n_orphans_removed": 0, "n_boundary_refs_dropped": 0}
+
+    remap = np.full(mesh.n_nodes, -1, dtype=np.int64)
+    remap[used] = np.arange(used.size, dtype=np.int64)
+
+    dropped_refs = 0
+    new_open: list[np.ndarray] = []
+    for seg in mesh.open_boundaries:
+        seg2 = remap[np.asarray(seg, dtype=np.int64)]
+        dropped_refs += int((seg2 < 0).sum())
+        seg2 = seg2[seg2 >= 0]
+        if seg2.size:
+            new_open.append(seg2)
+    new_land: list[tuple[int, np.ndarray]] = []
+    for ibtype, seg in mesh.land_boundaries:
+        seg2 = remap[np.asarray(seg, dtype=np.int64)]
+        dropped_refs += int((seg2 < 0).sum())
+        seg2 = seg2[seg2 >= 0]
+        if seg2.size:
+            new_land.append((int(ibtype), seg2))
+
+    out = Fort14Mesh(
+        title=mesh.title,
+        nodes=mesh.nodes[used].copy(),
+        depths=mesh.depths[used].copy(),
+        elements=remap[mesh.elements].astype(mesh.elements.dtype),
+        open_boundaries=new_open,
+        land_boundaries=new_land,
+    )
+    return out, {
+        "n_orphans_removed": n_orphans,
+        "n_boundary_refs_dropped": dropped_refs,
+    }
+
+
 def rebuild_boundaries(
     mesh: Fort14Mesh,
     *,
@@ -1994,6 +2045,7 @@ __all__ = [
     "UnderResolvedMode",
     "analyze_under_resolved_channels",
     "clean_mesh",
+    "compact_nodes",
     "keep_components",
     "rebuild_boundaries",
     "remove_elements",

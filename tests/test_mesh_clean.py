@@ -1188,3 +1188,53 @@ def test_analyze_under_resolved_channels_min_channel_elements_filters() -> None:
     assert filtered["components"] == []
     assert filtered["current_phase_e_new_nodes"] == 0
     assert filtered["medial_axis_new_nodes_estimate"] == 0
+
+
+# ---------------------------------------------------------------------------
+# compact_nodes
+# ---------------------------------------------------------------------------
+
+
+def test_compact_nodes_drops_orphans_and_remaps_boundaries():
+    from fvcom_mesh_tools.mesh_clean import compact_nodes
+
+    # Node 2 is an orphan in the middle of the index range; elements
+    # and boundaries reference nodes on either side of it.
+    nodes = np.array([
+        [0.0, 0.0], [1000.0, 0.0], [9999.0, 9999.0],
+        [1000.0, 1000.0], [0.0, 1000.0],
+    ])
+    mesh = Fort14Mesh(
+        title="orphan",
+        nodes=nodes,
+        depths=np.array([2.0, 3.0, 99.0, 4.0, 5.0]),
+        elements=np.array([[0, 1, 3], [0, 3, 4]]),
+        open_boundaries=[np.array([1, 3])],
+        land_boundaries=[(20, np.array([3, 4, 0, 1]))],
+    )
+    out, info = compact_nodes(mesh)
+    assert info["n_orphans_removed"] == 1
+    assert info["n_boundary_refs_dropped"] == 0
+    assert out.n_nodes == 4
+    # Old node 3 -> new node 2, old 4 -> 3; coordinates/depths follow.
+    assert np.allclose(out.nodes[2], [1000.0, 1000.0])
+    assert np.allclose(out.depths, [2.0, 3.0, 4.0, 5.0])
+    assert out.elements.max() == 3
+    assert list(out.open_boundaries[0]) == [1, 2]
+    assert list(out.land_boundaries[0][1]) == [2, 3, 0, 1]
+
+
+def test_compact_nodes_noop_when_dense():
+    from fvcom_mesh_tools.mesh_clean import compact_nodes
+
+    mesh = Fort14Mesh(
+        title="dense",
+        nodes=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+        depths=np.full(3, 2.0),
+        elements=np.array([[0, 1, 2]]),
+        open_boundaries=[],
+        land_boundaries=[(0, np.array([0, 1, 2]))],
+    )
+    out, info = compact_nodes(mesh)
+    assert info["n_orphans_removed"] == 0
+    assert out is mesh

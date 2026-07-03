@@ -339,6 +339,69 @@ def compute_isonb(
     return isonb
 
 
+def fvcom_boundary_element_flags(
+    mesh: Fort14Mesh, *, topo: _EdgeTopo | None = None,
+) -> dict[str, np.ndarray]:
+    """ISONB plus the per-element FVCOM boundary-classification hazards.
+
+    Returns a dict with:
+
+    * ``"isonb"`` — ``(NP,)`` int8 node marker (0 interior, 1 solid,
+      2 open), recomputed exactly as ``tge.F`` does.
+    * ``"isonb_sum"`` — ``(NE,)`` per-element sum of the three node
+      markers.
+    * ``"r4_mask"`` — ``(NE,)`` bool, True where ``sum > 4``: the
+      elements FVCOM PSTOPs on (``tge.F:558-581``).
+    * ``"fake_open_mask"`` — ``(NE,)`` bool, True where ``sum == 4``
+      but the element has no true open external edge — FVCOM silently
+      mis-classifies these as ``ISBCE=2`` / ``EPOR=0``.
+
+    Shared by :func:`run_qa` and by repair drivers that delete or fix
+    the offending elements.
+    """
+    n_nodes = mesh.n_nodes
+    ne = mesh.n_elements
+    if topo is None:
+        topo = _edge_topology(mesh.elements, n_nodes)
+    boundary_uv = topo.uv[topo.counts == 1]
+    isonb = compute_isonb(n_nodes, boundary_uv, mesh.open_boundaries)
+    if ne == 0:
+        empty = np.empty(0, dtype=bool)
+        return {
+            "isonb": isonb,
+            "isonb_sum": np.empty(0, dtype=np.int64),
+            "r4_mask": empty,
+            "fake_open_mask": empty.copy(),
+        }
+    isonb_sum = isonb[mesh.elements].astype(np.int64).sum(axis=1)
+    r4_mask = isonb_sum > 4
+
+    open_edge_codes = np.empty(0, dtype=np.int64)
+    if boundary_uv.size:
+        both_open = (isonb[boundary_uv[:, 0]] == 2) & (isonb[boundary_uv[:, 1]] == 2)
+        oe = boundary_uv[both_open]
+        open_edge_codes = np.sort(oe[:, 0] * n_nodes + oe[:, 1])
+    cand = isonb_sum == 4
+    fake_open_mask = np.zeros(ne, dtype=bool)
+    if cand.any():
+        ee = np.stack([
+            np.sort(mesh.elements[:, [0, 1]], axis=1),
+            np.sort(mesh.elements[:, [1, 2]], axis=1),
+            np.sort(mesh.elements[:, [2, 0]], axis=1),
+        ], axis=1)
+        elem_codes = ee[..., 0].astype(np.int64) * n_nodes + ee[..., 1]
+        has_open_edge = _isin_sorted(
+            elem_codes.ravel(), open_edge_codes,
+        ).reshape(ne, 3).any(axis=1)
+        fake_open_mask = cand & ~has_open_edge
+    return {
+        "isonb": isonb,
+        "isonb_sum": isonb_sum,
+        "r4_mask": r4_mask,
+        "fake_open_mask": fake_open_mask,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Offender record helpers (locations are reported in file coordinates)
 # ---------------------------------------------------------------------------
@@ -479,7 +542,8 @@ def run_qa(
     topo = _edge_topology(mesh.elements, n_nodes)
     boundary_uv = topo.uv[topo.counts == 1]
     valence = node_valence(mesh.elements, n_nodes=n_nodes)
-    isonb = compute_isonb(n_nodes, boundary_uv, mesh.open_boundaries)
+    bflags = fvcom_boundary_element_flags(mesh, topo=topo)
+    isonb_sum = bflags["isonb_sum"]
     adj = face_face_adjacency(mesh.elements)
 
     # -- FVCOM-fatal geometry / topology -----------------------------------
@@ -504,8 +568,7 @@ def run_qa(
     ))
 
     # R4: SUM(ISONB over element nodes) > 4 is a PSTOP (tge.F:558-581).
-    isonb_sum = isonb[mesh.elements].astype(np.int64).sum(axis=1)
-    r4_viol = np.where(isonb_sum > 4)[0]
+    r4_viol = np.where(bflags["r4_mask"])[0]
     checks.append(QACheck(
         "r4_mixed_boundary", "fvcom", True, r4_viol.size == 0,
         "sum(ISONB) <= 4", f"violations = {r4_viol.size}", int(r4_viol.size),
@@ -576,25 +639,7 @@ def run_qa(
 
     # ISBCE=2 authenticity: every element FVCOM would classify open
     # (sum == 4) must own a true boundary edge with both endpoints open.
-    open_edge_codes = np.empty(0, dtype=np.int64)
-    if boundary_uv.size:
-        both_open = (isonb[boundary_uv[:, 0]] == 2) & (isonb[boundary_uv[:, 1]] == 2)
-        oe = boundary_uv[both_open]
-        open_edge_codes = np.sort(oe[:, 0] * n_nodes + oe[:, 1])
-    cand = isonb_sum == 4
-    if cand.any() and ne:
-        ee = np.stack([
-            np.sort(mesh.elements[:, [0, 1]], axis=1),
-            np.sort(mesh.elements[:, [1, 2]], axis=1),
-            np.sort(mesh.elements[:, [2, 0]], axis=1),
-        ], axis=1)
-        elem_codes = ee[..., 0].astype(np.int64) * n_nodes + ee[..., 1]
-        has_open_edge = _isin_sorted(
-            elem_codes.ravel(), open_edge_codes,
-        ).reshape(ne, 3).any(axis=1)
-        fake_open = np.where(cand & ~has_open_edge)[0]
-    else:
-        fake_open = np.empty(0, dtype=np.int64)
+    fake_open = np.where(bflags["fake_open_mask"])[0]
     checks.append(QACheck(
         "isbce2_authentic", "fvcom", True, fake_open.size == 0,
         "each ISBCE=2 element has an open external edge",
@@ -1025,5 +1070,6 @@ __all__ = [
     "compute_isonb",
     "detect_coords",
     "format_report",
+    "fvcom_boundary_element_flags",
     "run_qa",
 ]

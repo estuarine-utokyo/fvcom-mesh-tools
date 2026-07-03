@@ -1,0 +1,29 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=03:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc59
+
+# PoC #59a + #59b: structural finalize of 58l (components / orphans /
+# R4 / depth clip, lon/lat) followed by UTM 54N projection + perpfix +
+# metric-space phase_h_finish, gated by fmesh-mesh-qa.
+
+set -euo pipefail
+
+export OMP_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+export PYTHONUNBUFFERED=1
+
+: "${HOME:?HOME not set}"
+
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u notebooks/59a_structural_finalize.py
+python -u notebooks/59b_utm_metric_finish.py
