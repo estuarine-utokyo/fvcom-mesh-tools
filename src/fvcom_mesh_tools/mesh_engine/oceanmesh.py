@@ -241,6 +241,7 @@ def build(
     courant_wave_amplitude_m: float = 2.0,
     high_fidelity: bool = False,
     high_fidelity_lines: Path | None = None,
+    shoreline_h0_m: float | None = None,
     log: Callable[[str], None] = print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a mesh with oceanmesh + DistMesh.
@@ -345,12 +346,27 @@ def build(
                 "merge upstream if multiple sources are needed."
             )
         coast_staged = _stage_shapefile(Path(coastline_paths[0]), td_path)
+        # Decouple the DOMAIN's shoreline resolution from the element
+        # size: om.Shoreline simplifies the coast to its h0, and the
+        # signed-distance domain inherits that simplification — the
+        # root cause of the ~h0/6 boundary-conformity floor (PoC
+        # #60-62). A smaller shoreline_h0_m keeps the domain faithful
+        # while sizing stays at hmin (DistMesh's boundary projection
+        # then lands coarse boundary nodes ON the detailed line).
+        if shoreline_h0_m is None:
+            shore_h0_deg = hmin_deg
+        else:
+            shore_h0_deg = float(min(
+                _m_to_deg_lat(shoreline_h0_m),
+                _m_to_deg_lon(shoreline_h0_m, lat_mid),
+            ))
         log(
             f"[oceanmesh] reading shoreline {coast_staged.name}  "
-            f"minimum_area_mult={minimum_area_mult:g} ..."
+            f"minimum_area_mult={minimum_area_mult:g}  "
+            f"shoreline_h0={shore_h0_deg:.6f} deg ..."
         )
         shore = om.Shoreline(
-            str(coast_staged), region, hmin_deg,
+            str(coast_staged), region, shore_h0_deg,
             minimum_area_mult=minimum_area_mult,
         )
         sdf = om.signed_distance_function(shore)

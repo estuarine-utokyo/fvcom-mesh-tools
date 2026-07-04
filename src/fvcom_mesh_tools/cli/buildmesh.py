@@ -162,6 +162,13 @@ def build_parser() -> argparse.ArgumentParser:
              "--om-high-fidelity).",
     )
     p.add_argument(
+        "--om-shoreline-h0-m", type=float, default=None, metavar="METRES",
+        help="[oceanmesh] Shoreline simplification scale for the DOMAIN "
+             "geometry, decoupled from --hmin sizing (default: hmin). "
+             "Smaller = boundary follows the coastline data more "
+             "faithfully while elements stay at hmin.",
+    )
+    p.add_argument(
         "--om-minimum-area-mult", type=float, default=4.0,
         help=(
             "[oceanmesh] minimum_area_mult forwarded to om.Shoreline "
@@ -479,6 +486,7 @@ def main(argv: list[str] | None = None) -> int:
             minimum_area_mult=args.om_minimum_area_mult,
             high_fidelity=args.om_high_fidelity,
             high_fidelity_lines=args.om_high_fidelity_lines,
+            shoreline_h0_m=args.om_shoreline_h0_m,
             use_wavelength_sizing=args.om_wavelength_sizing,
             wavelength_period_s=args.om_wavelength_period,
             wavelength_grid_spacing=args.om_wavelength_grid_spacing,
