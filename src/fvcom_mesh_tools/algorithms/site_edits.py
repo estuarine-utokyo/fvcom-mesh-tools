@@ -253,52 +253,80 @@ def extrude_boundary_strip(
         )
 
     for run in runs:
-        if len(run) < min_run:
+        if len(run) < 2:
             continue
         line = geoms[eligible[run[0]]]
         s_vals = [float(line.project(shapely.Point(*nodes[v])))
                   for v in run]
-        diffs = np.diff(s_vals)
-        if not ((diffs > 0).all() or (diffs < 0).all()):
-            n_trimmed += 1
-            continue
-        if (np.abs(diffs) < 0.2 * np.array(
-                [local_h[v] for v in run[:-1]])).any():
-            n_trimmed += 1
-            continue
         foot = [line.interpolate(s) for s in s_vals]
-        base = n_nodes + len(new_nodes)
-        ids = list(range(base, base + len(run)))
         coords = {v: nodes[v] for v in run}
-        for k, f in enumerate(foot):
-            coords[ids[k]] = np.array([f.x, f.y])
-        strip: list[list[int]] = []
-        ok = True
+
+        # Per-quad evaluation; a defective pair CLOSES the current
+        # sub-segment instead of killing the whole run (the same
+        # narrowing lesson as the bisecting snap, PoC #71 -> #72).
+        seg_quads: list[tuple[int, list[list[int]] | None]] = []
+        direction = 0.0
         for k in range(len(run) - 1):
-            vi, vj = run[k], run[k + 1]
-            ni, nj = ids[k], ids[k + 1]
-            # Two candidate diagonal splits of quad (vi, vj, nj, ni).
-            cand_a = [_tri_ccw(vi, vj, nj, coords),
-                      _tri_ccw(vi, nj, ni, coords)]
-            cand_b = [_tri_ccw(vi, vj, ni, coords),
-                      _tri_ccw(vj, nj, ni, coords)]
+            ds = s_vals[k + 1] - s_vals[k]
+            good = abs(ds) >= 0.2 * local_h[run[k]]
+            if good and direction != 0.0 and ds * direction < 0:
+                good = False
             pick = None
-            for cand in (cand_a, cand_b):
-                if all(_tri_ok(c, coords) for c in cand):
-                    pick = cand
-                    break
+            if good:
+                if direction == 0.0:
+                    direction = np.sign(ds)
+                vi, vj = run[k], run[k + 1]
+                ni, nj = -(k + 1), -(k + 2)  # placeholder ids
+                coords[ni] = np.array([foot[k].x, foot[k].y])
+                coords[nj] = np.array([foot[k + 1].x, foot[k + 1].y])
+                cand_a = [_tri_ccw(vi, vj, nj, coords),
+                          _tri_ccw(vi, nj, ni, coords)]
+                cand_b = [_tri_ccw(vi, vj, ni, coords),
+                          _tri_ccw(vj, nj, ni, coords)]
+                for cand in (cand_a, cand_b):
+                    if all(_tri_ok(c, coords) for c in cand):
+                        pick = cand
+                        break
             if pick is None:
-                ok = False
-                break
-            strip.extend(pick)
-        if not ok:
-            n_trimmed += 1
-            continue
-        for k, f in enumerate(foot):
-            new_nodes.append(np.array([f.x, f.y]))
-            new_depths.append(float(mesh.depths[run[k]]))
-        new_tris.extend(strip)
-        n_strips += 1
+                direction = 0.0
+                n_trimmed += 1
+            seg_quads.append((k, pick))
+
+        # Emit contiguous stretches of >= (min_run - 1) good quads.
+        stretch: list[tuple[int, list[list[int]]]] = []
+
+        def _flush():
+            nonlocal n_strips
+            if len(stretch) < max(1, min_run - 1):
+                stretch.clear()
+                return
+            ks = [k for k, _q in stretch]
+            node_ks = list(range(ks[0], ks[-1] + 2))
+            base = n_nodes + len(new_nodes)
+            id_of = {kk: base + i for i, kk in enumerate(node_ks)}
+            for kk in node_ks:
+                new_nodes.append(
+                    np.array([foot[kk].x, foot[kk].y])
+                )
+                new_depths.append(float(mesh.depths[run[kk]]))
+            for k, quad in stretch:
+                for tri in quad:
+                    remap = [
+                        id_of[k] if i == -(k + 1)
+                        else id_of[k + 1] if i == -(k + 2)
+                        else i
+                        for i in tri
+                    ]
+                    new_tris.append(remap)
+            n_strips += 1
+            stretch.clear()
+
+        for k, pick in seg_quads:
+            if pick is None:
+                _flush()
+            else:
+                stretch.append((k, pick))
+        _flush()
 
     if not new_nodes:
         return mesh, {"n_strips": 0, "n_new_nodes": 0,
