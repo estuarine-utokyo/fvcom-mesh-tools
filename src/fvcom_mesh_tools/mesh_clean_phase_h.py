@@ -40,6 +40,7 @@ smooth pass is small).
 from __future__ import annotations
 
 import heapq
+import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable
@@ -55,6 +56,8 @@ from fvcom_mesh_tools.mesh_clean import (
 )
 
 CoastlineProjector = Callable[[np.ndarray], np.ndarray | None]
+
+logger = logging.getLogger(__name__)
 """``(xy: np.ndarray of shape (2,)) -> projected np.ndarray or None``.
 
 Returns the input point projected onto the nearest coastline polyline
@@ -3304,6 +3307,12 @@ def phase_h_optimize(
             n2e = _node_to_elements(cur.elements, cur.n_nodes)
             bnd_prev, bnd_next, _ = _boundary_topology(cur)
             for _sweep in range(max_smooth_sweeps):
+                if _sweep and _sweep % 25 == 0:
+                    logger.info(
+                        "phase_h_optimize round %d Pass A: sweep %d, "
+                        "%d accepts so far",
+                        outer_round + 1, _sweep, round_accepts,
+                    )
                 n_acc = _batch_smooth_sweep(
                     cur,
                     alpha_target=alpha_target,
@@ -3325,6 +3334,10 @@ def phase_h_optimize(
 
         # Pass B: topology operators.
         if topology_ops:
+            logger.info(
+                "phase_h_optimize round %d Pass B starting "
+                "(Pass A accepts: %d)", outer_round + 1, round_accepts,
+            )
             cur, topo_acc, n_aband = _topology_round(
                 cur,
                 alpha_target=alpha_target,
@@ -3781,6 +3794,11 @@ def _stochastic_local_fix_round(
         for pair in elem_pair[c4_fail]:
             c4_fail_elems.add(int(pair[0]))
             c4_fail_elems.add(int(pair[1]))
+        logger.info(
+            "stochastic fixer pass %d/%d: C1=%d C2=%d C4-edges=%d",
+            outer, max_outer_passes,
+            int(c1_fail.sum()), int(c2_fail.sum()), int(c4_fail.sum()),
+        )
         fail_set = (
             set(int(e) for e in np.where(c1_fail)[0])
             | set(int(e) for e in np.where(c2_fail)[0])
@@ -3920,6 +3938,10 @@ def _vertex_remove_chain_round(
     )
     records: list[dict[str, Any]] = []
     while True:
+        logger.info(
+            "vertex_remove chain (%s): %d accepts so far",
+            target_kind, len(records),
+        )
         cur_counts = _finish_global_counts(
             mesh,
             min_angle_target=min_angle_target,
