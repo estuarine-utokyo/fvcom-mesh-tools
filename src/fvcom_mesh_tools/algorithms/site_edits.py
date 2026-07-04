@@ -358,6 +358,7 @@ def collapse_edge(
     min_angle: float = 30.0,
     max_angle: float = 130.0,
     protected=None,
+    gate_metric: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
     """Collapse edge ``(u, v)`` into ``u`` (the sliver-needle remedy).
 
@@ -378,6 +379,9 @@ def collapse_edge(
     protected = set(protected or ())
     if u in protected or v in protected:
         return None
+    # gate_metric: accept also when the count is unchanged but the
+    # worst local metric improves (single ops on >0.75 area-change
+    # pairs are real progress the count cannot see).
     elements = mesh.elements
     n_nodes = mesh.n_nodes
 
@@ -416,10 +420,12 @@ def collapse_edge(
     def _fails(nodes_arr, elems_arr, region):
         tri = elems_arr[region]
         mn, mx, twice = _tri_quality(nodes_arr[tri])
-        return int((mn < min_angle).sum() + (mx > max_angle).sum()
-                   + (twice <= 0).sum())
+        n = int((mn < min_angle).sum() + (mx > max_angle).sum()
+                + (twice <= 0).sum())
+        worst = float(mn.min()) if mn.size else 90.0
+        return n, worst
 
-    before = _fails(mesh.nodes, elements, ring)
+    before, worst_before = _fails(mesh.nodes, elements, ring)
 
     nodes2 = mesh.nodes.copy()
     nodes2[keep] = pos
@@ -433,8 +439,12 @@ def collapse_edge(
     ring2 = np.where((elements2 == keep).any(axis=1))[0]
     if ring2.size == 0:
         return None
-    after = _fails(nodes2, elements2, ring2)
-    if after >= before:
+    after, worst_after = _fails(nodes2, elements2, ring2)
+    ok = after < before or (
+        gate_metric and after == before
+        and worst_after > worst_before + 0.5
+    )
+    if not ok:
         return None
 
     def _remap(seg):
@@ -464,6 +474,7 @@ def split_edge_pair(
     max_angle: float = 130.0,
     max_area_change: float = 0.5,
     relax_iters: int = 3,
+    gate_metric: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
     """Split interior edge ``(u, v)`` at its midpoint (2 -> 4
     elements) and relax the new node — the long-chord grading remedy
@@ -513,13 +524,17 @@ def split_edge_pair(
             a, b, c = (int(x) for x in elements2[e])
             for p_, q_ in ((a, b), (b, c), (c, a)):
                 edges.setdefault((min(p_, q_), max(p_, q_)), []).append(int(e))
+        worst_ac = 0.0
         for pair in edges.values():
             if len(pair) == 2:
                 a1, a2 = areas[pos_of[pair[0]]], areas[pos_of[pair[1]]]
                 hi = max(a1, a2)
-                if hi > 0 and (hi - min(a1, a2)) / hi > max_area_change:
-                    n_bad += 1
-        return n_bad
+                if hi > 0:
+                    ac = (hi - min(a1, a2)) / hi
+                    worst_ac = max(worst_ac, ac)
+                    if ac > max_area_change:
+                        n_bad += 1
+        return n_bad, worst_ac
 
     # Pre-split baseline on the same region topology is not defined;
     # gate against the PRE-EDIT ring of (u, v) instead.
@@ -535,12 +550,16 @@ def split_edge_pair(
         a, b, c = (int(x) for x in elements[e])
         for p_, q_ in ((a, b), (b, c), (c, a)):
             edges0.setdefault((min(p_, q_), max(p_, q_)), []).append(int(e))
+    worst_ac0 = 0.0
     for pair in edges0.values():
         if len(pair) == 2:
             a1, a2 = areas0[pos0[pair[0]]], areas0[pos0[pair[1]]]
             hi = max(a1, a2)
-            if hi > 0 and (hi - min(a1, a2)) / hi > max_area_change:
-                before += 1
+            if hi > 0:
+                ac = (hi - min(a1, a2)) / hi
+                worst_ac0 = max(worst_ac0, ac)
+                if ac > max_area_change:
+                    before += 1
 
     # Gated centroid relax of the new node.
     nbr = set()
@@ -548,17 +567,21 @@ def split_edge_pair(
         tri = elements2[e]
         if w in tri:
             nbr.update(int(x) for x in tri if x != w)
-    best_bad = _region_bad(nodes2)
+    best_bad, best_ac = _region_bad(nodes2)
     for _ in range(relax_iters):
         old_pos = nodes2[w].copy()
         nodes2[w] = nodes2[sorted(nbr)].mean(axis=0)
-        bad = _region_bad(nodes2)
-        if bad > best_bad:
+        bad, ac = _region_bad(nodes2)
+        if (bad, ac) > (best_bad, best_ac):
             nodes2[w] = old_pos
             break
-        best_bad = bad
+        best_bad, best_ac = bad, ac
 
-    if best_bad >= before:
+    ok = best_bad < before or (
+        gate_metric and best_bad <= before
+        and best_ac < worst_ac0 - 0.02
+    )
+    if not ok:
         return None
     depths2 = np.concatenate([
         mesh.depths, [0.5 * (mesh.depths[u] + mesh.depths[v])],
