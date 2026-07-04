@@ -465,13 +465,15 @@ def channel_width_metric(
 
     for p, (pts, arcs) in enumerate(polylines):
         tree = cKDTree(pts)
-        d1, idx1 = tree.query(centroids, k=1)
+        # workers=-1: the per-polyline KD queries dominate QA wall
+        # time on large meshes; use every available core.
+        d1, idx1 = tree.query(centroids, k=1, workers=-1)
         d_per_poly[:, p] = d1
         arc_at_nearest = arcs[idx1]
         K = min(k_far, len(pts))
         if K < 2:
             continue
-        dK, idxK = tree.query(centroids, k=K)
+        dK, idxK = tree.query(centroids, k=K, workers=-1)
         arc_K = arcs[idxK]
         arc_diff = np.abs(arc_K - arc_at_nearest[:, None])
         threshold = arc_separation_factor * d1[:, None]
