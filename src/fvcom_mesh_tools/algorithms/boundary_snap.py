@@ -251,6 +251,205 @@ def snap_boundary_to_polylines(
     return out, info
 
 
+def snap_boundary_chains(
+    mesh: Fort14Mesh,
+    polylines: Sequence,
+    *,
+    max_snap_frac: float = 1.2,
+    max_chain_len: int = 40,
+    relax_iters: int = 2,
+    min_angle: float = 30.0,
+    max_angle: float = 130.0,
+    exclude_nodes: Sequence[int] | None = None,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Collective (chain-wise) boundary snapping.
+
+    Per-node gated snapping (PoC #70) is structurally pessimistic:
+    conforming the boundary to the coastline is a COLLECTIVE move, so
+    judging each node while its neighbours have not moved yet sees
+    shear that would vanish once the whole run moves. This variant
+    mirrors the SMS edit "drag the segment, smooth its surroundings,
+    keep or undo": consecutive runs of snappable boundary nodes move
+    together, the interior 1-ring is relaxed (interior nodes only —
+    boundary nodes never leave the target line), and the whole chain
+    is accepted only if its element patch has no flips and no more
+    C1/C2 violations than before; otherwise every node of the chain
+    is rolled back and the chain is reported under
+    ``deferred_chains`` for per-site treatment.
+    """
+    import shapely
+    from shapely.strtree import STRtree
+
+    from fvcom_mesh_tools.algorithms.perp_local import _tri_quality
+
+    nodes = mesh.nodes.copy()
+    elements = mesh.elements
+    n_nodes = mesh.n_nodes
+    boundary_uv, n2e = _boundary_topology(elements, n_nodes)
+
+    excl = set(int(v) for s in mesh.open_boundaries for v in s)
+    if exclude_nodes is not None:
+        excl.update(int(v) for v in exclude_nodes)
+
+    elen = np.linalg.norm(
+        nodes[boundary_uv[:, 0]] - nodes[boundary_uv[:, 1]], axis=1,
+    )
+    lsum = np.zeros(n_nodes)
+    lcnt = np.zeros(n_nodes)
+    np.add.at(lsum, boundary_uv[:, 0], elen)
+    np.add.at(lsum, boundary_uv[:, 1], elen)
+    np.add.at(lcnt, boundary_uv[:, 0], 1)
+    np.add.at(lcnt, boundary_uv[:, 1], 1)
+    local_h = np.divide(lsum, np.maximum(lcnt, 1))
+
+    bnodes = np.unique(boundary_uv.ravel())
+    bset = set(int(v) for v in bnodes)
+    tree = STRtree(list(polylines))
+    geoms = np.array(list(polylines), dtype=object)
+    pts = shapely.points(nodes[bnodes, 0], nodes[bnodes, 1])
+    nearest_idx = tree.nearest(pts)
+    d_before_all = shapely.distance(pts, geoms[nearest_idx])
+    d_of = {int(v): float(d) for v, d in zip(bnodes, d_before_all)}
+    line_of = {int(v): geoms[i] for v, i in zip(bnodes, nearest_idx)}
+
+    # Snappable = within the cap, not excluded, not already on-line.
+    snappable = {
+        int(v) for v in bnodes
+        if int(v) not in excl
+        and d_of[int(v)] <= max_snap_frac * local_h[int(v)]
+    }
+
+    # Boundary adjacency restricted to snappable nodes -> chains.
+    nbr: dict[int, list[int]] = {}
+    for u, v in boundary_uv:
+        u, v = int(u), int(v)
+        if u in snappable and v in snappable:
+            nbr.setdefault(u, []).append(v)
+            nbr.setdefault(v, []).append(u)
+    chains: list[list[int]] = []
+    seen: set[int] = set()
+    endpoints = sorted(
+        v for v in snappable
+        if len(nbr.get(v, ())) == 1
+    )
+    isolated = sorted(
+        v for v in snappable if v not in nbr
+    )
+    for v0 in endpoints:
+        if v0 in seen:
+            continue
+        chain = [v0]
+        seen.add(v0)
+        prev, cur2 = None, v0
+        while True:
+            nxt = [w for w in nbr[cur2] if w != prev and w not in seen]
+            if not nxt:
+                break
+            prev, cur2 = cur2, nxt[0]
+            chain.append(cur2)
+            seen.add(cur2)
+        chains.append(chain)
+    for v0 in sorted(snappable - seen):  # pure cycles (islands)
+        if v0 in seen:
+            continue
+        chain = [v0]
+        seen.add(v0)
+        prev, cur2 = None, v0
+        while True:
+            nxt = [w for w in nbr.get(cur2, ()) if w != prev
+                   and w not in seen]
+            if not nxt:
+                break
+            prev, cur2 = cur2, nxt[0]
+            chain.append(cur2)
+            seen.add(cur2)
+        chains.append(chain)
+    chains.extend([v] for v in isolated if v not in seen)
+    # Bound decision granularity.
+    chains = [c[i:i + max_chain_len]
+              for c in chains for i in range(0, len(c), max_chain_len)]
+
+    def _patch_fails(eids: np.ndarray) -> int:
+        tri = elements[eids]
+        mn, mx, twice = _tri_quality(nodes[tri])
+        return int((mn < min_angle).sum() + (mx > max_angle).sum()
+                   + (twice <= 0).sum())
+
+    n_acc = n_def = 0
+    deferred_chains: list[list[int]] = []
+    for chain in chains:
+        ring_e = np.unique(np.concatenate(
+            [n2e[v] for v in chain if v in n2e]
+        ))
+        patch_nodes = np.unique(elements[ring_e].ravel())
+        interior = [int(w) for w in patch_nodes
+                    if int(w) not in bset and int(w) not in excl]
+        saved = {int(w): nodes[int(w)].copy()
+                 for w in np.concatenate([chain, interior]).astype(int)}
+        before = _patch_fails(ring_e)
+
+        for v in chain:
+            line = line_of[v]
+            q = line.interpolate(line.project(
+                shapely.Point(nodes[v, 0], nodes[v, 1])
+            ))
+            nodes[v] = (q.x, q.y)
+        # Relax the interior 1-ring (interior nodes ONLY — boundary
+        # nodes stay on their lines).
+        vtx_nbr: dict[int, set[int]] = {}
+        for e in ring_e:
+            a, b, c = (int(x) for x in elements[e])
+            vtx_nbr.setdefault(a, set()).update((b, c))
+            vtx_nbr.setdefault(b, set()).update((a, c))
+            vtx_nbr.setdefault(c, set()).update((a, b))
+        cur_fails = _patch_fails(ring_e)
+        for _ in range(relax_iters):
+            for w in interior:
+                nb = list(vtx_nbr.get(w, ()))
+                if len(nb) < 3:
+                    continue
+                old_pos = nodes[w].copy()
+                nodes[w] = nodes[nb].mean(axis=0)
+                nf = _patch_fails(ring_e)
+                if nf > cur_fails:
+                    nodes[w] = old_pos
+                else:
+                    cur_fails = nf
+
+        after = _patch_fails(ring_e)
+        if after <= before:
+            n_acc += 1
+        else:
+            for w, pos in saved.items():
+                nodes[w] = pos
+            n_def += 1
+            deferred_chains.append([int(v) for v in chain])
+
+    out = Fort14Mesh(
+        title=mesh.title, nodes=nodes, depths=mesh.depths,
+        elements=mesh.elements,
+        open_boundaries=[s.copy() for s in mesh.open_boundaries],
+        land_boundaries=[(ib, s.copy())
+                         for ib, s in mesh.land_boundaries],
+    )
+    pts2 = shapely.points(nodes[bnodes, 0], nodes[bnodes, 1])
+    d_after = shapely.distance(pts2, geoms[tree.nearest(pts2)])
+    info = {
+        "n_chains": len(chains),
+        "n_chains_accepted": n_acc,
+        "n_chains_deferred": n_def,
+        "deferred_chains": deferred_chains,
+        "n_far": int(sum(1 for v in bnodes
+                         if int(v) not in excl
+                         and int(v) not in snappable)),
+        "dist_before_p50_m": float(np.percentile(d_before_all, 50)),
+        "dist_before_p90_m": float(np.percentile(d_before_all, 90)),
+        "dist_after_p50_m": float(np.percentile(d_after, 50)),
+        "dist_after_p90_m": float(np.percentile(d_after, 90)),
+    }
+    return out, info
+
+
 def snap_nodes_to_segment(
     mesh: Fort14Mesh,
     node_ids: Sequence[int],

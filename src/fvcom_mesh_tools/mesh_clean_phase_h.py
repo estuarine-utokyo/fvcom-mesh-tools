@@ -1123,6 +1123,7 @@ def _topology_round(
     max_angle_target: float = DEFAULT_MAX_ANGLE_TARGET,
     operator_order: tuple[str, ...],
     max_topology_accepts: int,
+    deadline: float | None = None,
     coastline_projector: CoastlineProjector | None = None,
 ) -> tuple[Fort14Mesh, dict[str, int], int]:
     """Run a single Pass-B round: pop fail elements by descending
@@ -1135,6 +1136,12 @@ def _topology_round(
     abandoned: set = set()
     accepts_total = 0
     while accepts_total < max_topology_accepts:
+        if deadline is not None and time.perf_counter() >= deadline:
+            logger.info(
+                "topology round: deadline hit after %d accepts",
+                accepts_total,
+            )
+            break
         a, m, M = _per_element_quality(cur.nodes, cur.elements)
         fail = _is_fail(
             a, m, M,
@@ -3386,6 +3393,8 @@ def phase_h_optimize(
                 operator_order=operator_order,
                 max_topology_accepts=max_topology_per_round,
                 coastline_projector=coastline_projector,
+                deadline=(None if time_budget_s is None
+                          else t_opt0 + time_budget_s),
             )
             for op_name, n in topo_acc.items():
                 info["operators_applied"][op_name] += int(n)
@@ -3463,7 +3472,7 @@ def phase_h_optimize(
         # (C1/C2 must not increase, C4 must strictly decrease in the
         # local block). Runs after Pass E so it acts on the cleanest
         # residual.
-        if pass_f_enabled:
+        if pass_f_enabled and not _over_budget():
             cur, pf_acc, pf_sw = _pass_f_round(
                 cur,
                 min_angle_target=min_angle_target,
@@ -3482,7 +3491,7 @@ def phase_h_optimize(
         # moves that clear C1 when their alpha trace is non-monotone)
         # by accepting any Laplacian / tangent move that strictly
         # decreases local C1 fail count without raising C2 or C4.
-        if pass_g_enabled:
+        if pass_g_enabled and not _over_budget():
             cur, pg_acc, pg_sw = _pass_g_round(
                 cur,
                 min_angle_target=pass_g_min_angle_target,

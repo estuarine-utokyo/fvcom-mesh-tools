@@ -9,6 +9,7 @@ from fvcom_mesh_tools.algorithms.boundary import (
 )
 from fvcom_mesh_tools.algorithms.boundary_snap import (
     load_polylines,
+    snap_boundary_chains,
     snap_boundary_to_polylines,
     snap_nodes_to_segment,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "outer_loop",
     "refine_bad_triangles",
     "signed_areas",
+    "snap_boundary_chains",
     "snap_boundary_to_polylines",
     "snap_nodes_to_segment",
     "swap_edges_for_quality",

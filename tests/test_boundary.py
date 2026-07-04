@@ -321,3 +321,52 @@ def test_snap_boundary_quality_gate_defers_ring_breakers():
         exclude_nodes=[0, 2, 3, 6, 7, 8],
     )
     assert info3["n_snapped"] == 1
+
+
+def test_snap_boundary_chains_collective_accept_and_rollback():
+    from shapely.geometry import LineString
+
+    from fvcom_mesh_tools.algorithms.boundary_snap import (
+        snap_boundary_chains,
+    )
+
+    n = 3
+    nodes = np.array([[i * 1000.0, j * 1000.0]
+                      for j in range(n) for i in range(n)])
+    elements = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            a, b = j * n + i, j * n + i + 1
+            c, d = (j + 1) * n + i + 1, (j + 1) * n + i
+            elements.append([a, b, c])
+            elements.append([a, c, d])
+    mesh = Fort14Mesh(
+        title="chains",
+        nodes=nodes,
+        depths=np.full(n * n, 5.0),
+        elements=np.asarray(elements),
+        open_boundaries=[np.array([5, 8])],
+        land_boundaries=[(20, np.array([8, 7, 6, 3, 0, 1, 2, 5]))],
+    )
+    # The whole bottom row moves together onto y=200: a single-node
+    # gate would see shear; the chain gate must accept, and interior
+    # node 4 gets relaxed.
+    coast = LineString([(-500.0, 200.0), (2500.0, 200.0)])
+    out, info = snap_boundary_chains(
+        mesh, [coast], exclude_nodes=[3, 6, 7, 8],
+    )
+    assert info["n_chains_accepted"] >= 1
+    assert info["n_chains_deferred"] == 0
+    assert np.allclose(out.nodes[[0, 1, 2], 1], 200.0)
+    from fvcom_mesh_tools.algorithms import signed_areas
+
+    assert (signed_areas(out) > 0).all()
+
+    # A line that collapses the chain onto one point must be rolled
+    # back wholesale and reported.
+    point_line = LineString([(1500.0, 60.0), (1501.0, 60.0)])
+    out2, info2 = snap_boundary_chains(
+        mesh, [point_line], exclude_nodes=[3, 6, 7, 8],
+    )
+    assert info2["n_chains_deferred"] >= 1
+    assert np.allclose(out2.nodes[[0, 1, 2]], mesh.nodes[[0, 1, 2]])
