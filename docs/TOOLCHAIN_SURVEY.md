@@ -211,3 +211,33 @@ Ports from OceanMesh2D (Phase 1–2):
 Minor: `max_el_ns` nearshore cap; robust-shapefile loader (`safe_geodata`
 equivalent — needed anyway for the broken Futtsu shapefiles); fix stale
 `architecture.md` §5; remove dead `slope_sizing_function` export upstream.
+
+## Addendum 2026-07-04 — OceanMesh2D V6.0 "high-fidelity" option (#264)
+
+Upstream re-check (user request): the only post-sync commits are
+non-algorithmic (M1 mex binary, README x2), but the V6.0 headline
+feature (2024-02, present in the local clone yet missed by the
+original survey) is directly relevant to the boundary-conformity
+requirement:
+
+* `geodata(..., 'high_fidelity', 1)` resamples the shoreline at the
+  LOCAL target size with a 1-D DistMesh (`mesh1d.m`) and injects the
+  result as fixed points (`pfix`) + constrained edges (`egfix`,
+  constrained Delaunay) into the 2-D iteration; fixed entities are
+  immune to forces, boundary projection, and pruning; automatic
+  cleanup is disabled in this mode. `high_fidelity=2` constrains the
+  vector verbatim. Example_13 (Christchurch, nested 50 m box)
+  demonstrates it. Limitation: polylines shorter than ~5 local
+  elements are dropped; corner pinning is unfinished upstream.
+* Python `oceanmesh` already has the POINT half of the plumbing:
+  `generate_mesh(pfix=...)` (re-snap each iteration + force zeroing)
+  and `laplacian2/clean(pfix=...)` locking. Missing: a `mesh1d`
+  resampler, polyline clipping/segmentation helpers, projection-step
+  exclusion, and (for strict edge enforcement) a
+  Constrained_Delaunay_triangulation_2 path in the C++ layer.
+* Port plan: (1) shoreline->pfix driver (resample at `fh`, skip
+  sub-5-element lines) + `high_fidelity` flag — dense chains recover
+  edges without CDT in practice; (2) CDT/egfix as a follow-up C++
+  change. Complements (not replaces) the post-generation
+  `boundary_snap` pass: high-fidelity constrains at BUILD time on
+  smooth/hardened lines; snapping repairs whatever generation missed.
