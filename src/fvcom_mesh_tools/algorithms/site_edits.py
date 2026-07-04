@@ -475,6 +475,7 @@ def split_edge_pair(
     max_area_change: float = 0.5,
     relax_iters: int = 3,
     gate_metric: bool = False,
+    force: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]] | None:
     """Split interior edge ``(u, v)`` at its midpoint (2 -> 4
     elements) and relax the new node — the long-chord grading remedy
@@ -577,7 +578,7 @@ def split_edge_pair(
             break
         best_bad, best_ac = bad, ac
 
-    ok = best_bad < before or (
+    ok = force or best_bad < before or (
         gate_metric and best_bad <= before
         and best_ac < worst_ac0 - 0.02
     )
@@ -594,3 +595,122 @@ def split_edge_pair(
                          for ib, s in mesh.land_boundaries],
     )
     return out, {"new_node": int(w), "violations": [before, best_bad]}
+
+
+def _global_bad(mesh, *, min_angle=30.0, max_angle=130.0,
+                max_area_change=0.5) -> int:
+    """Whole-mesh C1/C2/flip element count + failing C4 pair count."""
+    from fvcom_mesh_tools.algorithms.perp_local import _tri_quality
+
+    els = mesh.elements
+    mn, mx, twice = _tri_quality(mesh.nodes[els])
+    n_bad = int((mn < min_angle).sum() + (mx > max_angle).sum()
+                + (twice <= 0).sum())
+    areas = 0.5 * np.abs(twice)
+    raw = np.vstack([els[:, [0, 1]], els[:, [1, 2]], els[:, [2, 0]]])
+    raw.sort(axis=1)
+    eid = np.repeat(np.arange(els.shape[0]), 1)
+    eids = np.concatenate([eid, eid, eid])
+    codes = raw[:, 0].astype(np.int64) * mesh.n_nodes + raw[:, 1]
+    order = np.argsort(codes, kind="stable")
+    codes_s, eids_s = codes[order], eids[order]
+    starts = np.flatnonzero(np.concatenate(
+        [[True], codes_s[1:] != codes_s[:-1]]
+    ))
+    counts = np.diff(np.concatenate([starts, [codes_s.size]]))
+    for s, c in zip(starts[counts == 2], counts[counts == 2]):
+        a1, a2 = areas[eids_s[s]], areas[eids_s[s + 1]]
+        hi = max(a1, a2)
+        if hi > 0 and (hi - min(a1, a2)) / hi > max_area_change:
+            n_bad += 1
+    return n_bad
+
+
+def grade_region(
+    mesh: Fort14Mesh,
+    u: int,
+    v: int,
+    *,
+    max_splits: int = 8,
+    max_area_change: float = 0.5,
+) -> tuple[Fort14Mesh, dict[str, Any]] | None:
+    """Fan-out grading transaction for a size cliff.
+
+    One split of a >0.5 area-change pair typically shifts the jump to
+    the next ring (the single-edge gate rightly rejects it). This
+    operator splits the target edge and then, breadth-first, any NEW
+    failing pair among elements touching the freshly inserted nodes —
+    up to ``max_splits`` — and accepts the WHOLE transaction only if
+    the global violation count drops. Deterministic and bounded.
+    """
+    from fvcom_mesh_tools.algorithms.perp_local import _tri_quality
+
+    init_bad = _global_bad(mesh, max_area_change=max_area_change)
+    work = Fort14Mesh(
+        title=mesh.title, nodes=mesh.nodes.copy(),
+        depths=mesh.depths.copy(), elements=mesh.elements.copy(),
+        open_boundaries=[s.copy() for s in mesh.open_boundaries],
+        land_boundaries=[(ib, s.copy())
+                         for ib, s in mesh.land_boundaries],
+    )
+    queue: list[tuple[int, int]] = [(int(u), int(v))]
+    seen: set[tuple[int, int]] = set()
+    n_splits = 0
+    best_bad = init_bad
+    best_state = None
+    best_splits = 0
+    while queue and n_splits < max_splits:
+        a, b = queue.pop(0)
+        key = (min(a, b), max(a, b))
+        if key in seen:
+            continue
+        seen.add(key)
+        res = split_edge_pair(work, a, b, force=True,
+                              max_area_change=max_area_change)
+        if res is None:
+            continue
+        work, info = res
+        n_splits += 1
+        bad_now = _global_bad(work, max_area_change=max_area_change)
+        if bad_now < best_bad:
+            best_bad = bad_now
+            best_state = Fort14Mesh(
+                title=work.title, nodes=work.nodes.copy(),
+                depths=work.depths.copy(),
+                elements=work.elements.copy(),
+                open_boundaries=[s.copy()
+                                 for s in work.open_boundaries],
+                land_boundaries=[(ib, s.copy())
+                                 for ib, s in work.land_boundaries],
+            )
+            best_splits = n_splits
+        w = int(info["new_node"])
+        # New failing pairs among elements touching w.
+        ring = np.where((work.elements == w).any(axis=1))[0]
+        patch = np.unique(work.elements[ring].ravel())
+        cand_e = np.where(np.isin(work.elements, patch).any(axis=1))[0]
+        tri = work.elements[cand_e]
+        _mn, _mx, twice = _tri_quality(work.nodes[tri])
+        areas = 0.5 * np.abs(twice)
+        pos = {int(e): k for k, e in enumerate(cand_e)}
+        edges: dict[tuple[int, int], list[int]] = {}
+        for k, e in enumerate(cand_e):
+            x, y, z = (int(q) for q in work.elements[e])
+            for p_, q_ in ((x, y), (y, z), (z, x)):
+                edges.setdefault((min(p_, q_), max(p_, q_)), []).append(int(e))
+        fails = []
+        for (p_, q_), pair in edges.items():
+            if len(pair) == 2 and (p_, q_) not in seen:
+                a1, a2 = areas[pos[pair[0]]], areas[pos[pair[1]]]
+                hi = max(a1, a2)
+                if hi > 0:
+                    ac = (hi - min(a1, a2)) / hi
+                    if ac > max_area_change:
+                        fails.append((ac, p_, q_))
+        for _ac, p_, q_ in sorted(fails, reverse=True):
+            queue.append((p_, q_))
+
+    if best_state is None:
+        return None
+    return best_state, {"n_splits": best_splits,
+                        "violations": [init_bad, best_bad]}

@@ -228,3 +228,32 @@ def test_split_edge_pair_grades_long_chord():
     assert (signed_areas(out) > 0).all()
     b, a = info["violations"]
     assert a < b
+
+
+def test_grade_region_accepts_cascade():
+    from fvcom_mesh_tools.algorithms import signed_areas
+    from fvcom_mesh_tools.algorithms.site_edits import grade_region
+
+    # Same size-cliff fixture as split_edge_pair's test.
+    nodes = np.array([
+        [0.0, 0.0], [2000.0, 0.0],
+        [1000.0, 1500.0], [1000.0, -1500.0],
+        [-400.0, 400.0], [-400.0, -400.0],
+    ])
+    mesh = Fort14Mesh(
+        title="cliff",
+        nodes=nodes,
+        depths=np.full(6, 10.0),
+        elements=np.array([
+            [0, 1, 2], [0, 3, 1], [0, 2, 4], [0, 4, 5], [0, 5, 3],
+        ]),
+        open_boundaries=[np.array([2])],
+        land_boundaries=[(20, np.array([2, 1, 3]))],
+    )
+    res = grade_region(mesh, 0, 1, max_splits=6)
+    assert res is not None
+    out, info = res
+    assert info["n_splits"] >= 1
+    b, a = info["violations"]
+    assert a < b
+    assert (signed_areas(out) > 0).all()
