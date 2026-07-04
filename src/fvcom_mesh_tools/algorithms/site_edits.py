@@ -714,3 +714,108 @@ def grade_region(
         return None
     return best_state, {"n_splits": best_splits,
                         "violations": [init_bad, best_bad]}
+
+
+def equalize_pair(
+    mesh: Fort14Mesh,
+    u: int,
+    v: int,
+    *,
+    min_angle: float = 30.0,
+    max_angle: float = 130.0,
+    max_area_change: float = 0.5,
+    steps=(0.0, 0.08, 0.16, 0.24, 0.32, 0.40),
+) -> tuple[Fort14Mesh, dict[str, Any]] | None:
+    """Rebalance a C4 pair by moving the two apex nodes (the SMS
+    "drag the interior node" move): the larger element's apex toward
+    the shared edge, the smaller one's away from it. Joint
+    deterministic grid search; apexes that are boundary nodes stay
+    put (whitelist). Accepts the best position pair that lowers the
+    pair's area change without creating C1/C2/flip violations in
+    either apex ring; returns ``None`` if no such position exists.
+    """
+    from fvcom_mesh_tools.algorithms.perp_local import _tri_quality
+
+    u, v = int(u), int(v)
+    elements = mesh.elements
+    n_nodes = mesh.n_nodes
+    carriers = np.where(
+        (elements == u).any(axis=1) & (elements == v).any(axis=1)
+    )[0]
+    if carriers.size != 2:
+        return None
+    tri_pair = elements[carriers]
+    _mn, _mx, twice = _tri_quality(mesh.nodes[tri_pair])
+    areas = 0.5 * np.abs(twice)
+    big_k, small_k = (0, 1) if areas[0] >= areas[1] else (1, 0)
+    apex = []
+    for k in (big_k, small_k):
+        w = next(int(x) for x in tri_pair[k] if int(x) not in (u, v))
+        apex.append(w)
+    w_big, w_small = apex
+
+    raw = np.vstack([
+        elements[:, [0, 1]], elements[:, [1, 2]], elements[:, [2, 0]],
+    ])
+    raw.sort(axis=1)
+    codes = raw[:, 0].astype(np.int64) * n_nodes + raw[:, 1]
+    uniq, counts = np.unique(codes, return_counts=True)
+    bnd = set(np.column_stack([
+        uniq[counts == 1] // n_nodes, uniq[counts == 1] % n_nodes,
+    ]).ravel().tolist())
+    obc = set(int(x) for s in mesh.open_boundaries for x in s)
+
+    mid = 0.5 * (mesh.nodes[u] + mesh.nodes[v])
+    ring = np.where((elements == w_big).any(axis=1)
+                    | (elements == w_small).any(axis=1)
+                    | (elements == u).any(axis=1)
+                    | (elements == v).any(axis=1))[0]
+
+    def _state(nodes_arr):
+        tri = elements[ring]
+        mn, mx, twice2 = _tri_quality(nodes_arr[tri])
+        n_bad = int((mn < min_angle).sum() + (mx > max_angle).sum()
+                    + (twice2 <= 0).sum())
+        a = 0.5 * np.abs(twice2)
+        pos_of = {int(e): k2 for k2, e in enumerate(ring)}
+        a1, a2 = a[pos_of[int(carriers[0])]], a[pos_of[int(carriers[1])]]
+        hi = max(a1, a2)
+        ac = (hi - min(a1, a2)) / hi if hi > 0 else 1.0
+        return n_bad, ac
+
+    bad0, ac0 = _state(mesh.nodes)
+    movable_big = w_big not in bnd and w_big not in obc
+    movable_small = w_small not in bnd and w_small not in obc
+    if not (movable_big or movable_small):
+        return None
+
+    nodes2 = mesh.nodes.copy()
+    p_big0, p_small0 = nodes2[w_big].copy(), nodes2[w_small].copy()
+    best = None
+    for s_b in (steps if movable_big else (0.0,)):
+        for s_s in (steps if movable_small else (0.0,)):
+            if s_b == 0.0 and s_s == 0.0:
+                continue
+            nodes2[w_big] = p_big0 + s_b * (mid - p_big0)
+            nodes2[w_small] = p_small0 - s_s * (mid - p_small0)
+            n_bad, ac = _state(nodes2)
+            ok = (n_bad < bad0) or (n_bad <= bad0 and ac < ac0 - 1e-3)
+            if ok:
+                if best is None or (n_bad, ac) < (best[1], best[0]):
+                    best = (ac, n_bad, float(s_b), float(s_s),
+                            nodes2[w_big].copy(), nodes2[w_small].copy())
+    nodes2[w_big], nodes2[w_small] = p_big0, p_small0
+    if best is None:
+        return None
+    ac, n_bad, s_b, s_s, pb, ps = best
+    nodes2[w_big], nodes2[w_small] = pb, ps
+    out = Fort14Mesh(
+        title=mesh.title, nodes=nodes2, depths=mesh.depths,
+        elements=mesh.elements,
+        open_boundaries=[s.copy() for s in mesh.open_boundaries],
+        land_boundaries=[(ib, s.copy())
+                         for ib, s in mesh.land_boundaries],
+    )
+    return out, {"area_change": [float(ac0), float(ac)],
+                 "steps": [s_b, s_s],
+                 "apexes": [int(w_big), int(w_small)]}

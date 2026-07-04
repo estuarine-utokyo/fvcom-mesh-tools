@@ -257,3 +257,42 @@ def test_grade_region_accepts_cascade():
     b, a = info["violations"]
     assert a < b
     assert (signed_areas(out) > 0).all()
+
+
+def test_equalize_pair_rebalances_c4():
+    from fvcom_mesh_tools.algorithms import signed_areas
+    from fvcom_mesh_tools.algorithms.site_edits import equalize_pair
+
+    # Big/small pair over shared edge (0,1); the outer rectangle is
+    # fully tiled so both apexes (2, 3) are INTERIOR nodes.
+    nodes = np.array([
+        [0.0, 0.0], [1000.0, 0.0],
+        [500.0, 800.0],    # big apex (2)
+        [500.0, -240.0],   # small apex (3)
+        [-900.0, 900.0], [1900.0, 900.0],
+        [-900.0, -900.0], [1900.0, -900.0],
+    ])
+    elements = np.array([
+        [0, 1, 2], [1, 0, 3],
+        [0, 2, 4], [1, 5, 2],
+        [0, 6, 3], [1, 3, 7],
+        [0, 4, 6], [1, 7, 5],
+        [4, 2, 5], [6, 7, 3],
+    ])
+    mesh = Fort14Mesh(
+        title="eq",
+        nodes=nodes,
+        depths=np.full(8, 8.0),
+        elements=elements,
+        open_boundaries=[np.array([4])],
+        land_boundaries=[(20, np.array([4, 6, 7, 5]))],
+    )
+    res = equalize_pair(mesh, 0, 1)
+    assert res is not None
+    out, info = res
+    b, a = info["area_change"]
+    assert b > 0.5 and a < b
+    assert (signed_areas(out) > 0).all()
+    # Only the two apexes moved.
+    moved = np.where(np.any(out.nodes != mesh.nodes, axis=1))[0]
+    assert set(moved.tolist()) <= {2, 3}
