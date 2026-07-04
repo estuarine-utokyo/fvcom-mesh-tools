@@ -192,3 +192,77 @@ def test_classify_boundaries_by_bbox_no_loops_returns_empty() -> None:
     )
     assert len(open_segs) == 1
     assert land_bnds == []
+
+
+# ---------------------------------------------------------------------------
+# boundary_snap (exact conformity)
+# ---------------------------------------------------------------------------
+
+
+def test_snap_boundary_to_polylines_snaps_smooth_and_caps_far():
+    from shapely.geometry import LineString
+
+    from fvcom_mesh_tools.algorithms.boundary_snap import (
+        snap_boundary_to_polylines,
+    )
+
+    # 3x3-node grid, 1000 m cells; the "true coastline" runs 80 m
+    # north of the bottom edge (smooth -> snappable) and one far line
+    # 5 km away that must be ignored by the cap.
+    n = 3
+    nodes = np.array([[i * 1000.0, j * 1000.0]
+                      for j in range(n) for i in range(n)])
+    elements = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            a, b = j * n + i, j * n + i + 1
+            c, d = (j + 1) * n + i + 1, (j + 1) * n + i
+            elements.append([a, b, c])
+            elements.append([a, c, d])
+    mesh = Fort14Mesh(
+        title="snap",
+        nodes=nodes,
+        depths=np.full(n * n, 5.0),
+        elements=np.asarray(elements),
+        open_boundaries=[np.array([5, 8])],  # right side: excluded
+        land_boundaries=[(20, np.array([8, 7, 6, 3, 0, 1, 2, 5]))],
+    )
+    coast = LineString([(-500.0, 80.0), (2500.0, 80.0)])
+    far = LineString([(-500.0, -5000.0), (2500.0, -5000.0)])
+    out, info = snap_boundary_to_polylines(mesh, [coast, far])
+
+    # Bottom-row land nodes 0,1,2 sit 80 m from the coast (< 0.6*h)
+    # -> snapped exactly onto y=80.
+    assert np.allclose(out.nodes[[0, 1, 2], 1], 80.0)
+    # OBC nodes untouched.
+    assert np.allclose(out.nodes[[5, 8]], mesh.nodes[[5, 8]])
+    assert info["n_snapped"] >= 3
+    # The toy grid's top/side nodes have no nearby reference line, so
+    # global percentiles only need to not regress.
+    assert info["dist_after_p50_m"] <= info["dist_before_p50_m"] + 1e-9
+    # Input untouched.
+    assert np.allclose(mesh.nodes[0], [0.0, 0.0])
+
+
+def test_snap_nodes_to_segment_projects_and_clamps():
+    from fvcom_mesh_tools.algorithms.boundary_snap import snap_nodes_to_segment
+
+    nodes = np.array([
+        [0.0, 30.0], [1000.0, -40.0], [2000.0, 25.0],
+        [0.0, 1000.0], [1000.0, 1000.0], [2000.0, 1000.0],
+    ])
+    elements = np.array([[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]])
+    mesh = Fort14Mesh(
+        title="seg",
+        nodes=nodes,
+        depths=np.full(6, 5.0),
+        elements=elements,
+        open_boundaries=[np.array([0, 1, 2])],
+        land_boundaries=[(20, np.array([2, 5, 4, 3, 0]))],
+    )
+    out, info = snap_nodes_to_segment(
+        mesh, [0, 1, 2], (0.0, 0.0), (2000.0, 0.0),
+    )
+    assert info["n_snapped"] == 3
+    assert np.allclose(out.nodes[[0, 1, 2], 1], 0.0)
+    assert np.allclose(out.nodes[[0, 1, 2], 0], [0.0, 1000.0, 2000.0])

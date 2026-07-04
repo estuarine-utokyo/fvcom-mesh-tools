@@ -15,10 +15,18 @@ Sign convention used below: "depth" is positive down; "elevation" positive up.
 
 | Rank | Bathymetry (within footprint) | Coastline |
 |---|---|---|
-| 1 | `Futtsu_JFA_2023` | `coastline/tokyo_bay` (MLIT C23) |
-| 2 | `M7001` / `tokyo_bay` (see overlap note) | `OSM` (land polygons 2026-03) |
+| 1 | `Futtsu_JFA_2023` | **`OSM` (land polygons 2026-03)** |
+| 2 | `M7001` / `tokyo_bay` (see overlap note) | `coastline/tokyo_bay` (MLIT C23) |
 | 3 | `mesh500` | `GSHHS` (fallback only) |
 | 4 | `GEBCO` (fallback only) | — |
+
+Coastline precedence REVISED 2026-07-04 (user decision, superseding the
+kickoff §4 order): OSM is the default — the MLIT C23 extract (2021) is
+older than the OSM land polygons (2026-03), and OSM applies worldwide,
+matching the general-purpose-toolkit goal. In practice the meshing
+shoreline is the xcoast "true land" product (land polygons minus
+inland water); the same polygons serve as the snap/QA conformity
+reference so mesh-vs-land figures are exact conformity checks.
 
 Overlap resolution within rank 2: `M7001` is the survey-authority source (JHA
 soundings/contours) but has **no intertidal data** (marks start ≥ 1 m below chart

@@ -7,6 +7,11 @@ from fvcom_mesh_tools.algorithms.boundary import (
     classify_outer_loop_by_bbox,
     outer_loop,
 )
+from fvcom_mesh_tools.algorithms.boundary_snap import (
+    load_polylines,
+    snap_boundary_to_polylines,
+    snap_nodes_to_segment,
+)
 from fvcom_mesh_tools.algorithms.edge_swap import (
     swap_edges_for_quality,
     swap_edges_for_valence,
@@ -38,11 +43,14 @@ __all__ = [
     "classify_outer_loop_by_bbox",
     "edge_lengths_planar",
     "laplacian_smooth",
+    "load_polylines",
     "min_interior_angle",
     "open_bdy_perpendicularity",
     "outer_loop",
     "refine_bad_triangles",
     "signed_areas",
+    "snap_boundary_to_polylines",
+    "snap_nodes_to_segment",
     "swap_edges_for_quality",
     "swap_edges_for_valence",
     "unique_edges",
