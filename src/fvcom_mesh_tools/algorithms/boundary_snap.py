@@ -377,6 +377,7 @@ def snap_boundary_chains(
 
     n_acc = n_def = 0
     n_nodes_snapped = 0
+    on_line: set[int] = set()
     deferred_chains: list[list[int]] = []
 
     def _attempt(chain: list[int]) -> None:
@@ -409,6 +410,9 @@ def snap_boundary_chains(
             vtx_nbr.setdefault(b, set()).update((a, c))
             vtx_nbr.setdefault(c, set()).update((a, b))
         cur_fails = _patch_fails(ring_e)
+        slidable = [int(w) for w in patch_nodes
+                    if int(w) in on_line and int(w) not in chain
+                    and int(w) not in excl]
         for _ in range(relax_iters):
             for w in interior:
                 nb = list(vtx_nbr.get(w, ()))
@@ -421,11 +425,33 @@ def snap_boundary_chains(
                     nodes[w] = old_pos
                 else:
                     cur_fails = nf
+            # On-line slide: an already-snapped neighbour may move
+            # ALONG its coastline to even out spacing (the SMS "drag
+            # the adjacent boundary node along the coast" move).
+            for w in slidable:
+                line = line_of.get(w)
+                if line is None:
+                    continue
+                nb = list(vtx_nbr.get(w, ()))
+                if len(nb) < 2:
+                    continue
+                old_pos = nodes[w].copy()
+                target = nodes[nb].mean(axis=0)
+                q = line.interpolate(line.project(
+                    shapely.Point(target[0], target[1])
+                ))
+                nodes[w] = (q.x, q.y)
+                nf = _patch_fails(ring_e)
+                if nf > cur_fails:
+                    nodes[w] = old_pos
+                else:
+                    cur_fails = nf
 
         after = _patch_fails(ring_e)
         if after <= before:
             n_acc += 1
             n_nodes_snapped += len(chain)
+            on_line.update(int(v) for v in chain)
             return
         for w, pos in saved.items():
             nodes[w] = pos
