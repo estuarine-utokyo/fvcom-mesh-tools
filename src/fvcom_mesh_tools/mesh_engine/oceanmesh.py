@@ -540,8 +540,19 @@ def build(
 
         log("[oceanmesh] cleanup pipeline ...")
         points, cells = om.make_mesh_boundaries_traversable(points, cells)
-        points, cells = om.delete_faces_connected_to_one_face(points, cells)
-        points, cells = om.delete_boundary_faces(points, cells, min_qual=min_qual)
+        if not constrain_boundary:
+            points, cells = om.delete_faces_connected_to_one_face(points, cells)
+            points, cells = om.delete_boundary_faces(points, cells, min_qual=min_qual)
+        else:
+            # The quality-based boundary deleters are exactly the
+            # "cleanup retreat" (PoC #77/#92: boundary pulled ~0.7 h
+            # inside). With CDT-constrained chains the boundary
+            # triangles are mesh1d-spaced by construction; keep only
+            # the manifold guarantee.
+            log(
+                "[oceanmesh] constrained boundary: skipping "
+                "delete_boundary_faces / one-face deletion"
+            )
 
         # ``om.laplacian2`` converges on edge-length stability but does
         # not check signed area, so it can leave a few inverted
