@@ -239,6 +239,7 @@ def build(
     courant_target: float = 0.7,
     courant_timestep_s: float = 5.0,
     courant_wave_amplitude_m: float = 2.0,
+    high_fidelity: bool = False,
     log: Callable[[str], None] = print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a mesh with oceanmesh + DistMesh.
@@ -411,8 +412,23 @@ def build(
                 om.compute_minimum(edge_components), gradation=gradation,
             )
 
+        pfix = None
+        if high_fidelity:
+            # OceanMesh2D V6.0 #264 port: fix resampled shoreline points
+            # into the DistMesh iteration so the boundary lies exactly
+            # on the (locally-resampled) shoreline.
+            pfix = om.shoreline_to_fixed_points(shore, edge)
+            log(
+                f"[oceanmesh] high-fidelity: {len(pfix):,} fixed "
+                "shoreline points"
+            )
+            if len(pfix) == 0:
+                pfix = None
+
         log(f"[oceanmesh] generate_mesh (max_iter={max_iter}, seed={seed}) ...")
-        points, cells = om.generate_mesh(sdf, edge, max_iter=max_iter, seed=seed)
+        points, cells = om.generate_mesh(
+            sdf, edge, max_iter=max_iter, seed=seed, pfix=pfix,
+        )
         log(f"[oceanmesh] raw output: NP={points.shape[0]:,} NE={cells.shape[0]:,}")
 
         log("[oceanmesh] cleanup pipeline ...")
@@ -428,7 +444,20 @@ def build(
         from fvcom_mesh_tools.mesh_clean import repair_flipped_elements
 
         pre = np.asarray(points, dtype=float).copy()
-        smoothed, cells = om.laplacian2(points, cells)
+        pfix_idx = None
+        if pfix is not None:
+            # Cleanup may have renumbered/dropped vertices; re-locate
+            # the surviving fixed points by exact coordinate match so
+            # the smoother cannot move them off the shoreline.
+            from scipy.spatial import cKDTree
+
+            d, idx = cKDTree(pre).query(pfix)
+            pfix_idx = np.unique(idx[d < 1e-9])
+            log(
+                f"[oceanmesh] high-fidelity: locking {len(pfix_idx):,}"
+                f"/{len(pfix):,} surviving fixed points in laplacian2"
+            )
+        smoothed, cells = om.laplacian2(points, cells, pfix=pfix_idx)
         smoothed = np.asarray(smoothed, dtype=float)
         cells_arr = np.asarray(cells, dtype=int)
         repaired, repair_info = repair_flipped_elements(pre, smoothed, cells_arr)

@@ -148,6 +148,13 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--om-high-fidelity", action="store_true",
+        help="[oceanmesh] Fix shoreline points (resampled at the local "
+             "target size) into the DistMesh iteration so the mesh "
+             "boundary lies exactly on the shoreline "
+             "(OceanMesh2D V6.0 high_fidelity port).",
+    )
+    p.add_argument(
         "--om-minimum-area-mult", type=float, default=4.0,
         help=(
             "[oceanmesh] minimum_area_mult forwarded to om.Shoreline "
@@ -463,6 +470,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.om_seed,
             use_bathymetric_gradient=not args.om_no_bathymetric_gradient,
             minimum_area_mult=args.om_minimum_area_mult,
+            high_fidelity=args.om_high_fidelity,
             use_wavelength_sizing=args.om_wavelength_sizing,
             wavelength_period_s=args.om_wavelength_period,
             wavelength_grid_spacing=args.om_wavelength_grid_spacing,
