@@ -132,19 +132,37 @@ def main() -> int:
     protected = set(int(v) for s in mesh.open_boundaries for v in s)
     edit_log = []
 
+    # Freeze each site's offender elements as NODE TRIPLES before any
+    # edit: an accepted re-CDT renumbers the element array, so raw ids
+    # from the #80 report go stale after the first acceptance (the
+    # first #81 run corrupted every later site's region this way).
+    site_triples = {}
+    for site in sites:
+        ids = sorted({int(r["id"]) for r in site["offenders"]
+                      if r.get("kind") == "element"})
+        site_triples[site["site"]] = [
+            frozenset(int(x) for x in mesh.elements[e]) for e in ids
+        ]
+
     # ---- quality sites: patch re-CDT --------------------------------------
     for site in sorted(sites, key=lambda s: s["site"]):
         checks = {r["check"] for r in site["offenders"]}
         if checks == {"obc_perpendicularity"}:
             continue
-        elem_ids = sorted({int(r["id"]) for r in site["offenders"]
-                           if r.get("kind") == "element"})
-        if not elem_ids:
+        triples = site_triples[site["site"]]
+        if not triples:
             edit_log.append({"site": site["site"], "action": "skip",
                              "reason": "no element offenders"})
             continue
+        lookup = {frozenset(int(x) for x in tri): k
+                  for k, tri in enumerate(mesh.elements)}
+        elem_ids = [lookup[tr] for tr in triples if tr in lookup]
+        if not elem_ids:
+            edit_log.append({"site": site["site"], "action": "skip",
+                             "reason": "elements already edited away"})
+            continue
         patch_e = _neighbours_by_node(
-            mesh.elements, mesh.n_nodes, np.asarray(elem_ids),
+            mesh.elements, mesh.n_nodes, np.asarray(sorted(elem_ids)),
         )
         region_e = _neighbours_by_node(
             mesh.elements, mesh.n_nodes, patch_e,
