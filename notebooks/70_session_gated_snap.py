@@ -258,7 +258,11 @@ def main() -> int:
         pass_g_min_angle_target=30.0,
         max_outer_rounds=1,
         coastline_projector=projector,
+        time_budget_s=600.0,
     )
+    if _oinfo.get("budget_exhausted"):
+        print("[70] B: 10-min budget hit — continuing to targeted "
+              "editing with the current state", flush=True)
     mesh, cinfo = compact_nodes(mesh)
     if cinfo["n_orphans_removed"]:
         ring, islands, open_end, _w, _s = _arc_bands(mesh)

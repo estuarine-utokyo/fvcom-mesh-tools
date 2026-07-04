@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import heapq
 import logging
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable
@@ -3089,6 +3090,8 @@ def phase_h_optimize(
     max_outer_rounds: int = 10,
     operator_order: tuple[str, ...] = DEFAULT_OPERATOR_ORDER,
     coastline_projector: CoastlineProjector | None = None,
+    time_budget_s: float | None = None,
+    stagnation_accept_frac: float = 0.02,
     lookahead_enabled: bool = False,
     max_lookahead_per_round: int = 10_000,
     lookahead_op1_inventory: tuple[str, ...] = DEFAULT_LOOKAHEAD_OP1_INVENTORY,
@@ -3297,7 +3300,24 @@ def phase_h_optimize(
         op for op in operator_order if op != "smooth_node"
     )
 
+    t_opt0 = time.perf_counter()
+
+    def _over_budget() -> bool:
+        if time_budget_s is None:
+            return False
+        if time.perf_counter() - t_opt0 >= time_budget_s:
+            info["budget_exhausted"] = True
+            logger.info(
+                "phase_h_optimize: time budget %.0f s exhausted — "
+                "handing over to targeted editing", time_budget_s,
+            )
+            return True
+        return False
+
+    info["budget_exhausted"] = False
     for outer_round in range(max_outer_rounds):
+        if _over_budget():
+            break
         info["n_outer_rounds"] = outer_round + 1
         round_accepts = 0
 
@@ -3306,13 +3326,22 @@ def phase_h_optimize(
             bnd_node = _boundary_node_mask(cur)
             n2e = _node_to_elements(cur.elements, cur.n_nodes)
             bnd_prev, bnd_next, _ = _boundary_topology(cur)
+            first_sweep_acc: int | None = None
+            from fvcom_mesh_tools.algorithms.quality import (  # noqa: PLC0415
+                min_interior_angle as _mia,
+            )
+
             for _sweep in range(max_smooth_sweeps):
-                if _sweep and _sweep % 25 == 0:
+                if _sweep and _sweep % 10 == 0:
+                    m_now = _mia(cur)
                     logger.info(
                         "phase_h_optimize round %d Pass A: sweep %d, "
-                        "%d accepts so far",
+                        "%d accepts, C1 fails now %d",
                         outer_round + 1, _sweep, round_accepts,
+                        int((m_now < min_angle_target).sum()),
                     )
+                if _over_budget():
+                    break
                 n_acc = _batch_smooth_sweep(
                     cur,
                     alpha_target=alpha_target,
@@ -3331,9 +3360,19 @@ def phase_h_optimize(
                 round_accepts += int(n_acc)
                 if n_acc == 0:
                     break
+                if first_sweep_acc is None:
+                    first_sweep_acc = int(n_acc)
+                elif n_acc < max(3, stagnation_accept_frac * first_sweep_acc):
+                    logger.info(
+                        "phase_h_optimize round %d Pass A: stagnation stop "
+                        "(sweep accepts %d < %.0f%% of first sweep %d)",
+                        outer_round + 1, n_acc,
+                        stagnation_accept_frac * 100, first_sweep_acc,
+                    )
+                    break
 
         # Pass B: topology operators.
-        if topology_ops:
+        if topology_ops and not _over_budget():
             logger.info(
                 "phase_h_optimize round %d Pass B starting "
                 "(Pass A accepts: %d)", outer_round + 1, round_accepts,
