@@ -1,0 +1,44 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc82b
+
+set -euo pipefail
+export OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 MKL_NUM_THREADS=8
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+: "${HOME:?}"
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u - <<'PYEOF'
+import numpy as np
+from pyproj import Transformer
+
+from fvcom_mesh_tools.io import read_fort14
+from fvcom_mesh_tools.plotting import plot_mesh_overview
+
+mesh = read_fort14("outputs/81_v4_final.14")
+tr = Transformer.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
+lon, lat = tr.transform(mesh.nodes[:, 0], mesh.nodes[:, 1])
+mesh.nodes = np.column_stack([lon, lat])
+coast = (139.4, 35.05, 140.4, 35.85)
+zooms = {
+    "overview": None,
+    "banzu":   (139.85, 35.33, 140.02, 35.46),
+    "arakawa": (139.78, 35.55, 139.92, 35.68),
+    "yokosuka": (139.60, 35.24, 139.76, 35.36),
+    "futtsu":  (139.72, 35.28, 139.90, 35.40),
+}
+for name, zb in zooms.items():
+    p = plot_mesh_overview(
+        mesh, f"outputs/figures/82_v4_{name}.png", crs="EPSG:4326",
+        cell_m=None, coast=coast, zoom=zb, dpi=250,
+        title=f"tokyo_bay_v4 (true-300m, OSM-conformal) - {name}",
+    )
+    print(p, flush=True)
+PYEOF
