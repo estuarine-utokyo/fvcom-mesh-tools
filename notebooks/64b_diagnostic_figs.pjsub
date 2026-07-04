@@ -1,0 +1,37 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc64b
+
+set -euo pipefail
+export OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 MKL_NUM_THREADS=8
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+: "${HOME:?}"
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u - <<'PYEOF'
+from fvcom_mesh_tools.io import read_fort14
+from fvcom_mesh_tools.plotting import plot_mesh_overview
+
+mesh = read_fort14("outputs/64_v4_raw_opened_h0100.14")
+coast = (139.4, 35.05, 140.4, 35.85)
+zooms = {
+    "yokosuka": (139.70, 35.28, 139.78, 35.34),
+    "futtsu":   (139.80, 35.34, 139.90, 35.42),
+    "banzu":    (139.87, 35.36, 139.98, 35.44),
+    "arakawa":  (139.82, 35.58, 139.88, 35.65),
+}
+for name, zb in zooms.items():
+    p = plot_mesh_overview(
+        mesh, f"outputs/figures/64_{name}.png", crs="EPSG:4326",
+        cell_m=None, coast=coast, zoom=zb, dpi=250,
+        title=f"v4 opened+h0=100 raw - {name}",
+    )
+    print(p, flush=True)
+PYEOF
