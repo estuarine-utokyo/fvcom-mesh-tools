@@ -1,0 +1,75 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc87a
+
+# PoC #87a: mesh PNG gallery — the raw oceanmesh builds and every
+# pipeline stage checkpoint, so the user can locate where the mesh
+# goes wrong (Tokyo Port loss, Banzu, jagged OBC at the Boso base).
+
+set -euo pipefail
+export OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 MKL_NUM_THREADS=8
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+: "${HOME:?}"
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u - <<'PYEOF'
+from pathlib import Path
+
+import numpy as np
+from pyproj import Transformer
+
+from fvcom_mesh_tools.io import read_fort14
+from fvcom_mesh_tools.plotting import plot_mesh_overview
+
+TR = Transformer.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
+COAST = (139.4, 35.05, 140.4, 35.85)
+VIEWS = {
+    "full": None,
+    "tokyoport": (139.72, 35.53, 139.90, 35.68),
+    "banzu": (139.85, 35.33, 140.02, 35.46),
+    "obc_boso": (139.75, 35.10, 140.05, 35.35),
+}
+MESHES = [
+    ("s01_60c_raw_finecoast", "outputs/60c_v4_raw_300m_osm.14"),
+    ("s02_63_h0100_raw", "outputs/63_v4_raw_300m_h0100.14"),
+    ("s03_64_opened_h0100", "outputs/64_v4_raw_opened_h0100.14"),
+    ("s04_77_true300_raw", "outputs/77_v4_hmax1500.14"),
+    ("s05_79_stageA_snap", "outputs/79_stageA_prepped.14"),
+    ("s06_79_stageB_opt", "outputs/79_stageB_ground.14"),
+    ("s07_79_final", "outputs/79_v4_session.14"),
+    ("s08_80_finish", "outputs/80_v4_session.14"),
+    ("s09_81_persite", "outputs/81_v4_final.14"),
+    ("s10_83_collapse", "outputs/83_v4_final.14"),
+    ("s11_84_metric", "outputs/84_v4_final.14"),
+    ("s12_86_equalize", "outputs/86_v4_final.14"),
+]
+outdir = Path("outputs/figures/87_gallery")
+outdir.mkdir(parents=True, exist_ok=True)
+for tag, path in MESHES:
+    p = Path(path)
+    if not p.exists():
+        print(f"skip {p}", flush=True)
+        continue
+    mesh = read_fort14(p)
+    if abs(mesh.nodes[:, 0]).max() > 1000.0:  # UTM -> lonlat
+        lon, lat = TR.transform(mesh.nodes[:, 0], mesh.nodes[:, 1])
+        mesh.nodes = np.column_stack([lon, lat])
+    for view, zb in VIEWS.items():
+        try:
+            plot_mesh_overview(
+                mesh, outdir / f"{tag}_{view}.png", crs="EPSG:4326",
+                cell_m=None, coast=COAST, zoom=zb, dpi=220,
+                title=f"{tag} - {view}",
+            )
+        except Exception as e:
+            print(f"{tag}/{view} failed: {e}", flush=True)
+    print(f"done {tag}", flush=True)
+print("gallery complete", flush=True)
+PYEOF

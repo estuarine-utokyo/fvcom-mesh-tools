@@ -1,0 +1,74 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=01:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc90
+
+# PoC #88: hmin floor sweep (150/200/300 m) on the RAW OSM domain
+# (NO opening preprocess), h0=100 m detail, mult=36, hmax=1500.
+# Question: which floor keeps Tokyo Port / river mouths naturally.
+
+set -euo pipefail
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+: "${HOME:?}"
+: "${DATA_DIR:?DATA_DIR not set}"
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u - <<'PYEOF'
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+
+from fvcom_mesh_tools.io import read_fort14
+from fvcom_mesh_tools.plotting import plot_mesh_overview
+
+REPO = Path.cwd()
+import os
+DEM = Path(os.environ["DATA_DIR"]) / "bathymetry" / "tokyo_bay" / "depth_0030-11+12+13+14+15.nc"
+COAST = REPO / "outputs" / "osm_shoreline" / "osm_land_opened_land150.shp"
+VIEWS = {
+    "full": None,
+    "tokyoport": (139.72, 35.53, 139.90, 35.68),
+    "banzu": (139.85, 35.33, 140.02, 35.46),
+}
+for hmin in (300,):
+    out14 = REPO / "outputs" / f"90_landopen_hmin{hmin}.14"
+    cmd = [
+        sys.executable, "-m", "fvcom_mesh_tools.cli.buildmesh",
+        str(DEM), str(out14),
+        "--engine", "oceanmesh",
+        "--coastline", str(COAST),
+        "--hmin", str(hmin), "--hmax", "1500", "--zmax", "0.0",
+        "--om-seed", "0",
+        "--om-shoreline-h0-m", "100",
+        "--om-minimum-area-mult", str(4.0 * (hmin / 100.0) ** 2),
+        "--om-enforce-hmin-floor",
+    ]
+    print(f"[90] build hmin={hmin} ...", flush=True)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    tail = "\n".join((r.stdout + r.stderr).splitlines()[-4:])
+    print(tail, flush=True)
+    if r.returncode != 0 or not out14.exists():
+        print(f"[90] hmin={hmin} FAILED", flush=True)
+        continue
+    mesh = read_fort14(out14)
+    print(f"[90] hmin={hmin}: NP={mesh.n_nodes:,} NE={mesh.n_elements:,}",
+          flush=True)
+    for view, zb in VIEWS.items():
+        plot_mesh_overview(
+            mesh, REPO / "outputs" / "figures" /
+            f"90_landopen_hmin{hmin}_{view}.png",
+            crs="EPSG:4326", cell_m=None,
+            coast=(139.4, 35.05, 140.4, 35.85), zoom=zb, dpi=220,
+            title=f"land-opened domain, hmin floor {hmin} m - {view}",
+        )
+    print(f"[90] hmin={hmin} figures done", flush=True)
+PYEOF

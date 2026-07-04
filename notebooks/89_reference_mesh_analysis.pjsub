@@ -1,0 +1,130 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc89
+
+# PoC #89: dissect the goto2023 reference mesh (OceanMesh2D+SMS,
+# ~300 m, 3210 nodes) — size distributions, port/river handling,
+# OBC shape, and OUR QA gates applied to it (gate calibration).
+
+set -euo pipefail
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+: "${HOME:?}"
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python -u - <<'PYEOF'
+from pathlib import Path
+
+import numpy as np
+
+GRD = Path.home() / "Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat"
+DEP = Path.home() / "Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep.dat"
+OBC = Path.home() / "Github/TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat"
+
+lines = GRD.read_text().split("\n")
+n_node = int(lines[0].split("=")[1])
+n_cell = int(lines[1].split("=")[1])
+cells = np.array([lines[2 + i].split() for i in range(n_cell)],
+                 dtype=int)
+nodes = np.array([lines[2 + n_cell + i].split()
+                  for i in range(n_node)], dtype=float)
+xy = nodes[:, 1:3]
+# FVCOM grd NVG columns: id n1 n2 n3 (+maybe more)
+tri = cells[:, 1:4] - 1
+print(f"[89] NP={n_node} NE={n_cell} x range {xy[:,0].min():.0f}"
+      f"..{xy[:,0].max():.0f} y {xy[:,1].min():.0f}..{xy[:,1].max():.0f}",
+      flush=True)
+
+# Edge stats
+e = np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]])
+el = np.linalg.norm(xy[e[:, 0]] - xy[e[:, 1]], axis=1)
+print("[89] edge length percentiles:",
+      np.percentile(el, [1, 5, 25, 50, 75, 95, 99]).round(0), flush=True)
+
+# angles / quality per our gates
+from fvcom_mesh_tools.algorithms.perp_local import _tri_quality
+
+mn, mx, twice = _tri_quality(xy[tri])
+flip = (twice < 0).sum()
+if flip > n_cell / 2:  # orientation convention
+    tri = tri[:, [0, 2, 1]]
+    mn, mx, twice = _tri_quality(xy[tri])
+print(f"[89] min angle: min={mn.min():.1f} p1={np.percentile(mn,1):.1f} "
+      f"p5={np.percentile(mn,5):.1f} p50={np.percentile(mn,50):.1f}; "
+      f"below30={int((mn<30).sum())} ({(mn<30).mean()*100:.1f}%)",
+      flush=True)
+print(f"[89] max angle: max={mx.max():.1f} above130={int((mx>130).sum())}",
+      flush=True)
+areas = 0.5 * np.abs(twice)
+codes = {}
+nn = n_node
+ee = np.sort(e, axis=1)
+cd = ee[:, 0].astype(np.int64) * nn + ee[:, 1]
+eid = np.tile(np.arange(n_cell), 3)
+order = np.argsort(cd, kind="stable")
+cd_s, eid_s = cd[order], eid[order]
+starts = np.flatnonzero(np.concatenate([[True], cd_s[1:] != cd_s[:-1]]))
+counts = np.diff(np.concatenate([starts, [cd_s.size]]))
+acs = []
+for s, c in zip(starts, counts):
+    if c == 2:
+        a1, a2 = areas[eid_s[s]], areas[eid_s[s + 1]]
+        hi = max(a1, a2)
+        if hi > 0:
+            acs.append((hi - min(a1, a2)) / hi)
+acs = np.array(acs)
+print(f"[89] area change: p50={np.percentile(acs,50):.2f} "
+      f"p95={np.percentile(acs,95):.2f} max={acs.max():.2f}; "
+      f"above0.5={int((acs>0.5).sum())} ({(acs>0.5).mean()*100:.1f}%)",
+      flush=True)
+
+# valence
+val = np.bincount(tri.ravel(), minlength=n_node)
+print(f"[89] valence max={val.max()} above8={int((val>8).sum())}",
+      flush=True)
+
+# figures (assume cartesian meters -> convert to lonlat via UTM54?)
+from pyproj import Transformer
+
+from fvcom_mesh_tools.io import Fort14Mesh
+from fvcom_mesh_tools.plotting import plot_mesh_overview
+
+obc_nodes = []
+if OBC.exists():
+    for ln in OBC.read_text().split("\n")[1:]:
+        p = ln.split()
+        if len(p) >= 2:
+            obc_nodes.append(int(p[1]) - 1)
+tr = Transformer.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
+lon, lat = tr.transform(xy[:, 0], xy[:, 1])
+mesh = Fort14Mesh(
+    title="goto2023", nodes=np.column_stack([lon, lat]),
+    depths=np.full(n_node, 5.0), elements=tri,
+    open_boundaries=[np.array(obc_nodes, dtype=int)]
+    if obc_nodes else [],
+    land_boundaries=[],
+)
+print(f"[89] lon range {lon.min():.3f}..{lon.max():.3f} "
+      f"lat {lat.min():.3f}..{lat.max():.3f}", flush=True)
+VIEWS = {
+    "full": None,
+    "tokyoport": (139.72, 35.53, 139.90, 35.68),
+    "banzu": (139.85, 35.33, 140.02, 35.46),
+    "obc": (139.60, 35.10, 140.05, 35.35),
+}
+for view, zb in VIEWS.items():
+    plot_mesh_overview(
+        mesh, f"outputs/figures/89_goto2023_{view}.png",
+        crs="EPSG:4326", cell_m=None,
+        coast=(139.4, 35.05, 140.4, 35.85), zoom=zb, dpi=220,
+        title=f"goto2023 reference (OM2D+SMS ~300 m) - {view}",
+    )
+print("[89] figures done", flush=True)
+PYEOF
