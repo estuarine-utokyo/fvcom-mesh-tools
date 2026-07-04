@@ -221,8 +221,11 @@ def main() -> int:
     mesh, sinfo = snap_boundary_chains(
         mesh, lines, max_snap_frac=1.2, exclude_nodes=list(arc_all),
     )
-    deferred_snap = [v for c in sinfo.pop("deferred_chains")
-                     for v in c]
+    # Record deferred nodes as COORDINATES: stage B compacts node ids.
+    deferred_snap_xy = [
+        (float(mesh.nodes[v, 0]), float(mesh.nodes[v, 1]))
+        for c in sinfo.pop("deferred_chains") for v in c
+    ]
     print(f"[73] A3 snap: {sinfo}", flush=True)
     for run_nodes, label in ((west_n, "west"), (south_n, "south")):
         if run_nodes.size >= 2:
@@ -288,11 +291,9 @@ def main() -> int:
 
     # Cluster residual offenders into sites.
     pts, recs = [], []
-    for v in deferred_snap:
-        pts.append((float(mesh.nodes[v, 0]), float(mesh.nodes[v, 1])))
-        recs.append({"check": "snap_deferred", "node": int(v),
-                     "x": float(mesh.nodes[v, 0]),
-                     "y": float(mesh.nodes[v, 1])})
+    for x, y in deferred_snap_xy:
+        pts.append((x, y))
+        recs.append({"check": "snap_deferred", "x": x, "y": y})
     for c in report.checks:
         if not c.gate or c.skipped or c.passed:
             continue
