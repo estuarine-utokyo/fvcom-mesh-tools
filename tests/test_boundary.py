@@ -266,3 +266,58 @@ def test_snap_nodes_to_segment_projects_and_clamps():
     assert info["n_snapped"] == 3
     assert np.allclose(out.nodes[[0, 1, 2], 1], 0.0)
     assert np.allclose(out.nodes[[0, 1, 2], 0], [0.0, 1000.0, 2000.0])
+
+
+def test_snap_boundary_quality_gate_defers_ring_breakers():
+    from shapely.geometry import LineString
+
+    from fvcom_mesh_tools.algorithms.boundary_snap import (
+        snap_boundary_to_polylines,
+    )
+
+    # Same 3x3 grid; a coastline 80 m off the bottom edge is benign,
+    # so the gate accepts those snaps (no new ring violations).
+    n = 3
+    nodes = np.array([[i * 1000.0, j * 1000.0]
+                      for j in range(n) for i in range(n)])
+    elements = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            a, b = j * n + i, j * n + i + 1
+            c, d = (j + 1) * n + i + 1, (j + 1) * n + i
+            elements.append([a, b, c])
+            elements.append([a, c, d])
+    mesh = Fort14Mesh(
+        title="snapgate",
+        nodes=nodes,
+        depths=np.full(n * n, 5.0),
+        elements=np.asarray(elements),
+        open_boundaries=[np.array([5, 8])],
+        land_boundaries=[(20, np.array([8, 7, 6, 3, 0, 1, 2, 5]))],
+    )
+    benign = LineString([(-500.0, 80.0), (2500.0, 80.0)])
+    out, info = snap_boundary_to_polylines(
+        mesh, [benign], quality_gate=True,
+    )
+    assert np.allclose(out.nodes[[0, 1, 2], 1], 80.0)
+    assert info["n_quality_deferred"] == 0
+
+    # A spike line pulls ONLY node 1 sideways by ~55% of h (within the
+    # snap cap, no flip), but the move drops a ring angle to 25 deg and
+    # pushes ring area-change to 0.70 -> the gate must roll node 1
+    # back and report it deferred.
+    spike = LineString([(1550.0, 50.0), (1560.0, 70.0)])
+    out2, info2 = snap_boundary_to_polylines(
+        mesh, [spike], quality_gate=True,
+        exclude_nodes=[0, 2, 3, 6, 7, 8],
+    )
+    assert info2["n_quality_deferred"] == 1
+    assert info2["deferred_nodes"] == [1]
+    assert np.allclose(out2.nodes[1], [1000.0, 0.0])
+
+    # Without the gate the same snap is accepted (flip guard only).
+    out3, info3 = snap_boundary_to_polylines(
+        mesh, [spike], quality_gate=False,
+        exclude_nodes=[0, 2, 3, 6, 7, 8],
+    )
+    assert info3["n_snapped"] == 1

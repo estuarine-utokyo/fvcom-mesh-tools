@@ -105,6 +105,10 @@ def snap_boundary_to_polylines(
     *,
     max_snap_frac: float = 0.6,
     exclude_nodes: Sequence[int] | None = None,
+    quality_gate: bool = False,
+    min_angle: float = 30.0,
+    max_angle: float = 130.0,
+    max_area_change: float = 0.5,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Snap boundary nodes onto the nearest point of ``polylines``.
 
@@ -116,6 +120,14 @@ def snap_boundary_to_polylines(
 
     Returns a new mesh plus stats (n_snapped / n_far / n_flip_reverted
     and boundary-to-polyline distance percentiles before/after).
+
+    With ``quality_gate=True`` a snap is accepted only if the moved
+    node's 1-ring does not gain quality violations (C1/C2 angles and
+    C4 area-change against the ring's neighbours) — the SMS-editor
+    discipline of "move a node, check its surroundings, undo if it
+    made things worse". Rejected nodes are counted in
+    ``n_quality_deferred`` and their ids returned under
+    ``deferred_nodes`` for per-site treatment.
     """
     import shapely
     from shapely.strtree import STRtree
@@ -150,7 +162,38 @@ def snap_boundary_to_polylines(
     nearest_idx = tree.nearest(pts)
     d_before = shapely.distance(pts, geoms[nearest_idx])
 
-    n_snapped = n_far = n_flip = 0
+    if quality_gate:
+        from fvcom_mesh_tools.algorithms.perp_local import (
+            _edge_arrays,
+            _tri_quality,
+        )
+
+        _adj, _bnd, n2e_q, e2nbr = _edge_arrays(elements, n_nodes)
+        p0_, p1_, p2_ = (nodes[elements[:, k]] for k in range(3))
+        areas_all = 0.5 * np.abs(
+            (p1_[:, 0] - p0_[:, 0]) * (p2_[:, 1] - p0_[:, 1])
+            - (p1_[:, 1] - p0_[:, 1]) * (p2_[:, 0] - p0_[:, 0])
+        )
+
+        def _ring_fails(ring) -> int:
+            tri = elements[ring]
+            mn, mx, twice = _tri_quality(nodes[tri])
+            n_bad = int((mn < min_angle).sum() + (mx > max_angle).sum())
+            n_bad += int((twice <= 0).sum())
+            ring_pos = {int(e): k2 for k2, e in enumerate(ring)}
+            a_ring = 0.5 * np.abs(twice)
+            for k2, e in enumerate(ring):
+                for nb in e2nbr.get(int(e), ()):
+                    a_nb = (a_ring[ring_pos[nb]] if nb in ring_pos
+                            else areas_all[nb])
+                    hi = max(a_ring[k2], a_nb)
+                    if hi > 0 and (hi - min(a_ring[k2], a_nb)) / hi \
+                            > max_area_change:
+                        n_bad += 1
+            return n_bad
+
+    n_snapped = n_far = n_flip = n_deferred = 0
+    deferred: list[int] = []
     for k, v in enumerate(bnodes):
         cap = max_snap_frac * local_h[v]
         if d_before[k] > cap:
@@ -161,11 +204,27 @@ def snap_boundary_to_polylines(
         line = geoms[nearest_idx[k]]
         p = line.interpolate(line.project(pts[k]))
         p_new = np.array([p.x, p.y])
-        if _move_ok(nodes, elements, n2e, int(v), p_new):
+        if not _move_ok(nodes, elements, n2e, int(v), p_new):
+            n_flip += 1
+            continue
+        if quality_gate:
+            ring = n2e_q.get(int(v))
+            before = _ring_fails(ring)
+            old_pos = nodes[int(v)].copy()
             nodes[int(v)] = p_new
+            after = _ring_fails(ring)
+            if after > before:
+                nodes[int(v)] = old_pos
+                n_deferred += 1
+                deferred.append(int(v))
+                continue
+            tri = elements[ring]
+            _mn, _mx, twice = _tri_quality(nodes[tri])
+            areas_all[ring] = 0.5 * np.abs(twice)
             n_snapped += 1
         else:
-            n_flip += 1
+            nodes[int(v)] = p_new
+            n_snapped += 1
 
     pts_after = shapely.points(nodes[bnodes, 0], nodes[bnodes, 1])
     d_after = shapely.distance(pts_after, geoms[tree.nearest(pts_after)])
@@ -182,6 +241,8 @@ def snap_boundary_to_polylines(
         "n_snapped": n_snapped,
         "n_far": n_far,
         "n_flip_reverted": n_flip,
+        "n_quality_deferred": n_deferred,
+        "deferred_nodes": deferred,
         "dist_before_p50_m": float(np.percentile(d_before, 50)),
         "dist_before_p90_m": float(np.percentile(d_before, 90)),
         "dist_after_p50_m": float(np.percentile(d_after, 50)),
