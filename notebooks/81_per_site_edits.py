@@ -137,8 +137,8 @@ def main() -> int:
         checks = {r["check"] for r in site["offenders"]}
         if checks == {"obc_perpendicularity"}:
             continue
-        elem_ids = sorted({int(r["element"]) for r in site["offenders"]
-                           if "element" in r})
+        elem_ids = sorted({int(r["id"]) for r in site["offenders"]
+                           if r.get("kind") == "element"})
         if not elem_ids:
             edit_log.append({"site": site["site"], "action": "skip",
                              "reason": "no element offenders"})
@@ -190,7 +190,8 @@ def main() -> int:
     perp_nodes = []
     for c in report0.checks:
         if c.check_id == "obc_perpendicularity" and not c.passed:
-            perp_nodes = [int(o["node"]) for o in c.offenders]
+            perp_nodes = [int(o["id"]) for o in c.offenders
+                          if o.get("kind") == "node"]
     for v in perp_nodes:
         i = pos_in_obc.get(v)
         if i is None or i == 0 or i == len(obc) - 1:
