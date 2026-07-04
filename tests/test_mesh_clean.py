@@ -1238,3 +1238,32 @@ def test_compact_nodes_noop_when_dense():
     out, info = compact_nodes(mesh)
     assert info["n_orphans_removed"] == 0
     assert out is mesh
+
+
+def test_weld_close_nodes_merges_and_drops_degenerates():
+    from fvcom_mesh_tools.mesh_clean import weld_close_nodes
+
+    # Nodes 1 and 2 nearly coincide; the triangle using both becomes
+    # degenerate and must vanish; boundaries remap without repeats.
+    nodes = np.array([
+        [0.0, 0.0], [1000.0, 0.0], [1000.0, 0.4], [2000.0, 0.0],
+        [1000.0, 1000.0],
+    ])
+    mesh = Fort14Mesh(
+        title="weld",
+        nodes=nodes,
+        depths=np.array([2.0, 3.0, 4.0, 5.0, 6.0]),
+        elements=np.array([[0, 1, 4], [1, 2, 4], [2, 3, 4]]),
+        open_boundaries=[np.array([0, 1, 2, 3])],
+        land_boundaries=[(20, np.array([3, 4, 0]))],
+    )
+    out, info = weld_close_nodes(mesh, tol=1.0)
+    assert info["n_welded"] == 1
+    assert info["n_elements_dropped"] == 1
+    assert out.n_elements == 2
+    assert out.n_nodes == 4
+    seg = out.open_boundaries[0]
+    assert len(seg) == 3 and len(np.unique(seg)) == 3
+    from fvcom_mesh_tools.algorithms import signed_areas
+
+    assert (signed_areas(out) > 0).all()

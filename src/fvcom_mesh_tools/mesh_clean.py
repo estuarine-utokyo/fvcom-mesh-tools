@@ -203,6 +203,73 @@ def compact_nodes(mesh: Fort14Mesh) -> tuple[Fort14Mesh, dict[str, Any]]:
     }
 
 
+def weld_close_nodes(
+    mesh: Fort14Mesh, tol: float,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Merge node pairs closer than ``tol`` (coordinate units) into the
+    lower-indexed node, drop the degenerate elements this creates, and
+    remap the boundary lists (consecutive repeats removed).
+
+    Needed after aggressive boundary snapping: neighbouring nodes can
+    land on the same polyline point, which FVCOM never detects but the
+    QA gate rejects (``no_duplicate_nodes`` / ``no_tiny_area``).
+    """
+    from scipy.spatial import cKDTree
+
+    pairs = sorted(cKDTree(mesh.nodes).query_pairs(r=float(tol)))
+    if not pairs:
+        return mesh, {"n_welded": 0, "n_elements_dropped": 0}
+
+    target = np.arange(mesh.n_nodes, dtype=np.int64)
+    for i, j in pairs:
+        a, b = sorted((int(i), int(j)))
+        # Union toward the smallest representative.
+        ra = a
+        while target[ra] != ra:
+            ra = target[ra]
+        rb = b
+        while target[rb] != rb:
+            rb = target[rb]
+        lo, hi = (ra, rb) if ra < rb else (rb, ra)
+        target[hi] = lo
+    # Path-compress.
+    for v in range(mesh.n_nodes):
+        r = v
+        while target[r] != r:
+            r = target[r]
+        target[v] = r
+
+    elements = target[mesh.elements]
+    degenerate = (
+        (elements[:, 0] == elements[:, 1])
+        | (elements[:, 1] == elements[:, 2])
+        | (elements[:, 2] == elements[:, 0])
+    )
+    elements = elements[~degenerate]
+
+    def _remap_seg(seg: np.ndarray) -> np.ndarray:
+        s = target[np.asarray(seg, dtype=np.int64)]
+        keep = np.ones(s.size, dtype=bool)
+        keep[1:] = s[1:] != s[:-1]
+        return s[keep]
+
+    welded = Fort14Mesh(
+        title=mesh.title,
+        nodes=mesh.nodes,
+        depths=mesh.depths,
+        elements=elements,
+        open_boundaries=[_remap_seg(s) for s in mesh.open_boundaries],
+        land_boundaries=[(ib, _remap_seg(s))
+                         for ib, s in mesh.land_boundaries],
+    )
+    out, cinfo = compact_nodes(welded)
+    return out, {
+        "n_welded": len(pairs),
+        "n_elements_dropped": int(degenerate.sum()),
+        "n_orphans_removed": cinfo["n_orphans_removed"],
+    }
+
+
 def rebuild_boundaries(
     mesh: Fort14Mesh,
     *,
@@ -2056,5 +2123,6 @@ __all__ = [
     "repair_under_resolved_channels",
     "smooth_mesh_laplacian",
     "trim_dead_ends",
+    "weld_close_nodes",
     "widen_thin_elements_at_centroid",
 ]
