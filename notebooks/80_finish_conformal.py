@@ -75,7 +75,7 @@ from fvcom_mesh_tools.qa import (
 )
 
 REPO = Path(__file__).resolve().parents[1]
-SRC = REPO / "outputs" / "80_v4_session.14"
+SRC = REPO / "outputs" / "79_v4_session.14"
 OSM_SHP = REPO / "outputs" / "osm_shoreline" / "osm_true_land_tokyo_bay.shp"
 OSM_UTM_DIR = REPO / "outputs" / "osm_shoreline_utm_nocrs"
 CKPT_A = REPO / "outputs" / "80_stageA_prepped.14"
