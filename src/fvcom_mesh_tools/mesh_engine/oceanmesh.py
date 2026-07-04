@@ -240,6 +240,7 @@ def build(
     courant_timestep_s: float = 5.0,
     courant_wave_amplitude_m: float = 2.0,
     high_fidelity: bool = False,
+    high_fidelity_lines: Path | None = None,
     log: Callable[[str], None] = print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a mesh with oceanmesh + DistMesh.
@@ -413,7 +414,35 @@ def build(
             )
 
         pfix = None
-        if high_fidelity:
+        if high_fidelity_lines is not None:
+            # Constrain to the RAW (unsimplified) vectors: Shoreline's
+            # mainland/inner are h0-simplified, so shore-derived pfix
+            # cannot beat the simplification floor (PoC #61: ~50 m at
+            # 300 m). Equivalent to OceanMesh2D high_fidelity=2 with
+            # local-h resampling.
+            import geopandas as gpd
+
+            gdf = gpd.read_file(high_fidelity_lines)
+            raw_lines = []
+            for geom in gdf.geometry:
+                if geom is None or geom.is_empty:
+                    continue
+                boundary = (
+                    geom.boundary if geom.geom_type.endswith("Polygon") else geom
+                )
+                geoms = (
+                    boundary.geoms if hasattr(boundary, "geoms") else [boundary]
+                )
+                for g in geoms:
+                    raw_lines.append(np.asarray(g.coords, dtype=float))
+            pfix = om.polylines_to_fixed_points(raw_lines, edge)
+            log(
+                f"[oceanmesh] high-fidelity (raw lines): {len(pfix):,} "
+                f"fixed points from {len(raw_lines):,} polylines"
+            )
+            if len(pfix) == 0:
+                pfix = None
+        elif high_fidelity:
             # OceanMesh2D V6.0 #264 port: fix resampled shoreline points
             # into the DistMesh iteration so the boundary lies exactly
             # on the (locally-resampled) shoreline.

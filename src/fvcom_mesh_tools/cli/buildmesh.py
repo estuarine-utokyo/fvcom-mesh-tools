@@ -155,6 +155,13 @@ def build_parser() -> argparse.ArgumentParser:
              "(OceanMesh2D V6.0 high_fidelity port).",
     )
     p.add_argument(
+        "--om-high-fidelity-lines", type=Path, default=None, metavar="PATH",
+        help="[oceanmesh] Vector file whose RAW polylines are resampled "
+             "at the local target size and fixed into the mesh "
+             "(beats the h0-simplification floor; overrides "
+             "--om-high-fidelity).",
+    )
+    p.add_argument(
         "--om-minimum-area-mult", type=float, default=4.0,
         help=(
             "[oceanmesh] minimum_area_mult forwarded to om.Shoreline "
@@ -471,6 +478,7 @@ def main(argv: list[str] | None = None) -> int:
             use_bathymetric_gradient=not args.om_no_bathymetric_gradient,
             minimum_area_mult=args.om_minimum_area_mult,
             high_fidelity=args.om_high_fidelity,
+            high_fidelity_lines=args.om_high_fidelity_lines,
             use_wavelength_sizing=args.om_wavelength_sizing,
             wavelength_period_s=args.om_wavelength_period,
             wavelength_grid_spacing=args.om_wavelength_grid_spacing,
