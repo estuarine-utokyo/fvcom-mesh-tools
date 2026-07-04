@@ -347,3 +347,227 @@ def extrude_boundary_strip(
         "n_new_elements": len(new_tris),
         "n_trimmed": n_trimmed,
     }
+
+
+def collapse_edge(
+    mesh: Fort14Mesh,
+    u: int,
+    v: int,
+    *,
+    lines=None,
+    min_angle: float = 30.0,
+    max_angle: float = 130.0,
+    protected=None,
+) -> tuple[Fort14Mesh, dict[str, Any]] | None:
+    """Collapse edge ``(u, v)`` into ``u`` (the sliver-needle remedy).
+
+    Position rules honour the boundary whitelist: if both endpoints
+    are mesh-boundary nodes and ``lines`` is given, the survivor
+    moves to the midpoint PROJECTED onto the nearest line (it stays
+    on the coastline); if exactly one endpoint is a boundary node,
+    that node survives in place; two interior nodes meet at the
+    midpoint. Rejected (returns ``None``) when an endpoint is
+    ``protected`` (OBC), when a flip would occur, or when the 1-ring
+    violation count (C1/C2/flips) does not decrease.
+    """
+    import shapely
+
+    from fvcom_mesh_tools.algorithms.perp_local import _tri_quality
+
+    u, v = int(u), int(v)
+    protected = set(protected or ())
+    if u in protected or v in protected:
+        return None
+    elements = mesh.elements
+    n_nodes = mesh.n_nodes
+
+    raw = np.vstack([
+        elements[:, [0, 1]], elements[:, [1, 2]], elements[:, [2, 0]],
+    ])
+    raw.sort(axis=1)
+    codes = raw[:, 0].astype(np.int64) * n_nodes + raw[:, 1]
+    uniq, counts = np.unique(codes, return_counts=True)
+    bnd_nodes = set(
+        np.column_stack([
+            uniq[counts == 1] // n_nodes, uniq[counts == 1] % n_nodes,
+        ]).ravel().tolist()
+    )
+
+    u_b, v_b = u in bnd_nodes, v in bnd_nodes
+    if u_b and not v_b:
+        keep, drop, pos = u, v, mesh.nodes[u].copy()
+    elif v_b and not u_b:
+        keep, drop, pos = v, u, mesh.nodes[v].copy()
+    else:
+        keep, drop = u, v
+        pos = 0.5 * (mesh.nodes[u] + mesh.nodes[v])
+        if u_b and v_b and lines is not None:
+            from shapely.strtree import STRtree
+
+            tree = STRtree(list(lines))
+            pt = shapely.Point(pos[0], pos[1])
+            line = list(lines)[int(tree.nearest(pt))]
+            q = line.interpolate(line.project(pt))
+            pos = np.array([q.x, q.y])
+
+    ring = np.where((elements == keep).any(axis=1)
+                    | (elements == drop).any(axis=1))[0]
+
+    def _fails(nodes_arr, elems_arr, region):
+        tri = elems_arr[region]
+        mn, mx, twice = _tri_quality(nodes_arr[tri])
+        return int((mn < min_angle).sum() + (mx > max_angle).sum()
+                   + (twice <= 0).sum())
+
+    before = _fails(mesh.nodes, elements, ring)
+
+    nodes2 = mesh.nodes.copy()
+    nodes2[keep] = pos
+    elements2 = np.where(elements == drop, keep, elements)
+    degen = (
+        (elements2[:, 0] == elements2[:, 1])
+        | (elements2[:, 1] == elements2[:, 2])
+        | (elements2[:, 2] == elements2[:, 0])
+    )
+    elements2 = elements2[~degen]
+    ring2 = np.where((elements2 == keep).any(axis=1))[0]
+    if ring2.size == 0:
+        return None
+    after = _fails(nodes2, elements2, ring2)
+    if after >= before:
+        return None
+
+    def _remap(seg):
+        s = np.where(np.asarray(seg) == drop, keep, np.asarray(seg))
+        keep_m = np.ones(s.size, dtype=bool)
+        keep_m[1:] = s[1:] != s[:-1]
+        return s[keep_m]
+
+    out = Fort14Mesh(
+        title=mesh.title, nodes=nodes2, depths=mesh.depths,
+        elements=elements2,
+        open_boundaries=[_remap(s) for s in mesh.open_boundaries],
+        land_boundaries=[(ib, _remap(s))
+                         for ib, s in mesh.land_boundaries],
+    )
+    return out, {"kept": keep, "dropped": drop,
+                 "violations": [before, after],
+                 "n_elements_removed": int(degen.sum())}
+
+
+def split_edge_pair(
+    mesh: Fort14Mesh,
+    u: int,
+    v: int,
+    *,
+    min_angle: float = 30.0,
+    max_angle: float = 130.0,
+    max_area_change: float = 0.5,
+    relax_iters: int = 3,
+) -> tuple[Fort14Mesh, dict[str, Any]] | None:
+    """Split interior edge ``(u, v)`` at its midpoint (2 -> 4
+    elements) and relax the new node — the long-chord grading remedy
+    for C4 jumps. Gated on the C1/C2/C4/flip count of the affected
+    ring; returns ``None`` if the edge is not interior or the gate
+    fails.
+    """
+    from fvcom_mesh_tools.algorithms.perp_local import _tri_quality
+
+    u, v = int(u), int(v)
+    elements = mesh.elements
+    has_u = (elements == u).any(axis=1)
+    has_v = (elements == v).any(axis=1)
+    carriers = np.where(has_u & has_v)[0]
+    if carriers.size != 2:
+        return None
+
+    def _replace(seq, a, b):
+        return [b if x == a else x for x in seq]
+
+    w = mesh.n_nodes
+    nodes2 = np.vstack([
+        mesh.nodes, (0.5 * (mesh.nodes[u] + mesh.nodes[v]))[None, :],
+    ])
+    new_rows = []
+    for eid in carriers:
+        tri = [int(x) for x in elements[eid]]
+        new_rows.append((eid, _replace(tri, v, w), _replace(tri, u, w)))
+    elements2 = np.vstack([elements, np.zeros((2, 3), dtype=elements.dtype)])
+    for k2, (eid, tri_a, tri_b) in enumerate(new_rows):
+        elements2[eid] = tri_a
+        elements2[mesh.n_elements + k2] = tri_b
+
+    region = np.where((elements2 == u).any(axis=1)
+                      | (elements2 == v).any(axis=1)
+                      | (elements2 == w).any(axis=1))[0]
+
+    def _region_bad(nodes_arr):
+        tri = elements2[region]
+        mn, mx, twice = _tri_quality(nodes_arr[tri])
+        n_bad = int((mn < min_angle).sum() + (mx > max_angle).sum()
+                    + (twice <= 0).sum())
+        areas = 0.5 * np.abs(twice)
+        pos_of = {int(e): k3 for k3, e in enumerate(region)}
+        edges: dict[tuple[int, int], list[int]] = {}
+        for k3, e in enumerate(region):
+            a, b, c = (int(x) for x in elements2[e])
+            for p_, q_ in ((a, b), (b, c), (c, a)):
+                edges.setdefault((min(p_, q_), max(p_, q_)), []).append(int(e))
+        for pair in edges.values():
+            if len(pair) == 2:
+                a1, a2 = areas[pos_of[pair[0]]], areas[pos_of[pair[1]]]
+                hi = max(a1, a2)
+                if hi > 0 and (hi - min(a1, a2)) / hi > max_area_change:
+                    n_bad += 1
+        return n_bad
+
+    # Pre-split baseline on the same region topology is not defined;
+    # gate against the PRE-EDIT ring of (u, v) instead.
+    ring0 = np.where(has_u | has_v)[0]
+    tri0 = elements[ring0]
+    mn0, mx0, twice0 = _tri_quality(mesh.nodes[tri0])
+    before = int((mn0 < min_angle).sum() + (mx0 > max_angle).sum()
+                 + (twice0 <= 0).sum())
+    areas0 = 0.5 * np.abs(twice0)
+    pos0 = {int(e): k3 for k3, e in enumerate(ring0)}
+    edges0: dict[tuple[int, int], list[int]] = {}
+    for k3, e in enumerate(ring0):
+        a, b, c = (int(x) for x in elements[e])
+        for p_, q_ in ((a, b), (b, c), (c, a)):
+            edges0.setdefault((min(p_, q_), max(p_, q_)), []).append(int(e))
+    for pair in edges0.values():
+        if len(pair) == 2:
+            a1, a2 = areas0[pos0[pair[0]]], areas0[pos0[pair[1]]]
+            hi = max(a1, a2)
+            if hi > 0 and (hi - min(a1, a2)) / hi > max_area_change:
+                before += 1
+
+    # Gated centroid relax of the new node.
+    nbr = set()
+    for e in region:
+        tri = elements2[e]
+        if w in tri:
+            nbr.update(int(x) for x in tri if x != w)
+    best_bad = _region_bad(nodes2)
+    for _ in range(relax_iters):
+        old_pos = nodes2[w].copy()
+        nodes2[w] = nodes2[sorted(nbr)].mean(axis=0)
+        bad = _region_bad(nodes2)
+        if bad > best_bad:
+            nodes2[w] = old_pos
+            break
+        best_bad = bad
+
+    if best_bad >= before:
+        return None
+    depths2 = np.concatenate([
+        mesh.depths, [0.5 * (mesh.depths[u] + mesh.depths[v])],
+    ])
+    out = Fort14Mesh(
+        title=mesh.title, nodes=nodes2, depths=depths2,
+        elements=elements2,
+        open_boundaries=[s.copy() for s in mesh.open_boundaries],
+        land_boundaries=[(ib, s.copy())
+                         for ib, s in mesh.land_boundaries],
+    )
+    return out, {"new_node": int(w), "violations": [before, best_bad]}
