@@ -169,6 +169,13 @@ def build_parser() -> argparse.ArgumentParser:
              "faithfully while elements stay at hmin.",
     )
     p.add_argument(
+        "--om-enforce-hmin-floor", action="store_true",
+        help="[oceanmesh] Clamp the feature sizing grid at --hmin "
+             "(its native min_edge_length argument is not a floor). "
+             "Combine with --om-shoreline-h0-m for boundary nodes "
+             "spaced at hmin ON the detailed coastline.",
+    )
+    p.add_argument(
         "--om-minimum-area-mult", type=float, default=4.0,
         help=(
             "[oceanmesh] minimum_area_mult forwarded to om.Shoreline "
@@ -487,6 +494,7 @@ def main(argv: list[str] | None = None) -> int:
             high_fidelity=args.om_high_fidelity,
             high_fidelity_lines=args.om_high_fidelity_lines,
             shoreline_h0_m=args.om_shoreline_h0_m,
+            enforce_hmin_floor=args.om_enforce_hmin_floor,
             use_wavelength_sizing=args.om_wavelength_sizing,
             wavelength_period_s=args.om_wavelength_period,
             wavelength_grid_spacing=args.om_wavelength_grid_spacing,

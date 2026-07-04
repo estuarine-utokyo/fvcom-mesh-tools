@@ -242,6 +242,7 @@ def build(
     high_fidelity: bool = False,
     high_fidelity_lines: Path | None = None,
     shoreline_h0_m: float | None = None,
+    enforce_hmin_floor: bool = False,
     log: Callable[[str], None] = print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a mesh with oceanmesh + DistMesh.
@@ -378,6 +379,20 @@ def build(
         edge_feat = om.feature_sizing_function(
             shore, sdf, max_edge_length=hmax_deg, crs=4326,
         )
+        if enforce_hmin_floor:
+            # feature_sizing has no lower bound (its min_edge_length
+            # argument is NOT a floor — passing hmin there collapsed
+            # the mesh in PoC #65), so nearshore sizes fall to
+            # ~hmin/4 and boundary vertices pack at that scale.
+            # Clamping the grid VALUES afterwards is the safe floor:
+            # with a detailed domain (shoreline_h0_m) the boundary
+            # vertices then space at hmin ON the detailed line.
+            n_below = int((edge_feat.values < hmin_deg).sum())
+            edge_feat.values = np.maximum(edge_feat.values, hmin_deg)
+            log(
+                f"[oceanmesh] hmin floor: raised {n_below:,} "
+                f"feature-sizing cells to {hmin_deg:.6f} deg"
+            )
         edge_components = [edge_feat]
         if use_bathymetric_gradient:
             log("[oceanmesh] bathymetric_gradient_sizing_function ...")
