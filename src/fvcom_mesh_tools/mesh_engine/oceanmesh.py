@@ -243,6 +243,7 @@ def build(
     high_fidelity_lines: Path | None = None,
     shoreline_h0_m: float | None = None,
     enforce_hmin_floor: bool = False,
+    constrain_boundary: bool = False,
     log: Callable[[str], None] = print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a mesh with oceanmesh + DistMesh.
@@ -445,7 +446,52 @@ def build(
             )
 
         pfix = None
-        if high_fidelity_lines is not None:
+        egfix = None
+        if constrain_boundary:
+            # OM2D-parity: the shoreline's own polylines (h0-detail)
+            # resampled at local h become pfix + CONSTRAINED EDGE
+            # chains (egfix) — the boundary of the triangulation IS
+            # the shoreline, no cleanup retreat, no post-hoc snap.
+            pfix, egfix = om.shoreline_to_fixed_points(
+                shore, edge, return_edges=True,
+            )
+            log(
+                f"[oceanmesh] constrained boundary: {len(pfix):,} "
+                f"fixed points, {len(egfix):,} fixed edges"
+            )
+            if high_fidelity_lines is not None:
+                # Extra interior seed lines (e.g. water skeleton):
+                # points only, no edge constraints.
+                import geopandas as gpd
+
+                gdf = gpd.read_file(high_fidelity_lines)
+                raw_lines = []
+                for geom in gdf.geometry:
+                    if geom is None or geom.is_empty:
+                        continue
+                    boundary = (
+                        geom.boundary
+                        if geom.geom_type.endswith("Polygon") else geom
+                    )
+                    geoms = (
+                        boundary.geoms
+                        if hasattr(boundary, "geoms") else [boundary]
+                    )
+                    for g in geoms:
+                        raw_lines.append(
+                            np.asarray(g.coords, dtype=float)
+                        )
+                seed_pts = om.polylines_to_fixed_points(raw_lines, edge)
+                if len(seed_pts):
+                    pfix = np.vstack([pfix, seed_pts])
+                log(
+                    f"[oceanmesh] + {len(seed_pts):,} interior seed "
+                    "points (no edge constraints)"
+                )
+            if len(pfix) == 0:
+                pfix = None
+                egfix = None
+        elif high_fidelity_lines is not None:
             # Constrain to the RAW (unsimplified) vectors: Shoreline's
             # mainland/inner are h0-simplified, so shore-derived pfix
             # cannot beat the simplification floor (PoC #61: ~50 m at
@@ -488,6 +534,7 @@ def build(
         log(f"[oceanmesh] generate_mesh (max_iter={max_iter}, seed={seed}) ...")
         points, cells = om.generate_mesh(
             sdf, edge, max_iter=max_iter, seed=seed, pfix=pfix,
+            egfix=egfix,
         )
         log(f"[oceanmesh] raw output: NP={points.shape[0]:,} NE={cells.shape[0]:,}")
 

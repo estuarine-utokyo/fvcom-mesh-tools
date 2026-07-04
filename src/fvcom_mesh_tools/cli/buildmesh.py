@@ -169,6 +169,14 @@ def build_parser() -> argparse.ArgumentParser:
              "faithfully while elements stay at hmin.",
     )
     p.add_argument(
+        "--om-constrain-boundary", action="store_true",
+        help="[oceanmesh] Fix the shoreline into the triangulation as "
+             "constrained-edge chains (CGAL CDT): the mesh boundary IS "
+             "the shoreline — no cleanup retreat, no post-hoc "
+             "snapping. Combine with --om-high-fidelity-lines for "
+             "extra interior seed points (e.g. water skeleton).",
+    )
+    p.add_argument(
         "--om-enforce-hmin-floor", action="store_true",
         help="[oceanmesh] Clamp the feature sizing grid at --hmin "
              "(its native min_edge_length argument is not a floor). "
@@ -495,6 +503,7 @@ def main(argv: list[str] | None = None) -> int:
             high_fidelity_lines=args.om_high_fidelity_lines,
             shoreline_h0_m=args.om_shoreline_h0_m,
             enforce_hmin_floor=args.om_enforce_hmin_floor,
+            constrain_boundary=args.om_constrain_boundary,
             use_wavelength_sizing=args.om_wavelength_sizing,
             wavelength_period_s=args.om_wavelength_period,
             wavelength_grid_spacing=args.om_wavelength_grid_spacing,
