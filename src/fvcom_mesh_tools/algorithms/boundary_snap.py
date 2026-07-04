@@ -427,7 +427,10 @@ def snap_boundary_chains(
                     cur_fails = nf
             # On-line slide: an already-snapped neighbour may move
             # ALONG its coastline to even out spacing (the SMS "drag
-            # the adjacent boundary node along the coast" move).
+            # the adjacent boundary node along the coast" move). The
+            # gate must cover the slid node's FULL incident ring —
+            # judging only the chain patch let outside elements flip
+            # (PoC #73: 2 CCW failures).
             for w in slidable:
                 line = line_of.get(w)
                 if line is None:
@@ -435,17 +438,20 @@ def snap_boundary_chains(
                 nb = list(vtx_nbr.get(w, ()))
                 if len(nb) < 2:
                     continue
+                ring_w = np.unique(np.concatenate(
+                    [ring_e, n2e.get(w, np.empty(0, dtype=np.int64))]
+                ))
+                before_w = _patch_fails(ring_w)
                 old_pos = nodes[w].copy()
                 target = nodes[nb].mean(axis=0)
                 q = line.interpolate(line.project(
                     shapely.Point(target[0], target[1])
                 ))
                 nodes[w] = (q.x, q.y)
-                nf = _patch_fails(ring_e)
-                if nf > cur_fails:
+                if _patch_fails(ring_w) > before_w:
                     nodes[w] = old_pos
                 else:
-                    cur_fails = nf
+                    cur_fails = _patch_fails(ring_e)
 
         after = _patch_fails(ring_e)
         if after <= before:
