@@ -376,8 +376,14 @@ def snap_boundary_chains(
                    + (twice <= 0).sum())
 
     n_acc = n_def = 0
+    n_nodes_snapped = 0
     deferred_chains: list[list[int]] = []
-    for chain in chains:
+
+    def _attempt(chain: list[int]) -> None:
+        """Snap+relax+judge ``chain``; on failure bisect — the SMS
+        editor's narrowing move: keep the good halves, isolate the
+        troublesome run down to a single node before deferring it."""
+        nonlocal n_acc, n_def, n_nodes_snapped
         ring_e = np.unique(np.concatenate(
             [n2e[v] for v in chain if v in n2e]
         ))
@@ -385,7 +391,7 @@ def snap_boundary_chains(
         interior = [int(w) for w in patch_nodes
                     if int(w) not in bset and int(w) not in excl]
         saved = {int(w): nodes[int(w)].copy()
-                 for w in np.concatenate([chain, interior]).astype(int)}
+                 for w in list(chain) + interior}
         before = _patch_fails(ring_e)
 
         for v in chain:
@@ -419,11 +425,20 @@ def snap_boundary_chains(
         after = _patch_fails(ring_e)
         if after <= before:
             n_acc += 1
-        else:
-            for w, pos in saved.items():
-                nodes[w] = pos
+            n_nodes_snapped += len(chain)
+            return
+        for w, pos in saved.items():
+            nodes[w] = pos
+        if len(chain) == 1:
             n_def += 1
-            deferred_chains.append([int(v) for v in chain])
+            deferred_chains.append([int(chain[0])])
+            return
+        mid = len(chain) // 2
+        _attempt(chain[:mid])
+        _attempt(chain[mid:])
+
+    for chain in chains:
+        _attempt([int(v) for v in chain])
 
     out = Fort14Mesh(
         title=mesh.title, nodes=nodes, depths=mesh.depths,
@@ -438,6 +453,7 @@ def snap_boundary_chains(
         "n_chains": len(chains),
         "n_chains_accepted": n_acc,
         "n_chains_deferred": n_def,
+        "n_nodes_snapped": n_nodes_snapped,
         "deferred_chains": deferred_chains,
         "n_far": int(sum(1 for v in bnodes
                          if int(v) not in excl
