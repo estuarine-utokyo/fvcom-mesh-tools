@@ -1,5 +1,12 @@
 # The gate-passing pipeline — from Phase-H endpoint to FVCOM-ready inputs
 
+> **Superseded (2026-07-05):** this documents the v1-era
+> pipeline (post-hoc OBC arc + local perp fixing on the
+> fine-coastal mesh). The current architecture — CDT-constrained
+> boundary, land-opening preprocess, skeleton seeding, session
+> cleanup — is described in `DESIGN_HISTORY.md`.
+
+
 Status snapshot 2026-07-04. This documents the PoC #59 chain that took
 the Phase-H quality endpoint (`outputs/58l_chained.14`, the "77 → 1"
 mesh) to the first mesh that passes **every** `fmesh-mesh-qa` gate,
