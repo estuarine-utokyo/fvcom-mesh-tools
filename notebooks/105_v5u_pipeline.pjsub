@@ -2,7 +2,7 @@
 #PJM -L rscgrp=a-batch
 #PJM -L vnode=1
 #PJM -L vnode-core=4
-#PJM -L elapse=03:00:00
+#PJM -L elapse=00:25:00
 #PJM -j
 #PJM -X
 #PJM -N fvcm-poc105
