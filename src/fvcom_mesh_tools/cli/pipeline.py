@@ -148,12 +148,109 @@ def _stage_finish(recipe, out_dir, artifacts, log):
     return {"finished_mesh": str(out14), "finish_info": finfo}
 
 
+def _stage_obc(recipe, out_dir, artifacts, log):
+    from fvcom_mesh_tools.io import read_fort14, write_fort14
+    from fvcom_mesh_tools.obc_tools import assign_west_south_obc
+
+    cfg = recipe.get("obc", {}) or {}
+    src = Path(artifacts.get("finished_mesh") or artifacts["raw_mesh"])
+    mesh = read_fort14(src)
+    mesh, info = assign_west_south_obc(
+        mesh,
+        utm_epsg=int(cfg.get("utm_epsg",
+                             (recipe.get("finish") or {})
+                             .get("utm_epsg", 32654))),
+        band_deg=float(cfg.get("band_deg", 0.012)),
+        trim=int(cfg.get("trim", 1)),
+        max_move_m=float(cfg.get("max_move_m", 600.0)),
+        min_depth_m=cfg.get("min_depth_m", 2.0),
+        log=log,
+    )
+    out14 = out_dir / f"{recipe['name']}_obc.14"
+    write_fort14(mesh, out14)
+    return {"obc_mesh": str(out14), "obc_info": info}
+
+
+def _stage_siteops(recipe, out_dir, artifacts, log):
+    import json as _json
+
+    from fvcom_mesh_tools.algorithms.boundary_snap import load_polylines
+    from fvcom_mesh_tools.io import read_fort14, write_fort14
+    from fvcom_mesh_tools.site_session import apply_site_operators
+
+    cfg = recipe.get("siteops", {}) or {}
+    src = Path(artifacts.get("obc_mesh")
+               or artifacts.get("finished_mesh")
+               or artifacts["raw_mesh"])
+    mesh = read_fort14(src)
+    utm = int((recipe.get("finish") or {}).get("utm_epsg", 32654))
+    shoreline = Path(artifacts.get("land_opened")
+                     or recipe["build"]["coastline"])
+    lines = load_polylines(shoreline, to_crs=utm)
+    mesh, edit_log = apply_site_operators(
+        mesh, lines, passes=int(cfg.get("passes", 2)), log=log,
+    )
+    from fvcom_mesh_tools.mesh_clean import compact_nodes
+
+    mesh, _ = compact_nodes(mesh)
+    out14 = out_dir / f"{recipe['name']}_siteops.14"
+    write_fort14(mesh, out14)
+    (out_dir / "siteops_edit_log.json").write_text(
+        _json.dumps(edit_log, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    ops = {}
+    for r in edit_log:
+        ops[r["op"]] = ops.get(r["op"], 0) + 1
+    log(f"[pipeline] siteops: {ops}")
+    return {"siteops_mesh": str(out14), "siteops_ops": ops}
+
+
+def _stage_export(recipe, out_dir, artifacts, log):
+    import numpy as np
+    from pyproj import Transformer
+
+    from fvcom_mesh_tools.io import read_fort14
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
+
+    cfg = recipe.get("export", {}) or {}
+    src = Path(artifacts.get("siteops_mesh")
+               or artifacts.get("obc_mesh")
+               or artifacts["raw_mesh"])
+    mesh = read_fort14(src)
+    if not mesh.open_boundaries or not len(mesh.open_boundaries[0]):
+        log("[pipeline] export SKIPPED: mesh has no open boundary")
+        return {}
+    utm = int((recipe.get("finish") or {}).get("utm_epsg", 32654))
+    tr = Transformer.from_crs(f"EPSG:{utm}", "EPSG:4326",
+                              always_xy=True)
+    _lon, lat = tr.transform(mesh.nodes[:, 0], mesh.nodes[:, 1])
+    obc = mesh.open_boundaries[0]
+    sponge = [
+        (int(v), float(cfg.get("sponge_radius_m", 3000.0)),
+         float(cfg.get("sponge_coeff", 0.001)))
+        for v in obc
+    ]
+    case_dir = Path(cfg.get("case_dir", out_dir / "fvcom_inputs"))
+    written = export_fvcom_case(
+        mesh, case_dir, cfg.get("casename", recipe["name"]),
+        obc_type=int(cfg.get("obc_type", 1)),
+        cor=lat, sponge=sponge,
+    )
+    for k, pth in written.items():
+        log(f"[pipeline] export {k}: {pth}")
+    del np
+    return {"case_dir": str(case_dir)}
+
+
 def _stage_qa(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io import read_fort14
     from fvcom_mesh_tools.qa import format_report, run_qa
 
     cfg = recipe.get("qa", {}) or {}
-    target = Path(artifacts.get("finished_mesh")
+    target = Path(artifacts.get("siteops_mesh")
+                  or artifacts.get("obc_mesh")
+                  or artifacts.get("finished_mesh")
                   or artifacts["raw_mesh"])
     mesh = read_fort14(target)
     report = run_qa(mesh, name=target.name, path=target,
@@ -184,7 +281,8 @@ def _stage_figures(recipe, out_dir, artifacts, log):
     fig_dir = out_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
     written = []
-    for key in ("raw_mesh", "finished_mesh"):
+    for key in ("raw_mesh", "finished_mesh", "obc_mesh",
+                "siteops_mesh"):
         path = artifacts.get(key)
         if not path or not Path(path).exists():
             continue
@@ -212,7 +310,10 @@ STAGES = [
     ("prep", _stage_prep),
     ("build", _stage_build),
     ("finish", _stage_finish),
+    ("obc", _stage_obc),
+    ("siteops", _stage_siteops),
     ("qa", _stage_qa),
+    ("export", _stage_export),
     ("figures", _stage_figures),
 ]
 

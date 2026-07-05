@@ -31,8 +31,23 @@ finish:
   optimize_budget_s: 600     # SMS cadence: 10 minutes, then stop
   weld_tol_m: 2.0
 
+obc:
+  band_deg: 0.012
+  trim: 1
+  max_move_m: 600.0
+  min_depth_m: 2.0       # clip AFTER boundary work; coastline unmoved
+
+siteops:
+  passes: 2
+
 qa:
   lang: ja
+
+export:
+  casename: tokyo_bay_v5
+  obc_type: 1
+  sponge_radius_m: 3000.0   # forced runs REQUIRE a sponge (v2 lesson)
+  sponge_coeff: 0.001
 
 figures:
   coast_bbox: [139.4, 34.9, 140.4, 35.85]
