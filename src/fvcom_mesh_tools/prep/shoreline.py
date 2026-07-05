@@ -163,37 +163,29 @@ def cut_domain_at_obc_line(
     south of the line.
     """
     import geopandas as gpd
-    import numpy as np
     from shapely import make_valid
-    from shapely.geometry import Polygon
+    from shapely.geometry import LineString, Point
 
-    # Swept-band wall: the arc extruded ~30 km along its seaward
-    # normal. Unlike a bbox-corner ring, this keeps coastal waters
-    # BEYOND the junctions (e.g. the Boso west coast north of the
-    # southern junction, which the reference mesh retains) — any
-    # water remnant seaward of the band is disconnected from the bay
-    # and dropped by keep_components later.
+    # Swept-band wall via a SINGLE-SIDED buffer of the OBC line: it
+    # keeps coastal waters beyond the junctions (unlike a bbox-corner
+    # ring) and, unlike a hand-rolled normal offset, handles the
+    # curved Bezier tails without self-intersection (the manual
+    # offset self-intersected there; make_valid dropped the tail
+    # piece and a coastal cove survived at the Miura junction — the
+    # review9/10 W-notch). Side selection: the larger candidate that
+    # does not contain the bay centre.
     lon_min, lat_min, lon_max, lat_max = bbox
-    pts = np.asarray(obc_line, dtype=float)
-    seg = np.diff(pts, axis=0)
-    nrm = np.stack([-seg[:, 1], seg[:, 0]], axis=1)
-    nrm = nrm / np.maximum(
-        np.linalg.norm(nrm, axis=1, keepdims=True), 1e-12,
-    )
-    vnorm = np.vstack([nrm[:1], 0.5 * (nrm[:-1] + nrm[1:]), nrm[-1:]])
-    vnorm = vnorm / np.maximum(
-        np.linalg.norm(vnorm, axis=1, keepdims=True), 1e-12,
-    )
-    center = np.asarray([
-        0.5 * (lon_min + lon_max), 0.5 * (lat_min + lat_max),
-    ])
-    mid = pts[len(pts) // 2]
-    if np.dot(center - mid, vnorm[len(pts) // 2]) > 0:
-        vnorm = -vnorm  # normals must point AWAY from the bay
-    band_deg = 30000.0 / 91000.0  # ~30 km in degrees (coarse is fine)
-    outer = pts + vnorm * band_deg
-    ring = list(map(tuple, pts)) + list(map(tuple, outer[::-1]))
-    wall = make_valid(Polygon(ring))
+    line = LineString([(float(q[0]), float(q[1])) for q in obc_line])
+    band_deg = 30000.0 / 91000.0  # ~30 km (aspect distortion is fine)
+    center = Point(0.5 * (lon_min + lon_max), 0.5 * (lat_min + lat_max))
+    cands = [
+        make_valid(line.buffer(s, single_sided=True))
+        for s in (band_deg, -band_deg)
+    ]
+    cands = [c for c in cands if not c.contains(center)]
+    if not cands:
+        raise ValueError("OBC wall: both buffer sides contain the bay")
+    wall = max(cands, key=lambda c: c.area)
     gdf = land_gdf
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
