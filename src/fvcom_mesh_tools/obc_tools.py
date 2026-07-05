@@ -84,7 +84,20 @@ def assign_west_south_obc(
         arc0 = LineString(list(zip(ax, ay)))
         pts0 = shapely.points(mesh.nodes[ring, 0], mesh.nodes[ring, 1])
         d_arc = shapely.distance(pts0, arc0)
-        mask = d_arc < max(2.0 * max_move_m, 1000.0)
+        # The wall's arc edge is CDT-constrained, so true arc nodes
+        # sit within lattice noise of the line; a wide corridor
+        # (2*max_move) swallowed coastline nodes near the junctions
+        # and drew a staircase OBC up the Miura shore. Require BOTH
+        # a tight corridor and an interior projection (clamped-end
+        # projections = coast beyond the junction).
+        s_arc = np.array([
+            arc0.project(shapely.Point(mesh.nodes[v, 0],
+                                       mesh.nodes[v, 1]))
+            for v in ring
+        ])
+        eps = 30.0
+        mask = ((d_arc < 150.0)
+                & (s_arc > eps) & (s_arc < arc0.length - eps))
         south_b = mask
         west_b = np.zeros_like(mask)
     elif shoreline_shp is not None:
