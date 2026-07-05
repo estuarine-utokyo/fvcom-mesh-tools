@@ -363,6 +363,82 @@ def assign_west_south_obc(
                       & (mesh_in.elements == v2).any(axis=1))
         return bad_p
 
+    def _junction_closure(mesh_in):
+        """Extend OBC membership along the outer ring to the coast
+        (aftercare deletions retreat the tail; unmarked boundary
+        edges across the water strip act as a WALL in FVCOM)."""
+        if obc_line_lonlat is None:
+            return mesh_in, 0
+        import shapely
+        from shapely.geometry import LineString
+
+        to_m3 = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
+                                     always_xy=True)
+        cx, cy = to_m3.transform(
+            [q[0] for q in obc_line_lonlat],
+            [q[1] for q in obc_line_lonlat],
+        )
+        arc3 = LineString(list(zip(cx, cy)))
+        topo3 = _edge_topology(mesh_in.elements, mesh_in.n_nodes)
+        buv = topo3.uv[topo3.counts == 1]
+        nbr: dict[int, list[int]] = {}
+        for u4, v4 in buv:
+            nbr.setdefault(int(u4), []).append(int(v4))
+            nbr.setdefault(int(v4), []).append(int(u4))
+
+        def _ring_ok3(v2):
+            we = np.where((mesh_in.elements == v2).any(axis=1))[0]
+            tri = mesh_in.elements[we]
+            p0 = mesh_in.nodes[tri[:, 0]]
+            p1 = mesh_in.nodes[tri[:, 1]]
+            p2 = mesh_in.nodes[tri[:, 2]]
+            a2 = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+                  - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0]))
+            return bool((a2 > 0).all())
+
+        obc_list = [int(v) for v in mesh_in.open_boundaries[0]]
+        n_closed = 0
+        for end_i in (0, -1):
+            if len(obc_list) < 2:
+                break
+            cur = obc_list[end_i]
+            prev = obc_list[end_i + 1 if end_i == 0 else end_i - 1]
+            for _ in range(12):
+                nxt = [w for w in nbr.get(cur, [])
+                       if w != prev and w not in obc_list]
+                if len(nxt) != 1:
+                    break
+                w = nxt[0]
+                pt = shapely.Point(mesh_in.nodes[w, 0],
+                                   mesh_in.nodes[w, 1])
+                d = float(shapely.distance(pt, arc3))
+                s = float(arc3.project(pt))
+                interior = 30.0 < s < arc3.length - 30.0
+                if not ((interior and d <= max_move_m)
+                        or (not interior and d <= 120.0)):
+                    break
+                q = arc3.interpolate(s)
+                old_pos = mesh_in.nodes[w].copy()
+                mesh_in.nodes[w] = (q.x, q.y)
+                if not _ring_ok3(w):
+                    mesh_in.nodes[w] = old_pos
+                if end_i == 0:
+                    obc_list.insert(0, w)
+                else:
+                    obc_list.append(w)
+                snapped_keys.add(_key(mesh_in.nodes[w]))
+                snapped_ids.add(int(w))
+                n_closed += 1
+                prev, cur = cur, w
+        if n_closed:
+            bnd = mesh_in.open_boundaries
+            bnd[0] = np.array(obc_list, dtype=bnd[0].dtype)
+        return mesh_in, n_closed
+
+    mesh, n_cl1 = _junction_closure(mesh)
+    if n_cl1:
+        log(f"[obc] junction closure (pre-aftercare): +{n_cl1}")
+
     for _round in range(8):
         flags = fvcom_boundary_element_flags(mesh)
         # Pinch nodes break FVCOM's own NBE pairing at setup
@@ -381,76 +457,10 @@ def assign_west_south_obc(
     log(f"[obc] structural aftercare: deleted {n_deleted}, "
         f"n_obc={info['n_obc']}")
 
-    if obc_line_lonlat is not None:
-        # Junction closure: aftercare deletions retreat the OBC tail
-        # from the coast, leaving unmarked boundary edges across the
-        # water strip (an artificial WALL in FVCOM). Walk the outer
-        # ring outward from both ends of the OBC run, re-adding and
-        # snapping nodes that stay in the line's corridor; accept
-        # clamped-end projections only very close to the line (the
-        # perpendicular junction makes the coast leave the corridor
-        # within a node or two).
-        import shapely
-        from shapely.geometry import LineString
-
-        to_m3 = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
-                                     always_xy=True)
-        cx, cy = to_m3.transform(
-            [q[0] for q in obc_line_lonlat],
-            [q[1] for q in obc_line_lonlat],
-        )
-        arc3 = LineString(list(zip(cx, cy)))
-        topo3 = _edge_topology(mesh.elements, mesh.n_nodes)
-        buv = topo3.uv[topo3.counts == 1]
-        nbr: dict[int, list[int]] = {}
-        for u4, v4 in buv:
-            nbr.setdefault(int(u4), []).append(int(v4))
-            nbr.setdefault(int(v4), []).append(int(u4))
-
-        def _ring_ok3(v2):
-            we = np.where((mesh.elements == v2).any(axis=1))[0]
-            tri = mesh.elements[we]
-            p0, p1, p2 = (mesh.nodes[tri[:, 0]], mesh.nodes[tri[:, 1]],
-                          mesh.nodes[tri[:, 2]])
-            a2 = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
-                  - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0]))
-            return bool((a2 > 0).all())
-
-        obc_list = [int(v) for v in mesh.open_boundaries[0]]
-        n_closed = 0
-        for end_i in (0, -1):
-            cur = obc_list[end_i]
-            prev = obc_list[end_i + 1 if end_i == 0 else end_i - 1]
-            for _ in range(12):
-                nxt = [w for w in nbr.get(cur, [])
-                       if w != prev and w not in obc_list]
-                if len(nxt) != 1:
-                    break
-                w = nxt[0]
-                pt = shapely.Point(mesh.nodes[w, 0], mesh.nodes[w, 1])
-                d = float(shapely.distance(pt, arc3))
-                s = float(arc3.project(pt))
-                interior = 30.0 < s < arc3.length - 30.0
-                if not ((interior and d <= max_move_m)
-                        or (not interior and d <= 120.0)):
-                    break
-                q = arc3.interpolate(s)
-                old_pos = mesh.nodes[w].copy()
-                mesh.nodes[w] = (q.x, q.y)
-                if not _ring_ok3(w):
-                    mesh.nodes[w] = old_pos
-                if end_i == 0:
-                    obc_list.insert(0, w)
-                else:
-                    obc_list.append(w)
-                n_closed += 1
-                prev, cur = cur, w
-        if n_closed:
-            bnd = mesh.open_boundaries
-            bnd[0] = np.array(obc_list, dtype=bnd[0].dtype)
-            info["junction_closure"] = int(n_closed)
-            log(f"[obc] junction closure: +{n_closed} nodes")
-            info["n_obc"] = int(mesh.open_boundaries[0].size)
+    mesh, n_cl2 = _junction_closure(mesh)
+    if n_cl2:
+        log(f"[obc] junction closure (post-aftercare): +{n_cl2}")
+        info["n_obc"] = int(mesh.open_boundaries[0].size)
 
     mesh, pinfo = align_open_boundary_local(
         mesh, seed=perp_seed, max_outer=1,
