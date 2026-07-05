@@ -134,10 +134,12 @@ def assign_west_south_obc(
         parts = [arc_nodes[west_b[arc_pos]],
                  arc_nodes[south_b[arc_pos] & ~west_b[arc_pos]]]
         labels = ["west", "south"]
-    ring = np.roll(ring, -(a % len(ring)))
     open_len = (b - a)
 
     info: dict[str, Any] = {"n_arc": int(open_len + 1)}
+
+    # --- SNAP ONCE: nodes move only here. -----------------------------
+    snapped: set[int] = set()
     for run_nodes, label in zip(parts, labels):
         if run_nodes.size >= 2:
             p0 = tuple(mesh.nodes[run_nodes[0]])
@@ -146,50 +148,74 @@ def assign_west_south_obc(
                 mesh, [int(v) for v in run_nodes], p0, p1,
                 max_move=max_move_m,
             )
+            snapped.update(int(v) for v in run_nodes)
             info[f"line_{label}"] = li
             log(f"[obc] {label} line: {li}")
 
-    lo, hi = trim, open_len - trim
-    open_seg = ring[lo:hi + 1].copy()
-    land_seg = np.concatenate([ring[hi:], ring[:lo + 1]])
-    islands = [lp[:-1].copy() for lp in loops if lp is not outer]
-    mesh = Fort14Mesh(
-        title=mesh.title, nodes=mesh.nodes, depths=mesh.depths,
-        elements=mesh.elements,
-        open_boundaries=[open_seg],
-        land_boundaries=[(land_ibtype, land_seg)]
-        + [(land_ibtype, i) for i in islands],
-    )
-    info["n_obc"] = int(open_seg.size)
-
-    # Bounded structural cleanup: R4 / fake-open boundary elements
-    # created by the fresh junction trim (FVCOM-fatal) are deleted
-    # and the boundary lists rebuilt; at most ``8`` rounds, strictly
-    # decreasing (one-shot ladder, not a convergence loop).
+    # --- Assignment + bounded structural aftercare: deletions and
+    # boundary-list rebuilds ONLY — no further node motion (a
+    # re-snapping recursion here dragged nodes between shifting
+    # chords and wrecked quality; see the #98 v3 log). -----------------
     from fvcom_mesh_tools.mesh_clean import keep_components
     from fvcom_mesh_tools.mesh_clean import remove_elements as _rm
     from fvcom_mesh_tools.qa import fvcom_boundary_element_flags
 
+    def _rebuild(mesh_in: Fort14Mesh) -> Fort14Mesh:
+        loops2 = chain_edges_to_loops(
+            boundary_edges_from_tris(mesh_in.elements)
+        )
+        outer2 = outer_loop(loops2, mesh_in.nodes)
+        ring2 = outer2[:-1]
+        member = np.array([int(v) in snapped for v in ring2])
+        idx2 = np.where(member)[0]
+        if idx2.size < 4:
+            raise ValueError("open-sea run lost during cleanup")
+        runs2 = []
+        s2 = p2 = int(idx2[0])
+        for q2 in idx2[1:]:
+            q2 = int(q2)
+            if q2 == p2 + 1:
+                p2 = q2
+            else:
+                runs2.append((s2, p2))
+                s2 = p2 = q2
+        runs2.append((s2, p2))
+        if len(runs2) > 1 and runs2[0][0] == 0 \
+                and runs2[-1][1] == len(ring2) - 1:
+            s0, e0 = runs2.pop(0)
+            s1, e1 = runs2.pop(-1)
+            runs2.append((s1 - len(ring2), e0))
+        a2, b2 = max(runs2, key=lambda r: r[1] - r[0])
+        ring2 = np.roll(ring2, -(a2 % len(ring2)))
+        open_len2 = b2 - a2
+        lo2, hi2 = trim, open_len2 - trim
+        open_seg2 = ring2[lo2:hi2 + 1].copy()
+        land_seg2 = np.concatenate([ring2[hi2:], ring2[:lo2 + 1]])
+        islands2 = [lp[:-1].copy() for lp in loops2
+                    if lp is not outer2]
+        return Fort14Mesh(
+            title=mesh_in.title, nodes=mesh_in.nodes,
+            depths=mesh_in.depths, elements=mesh_in.elements,
+            open_boundaries=[open_seg2],
+            land_boundaries=[(land_ibtype, land_seg2)]
+            + [(land_ibtype, i2) for i2 in islands2],
+        )
+
+    mesh = _rebuild(mesh)
+    n_deleted = 0
     for _round in range(8):
         flags = fvcom_boundary_element_flags(mesh)
         bad = flags["r4_mask"] | flags["fake_open_mask"]
         if not bad.any():
             break
+        n_deleted += int(bad.sum())
         mesh = _rm(mesh, ~bad)
         mesh, _ = keep_components(mesh)
-        return assign_west_south_obc(
-            mesh,
-            utm_epsg=utm_epsg,
-            band_deg=band_deg,
-            shoreline_shp=shoreline_shp,
-            coast_tol_m=coast_tol_m,
-            trim=trim,
-            max_move_m=max_move_m,
-            land_ibtype=land_ibtype,
-            perp_seed=perp_seed,
-            min_depth_m=min_depth_m,
-            log=log,
-        )
+        mesh = _rebuild(mesh)
+    info["n_structural_deleted"] = n_deleted
+    info["n_obc"] = int(mesh.open_boundaries[0].size)
+    log(f"[obc] structural aftercare: deleted {n_deleted}, "
+        f"n_obc={info['n_obc']}")
 
     mesh, pinfo = align_open_boundary_local(
         mesh, seed=perp_seed, max_outer=1,
