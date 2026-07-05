@@ -435,9 +435,51 @@ def assign_west_south_obc(
             bnd[0] = np.array(obc_list, dtype=bnd[0].dtype)
         return mesh_in, n_closed
 
-    mesh, n_cl1 = _junction_closure(mesh)
-    if n_cl1:
-        log(f"[obc] junction closure (pre-aftercare): +{n_cl1}")
+    def _derive_arc_membership(mesh_in):
+        """Re-derive the OBC node list PURELY from geometry: outer-
+        ring nodes in the line corridor with interior projections
+        (plus near-line clamped ends), ordered by arc length.
+        Incremental closure walks + coordinate-keyed rebuilds go
+        stale as soon as siteops/polish move nodes (review23: list
+        collapsed 21 -> 8 and the tails to both coasts were left
+        unmarked = artificial walls)."""
+        if obc_line_lonlat is None:
+            return mesh_in, 0
+        import shapely
+        from shapely.geometry import LineString
+
+        to_m5 = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
+                                     always_xy=True)
+        ax5, ay5 = to_m5.transform(
+            [q[0] for q in obc_line_lonlat],
+            [q[1] for q in obc_line_lonlat],
+        )
+        arc5 = LineString(list(zip(ax5, ay5)))
+        topo5 = _edge_topology(mesh_in.elements, mesh_in.n_nodes)
+        ring5 = np.unique(topo5.uv[topo5.counts == 1])
+        pts5 = shapely.points(mesh_in.nodes[ring5, 0],
+                              mesh_in.nodes[ring5, 1])
+        d5 = shapely.distance(pts5, arc5)
+        s5 = np.array([
+            arc5.project(shapely.Point(*mesh_in.nodes[v]))
+            for v in ring5
+        ])
+        interior5 = (s5 > 30.0) & (s5 < arc5.length - 30.0)
+        keep5 = ((interior5 & (d5 <= max_move_m))
+                 | (~interior5 & (d5 <= 120.0)))
+        members = ring5[keep5][np.argsort(s5[keep5])]
+        if members.size < 2:
+            return mesh_in, 0
+        bnd5 = mesh_in.open_boundaries
+        bnd5[0] = members.astype(bnd5[0].dtype)
+        for v in members:
+            snapped_keys.add(_key(mesh_in.nodes[int(v)]))
+            snapped_ids.add(int(v))
+        return mesh_in, int(members.size)
+
+    mesh, n_m1 = _derive_arc_membership(mesh)
+    if n_m1:
+        log(f"[obc] arc membership (pre-aftercare): {n_m1} nodes")
 
     for _round in range(8):
         flags = fvcom_boundary_element_flags(mesh)
@@ -457,9 +499,9 @@ def assign_west_south_obc(
     log(f"[obc] structural aftercare: deleted {n_deleted}, "
         f"n_obc={info['n_obc']}")
 
-    mesh, n_cl2 = _junction_closure(mesh)
-    if n_cl2:
-        log(f"[obc] junction closure (post-aftercare): +{n_cl2}")
+    mesh, n_m2 = _derive_arc_membership(mesh)
+    if n_m2:
+        log(f"[obc] arc membership (post-aftercare): {n_m2} nodes")
         info["n_obc"] = int(mesh.open_boundaries[0].size)
 
     if obc_line_lonlat is not None:
