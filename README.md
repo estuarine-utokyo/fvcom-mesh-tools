@@ -18,6 +18,36 @@ high-quality FVCOM-ready unstructured meshes (`fort.14`), with a focus on:
 The package wraps several mature mesh tools behind a common backend interface
 rather than reimplementing meshing algorithms from scratch.
 
+## v5 pipeline (recipe-driven, one command)
+
+The end-to-end Tokyo Bay construction (see `docs/DESIGN_HISTORY.md`
+for the design rationale) runs from a single YAML recipe:
+
+```bash
+fmesh-pipeline recipes/tokyo_bay_v5.yaml
+# rerun a subset against stored artifacts:
+fmesh-pipeline recipes/tokyo_bay_v5.yaml --only polish,qa,figures
+```
+
+Stages (each runs at most once — no convergence loops):
+
+| Stage | What it does |
+|---|---|
+| `prep` | `fmesh-prep-shoreline`: OSM true-land (xcoast) -> LAND-opening (erase piers/breakwaters/islets thinner than the mesh scale, water connectivity preserved) + water-skeleton seed lines for narrow essential water |
+| `build` | `fmesh-buildmesh --om-constrain-boundary`: oceanmesh with the constrained-Delaunay boundary (this project's oceanmesh fork) — the mesh boundary lies ON the engineered shoreline at generation |
+| `finish` | constraint-respecting cleanup: cap-sliver deletion, weld, one budgeted projector-optimize |
+| `obc` | open-sea edge detection by distance-to-shoreline, exact snap onto straight OBC chords, junction trim, local perpendicularity fixer |
+| `siteops` | worst-first per-defect operators (equalize / collapse / split), gated, full edit log |
+| `polish` | one more bounded finish pass |
+| `qa` | the 24-check FVCOM acceptance gate (ja/en report; out-of-scope checks listable in the recipe) |
+| `export` | FVCOM case files incl. the mandatory OBC sponge |
+| `figures` | per-stage overview/zoom PNGs |
+
+`pipeline_provenance.json` records the recipe, git revision, artifact
+paths and per-stage wall times. Requires the oceanmesh fork with
+pfix/egfix support (see its README section 6.3) — install per its
+`environment.yml` (three commands, Intel oneAPI supported).
+
 ## Backend strategy
 
 | Role | Backend | License | How used |
