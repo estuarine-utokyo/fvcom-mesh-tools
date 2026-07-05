@@ -100,6 +100,11 @@ def _stage_build(recipe, out_dir, artifacts, log):
     argv = [
         dem, str(raw14),
         "--engine", cfg.get("engine", "oceanmesh"),
+    ]
+    prep_bbox = (recipe.get("prep", {}) or {}).get("bbox")
+    if prep_bbox:
+        argv += ["--region", *[str(v) for v in prep_bbox]]
+    argv += [
         "--coastline", str(coast),
         "--hmin", str(cfg["hmin_m"]),
         "--hmax", str(cfg.get("hmax_m", 1500.0)),

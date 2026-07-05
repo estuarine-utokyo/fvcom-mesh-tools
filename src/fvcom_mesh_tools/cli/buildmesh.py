@@ -261,6 +261,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--region", type=float, nargs=4, default=None,
+        metavar=("LON_MIN", "LAT_MIN", "LON_MAX", "LAT_MAX"),
+        help="Meshing region override. Default is the DEM extent — "
+             "which silently meshes water OUTSIDE the coastline "
+             "product's coverage and puts the open boundary on the "
+             "DEM rectangle (the v5s Sagami-trough OBC failure). "
+             "Always pass the shoreline-prep bbox.",
+    )
+    p.add_argument(
         "--bbox-tol-m", type=float, default=None,
         help=(
             "Distance tolerance for 'on the DEM bbox' open-boundary "
@@ -474,6 +483,13 @@ def main(argv: list[str] | None = None) -> int:
     from fvcom_mesh_tools.dem.bbox import read as read_dem_bbox
 
     xmin, ymin, xmax, ymax = read_dem_bbox(args.dem)
+    if args.region is not None:
+        rx0, ry0, rx1, ry1 = args.region
+        xmin, ymin = max(xmin, rx0), max(ymin, ry0)
+        xmax, ymax = min(xmax, rx1), min(ymax, ry1)
+        print(f"[buildmesh] region override: "
+              f"({xmin:.4f},{ymin:.4f})-({xmax:.4f},{ymax:.4f})",
+              flush=True)
     log(f"[buildmesh] DEM bbox: x[{xmin:.6f}, {xmax:.6f}]  y[{ymin:.6f}, {ymax:.6f}]")
 
     # Engine-specific kwargs. The dispatcher forwards these as
