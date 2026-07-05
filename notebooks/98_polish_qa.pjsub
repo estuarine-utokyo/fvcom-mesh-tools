@@ -20,4 +20,4 @@ source "${HOME}/mambaforge/etc/profile.d/conda.sh"
 conda activate oceanmesh-bench
 cd "${HOME}/Github/fvcom-mesh-tools"
 
-fmesh-pipeline recipes/tokyo_bay_v5.yaml --only obcfinal,qa,export,figures
+fmesh-pipeline recipes/tokyo_bay_v5.yaml --only siteops,polish,obcfinal,qa,export,figures

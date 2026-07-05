@@ -1,7 +1,7 @@
 #!/bin/bash
 #PJM -L rscgrp=a-batch
 #PJM -L node=1
-#PJM -L elapse=02:00:00
+#PJM -L elapse=00:13:00
 #PJM -j
 #PJM -X
 #PJM -N fvcm-poc102
