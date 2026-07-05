@@ -455,8 +455,10 @@ def assign_west_south_obc(
             [q[1] for q in obc_line_lonlat],
         )
         arc5 = LineString(list(zip(ax5, ay5)))
-        topo5 = _edge_topology(mesh_in.elements, mesh_in.n_nodes)
-        ring5 = np.unique(topo5.uv[topo5.counts == 1])
+        loops5 = chain_edges_to_loops(
+            boundary_edges_from_tris(mesh_in.elements)
+        )
+        ring5 = outer_loop(loops5, mesh_in.nodes)[:-1]
         pts5 = shapely.points(mesh_in.nodes[ring5, 0],
                               mesh_in.nodes[ring5, 1])
         d5 = shapely.distance(pts5, arc5)
@@ -467,9 +469,32 @@ def assign_west_south_obc(
         interior5 = (s5 > 30.0) & (s5 < arc5.length - 30.0)
         keep5 = ((interior5 & (d5 <= max_move_m))
                  | (~interior5 & (d5 <= 120.0)))
-        members = ring5[keep5][np.argsort(s5[keep5])]
+        kidx = np.where(keep5)[0]
+        if kidx.size < 2:
+            return mesh_in, 0
+        # OBC = the contiguous RING PATH between the two arc-length
+        # extreme members (guarantees boundary-edge adjacency; s-
+        # sorted member lists violated obc_ordering where corridor
+        # gaps left off-chain stragglers, review24). Direction: the
+        # ring path that contains the most members.
+        i0 = int(kidx[np.argmin(s5[kidx])])
+        i1 = int(kidx[np.argmax(s5[kidx])])
+        n5 = len(ring5)
+        fwd = np.arange(i0, i0 + (i1 - i0) % n5 + 1) % n5
+        bwd = np.arange(i1, i1 + (i0 - i1) % n5 + 1) % n5
+        kset = set(kidx.tolist())
+        n_fwd = sum(1 for j in fwd if j in kset)
+        n_bwd = sum(1 for j in bwd if j in kset)
+        path = fwd if (n_fwd, -len(fwd)) >= (n_bwd, -len(bwd)) else bwd
+        if len(path) > 3 * kidx.size + 8:
+            # degenerate direction pick: fall back to the other side
+            path = bwd if path is fwd else fwd
+        members = ring5[path]
         if members.size < 2:
             return mesh_in, 0
+        # orient by increasing arc length for a stable list
+        if s5[path[0]] > s5[path[-1]]:
+            members = members[::-1]
         bnd5 = mesh_in.open_boundaries
         bnd5[0] = members.astype(bnd5[0].dtype)
         for v in members:
