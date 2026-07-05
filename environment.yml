@@ -22,15 +22,23 @@ dependencies:
   # Mesh-generation backends
   - ocsmesh   # CC0-1.0; primary for the --engine ocsmesh path and mesh-combine
   - jigsawpy  # alternate OCSMesh backend
-  # C++ headers needed when building oceanmesh from source
+  # C++ build chain for building oceanmesh from source
+  # (CGAL headers + its gmp/mpfr arithmetic backends)
   - cgal
+  - gmp
+  - mpfr
   - cython
   - pybind11
   # Dev tooling
   - pytest
   - ruff
   - pip
-  # oceanmesh is GPL-3.0-or-later and is not on conda-forge - install
-  # from PyPI (or a local clone) after env creation:
-  #   pip install --no-deps oceanmesh
+  # oceanmesh is GPL-3.0-or-later and NOT on conda-forge/PyPI —
+  # install our fork (constrained Delaunay / pfix / egfix) from a
+  # local clone after env creation:
+  #   git clone <fork> ../oceanmesh && cd ../oceanmesh
+  #   pip install -e . --no-deps                  # GNU toolchain
+  #   CC=icx CXX=icpx pip install -e . --no-deps  # Intel oneAPI
+  # (-static-intel is applied automatically; see oceanmesh README 3.4)
+  # Then this repo:
   #   pip install --no-deps -e .
