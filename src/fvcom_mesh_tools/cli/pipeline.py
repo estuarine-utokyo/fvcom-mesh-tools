@@ -155,12 +155,16 @@ def _stage_obc(recipe, out_dir, artifacts, log):
     cfg = recipe.get("obc", {}) or {}
     src = Path(artifacts.get("finished_mesh") or artifacts["raw_mesh"])
     mesh = read_fort14(src)
+    shoreline = artifacts.get("land_opened") \
+        or recipe["build"].get("coastline")
     mesh, info = assign_west_south_obc(
         mesh,
         utm_epsg=int(cfg.get("utm_epsg",
                              (recipe.get("finish") or {})
                              .get("utm_epsg", 32654))),
         band_deg=float(cfg.get("band_deg", 0.012)),
+        shoreline_shp=shoreline,
+        coast_tol_m=float(cfg.get("coast_tol_m", 500.0)),
         trim=int(cfg.get("trim", 1)),
         max_move_m=float(cfg.get("max_move_m", 600.0)),
         min_depth_m=cfg.get("min_depth_m"),

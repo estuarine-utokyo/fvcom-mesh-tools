@@ -766,10 +766,15 @@ def equalize_pair(
     obc = set(int(x) for s in mesh.open_boundaries for x in s)
 
     mid = 0.5 * (mesh.nodes[u] + mesh.nodes[v])
-    ring = np.where((elements == w_big).any(axis=1)
-                    | (elements == w_small).any(axis=1)
-                    | (elements == u).any(axis=1)
-                    | (elements == v).any(axis=1))[0]
+    ring1 = np.where((elements == w_big).any(axis=1)
+                     | (elements == w_small).any(axis=1)
+                     | (elements == u).any(axis=1)
+                     | (elements == v).any(axis=1))[0]
+    # Gate on the 2-ring: apex moves change area ratios against
+    # elements OUTSIDE the immediate ring (PoC #96: C4 count rose
+    # between siteops passes with a 1-ring gate).
+    ring_nodes = np.unique(elements[ring1].ravel())
+    ring = np.where(np.isin(elements, ring_nodes).any(axis=1))[0]
 
     def _state(nodes_arr):
         tri = elements[ring]
@@ -781,6 +786,20 @@ def equalize_pair(
         a1, a2 = a[pos_of[int(carriers[0])]], a[pos_of[int(carriers[1])]]
         hi = max(a1, a2)
         ac = (hi - min(a1, a2)) / hi if hi > 0 else 1.0
+        # Count C4 pairs INSIDE the gate region as violations too.
+        edges2: dict[tuple[int, int], list[int]] = {}
+        for k2, e in enumerate(ring):
+            x_, y_, z_ = (int(q) for q in elements[e])
+            for p_, q_ in ((x_, y_), (y_, z_), (z_, x_)):
+                edges2.setdefault(
+                    (min(p_, q_), max(p_, q_)), []
+                ).append(k2)
+        for pr in edges2.values():
+            if len(pr) == 2:
+                b1, b2 = a[pr[0]], a[pr[1]]
+                h2 = max(b1, b2)
+                if h2 > 0 and (h2 - min(b1, b2)) / h2 > max_area_change:
+                    n_bad += 1
         return n_bad, ac
 
     bad0, ac0 = _state(mesh.nodes)

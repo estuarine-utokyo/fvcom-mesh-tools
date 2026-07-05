@@ -176,4 +176,9 @@ def apply_site_operators(
                                      "op": "unresolved",
                                      "area_change":
                                          float(o["area_change"])})
+    from fvcom_mesh_tools.mesh_clean import keep_components
+
+    mesh, kinfo = keep_components(mesh)
+    if kinfo.get("n_removed_elements"):
+        edit_log.append({"op": "keep_components", **kinfo})
     return mesh, edit_log

@@ -34,6 +34,8 @@ def assign_west_south_obc(
     *,
     utm_epsg: int = 32654,
     band_deg: float = 0.012,
+    shoreline_shp=None,
+    coast_tol_m: float = 500.0,
     trim: int = 1,
     max_move_m: float = 600.0,
     land_ibtype: int = 20,
@@ -62,12 +64,34 @@ def assign_west_south_obc(
     outer = outer_loop(loops, mesh.nodes)
     ring = outer[:-1]
     rlon, rlat = lon[ring], lat[ring]
-    south_b = rlat <= rlat.min() + band_deg
-    west_b = rlon <= rlon.min() + band_deg
-    mask = south_b | west_b
+    if shoreline_shp is not None:
+        # Open-sea edge = outer-ring nodes FAR from the engineered
+        # shoreline (the lat/lon band heuristic mixes in coastline
+        # nodes on non-rectangular domains — PoC #96: west run 0/107
+        # snapped, perpendicularity worst 88 deg).
+        import shapely
+        from shapely.strtree import STRtree
+
+        from fvcom_mesh_tools.algorithms.boundary_snap import (
+            load_polylines,
+        )
+
+        lines_utm = load_polylines(shoreline_shp, to_crs=utm_epsg)
+        tree = STRtree(lines_utm)
+        arr = np.array(lines_utm, dtype=object)
+        pts = shapely.points(mesh.nodes[ring, 0], mesh.nodes[ring, 1])
+        d_coast = shapely.distance(pts, arr[tree.nearest(pts)])
+        mask = d_coast > coast_tol_m
+        # west/south attribution decided later by chord splitting.
+        south_b = mask
+        west_b = np.zeros_like(mask)
+    else:
+        south_b = rlat <= rlat.min() + band_deg
+        west_b = rlon <= rlon.min() + band_deg
+        mask = south_b | west_b
     idx = np.where(mask)[0]
     if idx.size < 4:
-        raise ValueError("no west/south open-sea band found")
+        raise ValueError("no open-sea run found on the outer ring")
     runs = []
     s = p = int(idx[0])
     for q in idx[1:]:
@@ -86,13 +110,35 @@ def assign_west_south_obc(
     a, b = max(runs, key=lambda r: r[1] - r[0])
     arc_pos = np.arange(a, b + 1) % len(ring)
     arc_nodes = ring[arc_pos]
-    west_nodes = arc_nodes[west_b[arc_pos]]
-    south_nodes = arc_nodes[south_b[arc_pos] & ~west_b[arc_pos]]
+    if shoreline_shp is not None:
+        # Split the arc at its corner: the node farthest from the
+        # end-to-end chord (if its deviation is significant) — the
+        # west/south rectangle corner on box-cut domains.
+        P = mesh.nodes[arc_nodes]
+        p0v, p1v = P[0], P[-1]
+        chord = p1v - p0v
+        nrm = np.linalg.norm(chord) or 1.0
+        dev = np.abs(
+            (P[:, 0] - p0v[0]) * chord[1]
+            - (P[:, 1] - p0v[1]) * chord[0]
+        ) / nrm
+        k_corner = int(np.argmax(dev))
+        if dev[k_corner] > 2.0 * max_move_m and 2 <= k_corner \
+                <= len(arc_nodes) - 3:
+            parts = [arc_nodes[: k_corner + 1],
+                     arc_nodes[k_corner:]]
+        else:
+            parts = [arc_nodes]
+        labels = ["seg1", "seg2"][: len(parts)]
+    else:
+        parts = [arc_nodes[west_b[arc_pos]],
+                 arc_nodes[south_b[arc_pos] & ~west_b[arc_pos]]]
+        labels = ["west", "south"]
     ring = np.roll(ring, -(a % len(ring)))
     open_len = (b - a)
 
     info: dict[str, Any] = {"n_arc": int(open_len + 1)}
-    for run_nodes, label in ((west_nodes, "west"), (south_nodes, "south")):
+    for run_nodes, label in zip(parts, labels):
         if run_nodes.size >= 2:
             p0 = tuple(mesh.nodes[run_nodes[0]])
             p1 = tuple(mesh.nodes[run_nodes[-1]])
