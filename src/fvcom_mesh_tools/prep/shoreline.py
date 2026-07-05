@@ -375,6 +375,12 @@ def simplify_outside_region(
         utm_epsg = auto_utm_epsg(c.x, c.y)
     utm = gdf.to_crs(utm_epsg)
     poly_utm = gpd.GeoSeries([poly_i], crs=4326).to_crs(utm_epsg).iloc[0]
+    # snap to a 1 cm grid: buffer chains + DP otherwise leave
+    # micro-misnodings that crash GEOS boolean ops
+    # ("found non-noded intersection", review20/21)
+    from shapely import set_precision
+
+    poly_utm = set_precision(poly_utm, 0.01)
 
     # ORDER MATTERS: simplify the WHOLE polygon first, then cut both
     # the original and the simplified version with the SAME interest
@@ -418,6 +424,8 @@ def simplify_outside_region(
                 .buffer(smooth_r_m)
             )
         s = make_valid(s.simplify(tol_m, preserve_topology=True))
+        g = set_precision(make_valid(g), 0.01)
+        s = set_precision(s, 0.01)
         inside = make_valid(g.intersection(poly_utm))
         outside = make_valid(s.difference(poly_utm))
         merged = make_valid(unary_union([inside, outside]))
