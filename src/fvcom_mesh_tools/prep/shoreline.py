@@ -189,9 +189,21 @@ def cut_domain_at_obc_line(
     gdf = land_gdf
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
-    out = gpd.GeoDataFrame(
+    # Morphological CLOSING (r=100 m, in UTM) of land+wall: the wall
+    # touchdown leaves sub-200 m water slits along the coast whose
+    # pocket vertices drag the OBC into R4/fake-open wedges (PoC #113
+    # spike node). Engineered channels are >= ~300 m after land
+    # opening, so the closing cannot seal anything real.
+    from shapely import unary_union
+
+    utm = auto_utm_epsg(0.5 * (lon_min + lon_max),
+                        0.5 * (lat_min + lat_max))
+    merged = gpd.GeoDataFrame(
         geometry=list(gdf.to_crs(4326).geometry) + [wall], crs=4326,
-    )
+    ).to_crs(utm)
+    closed = unary_union(list(merged.geometry)).buffer(100.0).buffer(-100.0)
+    geoms = list(getattr(closed, "geoms", [closed]))
+    out = gpd.GeoDataFrame(geometry=geoms, crs=utm).to_crs(4326)
     return out
 
 
