@@ -510,6 +510,12 @@ def assign_west_south_obc(
     for _round in range(8):
         flags = fvcom_boundary_element_flags(mesh)
         r4 = flags["r4_mask"]
+        if obc_line_lonlat is not None:
+            # fake-open elements notch the boundary when deleted,
+            # exactly like R4s (review27: 8 deletions -> 1.6 km
+            # ring detour) — split them too; only pinch topology
+            # still requires deletion.
+            r4 = r4 | flags["fake_open_mask"]
         if obc_line_lonlat is not None and r4.any():
             # Arc mode: SPLIT R4 elements (1-to-3 centroid insert)
             # instead of deleting them — deletion retreats the
