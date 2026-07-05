@@ -375,31 +375,42 @@ def simplify_outside_region(
     utm = gdf.to_crs(utm_epsg)
     poly_utm = gpd.GeoSeries([poly_i], crs=4326).to_crs(utm_epsg).iloc[0]
 
+    # ORDER MATTERS: simplify the WHOLE polygon first, then cut both
+    # the original and the simplified version with the SAME interest
+    # polygon and union the halves. Cutting first and simplifying the
+    # outside piece moves the CUT-EDGE vertices too (up to tol), so
+    # the halves no longer share a seam: 3-km sliver "water" wedges
+    # along the seam (Yokosuka/Kurihama, user review) and invalid
+    # output geometry (side-location conflict at the NW corner).
     out_geoms = []
     for g in utm.geometry:
         if g is None or g.is_empty:
             continue
-        inside = make_valid(g.intersection(poly_utm))
-        outside = make_valid(g.difference(poly_utm))
-        keep = [p for p in getattr(inside, "geoms", [inside])
-                if p.geom_type == "Polygon" and not p.is_empty]
-        for p2 in getattr(outside, "geoms", [outside]):
-            if p2.geom_type != "Polygon" or p2.is_empty:
+        g = make_valid(g)
+        if not g.intersects(poly_utm):
+            # island fully outside: simplified, sub-scale ones drop
+            s = make_valid(g.simplify(tol_m, preserve_topology=True))
+            if s.is_empty or s.area < min_island_outside_m2:
                 continue
-            s = p2.simplify(tol_m, preserve_topology=True)
-            if s.is_empty:
-                continue
-            # islands fully outside: drop the sub-scale ones
-            if (not p2.intersects(poly_utm)
-                    and s.area < min_island_outside_m2):
-                continue
-            keep.append(s)
-        if keep:
-            merged = make_valid(unary_union(keep))
             out_geoms.extend(
-                p for p in getattr(merged, "geoms", [merged])
-                if p.geom_type == "Polygon" and not p.is_empty
+                q for q in getattr(s, "geoms", [s])
+                if q.geom_type == "Polygon" and not q.is_empty
             )
-    return gpd.GeoDataFrame(
+            continue
+        s = make_valid(g.simplify(tol_m, preserve_topology=True))
+        inside = make_valid(g.intersection(poly_utm))
+        outside = make_valid(s.difference(poly_utm))
+        merged = make_valid(unary_union([inside, outside]))
+        out_geoms.extend(
+            q for q in getattr(merged, "geoms", [merged])
+            if q.geom_type == "Polygon" and not q.is_empty
+        )
+    out = gpd.GeoDataFrame(
         geometry=out_geoms, crs=utm_epsg,
     ).to_crs(4326)
+    bad = int((~out.geometry.is_valid).sum())
+    if bad:
+        raise ValueError(
+            f"simplify_outside_region produced {bad} invalid polygons"
+        )
+    return out
