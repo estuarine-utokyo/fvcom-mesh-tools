@@ -346,6 +346,7 @@ def simplify_outside_region(
     interest_region: list[tuple[float, float]],
     *,
     tol_m: float = 500.0,
+    smooth_r_m: float = 400.0,
     min_island_outside_m2: float = 1.0e6,
     utm_epsg: int | None = None,
 ):
@@ -388,8 +389,14 @@ def simplify_outside_region(
             continue
         g = make_valid(g)
         if not g.intersects(poly_utm):
-            # island fully outside: simplified, sub-scale ones drop
-            s = make_valid(g.simplify(tol_m, preserve_topology=True))
+            # island fully outside: smoothed+simplified, small drop
+            s = g
+            if smooth_r_m > 0:
+                s = make_valid(
+                    s.buffer(smooth_r_m).buffer(-2.0 * smooth_r_m)
+                    .buffer(smooth_r_m)
+                )
+            s = make_valid(s.simplify(tol_m, preserve_topology=True))
             if s.is_empty or s.area < min_island_outside_m2:
                 continue
             out_geoms.extend(
@@ -397,7 +404,20 @@ def simplify_outside_region(
                 if q.geom_type == "Polygon" and not q.is_empty
             )
             continue
-        s = make_valid(g.simplify(tol_m, preserve_topology=True))
+        # Morphological smoothing BEFORE DP: preserve_topology keeps
+        # sub-scale inlets (Uraga port, 200-400 m wide) as slivers,
+        # and two shores closer than the local h force 130-260 m
+        # edges regardless of every sizing floor (review19 Miura
+        # patch p50 261 m). Closing fills water gaps < 2r, opening
+        # then removes land spits < 2r (r = smooth_r_m). Closing
+        # only GROWS land, so the seam union stays gap-free.
+        s = g
+        if smooth_r_m > 0:
+            s = make_valid(
+                s.buffer(smooth_r_m).buffer(-2.0 * smooth_r_m)
+                .buffer(smooth_r_m)
+            )
+        s = make_valid(s.simplify(tol_m, preserve_topology=True))
         inside = make_valid(g.intersection(poly_utm))
         outside = make_valid(s.difference(poly_utm))
         merged = make_valid(unary_union([inside, outside]))
