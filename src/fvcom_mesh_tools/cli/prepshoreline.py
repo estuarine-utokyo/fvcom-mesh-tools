@@ -76,13 +76,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Skeleton raster cell size.",
     )
     p.add_argument(
-        "--min-water-area", type=float, default=1e-5,
-        help="min_water_area_deg2 for the xcoast true-land product. "
-             "1e-5 (~1e5 m2) drops fragmented riverbank polygons and "
-             "leaves rivers as LAND (Tamagawa/Arakawa gap, PoC #114); "
-             "1e-7 opens them.",
-    )
-    p.add_argument(
         "--obc-line", type=float, nargs="+", default=None,
         metavar="LONLAT",
         help="Artificial open-boundary line as lon lat pairs "
