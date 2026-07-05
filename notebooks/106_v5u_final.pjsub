@@ -15,4 +15,4 @@ export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
 source "${HOME}/mambaforge/etc/profile.d/conda.sh"
 conda activate oceanmesh-bench
 cd "${HOME}/Github/fvcom-mesh-tools"
-fmesh-pipeline recipes/tokyo_bay_v5u.yaml --only obc,siteops,polish,obcfinal,qa,export,figures
+fmesh-pipeline recipes/tokyo_bay_v5u.yaml --only finish,obc,siteops,polish,obcfinal,qa,export,figures
