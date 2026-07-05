@@ -502,6 +502,43 @@ def assign_west_south_obc(
             snapped_ids.add(int(v))
         return mesh_in, int(members.size)
 
+    if obc_line_lonlat is not None and not snap:
+        # FINAL pass: strip re-extrusion. Incremental repair of the
+        # damaged first row (straightener/collapse/closure) kept
+        # chasing interactions (reviews 24-29); instead the corridor
+        # is purged and one clean ladder row is extruded onto the
+        # exact arc — outer nodes ON the line, every element carries
+        # an inner node (no R4/fake possible), rungs ~perpendicular.
+        import shapely as _shp
+        from shapely.geometry import LineString as _LS
+
+        from fvcom_mesh_tools.algorithms.site_edits import (
+            extrude_boundary_strip,
+        )
+
+        to_x = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
+                                    always_xy=True)
+        xs2, ys2 = to_x.transform(
+            [q[0] for q in obc_line_lonlat],
+            [q[1] for q in obc_line_lonlat],
+        )
+        arc_x = _LS(list(zip(xs2, ys2)))
+        cen_x = mesh.nodes[mesh.elements].mean(axis=1)
+        d_cen = _shp.distance(
+            _shp.points(cen_x[:, 0], cen_x[:, 1]), arc_x
+        )
+        purge = d_cen < 600.0
+        if purge.any():
+            mesh = _rm(mesh, ~purge)
+            mesh, _ = keep_components(mesh)
+            mesh = _rebuild(mesh)
+            log(f"[obc] corridor purge: {int(purge.sum())} elements")
+        mesh, xinfo = extrude_boundary_strip(
+            mesh, [arc_x], d_lo_frac=0.05, d_hi_frac=1.8,
+        )
+        mesh = _rebuild(mesh)
+        log(f"[obc] strip extrusion: {xinfo}")
+
     mesh, n_m1 = _derive_arc_membership(mesh)
     if n_m1:
         log(f"[obc] arc membership (pre-aftercare): {n_m1} nodes")
