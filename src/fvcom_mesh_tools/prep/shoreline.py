@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-__all__ = ["auto_utm_epsg", "fetch_true_land", "open_land"]
+__all__ = ["auto_utm_epsg", "default_land_shp", "fetch_true_land", "open_land"]
 
 
 def auto_utm_epsg(lon: float, lat: float) -> int:
@@ -23,9 +23,23 @@ def auto_utm_epsg(lon: float, lat: float) -> int:
     return (32600 if lat >= 0 else 32700) + zone
 
 
+def default_land_shp() -> Path | None:
+    """OSM land-polygons source under ``$DATA_DIR`` (GENKAI layout),
+    or None when DATA_DIR is unset / the file is absent."""
+    import os
+
+    data_dir = os.environ.get("DATA_DIR")
+    if not data_dir:
+        return None
+    cand = (Path(data_dir) / "OSM" / "land-polygons-split-4326"
+            / "land_polygons.shp")
+    return cand if cand.exists() else None
+
+
 def fetch_true_land(
     bbox: tuple[float, float, float, float],
     *,
+    land_shp_path: Path | None = None,
     min_water_area_deg2: float = 1e-5,
     cache_dir: Path | None = None,
     force: bool = False,
@@ -46,6 +60,10 @@ def fetch_true_land(
         ) from exc
 
     kwargs: dict[str, Any] = {"min_water_area_deg2": min_water_area_deg2}
+    if land_shp_path is None:
+        land_shp_path = default_land_shp()
+    if land_shp_path is not None:
+        kwargs["land_shp_path"] = Path(land_shp_path)
     if cache_dir is not None:
         kwargs["cache_dir"] = Path(cache_dir)
     config = xcoast.CoastmaskConfig(**kwargs)

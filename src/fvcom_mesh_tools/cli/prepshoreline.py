@@ -48,6 +48,12 @@ def main(argv: list[str] | None = None) -> int:
         help="xcoast: minimum water-polygon area subtracted from land.",
     )
     p.add_argument(
+        "--land-shp", type=Path, default=None,
+        help="OSM land-polygons source shapefile (needed on a cache "
+             "miss; default: $DATA_DIR/OSM/land-polygons-split-4326/"
+             "land_polygons.shp when DATA_DIR is set).",
+    )
+    p.add_argument(
         "--cache-dir", type=Path, default=None,
         help="xcoast download cache (default: xcoast's own).",
     )
@@ -88,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
           flush=True)
     land = fetch_true_land(
         tuple(args.bbox),
+        land_shp_path=args.land_shp,
         min_water_area_deg2=args.min_water_area,
         cache_dir=args.cache_dir,
         force=args.force_fetch,
