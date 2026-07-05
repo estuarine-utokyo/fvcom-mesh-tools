@@ -53,6 +53,19 @@ def main() -> int:
     (CASE_DIR / "output").mkdir(exist_ok=True)
     for f in V2_INPUTS.glob("tokyo_bay_v5_*.dat"):
         shutil.copy2(f, CASE_DIR / "input" / f.name)
+    # TEST-ONLY conditioning: the mesh product carries provisional
+    # depths (depth-field design is out of scope), but a forced run
+    # needs a wettable floor — clamp the CASE COPY of dep at 2 m
+    # (v4 precedent: unclamped 0 m depths -> NaN at startup).
+    import copy
+
+    from fvcom_mesh_tools.io.fvcom_native import write_dep
+
+    clipped = copy.deepcopy(mesh)
+    clipped.depths = np.maximum(clipped.depths, 2.0)
+    dep_case = CASE_DIR / "input" / "tokyo_bay_v5_dep.dat"
+    write_dep(clipped, dep_case)
+    print(f"[100] test-only dep floor 2 m -> {dep_case}", flush=True)
     (CASE_DIR / "input" / "sigma.dat").write_text(
         "NUMBER OF SIGMA LEVELS = 11\nSIGMA COORDINATE TYPE = UNIFORM\n",
     )
