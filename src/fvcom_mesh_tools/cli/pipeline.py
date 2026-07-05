@@ -218,7 +218,8 @@ def _stage_export(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
 
     cfg = recipe.get("export", {}) or {}
-    src = Path(artifacts.get("siteops_mesh")
+    src = Path(artifacts.get("polish_mesh")
+               or artifacts.get("siteops_mesh")
                or artifacts.get("obc_mesh")
                or artifacts["raw_mesh"])
     mesh = read_fort14(src)
@@ -247,12 +248,37 @@ def _stage_export(recipe, out_dir, artifacts, log):
     return {"case_dir": str(case_dir)}
 
 
+def _stage_polish(recipe, out_dir, artifacts, log):
+    from fvcom_mesh_tools.finishing import finish_constrained_mesh
+    from fvcom_mesh_tools.io import read_fort14, write_fort14
+
+    cfg = recipe.get("polish", {}) or {}
+    src = Path(artifacts.get("siteops_mesh")
+               or artifacts.get("obc_mesh")
+               or artifacts["finished_mesh"])
+    mesh = read_fort14(src)
+    shoreline = Path(artifacts.get("land_opened")
+                     or recipe["build"]["coastline"])
+    utm = int((recipe.get("finish") or {}).get("utm_epsg", 32654))
+    mesh, finfo = finish_constrained_mesh(
+        mesh, shoreline, out_dir / "work",
+        optimize_budget_s=float(cfg.get("optimize_budget_s", 300.0)),
+        weld_tol_m=float(cfg.get("weld_tol_m", 2.0)),
+        utm_epsg=utm,
+        log=log,
+    )
+    out14 = out_dir / f"{recipe['name']}_polished.14"
+    write_fort14(mesh, out14)
+    return {"polish_mesh": str(out14), "polish_info": finfo}
+
+
 def _stage_qa(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io import read_fort14
     from fvcom_mesh_tools.qa import format_report, run_qa
 
     cfg = recipe.get("qa", {}) or {}
-    target = Path(artifacts.get("siteops_mesh")
+    target = Path(artifacts.get("polish_mesh")
+                  or artifacts.get("siteops_mesh")
                   or artifacts.get("obc_mesh")
                   or artifacts.get("finished_mesh")
                   or artifacts["raw_mesh"])
@@ -265,11 +291,17 @@ def _stage_qa(recipe, out_dir, artifacts, log):
         json.dumps(report.to_dict(), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    n_fail = sum(1 for c in report.checks
-                 if c.gate and not c.skipped and not c.passed)
-    log(f"[pipeline] QA: {n_fail} gate failures "
-        f"(report -> {out_dir / 'qa_report.txt'})")
-    return {"qa_failures": n_fail}
+    skip = set(cfg.get("skip_checks") or [])
+    fails = [c.check_id for c in report.checks
+             if c.gate and not c.skipped and not c.passed]
+    counted = [c for c in fails if c not in skip]
+    ignored = [c for c in fails if c in skip]
+    log(f"[pipeline] QA: {len(counted)} gate failures"
+        + (f" (+{len(ignored)} out-of-scope: {ignored})"
+           if ignored else "")
+        + f" (report -> {out_dir / 'qa_report.txt'})")
+    return {"qa_failures": len(counted),
+            "qa_out_of_scope": ignored}
 
 
 def _stage_figures(recipe, out_dir, artifacts, log):
@@ -286,7 +318,7 @@ def _stage_figures(recipe, out_dir, artifacts, log):
     fig_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for key in ("raw_mesh", "finished_mesh", "obc_mesh",
-                "siteops_mesh"):
+                "siteops_mesh", "polish_mesh"):
         path = artifacts.get(key)
         if not path or not Path(path).exists():
             continue
@@ -316,6 +348,7 @@ STAGES = [
     ("finish", _stage_finish),
     ("obc", _stage_obc),
     ("siteops", _stage_siteops),
+    ("polish", _stage_polish),
     ("qa", _stage_qa),
     ("export", _stage_export),
     ("figures", _stage_figures),

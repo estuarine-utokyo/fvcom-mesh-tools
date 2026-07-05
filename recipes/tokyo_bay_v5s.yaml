@@ -1,13 +1,17 @@
+# Southern-extension variant: 90 m DEM (covers to 34.82 N) so
+# the domain reaches the Uraga narrows like goto2023 (34.97).
+# Sizing needs no better than 90 m; the M7001-based depth
+# product is a later, depth-phase task.
 # Tokyo Bay v5 — the CDT-constrained true-300m recipe.
 # Reproduces PoC #92/#93 (see docs/DESIGN_HISTORY.md) end to end:
 #   fmesh-pipeline recipes/tokyo_bay_v5.yaml
 # DEM path comes from the group data share; fail loudly if DATA_DIR
 # is unset (GENKAI rule) by leaving the ${DATA_DIR} reference.
-name: tokyo_bay_v5
-out_dir: outputs/pipeline_v5
+name: tokyo_bay_v5s
+out_dir: outputs/pipeline_v5s
 
 prep:
-  bbox: [139.50, 34.90, 140.25, 35.90]
+  bbox: [139.30, 34.80, 140.55, 35.90]
   r_open_m: 150.0            # erase land features thinner than 300 m
   min_island_area_m2: 3.6e5  # 4 * (300 m)^2
   skeleton: true
@@ -15,7 +19,7 @@ prep:
   skeleton_px_m: 50.0
 
 build:
-  dem: ${DATA_DIR}/bathymetry/tokyo_bay/depth_0030-11+12+13+14+15.nc
+  dem: ${DATA_DIR}/bathymetry/tokyo_bay/depth_0090-05+06+07.nc
   engine: oceanmesh
   hmin_m: 300
   hmax_m: 1500
@@ -51,7 +55,7 @@ qa:
   skip_checks: [min_depth_clip]   # depth work is out of scope
 
 export:
-  casename: tokyo_bay_v5
+  casename: tokyo_bay_v5s
   obc_type: 1
   sponge_radius_m: 3000.0   # forced runs REQUIRE a sponge (v2 lesson)
   sponge_coeff: 0.001
