@@ -177,6 +177,21 @@ def build_parser() -> argparse.ArgumentParser:
              "extra interior seed points (e.g. water skeleton).",
     )
     p.add_argument(
+        "--om-obc-coarsen-line", type=float, nargs="+", default=None,
+        metavar="LONLAT",
+        help="[oceanmesh] OBC arc as lon lat pairs; sizes near it are "
+             "floored (coarse simple boundary elements per reference-"
+             "mesh practice).",
+    )
+    p.add_argument(
+        "--om-obc-coarsen-size-m", type=float, default=1600.0,
+        help="[oceanmesh] Size floor AT the OBC arc.",
+    )
+    p.add_argument(
+        "--om-obc-coarsen-radius-m", type=float, default=10000.0,
+        help="[oceanmesh] Inland decay radius of the OBC size floor.",
+    )
+    p.add_argument(
         "--om-enforce-hmin-floor", action="store_true",
         help="[oceanmesh] Clamp the feature sizing grid at --hmin "
              "(its native min_edge_length argument is not a floor). "
@@ -520,6 +535,14 @@ def main(argv: list[str] | None = None) -> int:
             shoreline_h0_m=args.om_shoreline_h0_m,
             enforce_hmin_floor=args.om_enforce_hmin_floor,
             constrain_boundary=args.om_constrain_boundary,
+            obc_coarsen_line=(
+                [(args.om_obc_coarsen_line[i],
+                  args.om_obc_coarsen_line[i + 1])
+                 for i in range(0, len(args.om_obc_coarsen_line), 2)]
+                if args.om_obc_coarsen_line else None
+            ),
+            obc_coarsen_size_m=args.om_obc_coarsen_size_m,
+            obc_coarsen_radius_m=args.om_obc_coarsen_radius_m,
             use_wavelength_sizing=args.om_wavelength_sizing,
             wavelength_period_s=args.om_wavelength_period,
             wavelength_grid_spacing=args.om_wavelength_grid_spacing,

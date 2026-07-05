@@ -244,6 +244,9 @@ def build(
     shoreline_h0_m: float | None = None,
     enforce_hmin_floor: bool = False,
     constrain_boundary: bool = False,
+    obc_coarsen_line: list | None = None,
+    obc_coarsen_size_m: float = 1600.0,
+    obc_coarsen_radius_m: float = 10000.0,
     log: Callable[[str], None] = print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a mesh with oceanmesh + DistMesh.
@@ -439,11 +442,42 @@ def build(
             )
             edge_components.append(edge_courant)
         if len(edge_components) == 1:
-            edge = om.enforce_mesh_gradation(edge_feat, gradation=gradation)
+            combined = edge_feat
         else:
-            edge = om.enforce_mesh_gradation(
-                om.compute_minimum(edge_components), gradation=gradation,
+            combined = om.compute_minimum(edge_components)
+        if obc_coarsen_line:
+            # Reference-mesh policy (goto2023, user 2026-07-05): the
+            # open boundary carries COARSE simple elements (~1.6 km
+            # spacing at the arc) because the boundary zone is
+            # numerically delicate and outside the region of
+            # interest. Impose a size floor ramping from
+            # obc_coarsen_size_m at the arc down to nothing at
+            # obc_coarsen_radius_m inland; bathymetric-gradient
+            # refinement over the Uraga canyon otherwise pins the
+            # mouth at hmin.
+            import shapely
+            from shapely.geometry import LineString
+
+            arcline = LineString(
+                [(float(q[0]), float(q[1])) for q in obc_coarsen_line]
             )
+            xg, yg = combined.create_grid()
+            pts_g = shapely.points(xg.ravel(), yg.ravel())
+            d_deg = shapely.distance(pts_g, arcline).reshape(xg.shape)
+            deg_per_m = float(_m_to_deg_lat(1.0))
+            d_m = d_deg / deg_per_m
+            size_deg = obc_coarsen_size_m * deg_per_m
+            ramp = size_deg * np.clip(
+                1.0 - d_m / obc_coarsen_radius_m, 0.0, 1.0,
+            )
+            n_raised = int((combined.values < ramp).sum())
+            combined.values = np.maximum(combined.values, ramp)
+            log(
+                f"[oceanmesh] OBC coarsening: raised {n_raised:,} "
+                f"cells (size {obc_coarsen_size_m:g} m at the arc, "
+                f"radius {obc_coarsen_radius_m:g} m)"
+            )
+        edge = om.enforce_mesh_gradation(combined, gradation=gradation)
 
         pfix = None
         egfix = None

@@ -104,6 +104,15 @@ def _stage_build(recipe, out_dir, artifacts, log):
     prep_bbox = (recipe.get("prep", {}) or {}).get("bbox")
     if prep_bbox:
         argv += ["--region", *[str(v) for v in prep_bbox]]
+    obc_line = (recipe.get("prep", {}) or {}).get("obc_line")
+    if obc_line and cfg.get("obc_coarsen", True):
+        argv += ["--om-obc-coarsen-line"] + [
+            str(c) for pt in obc_line for c in pt
+        ]
+        argv += ["--om-obc-coarsen-size-m",
+                 str(cfg.get("obc_coarsen_size_m", 1600.0)),
+                 "--om-obc-coarsen-radius-m",
+                 str(cfg.get("obc_coarsen_radius_m", 10000.0))]
     argv += [
         "--coastline", str(coast),
         "--hmin", str(cfg["hmin_m"]),
