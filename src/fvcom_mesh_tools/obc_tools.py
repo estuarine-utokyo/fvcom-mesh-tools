@@ -496,7 +496,13 @@ def assign_west_south_obc(
         if s5[path[0]] > s5[path[-1]]:
             members = members[::-1]
         bnd5 = mesh_in.open_boundaries
-        bnd5[0] = members.astype(bnd5[0].dtype)
+        members = members.astype(
+            bnd5[0].dtype if bnd5 else np.int64
+        )
+        if bnd5:
+            bnd5[0] = members
+        else:
+            bnd5.append(members)
         for v in members:
             snapped_keys.add(_key(mesh_in.nodes[int(v)]))
             snapped_ids.add(int(v))
