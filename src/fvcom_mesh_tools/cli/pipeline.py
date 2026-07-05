@@ -163,7 +163,7 @@ def _stage_obc(recipe, out_dir, artifacts, log):
         band_deg=float(cfg.get("band_deg", 0.012)),
         trim=int(cfg.get("trim", 1)),
         max_move_m=float(cfg.get("max_move_m", 600.0)),
-        min_depth_m=cfg.get("min_depth_m", 2.0),
+        min_depth_m=cfg.get("min_depth_m"),
         log=log,
     )
     out14 = out_dir / f"{recipe['name']}_obc.14"

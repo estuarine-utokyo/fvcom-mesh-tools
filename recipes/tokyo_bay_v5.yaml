@@ -35,7 +35,10 @@ obc:
   band_deg: 0.012
   trim: 1
   max_move_m: 600.0
-  min_depth_m: 2.0       # clip AFTER boundary work; coastline unmoved
+  # min_depth_m: 2.0     # depth work is OUT OF SCOPE for mesh
+  #                      # generation (value clamp only, never
+  #                      # moves nodes); enable when a real depth
+  #                      # field is attached later
 
 siteops:
   passes: 2

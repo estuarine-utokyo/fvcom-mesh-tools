@@ -38,7 +38,7 @@ def assign_west_south_obc(
     max_move_m: float = 600.0,
     land_ibtype: int = 20,
     perp_seed: int = 9500,
-    min_depth_m: float | None = 2.0,
+    min_depth_m: float | None = None,
     log=print,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Detect the west+south open-sea edges of the outer ring, snap
@@ -47,6 +47,12 @@ def assign_west_south_obc(
     (optionally) clip depths at ``min_depth_m``.
 
     ``mesh`` is in UTM metres; returns a new mesh in the same CRS.
+
+    ``min_depth_m`` is OFF by default: depth-field construction is
+    out of scope for mesh generation (the depths carried here are
+    buildmesh's provisional DEM interpolation, not a designed
+    product). When set, it clamps VALUES only — node positions and
+    the coastline are untouched.
     """
     to_ll = Transformer.from_crs(f"EPSG:{utm_epsg}", "EPSG:4326",
                                  always_xy=True)
