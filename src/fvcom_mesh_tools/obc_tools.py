@@ -506,19 +506,50 @@ def assign_west_south_obc(
     if n_m1:
         log(f"[obc] arc membership (pre-aftercare): {n_m1} nodes")
 
+    n_split = 0
     for _round in range(8):
         flags = fvcom_boundary_element_flags(mesh)
+        r4 = flags["r4_mask"]
+        if obc_line_lonlat is not None and r4.any():
+            # Arc mode: SPLIT R4 elements (1-to-3 centroid insert)
+            # instead of deleting them — deletion retreats the
+            # boundary off the OBC line (review25: an ~800 m step
+            # with an 851 m off-line node the straightener cannot
+            # recover). The centroid becomes the interior node that
+            # de-R4s the element while the boundary stays put.
+            ids = np.where(r4)[0]
+            new_tris = []
+            keep_mask = np.ones(mesh.n_elements, dtype=bool)
+            for e in ids:
+                tri = mesh.elements[e]
+                cxy = mesh.nodes[tri].mean(axis=0)
+                vc = mesh.n_nodes
+                mesh.nodes = np.vstack([mesh.nodes, cxy[None, :]])
+                mesh.depths = np.append(
+                    mesh.depths, float(mesh.depths[tri].mean())
+                )
+                keep_mask[e] = False
+                a1, b1, c1 = (int(tri[0]), int(tri[1]), int(tri[2]))
+                new_tris += [[a1, b1, vc], [b1, c1, vc], [c1, a1, vc]]
+            mesh.elements = np.vstack(
+                [mesh.elements[keep_mask],
+                 np.asarray(new_tris, dtype=mesh.elements.dtype)]
+            )
+            n_split += int(ids.size)
+            mesh = _rebuild(mesh)
+            continue
         # Pinch nodes break FVCOM's own NBE pairing at setup
         # ("ELEMENT ... HAS NO NEIGHBORS" despite valid adjacency):
         # delete them with the fatal classes.
-        bad = flags["r4_mask"] | flags["fake_open_mask"] \
-            | _pinch_elements(mesh)
+        bad = r4 | flags["fake_open_mask"] | _pinch_elements(mesh)
         if not bad.any():
             break
         n_deleted += int(bad.sum())
         mesh = _rm(mesh, ~bad)
         mesh, _ = keep_components(mesh)
         mesh = _rebuild(mesh)
+    if n_split:
+        log(f"[obc] R4 centroid splits: {n_split}")
     info["n_structural_deleted"] = n_deleted
     info["n_obc"] = int(mesh.open_boundaries[0].size)
     log(f"[obc] structural aftercare: deleted {n_deleted}, "
