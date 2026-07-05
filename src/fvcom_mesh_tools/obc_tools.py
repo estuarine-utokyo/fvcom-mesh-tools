@@ -187,6 +187,18 @@ def assign_west_south_obc(
         arc = LineString(list(zip(lx, ly)))
         all_arc = np.concatenate(parts) if len(parts) else np.array([])
         n_arc_snap = 0
+        els_a = mesh.elements
+
+        def _ring_ok(v2):
+            we = np.where((els_a == v2).any(axis=1))[0]
+            tri = els_a[we]
+            p0 = mesh.nodes[tri[:, 0]]
+            p1 = mesh.nodes[tri[:, 1]]
+            p2 = mesh.nodes[tri[:, 2]]
+            a2 = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+                  - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0]))
+            return bool((a2 > 0).all())
+
         for v in all_arc:
             v = int(v)
             q = arc.interpolate(arc.project(
@@ -195,8 +207,12 @@ def assign_west_south_obc(
             move = float(np.hypot(q.x - mesh.nodes[v, 0],
                                   q.y - mesh.nodes[v, 1]))
             if move <= max_move_m:
+                old_pos = mesh.nodes[v].copy()
                 mesh.nodes[v] = (q.x, q.y)
-                n_arc_snap += 1
+                if not _ring_ok(v):
+                    mesh.nodes[v] = old_pos
+                else:
+                    n_arc_snap += 1
             snapped_keys.add(_key(mesh.nodes[v]))
             snapped_ids.add(v)
         info["arc_snap"] = {"n": int(n_arc_snap),
