@@ -33,7 +33,7 @@ prep:
     - [139.6772, 35.1168]
     - [139.6737, 35.1288]
     - [139.6713, 35.1396]
-  min_water_area: 1.0e-7   # open river channels (1e-5 left
+  min_water_area: 1.0e-6   # open river channels (1e-5 left
                            # Tamagawa/Arakawa as land, PoC #114)
   r_open_m: 150.0            # erase land features thinner than 300 m
   min_island_area_m2: 3.6e5  # 4 * (300 m)^2

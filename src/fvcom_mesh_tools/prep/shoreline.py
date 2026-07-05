@@ -15,6 +15,7 @@ from typing import Any
 
 __all__ = [
     "auto_utm_epsg",
+    "default_water_shp",
     "cut_domain_at_obc_line",
     "extend_obc_ends_perpendicular",
     "default_land_shp",
@@ -28,6 +29,21 @@ def auto_utm_epsg(lon: float, lat: float) -> int:
     zone = int((lon + 180.0) // 6.0) + 1
     zone = min(max(zone, 1), 60)
     return (32600 if lat >= 0 else 32700) + zone
+
+
+def default_water_shp() -> Path | None:
+    """Geofabrik inland-water polygons under ``$DATA_DIR`` (GENKAI
+    layout), or None when unset/absent. Without it xcoast silently
+    skips water subtraction entirely and rivers whose OSM coastline
+    stops at the mouth (Tamagawa) stay LAND (PoC #114/#115)."""
+    import os
+
+    data_dir = os.environ.get("DATA_DIR")
+    if not data_dir:
+        return None
+    cand = (Path(data_dir) / "OSM" / "geofabrik_kanto"
+            / "gis_osm_water_a_free_1.shp")
+    return cand if cand.exists() else None
 
 
 def default_land_shp() -> Path | None:
@@ -71,6 +87,9 @@ def fetch_true_land(
         land_shp_path = default_land_shp()
     if land_shp_path is not None:
         kwargs["land_shp_path"] = Path(land_shp_path)
+    water_shp = default_water_shp()
+    if water_shp is not None:
+        kwargs["water_shp_path"] = water_shp
     if cache_dir is not None:
         kwargs["cache_dir"] = Path(cache_dir)
     config = xcoast.CoastmaskConfig(**kwargs)
