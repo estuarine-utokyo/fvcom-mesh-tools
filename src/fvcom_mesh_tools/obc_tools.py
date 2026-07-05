@@ -41,6 +41,7 @@ def assign_west_south_obc(
     land_ibtype: int = 20,
     perp_seed: int = 9500,
     min_depth_m: float | None = None,
+    snap: bool = True,
     log=print,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Detect the west+south open-sea edges of the outer ring, snap
@@ -148,25 +149,32 @@ def assign_west_south_obc(
     snapped_ids: set[int] = set()
     for run_nodes, label in zip(parts, labels):
         if run_nodes.size >= 2:
-            p0 = tuple(mesh.nodes[run_nodes[0]])
-            p1 = tuple(mesh.nodes[run_nodes[-1]])
-            mesh, li = snap_nodes_to_segment(
-                mesh, [int(v) for v in run_nodes], p0, p1,
-                max_move=max_move_m,
-            )
+            if snap:
+                p0 = tuple(mesh.nodes[run_nodes[0]])
+                p1 = tuple(mesh.nodes[run_nodes[-1]])
+                mesh, li = snap_nodes_to_segment(
+                    mesh, [int(v) for v in run_nodes], p0, p1,
+                    max_move=max_move_m,
+                )
+                info[f"line_{label}"] = li
+                log(f"[obc] {label} line: {li}")
             for v in run_nodes:
                 snapped_keys.add(_key(mesh.nodes[int(v)]))
                 snapped_ids.add(int(v))
-            info[f"line_{label}"] = li
-            log(f"[obc] {label} line: {li}")
 
     # Gated relax of interior neighbours of the snapped runs: the
     # chord snap shears its 1-ring exactly like coastline snapping
     # did; absorb it HERE because no stage after obc may move nodes.
     from fvcom_mesh_tools.algorithms.perp_local import _tri_quality
 
-    els = mesh.elements
-    touch = np.isin(els, list(snapped_ids)).any(axis=1)
+    if not snap:
+        # finalize mode: lists + perp only, zero node motion.
+        info["n_relaxed"] = 0
+        els = mesh.elements
+        touch = np.zeros(els.shape[0], dtype=bool)
+    else:
+        els = mesh.elements
+        touch = np.isin(els, list(snapped_ids)).any(axis=1)
     ring_e = np.where(touch)[0]
     bnd_uv = boundary_edges_from_tris(els)
     bnd_nodes = set(int(x) for e in bnd_uv for x in e)

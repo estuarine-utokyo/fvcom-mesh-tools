@@ -183,7 +183,8 @@ def _stage_siteops(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.site_session import apply_site_operators
 
     cfg = recipe.get("siteops", {}) or {}
-    src = Path(artifacts.get("finished_mesh")
+    src = Path(artifacts.get("obc_mesh")
+               or artifacts.get("finished_mesh")
                or artifacts["raw_mesh"])
     mesh = read_fort14(src)
     utm = int((recipe.get("finish") or {}).get("utm_epsg", 32654))
@@ -217,8 +218,8 @@ def _stage_export(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
 
     cfg = recipe.get("export", {}) or {}
-    src = Path(artifacts.get("obc_mesh")
-               or artifacts.get("polish_mesh")
+    src = Path(artifacts.get("final_mesh")
+               or artifacts.get("obc_mesh")
                or artifacts["raw_mesh"])
     mesh = read_fort14(src)
     if not mesh.open_boundaries or not len(mesh.open_boundaries[0]):
@@ -269,15 +270,42 @@ def _stage_polish(recipe, out_dir, artifacts, log):
     return {"polish_mesh": str(out14), "polish_info": finfo}
 
 
+def _stage_obcfinal(recipe, out_dir, artifacts, log):
+    from fvcom_mesh_tools.io import read_fort14, write_fort14
+    from fvcom_mesh_tools.obc_tools import assign_west_south_obc
+
+    cfg = recipe.get("obcfinal", recipe.get("obc", {})) or {}
+    src = Path(artifacts.get("polish_mesh")
+               or artifacts.get("siteops_mesh")
+               or artifacts["obc_mesh"])
+    mesh = read_fort14(src)
+    shoreline = artifacts.get("land_opened") \
+        or recipe["build"].get("coastline")
+    mesh, info = assign_west_south_obc(
+        mesh,
+        utm_epsg=int((recipe.get("finish") or {})
+                     .get("utm_epsg", 32654)),
+        shoreline_shp=shoreline,
+        coast_tol_m=float(cfg.get("coast_tol_m", 500.0)),
+        trim=int(cfg.get("trim", 1)),
+        max_move_m=float(cfg.get("max_move_m", 600.0)),
+        min_depth_m=cfg.get("min_depth_m"),
+        perp_seed=9900,
+        snap=False,
+        log=log,
+    )
+    out14 = out_dir / f"{recipe['name']}_final.14"
+    write_fort14(mesh, out14)
+    return {"final_mesh": str(out14), "obcfinal_info": info}
+
+
 def _stage_qa(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io import read_fort14
     from fvcom_mesh_tools.qa import format_report, run_qa
 
     cfg = recipe.get("qa", {}) or {}
-    target = Path(artifacts.get("obc_mesh")
-                  or artifacts.get("polish_mesh")
-                  or artifacts.get("siteops_mesh")
-                  or artifacts.get("finished_mesh")
+    target = Path(artifacts.get("final_mesh")
+                  or artifacts.get("obc_mesh")
                   or artifacts["raw_mesh"])
     mesh = read_fort14(target)
     report = run_qa(mesh, name=target.name, path=target,
@@ -315,7 +343,7 @@ def _stage_figures(recipe, out_dir, artifacts, log):
     fig_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for key in ("raw_mesh", "finished_mesh", "obc_mesh",
-                "siteops_mesh", "polish_mesh"):
+                "siteops_mesh", "polish_mesh", "final_mesh"):
         path = artifacts.get(key)
         if not path or not Path(path).exists():
             continue
@@ -343,9 +371,10 @@ STAGES = [
     ("prep", _stage_prep),
     ("build", _stage_build),
     ("finish", _stage_finish),
+    ("obc", _stage_obc),
     ("siteops", _stage_siteops),
     ("polish", _stage_polish),
-    ("obc", _stage_obc),
+    ("obcfinal", _stage_obcfinal),
     ("qa", _stage_qa),
     ("export", _stage_export),
     ("figures", _stage_figures),
