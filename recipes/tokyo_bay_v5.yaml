@@ -46,6 +46,8 @@ siteops:
 polish:
   optimize_budget_s: 300
 
+obcfinal: {}   # motionless list rebuild + perp after repairs
+
 qa:
   lang: ja
   skip_checks: [min_depth_clip]   # depth work is out of scope
