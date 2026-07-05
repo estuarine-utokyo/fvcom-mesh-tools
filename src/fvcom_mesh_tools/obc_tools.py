@@ -531,12 +531,11 @@ def assign_west_south_obc(
         if purge.any():
             mesh = _rm(mesh, ~purge)
             mesh, _ = keep_components(mesh)
-            mesh = _rebuild(mesh)
             log(f"[obc] corridor purge: {int(purge.sum())} elements")
         mesh, xinfo = extrude_boundary_strip(
             mesh, [arc_x], d_lo_frac=0.05, d_hi_frac=1.8,
         )
-        mesh = _rebuild(mesh)
+        # lists are rebuilt by the membership derivation just below
         log(f"[obc] strip extrusion: {xinfo}")
 
     mesh, n_m1 = _derive_arc_membership(mesh)
