@@ -155,3 +155,71 @@ FVCOM automesher; RiverMapper pseudo-channels and ADMESH+ width
 classification as adoptable prior art), `gate_passing_pipeline.md`
 (v1-era pipeline; superseded by the architecture above),
 `fvcom_source_constraints.md` (the QA gate derivations).
+
+## 4. The Yokosuka seam campaign (2026-07-05/06): a cascade failure
+
+**User verdict (2026-07-06): the mesh BEFORE this campaign was much
+better; the entire fix stack was withdrawn and `src/` reverted to
+the review17 state (commit `2e4d89d`, CFL floor). The 14 campaign
+commits remain in history as the failure ledger.**
+
+### The original defect (a preprocessing bug)
+
+`simplify_outside_region` (introduced at `a187715`, review16) cut
+each land polygon at the interest-region boundary and Douglas-
+Peucker-simplified the OUTSIDE piece — including the CUT-EDGE
+vertices. The two halves then no longer shared a seam, leaving a
+sliver strip (hundreds of metres wide, km long) that belongs to no
+land polygon. In the engineered-shoreline product that strip is
+WATER, so the mesher meshed it faithfully: "mesh on OSM land" at
+Yokosuka/Kurihama, exactly where the interest boundary crosses
+land. Root cause class: PREPROCESSING — the mesher and the OBC
+machinery were never at fault.
+
+### The cascade: each fix made the open boundary worse
+
+1. Seam-exact rewrite + morphological smoothing (r=400 m) +
+   set_precision (`cfaf866`..`d0f91f5`, reviews 18-23): fixed the
+   land sliver, but MOVED THE COAST near the OBC junctions. The
+   junction geometry shift destabilised the (latent, fragile)
+   OBC list machinery — coordinate-keyed membership went stale
+   after siteops/polish motion and the OBC stopped reaching the
+   coasts (review23; unmarked boundary = artificial wall in FVCOM;
+   caught by the user).
+2. Repair surgeries on the first row then cascaded (reviews 24-33):
+   - geometric membership derivation + ring-path ordering: held
+     (coast-to-coast restored) but exposed off-line stragglers;
+   - R4 centroid splits: children re-flag -> 140 splits, C1 317;
+   - fake-open splits: same cascade class;
+   - on-line edge collapse: gates too tight, 1-2 firings only;
+   - corridor purge + strip re-extrusion: extrusion laddered only
+     2 strips into a purged 22 km corridor -> d p50 = 1 km.
+3. Net effect vs review17: OBC quality strictly worse at every
+   step; reverted wholesale.
+
+### Lessons (binding)
+
+- **Fix preprocessing bugs IN PREPROCESSING.** A broken input
+  (fake-water sliver) must be repaired where it was created; every
+  downstream compensation layer added a new failure mode.
+- **Boundary-touching surgery cascades.** Deleting elements at the
+  OBC retreats the boundary; splitting them re-flags children;
+  "repair" operators that run inside a convergence-style loop are
+  the anti-pattern the no-convergence-loop doctrine forbids —
+  meta-level included (iterating OPERATOR DESIGNS against one
+  residual is the same trap).
+- **Geometry changes near junctions invalidate downstream
+  assumptions.** Any prep change that moves the coast near an
+  OBC junction must be followed by a full-pipeline visual check of
+  the junctions before anything else is tuned.
+- **Revert early.** The correct response after the second failed
+  surgery was a wholesale revert; instead nine rebuilds were spent.
+
+### The planned correct fix (not yet implemented)
+
+Seam-free formulation: simplify the coastline as RING ARCS, not
+area pieces — split each polygon ring into arcs inside/outside the
+interest region, DP-simplify only the outside arcs with their
+endpoints (the region-boundary crossing points) pinned, and
+reassemble the ring. No area cut -> no seam -> no fake water, and
+the smoothing/precision/validity patches become unnecessary.
