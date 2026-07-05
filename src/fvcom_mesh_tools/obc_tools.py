@@ -138,8 +138,14 @@ def assign_west_south_obc(
 
     info: dict[str, Any] = {"n_arc": int(open_len + 1)}
 
-    # --- SNAP ONCE: nodes move only here. -----------------------------
-    snapped: set[int] = set()
+    # --- SNAP ONCE: nodes move only here. Membership is tracked by
+    # COORDINATES: element deletion + keep_components renumber the
+    # nodes, so id sets go stale (the n_obc=1 collapse). ---------------
+    def _key(xy):
+        return (round(float(xy[0]), 3), round(float(xy[1]), 3))
+
+    snapped_keys: set = set()
+    snapped_ids: set[int] = set()
     for run_nodes, label in zip(parts, labels):
         if run_nodes.size >= 2:
             p0 = tuple(mesh.nodes[run_nodes[0]])
@@ -148,9 +154,47 @@ def assign_west_south_obc(
                 mesh, [int(v) for v in run_nodes], p0, p1,
                 max_move=max_move_m,
             )
-            snapped.update(int(v) for v in run_nodes)
+            for v in run_nodes:
+                snapped_keys.add(_key(mesh.nodes[int(v)]))
+                snapped_ids.add(int(v))
             info[f"line_{label}"] = li
             log(f"[obc] {label} line: {li}")
+
+    # Gated relax of interior neighbours of the snapped runs: the
+    # chord snap shears its 1-ring exactly like coastline snapping
+    # did; absorb it HERE because no stage after obc may move nodes.
+    from fvcom_mesh_tools.algorithms.perp_local import _tri_quality
+
+    els = mesh.elements
+    touch = np.isin(els, list(snapped_ids)).any(axis=1)
+    ring_e = np.where(touch)[0]
+    bnd_uv = boundary_edges_from_tris(els)
+    bnd_nodes = set(int(x) for e in bnd_uv for x in e)
+    interior = [int(w) for w in np.unique(els[ring_e].ravel())
+                if int(w) not in bnd_nodes]
+    n_relax = 0
+    for _sweep in range(2):
+        for w in interior:
+            we = np.where((els == w).any(axis=1))[0]
+            nbrs = sorted({int(x) for e in we for x in els[e]
+                           if int(x) != w})
+            if len(nbrs) < 3:
+                continue
+            tri_w = els[we]
+            mn0, mx0, tw0 = _tri_quality(mesh.nodes[tri_w])
+            bad0 = int((mn0 < 30).sum() + (mx0 > 130).sum()
+                       + (tw0 <= 0).sum())
+            old_pos = mesh.nodes[w].copy()
+            mesh.nodes[w] = mesh.nodes[nbrs].mean(axis=0)
+            mn1, mx1, tw1 = _tri_quality(mesh.nodes[tri_w])
+            bad1 = int((mn1 < 30).sum() + (mx1 > 130).sum()
+                       + (tw1 <= 0).sum())
+            if bad1 > bad0 or (tw1 <= 0).any():
+                mesh.nodes[w] = old_pos
+            else:
+                n_relax += 1
+    info["n_relaxed"] = n_relax
+    log(f"[obc] gated relax around snapped runs: {n_relax} accepts")
 
     # --- Assignment + bounded structural aftercare: deletions and
     # boundary-list rebuilds ONLY — no further node motion (a
@@ -166,7 +210,9 @@ def assign_west_south_obc(
         )
         outer2 = outer_loop(loops2, mesh_in.nodes)
         ring2 = outer2[:-1]
-        member = np.array([int(v) in snapped for v in ring2])
+        member = np.array([
+            _key(mesh_in.nodes[int(v)]) in snapped_keys for v in ring2
+        ])
         idx2 = np.where(member)[0]
         if idx2.size < 4:
             raise ValueError("open-sea run lost during cleanup")
