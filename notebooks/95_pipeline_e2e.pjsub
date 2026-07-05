@@ -1,0 +1,23 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=02:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc95
+
+# PoC #95: first end-to-end fmesh-pipeline run (tokyo_bay_v5 recipe):
+# prep -> build (CDT boundary) -> finish -> QA -> figures, all from
+# one YAML. Validates refactoring item 2.
+
+set -euo pipefail
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+: "${HOME:?}"
+: "${DATA_DIR:?DATA_DIR not set}"
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+fmesh-pipeline recipes/tokyo_bay_v5.yaml
