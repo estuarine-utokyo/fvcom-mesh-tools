@@ -68,6 +68,8 @@ def _stage_prep(recipe, out_dir, log):
     ]
     if cfg.get("cache_dir"):
         argv += ["--cache-dir", str(cfg["cache_dir"])]
+    if cfg.get("min_water_area") is not None:
+        argv += ["--min-water-area", str(cfg["min_water_area"])]
     if cfg.get("obc_line"):
         argv += ["--obc-line"] + [
             str(c) for pt in cfg["obc_line"] for c in pt

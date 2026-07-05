@@ -462,6 +462,56 @@ def assign_west_south_obc(
         log(f"[obc] junction closure (post-aftercare): +{n_cl2}")
         info["n_obc"] = int(mesh.open_boundaries[0].size)
 
+    if obc_line_lonlat is not None:
+        # OBC line straightener (AI manual-editing pass, single
+        # sweep): any OBC node still off the effective line (e.g.
+        # the Boso touchdown step, user review 2026-07-05) is
+        # projected onto it; whitelist-compliant (motion along/onto
+        # the OBC line only), flip-guarded, no iteration.
+        import shapely as _shp
+        from shapely.geometry import LineString as _LS
+
+        to_m4 = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
+                                     always_xy=True)
+        sx, sy = to_m4.transform(
+            [q[0] for q in obc_line_lonlat],
+            [q[1] for q in obc_line_lonlat],
+        )
+        arc4 = _LS(list(zip(sx, sy)))
+        els4 = mesh.elements
+
+        def _ring_ok4(v2):
+            we = np.where((els4 == v2).any(axis=1))[0]
+            tri = els4[we]
+            p0 = mesh.nodes[tri[:, 0]]
+            p1 = mesh.nodes[tri[:, 1]]
+            p2 = mesh.nodes[tri[:, 2]]
+            a2 = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+                  - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0]))
+            return bool((a2 > 0).all())
+
+        n_str = 0
+        worst = 0.0
+        for v in [int(q) for q in mesh.open_boundaries[0]]:
+            pt = _shp.Point(mesh.nodes[v, 0], mesh.nodes[v, 1])
+            d = float(_shp.distance(pt, arc4))
+            if d <= 20.0 or d > max_move_m:
+                worst = max(worst, 0.0 if d <= 20.0 else d)
+                continue
+            q4 = arc4.interpolate(arc4.project(pt))
+            old_pos = mesh.nodes[v].copy()
+            mesh.nodes[v] = (q4.x, q4.y)
+            if _ring_ok4(v):
+                n_str += 1
+            else:
+                mesh.nodes[v] = old_pos
+                worst = max(worst, d)
+        if n_str or worst:
+            log(f"[obc] line straightener: moved {n_str}, "
+                f"worst residual {worst:.0f} m")
+            info["straightener"] = {"moved": int(n_str),
+                                    "worst_residual_m": float(worst)}
+
     mesh, pinfo = align_open_boundary_local(
         mesh, seed=perp_seed, max_outer=1,
     )
