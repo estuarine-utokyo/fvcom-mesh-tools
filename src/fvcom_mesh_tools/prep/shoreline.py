@@ -256,23 +256,44 @@ def extend_obc_ends_perpendicular(
         # side is where the original end point lies
         if np.dot(P - Q, n) < 0:
             n = -n
-        sea_pt = Q + n * seaward_m
         land_pt = Q - n * overshoot_m
-        # Trim arc points closer than ~1.3*seaward_m to the coast so
-        # the normal approach replaces the arc tail instead of
-        # appending past it (the S-bend kink at both junctions).
+        # Trim arc points closer than ~1.3*seaward_m to the coast,
+        # then BLEND smoothly from the arc tangent into the coast
+        # normal with a quadratic Bezier. A hard corner here (the
+        # earlier sea_pt dogleg) leaves a ~1 km wedge of water
+        # between the wall and the coast that feature sizing treats
+        # as a narrow strait -> a fan of 200-400 m junk elements at
+        # the junction.
         keep = pts[:-1] if end else pts[1:]
         if end:
             while len(keep) > 2 and np.linalg.norm(
                 np.asarray(keep[-1]) - Q
             ) < 1.3 * seaward_m:
                 keep = keep[:-1]
-            return keep + [tuple(sea_pt), tuple(land_pt)]
-        while len(keep) > 2 and np.linalg.norm(
-            np.asarray(keep[0]) - Q
-        ) < 1.3 * seaward_m:
-            keep = keep[1:]
-        return [tuple(land_pt), tuple(sea_pt)] + keep
+            P0 = np.asarray(keep[-1])
+            t_dir = P0 - np.asarray(keep[-2])
+        else:
+            while len(keep) > 2 and np.linalg.norm(
+                np.asarray(keep[0]) - Q
+            ) < 1.3 * seaward_m:
+                keep = keep[1:]
+            P0 = np.asarray(keep[0])
+            t_dir = P0 - np.asarray(keep[1])
+        t_dir = t_dir / (np.linalg.norm(t_dir) or 1.0)
+        # control point: intersection of the tangent ray with the
+        # normal line through Q (falls back to the midpoint)
+        A = np.column_stack([t_dir, n])
+        P1 = 0.5 * (P0 + Q)
+        if abs(np.linalg.det(A)) > 1e-6:
+            ab = np.linalg.solve(A, Q - P0)
+            if 0.0 < ab[0] < 4.0 * seaward_m:
+                P1 = P0 + t_dir * ab[0]
+        ts = np.linspace(0.0, 1.0, 8)[1:]
+        blend = [tuple((1 - u) ** 2 * P0 + 2 * u * (1 - u) * P1
+                       + u ** 2 * Q) for u in ts]
+        if end:
+            return keep + blend + [tuple(land_pt)]
+        return [tuple(land_pt)] + blend[::-1] + keep
 
     pts = _fix_end(pts, end=False)
     pts = _fix_end(pts, end=True)
