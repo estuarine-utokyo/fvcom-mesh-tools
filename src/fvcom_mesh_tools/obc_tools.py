@@ -66,7 +66,28 @@ def assign_west_south_obc(
     outer = outer_loop(loops, mesh.nodes)
     ring = outer[:-1]
     rlon, rlat = lon[ring], lat[ring]
-    if shoreline_shp is not None:
+    if obc_line_lonlat is not None:
+        # The OBC line is explicit: candidates are simply the ring
+        # nodes NEAR the arc (the wall polygon that cuts the domain
+        # at the arc is itself part of the engineered shoreline, so
+        # distance-to-shoreline cannot see the arc: PoC #105 v2
+        # found no open-sea run at all).
+        import shapely
+        from shapely.geometry import LineString
+
+        to_m2 = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
+                                     always_xy=True)
+        ax, ay = to_m2.transform(
+            [q[0] for q in obc_line_lonlat],
+            [q[1] for q in obc_line_lonlat],
+        )
+        arc0 = LineString(list(zip(ax, ay)))
+        pts0 = shapely.points(mesh.nodes[ring, 0], mesh.nodes[ring, 1])
+        d_arc = shapely.distance(pts0, arc0)
+        mask = d_arc < max(2.0 * max_move_m, 1000.0)
+        south_b = mask
+        west_b = np.zeros_like(mask)
+    elif shoreline_shp is not None:
         # Open-sea edge = outer-ring nodes FAR from the engineered
         # shoreline (the lat/lon band heuristic mixes in coastline
         # nodes on non-rectangular domains — PoC #96: west run 0/107
@@ -112,7 +133,10 @@ def assign_west_south_obc(
     a, b = max(runs, key=lambda r: r[1] - r[0])
     arc_pos = np.arange(a, b + 1) % len(ring)
     arc_nodes = ring[arc_pos]
-    if shoreline_shp is not None:
+    if obc_line_lonlat is not None:
+        parts = [arc_nodes]
+        labels = ["arc"]
+    elif shoreline_shp is not None:
         # Split the arc at its corner: the node farthest from the
         # end-to-end chord (if its deviation is significant) — the
         # west/south rectangle corner on box-cut domains.
