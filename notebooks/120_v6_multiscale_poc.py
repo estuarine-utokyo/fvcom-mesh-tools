@@ -33,13 +33,16 @@ OBC_LINE = [tuple(q) for q in recipe["prep"]["obc_line"]]
 # transition sits at ~35.20-35.25 (band p50: 541 m at 35.20-35.30
 # vs 1146 m at 35.10-35.20). South edge raised to the narrows on
 # both sides; single-variable change vs PoC #120.
+# PoC #122: the central wedge (vertex 139.80,35.10) and the west
+# strip kept band 35.10-35.20 fine (649 m vs sample 1146). The
+# sample's fine/coarse transition is effectively a flat line at
+# ~35.20 across the bay; adopt it.
 INTEREST = [
-    (139.58, 35.32),
+    (139.58, 35.20),
     (139.58, 35.74),
     (140.16, 35.74),
     (140.16, 35.32),
-    (139.88, 35.25),
-    (139.80, 35.10),
+    (139.90, 35.20),
 ]
 DEM_PATH = os.path.expandvars(recipe["build"]["dem"])
 assert "$" not in DEM_PATH
