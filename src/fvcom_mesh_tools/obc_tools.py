@@ -95,8 +95,12 @@ def assign_west_south_obc(
                                        mesh.nodes[v, 1]))
             for v in ring
         ])
+        # Corridor: pre-snap boundary nodes sit up to several
+        # hundred metres off the line (DistMesh lattice + cleanup),
+        # so use max_move_m; the staircase came from clamped-END
+        # projections, which the interior filter removes.
         eps = 30.0
-        mask = ((d_arc < 150.0)
+        mask = ((d_arc < max_move_m)
                 & (s_arc > eps) & (s_arc < arc0.length - eps))
         south_b = mask
         west_b = np.zeros_like(mask)
