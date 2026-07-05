@@ -163,18 +163,36 @@ def cut_domain_at_obc_line(
     south of the line.
     """
     import geopandas as gpd
+    import numpy as np
     from shapely import make_valid
     from shapely.geometry import Polygon
 
+    # Swept-band wall: the arc extruded ~30 km along its seaward
+    # normal. Unlike a bbox-corner ring, this keeps coastal waters
+    # BEYOND the junctions (e.g. the Boso west coast north of the
+    # southern junction, which the reference mesh retains) — any
+    # water remnant seaward of the band is disconnected from the bay
+    # and dropped by keep_components later.
     lon_min, lat_min, lon_max, lat_max = bbox
-    pts = list(obc_line)
-    s_end, n_end = pts[0], pts[-1]
-    ring = (
-        pts
-        + [(lon_min, n_end[1]), (lon_min, lat_min),
-           (lon_max, lat_min), (lon_max, s_end[1])]
-        + [pts[0]]
+    pts = np.asarray(obc_line, dtype=float)
+    seg = np.diff(pts, axis=0)
+    nrm = np.stack([-seg[:, 1], seg[:, 0]], axis=1)
+    nrm = nrm / np.maximum(
+        np.linalg.norm(nrm, axis=1, keepdims=True), 1e-12,
     )
+    vnorm = np.vstack([nrm[:1], 0.5 * (nrm[:-1] + nrm[1:]), nrm[-1:]])
+    vnorm = vnorm / np.maximum(
+        np.linalg.norm(vnorm, axis=1, keepdims=True), 1e-12,
+    )
+    center = np.asarray([
+        0.5 * (lon_min + lon_max), 0.5 * (lat_min + lat_max),
+    ])
+    mid = pts[len(pts) // 2]
+    if np.dot(center - mid, vnorm[len(pts) // 2]) > 0:
+        vnorm = -vnorm  # normals must point AWAY from the bay
+    band_deg = 30000.0 / 91000.0  # ~30 km in degrees (coarse is fine)
+    outer = pts + vnorm * band_deg
+    ring = list(map(tuple, pts)) + list(map(tuple, outer[::-1]))
     wall = make_valid(Polygon(ring))
     gdf = land_gdf
     if gdf.crs is None:
@@ -240,9 +258,21 @@ def extend_obc_ends_perpendicular(
             n = -n
         sea_pt = Q + n * seaward_m
         land_pt = Q - n * overshoot_m
+        # Trim arc points closer than ~1.3*seaward_m to the coast so
+        # the normal approach replaces the arc tail instead of
+        # appending past it (the S-bend kink at both junctions).
+        keep = pts[:-1] if end else pts[1:]
         if end:
-            return pts[:-1] + [tuple(sea_pt), tuple(land_pt)]
-        return [tuple(land_pt), tuple(sea_pt)] + pts[1:]
+            while len(keep) > 2 and np.linalg.norm(
+                np.asarray(keep[-1]) - Q
+            ) < 1.3 * seaward_m:
+                keep = keep[:-1]
+            return keep + [tuple(sea_pt), tuple(land_pt)]
+        while len(keep) > 2 and np.linalg.norm(
+            np.asarray(keep[0]) - Q
+        ) < 1.3 * seaward_m:
+            keep = keep[1:]
+        return [tuple(land_pt), tuple(sea_pt)] + keep
 
     pts = _fix_end(pts, end=False)
     pts = _fix_end(pts, end=True)
