@@ -408,6 +408,17 @@ def simplify_outside_region(
     out = gpd.GeoDataFrame(
         geometry=out_geoms, crs=utm_epsg,
     ).to_crs(4326)
+    # the CRS roundtrip can re-introduce micro-invalidities: sanitize
+    fixed = []
+    for g in out.geometry:
+        if g is None or g.is_empty:
+            continue
+        g = make_valid(g)
+        fixed.extend(
+            q for q in getattr(g, "geoms", [g])
+            if q.geom_type == "Polygon" and not q.is_empty
+        )
+    out = gpd.GeoDataFrame(geometry=fixed, crs=4326)
     bad = int((~out.geometry.is_valid).sum())
     if bad:
         raise ValueError(
