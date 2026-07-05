@@ -62,10 +62,10 @@ def main() -> int:
     from fvcom_mesh_tools.io.fvcom_native import write_dep
 
     clipped = copy.deepcopy(mesh)
-    clipped.depths = np.maximum(clipped.depths, 2.0)
+    clipped.depths = np.maximum(clipped.depths, 5.0)
     dep_case = CASE_DIR / "input" / "tokyo_bay_v5_dep.dat"
     write_dep(clipped, dep_case)
-    print(f"[100] test-only dep floor 2 m -> {dep_case}", flush=True)
+    print(f"[100] test-only dep floor 5 m -> {dep_case}", flush=True)
     (CASE_DIR / "input" / "sigma.dat").write_text(
         "NUMBER OF SIGMA LEVELS = 11\nSIGMA COORDINATE TYPE = UNIFORM\n",
     )
