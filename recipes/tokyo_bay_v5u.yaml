@@ -52,6 +52,13 @@ build:
   minimum_area_mult: 36      # island threshold vs the 300 m floor
   enforce_hmin_floor: true
   constrain_boundary: true   # CDT egfix: boundary IS the shoreline
+  # OM2D-parity CFL floor (every Tokyo_Bay script: edgefx dt=0 ->
+  # auto-dt, maxCr=0.5 -> h >= u*dt/Cr, u = sqrt(gH)+nu*sqrt(g/H)).
+  # dt/Cr calibrated on the sample: narrows H~80 m -> ~900 m,
+  # bay H~10-40 m -> 300-500 m, canyon H~200 m -> ~1400 m.
+  courant_sizing: true
+  courant_target: 0.5
+  courant_timestep_s: 16.0
   # Reference nesting (goto2023 MATLAB: fine ONLY inside the interest
   # polygon; outside 1-2 km+). Everything south of the narrows and
   # the outer Boso/Miura coasts coarsen to >= 1 km.

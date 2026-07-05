@@ -427,6 +427,7 @@ def build(
                 crs=4326,
             )
             edge_components.append(edge_wave)
+        edge_courant = None
         if use_courant_sizing:
             log(
                 f"[oceanmesh] courant_sizing_function "
@@ -443,11 +444,26 @@ def build(
                 max_edge_length=hmax_deg,
                 crs=4326,
             )
-            edge_components.append(edge_courant)
+            # NOT a compute_minimum member: the CFL bound is a size
+            # FLOOR (deep water -> COARSE mesh), exactly OM2D's
+            # edgefx dt limiter (dt=0 in every Tokyo_Bay script:
+            # auto-dt, maxCr=0.5, dxn_min = u*dt/maxCr). A MIN
+            # composition can never raise sizes, which is why the
+            # Uraga canyon stayed fine (user review round 4).
         if len(edge_components) == 1:
             combined = edge_feat
         else:
             combined = om.compute_minimum(edge_components)
+        if edge_courant is not None:
+            xgc, ygc = combined.create_grid()
+            cf = np.asarray(edge_courant.eval(
+                np.column_stack([xgc.ravel(), ygc.ravel()])
+            )).reshape(xgc.shape)
+            n_cfl = int((combined.values < cf).sum())
+            combined.values = np.maximum(combined.values, cf)
+            combined.values = np.minimum(combined.values, hmax_deg)
+            log(f"[oceanmesh] CFL floor: raised {n_cfl:,} cells "
+                f"(deep water coarsened)")
         if obc_coarsen_line:
             # Reference-mesh policy (goto2023, user 2026-07-05): the
             # open boundary carries COARSE simple elements (~1.6 km

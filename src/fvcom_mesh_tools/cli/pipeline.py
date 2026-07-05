@@ -123,6 +123,12 @@ def _stage_build(recipe, out_dir, artifacts, log):
                  str(cfg.get("obc_coarsen_size_m", 1600.0)),
                  "--om-obc-coarsen-radius-m",
                  str(cfg.get("obc_coarsen_radius_m", 10000.0))]
+    if cfg.get("courant_sizing"):
+        argv += ["--om-courant-sizing",
+                 "--om-courant-target",
+                 str(cfg.get("courant_target", 0.5)),
+                 "--om-courant-timestep",
+                 str(cfg.get("courant_timestep_s", 16.0))]
     if cfg.get("interest_region"):
         argv += ["--om-interest-region"] + [
             str(c) for pt in cfg["interest_region"] for c in pt
