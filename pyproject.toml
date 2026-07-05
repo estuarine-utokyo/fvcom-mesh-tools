@@ -30,6 +30,7 @@ dependencies = [
 # compiled raster stack.
 [project.optional-dependencies]
 io-vector = ["shapely>=2.0", "geopandas>=0.14", "fiona>=1.9"]
+prep = ["fvcom-mesh-tools[io-vector]", "scikit-image>=0.22"]
 dem = ["rasterio>=1.3", "netCDF4>=1.6", "pyproj>=3.6"]
 oceanmesh = ["oceanmesh", "fvcom-mesh-tools[dem,io-vector]"]
 ocsmesh = ["ocsmesh", "gmsh", "fvcom-mesh-tools[dem,io-vector]"]
@@ -43,6 +44,7 @@ all = ["fvcom-mesh-tools[oceanmesh,ocsmesh,viz]"]
 [project.scripts]
 fmesh-perpfix = "fvcom_mesh_tools.cli.perpfix:main"
 fmesh-buildmesh = "fvcom_mesh_tools.cli.buildmesh:main"
+fmesh-prep-shoreline = "fvcom_mesh_tools.cli.prepshoreline:main"
 fmesh-subset-dem = "fvcom_mesh_tools.cli.subset_dem:main"
 fmesh-mesh-combine = "fvcom_mesh_tools.cli.meshcombine:main"
 fmesh-mesh-check = "fvcom_mesh_tools.cli.meshcheck:main"

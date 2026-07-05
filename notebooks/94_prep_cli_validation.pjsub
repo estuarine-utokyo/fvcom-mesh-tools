@@ -1,0 +1,41 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:40:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc94
+
+# PoC #94: fmesh-prep-shoreline CLI validation — regenerate the v5
+# front-end artifacts from the bbox alone and compare with the PoC
+# #90/#91 hand-scripted versions.
+
+set -euo pipefail
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+export PYTHONUNBUFFERED=1
+: "${HOME:?}"
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+fmesh-prep-shoreline \
+  --bbox 139.50 34.90 140.25 35.90 \
+  --out-dir outputs/prep_v5 \
+  --r-open 150 --min-island 3.6e5 \
+  --half-width 140 460 --px 50
+
+python -u - <<'PYEOF'
+import geopandas as gpd
+
+new_land = gpd.read_file("outputs/prep_v5/land_opened.shp")
+old_land = gpd.read_file("outputs/osm_shoreline/osm_land_opened_land150.shp")
+new_sk = gpd.read_file("outputs/prep_v5/skeleton_seeds.shp")
+old_sk = gpd.read_file("outputs/osm_shoreline/water_skeleton_seeds.shp")
+a_new = gpd.GeoSeries(new_land.geometry, crs=4326).to_crs(32654).area.sum()
+a_old = gpd.GeoSeries(old_land.geometry, crs=4326).to_crs(32654).area.sum()
+print(f"[94] land polygons: new={len(new_land)} old={len(old_land)}")
+print(f"[94] land area: new={a_new/1e6:.1f} km2 old={a_old/1e6:.1f} km2 "
+      f"ratio={a_new/a_old:.4f}")
+print(f"[94] skeleton lines: new={len(new_sk)} old={len(old_sk)}")
+PYEOF
