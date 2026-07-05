@@ -506,47 +506,63 @@ def assign_west_south_obc(
     if n_m1:
         log(f"[obc] arc membership (pre-aftercare): {n_m1} nodes")
 
-    n_split = 0
-    for _round in range(8):
+    n_collapsed = 0
+    for _round in range(40):
         flags = fvcom_boundary_element_flags(mesh)
         r4 = flags["r4_mask"]
+        bad_arc = np.zeros(mesh.n_elements, dtype=bool)
         if obc_line_lonlat is not None:
-            # fake-open elements notch the boundary when deleted,
-            # exactly like R4s (review27: 8 deletions -> 1.6 km
-            # ring detour) — split them too; only pinch topology
-            # still requires deletion.
-            r4 = r4 | flags["fake_open_mask"]
-        if obc_line_lonlat is not None and r4.any():
-            # Arc mode: SPLIT R4 elements (1-to-3 centroid insert)
-            # instead of deleting them — deletion retreats the
-            # boundary off the OBC line (review25: an ~800 m step
-            # with an 851 m off-line node the straightener cannot
-            # recover). The centroid becomes the interior node that
-            # de-R4s the element while the boundary stays put.
-            ids = np.where(r4)[0]
-            new_tris = []
-            keep_mask = np.ones(mesh.n_elements, dtype=bool)
-            for e in ids:
-                tri = mesh.elements[e]
-                cxy = mesh.nodes[tri].mean(axis=0)
-                vc = mesh.n_nodes
-                mesh.nodes = np.vstack([mesh.nodes, cxy[None, :]])
-                mesh.depths = np.append(
-                    mesh.depths, float(mesh.depths[tri].mean())
-                )
-                keep_mask[e] = False
-                a1, b1, c1 = (int(tri[0]), int(tri[1]), int(tri[2]))
-                new_tris += [[a1, b1, vc], [b1, c1, vc], [c1, a1, vc]]
-            mesh.elements = np.vstack(
-                [mesh.elements[keep_mask],
-                 np.asarray(new_tris, dtype=mesh.elements.dtype)]
+            bad_arc = r4 | flags["fake_open_mask"]
+        if obc_line_lonlat is not None and bad_arc.any():
+            # Collapse the flagged element's on-line edge instead of
+            # deleting (deletion notches the boundary: review25/26
+            # 851 m step) or centroid-splitting (children re-flag
+            # and the splits cascade: review28, 140 splits, C1 317).
+            # Collapsing two on-line nodes keeps the boundary
+            # EXACTLY on the arc — the whitelist deletion form.
+            import shapely as _shp
+            from shapely.geometry import LineString as _LS
+
+            to_c = Transformer.from_crs(
+                "EPSG:4326", f"EPSG:{utm_epsg}", always_xy=True)
+            cxs, cys = to_c.transform(
+                [q[0] for q in obc_line_lonlat],
+                [q[1] for q in obc_line_lonlat],
             )
-            n_split += int(ids.size)
-            mesh = _rebuild(mesh)
-            continue
-        # Pinch nodes break FVCOM's own NBE pairing at setup
-        # ("ELEMENT ... HAS NO NEIGHBORS" despite valid adjacency):
-        # delete them with the fatal classes.
+            arc_c = _LS(list(zip(cxs, cys)))
+
+            def _dline(v):
+                return float(_shp.distance(
+                    _shp.Point(*mesh.nodes[int(v)]), arc_c))
+
+            did = 0
+            for e in np.where(bad_arc)[0]:
+                tri = [int(v) for v in mesh.elements[e]]
+                pairs = [(a1, b1) for a1, b1 in
+                         ((tri[0], tri[1]), (tri[1], tri[2]),
+                          (tri[2], tri[0]))
+                         if _dline(a1) < 100.0 and _dline(b1) < 100.0]
+                if not pairs:
+                    continue
+                a1, b1 = min(pairs, key=lambda pr: np.linalg.norm(
+                    mesh.nodes[pr[0]] - mesh.nodes[pr[1]]))
+                mid = 0.5 * (mesh.nodes[a1] + mesh.nodes[b1])
+                q_m = arc_c.interpolate(arc_c.project(_shp.Point(*mid)))
+                mesh.nodes[a1] = (q_m.x, q_m.y)
+                mesh.elements[mesh.elements == b1] = a1
+                keep_e = ~(
+                    (mesh.elements[:, 0] == mesh.elements[:, 1])
+                    | (mesh.elements[:, 1] == mesh.elements[:, 2])
+                    | (mesh.elements[:, 2] == mesh.elements[:, 0])
+                )
+                mesh.elements = mesh.elements[keep_e]
+                did += 1
+                break  # re-flag after each collapse (indices shift)
+            if did:
+                n_collapsed += did
+                mesh, _ = keep_components(mesh)
+                mesh = _rebuild(mesh)
+                continue
         bad = r4 | flags["fake_open_mask"] | _pinch_elements(mesh)
         if not bad.any():
             break
@@ -554,8 +570,8 @@ def assign_west_south_obc(
         mesh = _rm(mesh, ~bad)
         mesh, _ = keep_components(mesh)
         mesh = _rebuild(mesh)
-    if n_split:
-        log(f"[obc] R4 centroid splits: {n_split}")
+    if n_collapsed:
+        log(f"[obc] on-line collapses: {n_collapsed}")
     info["n_structural_deleted"] = n_deleted
     info["n_obc"] = int(mesh.open_boundaries[0].size)
     log(f"[obc] structural aftercare: deleted {n_deleted}, "
