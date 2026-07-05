@@ -257,9 +257,30 @@ def assign_west_south_obc(
 
     mesh = _rebuild(mesh)
     n_deleted = 0
+    from fvcom_mesh_tools.qa import _edge_topology
+
+    def _pinch_elements(mesh_in):
+        topo = _edge_topology(mesh_in.elements, mesh_in.n_nodes)
+        buv = topo.uv[topo.counts == 1]
+        cnt = np.zeros(mesh_in.n_nodes, dtype=np.int64)
+        if buv.size:
+            np.add.at(cnt, buv.ravel(), 1)
+        pinch = np.where(cnt > 2)[0]
+        bad_p = np.zeros(mesh_in.n_elements, dtype=bool)
+        if pinch.size:
+            bad_p |= np.isin(mesh_in.elements, pinch).any(axis=1)
+        for u2, v2 in topo.uv[topo.counts > 2]:
+            bad_p |= ((mesh_in.elements == u2).any(axis=1)
+                      & (mesh_in.elements == v2).any(axis=1))
+        return bad_p
+
     for _round in range(8):
         flags = fvcom_boundary_element_flags(mesh)
-        bad = flags["r4_mask"] | flags["fake_open_mask"]
+        # Pinch nodes break FVCOM's own NBE pairing at setup
+        # ("ELEMENT ... HAS NO NEIGHBORS" despite valid adjacency):
+        # delete them with the fatal classes.
+        bad = flags["r4_mask"] | flags["fake_open_mask"] \
+            | _pinch_elements(mesh)
         if not bad.any():
             break
         n_deleted += int(bad.sum())
