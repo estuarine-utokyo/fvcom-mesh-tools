@@ -27,7 +27,20 @@ import yaml  # noqa: E402
 recipe = yaml.safe_load((REPO / "recipes" / "tokyo_bay_v5u.yaml").read_text())
 BBOX = tuple(recipe["prep"]["bbox"])  # lon_min, lat_min, lon_max, lat_max
 OBC_LINE = [tuple(q) for q in recipe["prep"]["obc_line"]]
-INTEREST = [tuple(q) for q in recipe["build"]["interest_region"]]
+# Interest polygon override (PoC #121 diagnosis): the v5u polygon's
+# EAST side dips to 35.02-35.18, putting the Futtsu bank / east
+# mouth waters inside the fine nest — the sample's fine/coarse
+# transition sits at ~35.20-35.25 (band p50: 541 m at 35.20-35.30
+# vs 1146 m at 35.10-35.20). South edge raised to the narrows on
+# both sides; single-variable change vs PoC #120.
+INTEREST = [
+    (139.58, 35.32),
+    (139.58, 35.74),
+    (140.16, 35.74),
+    (140.16, 35.32),
+    (139.88, 35.25),
+    (139.80, 35.10),
+]
 DEM_PATH = os.path.expandvars(recipe["build"]["dem"])
 assert "$" not in DEM_PATH
 
