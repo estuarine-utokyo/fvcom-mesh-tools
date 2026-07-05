@@ -93,7 +93,7 @@ def main() -> int:
     # --- namelist ----------------------------------------------------------
     txt = TIDE_NML.read_text()
     txt = txt.replace("tokyo_bay_v4_tide", CASENAME)
-    txt = txt.replace("tokyo_bay_v4", "tokyo_bay_v4")
+    txt = txt.replace("tokyo_bay_v4", "tokyo_bay_v5")
     nml = CASE_DIR / f"{CASENAME}_run.nml"
     nml.write_text(txt)
     print(f"[100] wrote {nml}", flush=True)
