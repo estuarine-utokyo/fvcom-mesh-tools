@@ -60,8 +60,8 @@ build:
     - [140.16, 35.18]
     - [139.92, 35.02]
     - [139.72, 35.02]
-  outside_min_m: 1000.0
-  outside_blend_m: 5000.0
+  outside_min_m: 1200.0
+  outside_blend_m: 2000.0
 
 finish:
   utm_epsg: 32654
@@ -70,8 +70,8 @@ finish:
 
 obc:
   band_deg: 0.012
-  trim: 1
-  max_move_m: 600.0
+  trim: 2
+  max_move_m: 900.0
   # min_depth_m: 2.0     # depth work is OUT OF SCOPE for mesh
   #                      # generation (value clamp only, never
   #                      # moves nodes); enable when a real depth
