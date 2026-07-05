@@ -162,6 +162,35 @@ def assign_west_south_obc(
     )
     info["n_obc"] = int(open_seg.size)
 
+    # Bounded structural cleanup: R4 / fake-open boundary elements
+    # created by the fresh junction trim (FVCOM-fatal) are deleted
+    # and the boundary lists rebuilt; at most ``8`` rounds, strictly
+    # decreasing (one-shot ladder, not a convergence loop).
+    from fvcom_mesh_tools.mesh_clean import keep_components
+    from fvcom_mesh_tools.mesh_clean import remove_elements as _rm
+    from fvcom_mesh_tools.qa import fvcom_boundary_element_flags
+
+    for _round in range(8):
+        flags = fvcom_boundary_element_flags(mesh)
+        bad = flags["r4_mask"] | flags["fake_open_mask"]
+        if not bad.any():
+            break
+        mesh = _rm(mesh, ~bad)
+        mesh, _ = keep_components(mesh)
+        return assign_west_south_obc(
+            mesh,
+            utm_epsg=utm_epsg,
+            band_deg=band_deg,
+            shoreline_shp=shoreline_shp,
+            coast_tol_m=coast_tol_m,
+            trim=trim,
+            max_move_m=max_move_m,
+            land_ibtype=land_ibtype,
+            perp_seed=perp_seed,
+            min_depth_m=min_depth_m,
+            log=log,
+        )
+
     mesh, pinfo = align_open_boundary_local(
         mesh, seed=perp_seed, max_outer=1,
     )

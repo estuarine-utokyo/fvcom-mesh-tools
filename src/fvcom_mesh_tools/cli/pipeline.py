@@ -183,8 +183,7 @@ def _stage_siteops(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.site_session import apply_site_operators
 
     cfg = recipe.get("siteops", {}) or {}
-    src = Path(artifacts.get("obc_mesh")
-               or artifacts.get("finished_mesh")
+    src = Path(artifacts.get("finished_mesh")
                or artifacts["raw_mesh"])
     mesh = read_fort14(src)
     utm = int((recipe.get("finish") or {}).get("utm_epsg", 32654))
@@ -218,9 +217,8 @@ def _stage_export(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
 
     cfg = recipe.get("export", {}) or {}
-    src = Path(artifacts.get("polish_mesh")
-               or artifacts.get("siteops_mesh")
-               or artifacts.get("obc_mesh")
+    src = Path(artifacts.get("obc_mesh")
+               or artifacts.get("polish_mesh")
                or artifacts["raw_mesh"])
     mesh = read_fort14(src)
     if not mesh.open_boundaries or not len(mesh.open_boundaries[0]):
@@ -254,7 +252,6 @@ def _stage_polish(recipe, out_dir, artifacts, log):
 
     cfg = recipe.get("polish", {}) or {}
     src = Path(artifacts.get("siteops_mesh")
-               or artifacts.get("obc_mesh")
                or artifacts["finished_mesh"])
     mesh = read_fort14(src)
     shoreline = Path(artifacts.get("land_opened")
@@ -267,25 +264,6 @@ def _stage_polish(recipe, out_dir, artifacts, log):
         utm_epsg=utm,
         log=log,
     )
-    # Element removal/renumbering inside finishing does not maintain
-    # the boundary lists (the tide-case generator found the polished
-    # mesh with 0 open segments) — re-derive the OBC afterwards.
-    from fvcom_mesh_tools.obc_tools import assign_west_south_obc
-
-    ocfg = recipe.get("obc", {}) or {}
-    mesh, oinfo = assign_west_south_obc(
-        mesh,
-        utm_epsg=utm,
-        shoreline_shp=shoreline,
-        coast_tol_m=float(ocfg.get("coast_tol_m", 500.0)),
-        trim=int(ocfg.get("trim", 1)),
-        max_move_m=float(ocfg.get("max_move_m", 600.0)),
-        min_depth_m=ocfg.get("min_depth_m"),
-        perp_seed=9800,
-        log=log,
-    )
-    finfo["obc_reassign"] = {k: v for k, v in oinfo.items()
-                             if k in ("n_obc", "perp")}
     out14 = out_dir / f"{recipe['name']}_polished.14"
     write_fort14(mesh, out14)
     return {"polish_mesh": str(out14), "polish_info": finfo}
@@ -296,9 +274,9 @@ def _stage_qa(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.qa import format_report, run_qa
 
     cfg = recipe.get("qa", {}) or {}
-    target = Path(artifacts.get("polish_mesh")
+    target = Path(artifacts.get("obc_mesh")
+                  or artifacts.get("polish_mesh")
                   or artifacts.get("siteops_mesh")
-                  or artifacts.get("obc_mesh")
                   or artifacts.get("finished_mesh")
                   or artifacts["raw_mesh"])
     mesh = read_fort14(target)
@@ -365,9 +343,9 @@ STAGES = [
     ("prep", _stage_prep),
     ("build", _stage_build),
     ("finish", _stage_finish),
-    ("obc", _stage_obc),
     ("siteops", _stage_siteops),
     ("polish", _stage_polish),
+    ("obc", _stage_obc),
     ("qa", _stage_qa),
     ("export", _stage_export),
     ("figures", _stage_figures),
