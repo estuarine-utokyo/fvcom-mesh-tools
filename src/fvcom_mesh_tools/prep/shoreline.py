@@ -189,21 +189,35 @@ def cut_domain_at_obc_line(
     gdf = land_gdf
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
-    # Morphological CLOSING (r=100 m, in UTM) of land+wall: the wall
-    # touchdown leaves sub-200 m water slits along the coast whose
-    # pocket vertices drag the OBC into R4/fake-open wedges (PoC #113
-    # spike node). Engineered channels are >= ~300 m after land
-    # opening, so the closing cannot seal anything real.
+    # LOCAL morphological closing (r=100 m, UTM) of the wall plus the
+    # coast within 400 m of it: the wall touchdown leaves sub-200 m
+    # water slits whose pocket vertices drag the OBC into R4/fake-
+    # open wedges (PoC #113 spike node). The closing must stay LOCAL:
+    # a global union turns land+wall into one ring polygon holding
+    # the bay as an interior HOLE, which collapses the Shoreline/SDF
+    # domain (328 fixed points, NP=853 — the review12 debacle).
     from shapely import unary_union
 
     utm = auto_utm_epsg(0.5 * (lon_min + lon_max),
                         0.5 * (lat_min + lat_max))
-    merged = gpd.GeoDataFrame(
-        geometry=list(gdf.to_crs(4326).geometry) + [wall], crs=4326,
-    ).to_crs(utm)
-    closed = unary_union(list(merged.geometry)).buffer(100.0).buffer(-100.0)
-    geoms = list(getattr(closed, "geoms", [closed]))
-    out = gpd.GeoDataFrame(geometry=geoms, crs=utm).to_crs(4326)
+    land4326 = list(gdf.to_crs(4326).geometry)
+    land_utm = gpd.GeoSeries(land4326, crs=4326).to_crs(utm)
+    wall_utm = gpd.GeoSeries([wall], crs=4326).to_crs(utm).iloc[0]
+    near = wall_utm.buffer(400.0)
+    local = [wall_utm] + [
+        g.intersection(near) for g in land_utm
+        if g is not None and g.intersects(near)
+    ]
+    wall_closed = make_valid(
+        unary_union(local).buffer(100.0).buffer(-100.0)
+    )
+    wall_out = gpd.GeoSeries(
+        [wall_closed], crs=utm,
+    ).to_crs(4326).iloc[0]
+    out = gpd.GeoDataFrame(
+        geometry=land4326 + list(getattr(wall_out, "geoms", [wall_out])),
+        crs=4326,
+    )
     return out
 
 
