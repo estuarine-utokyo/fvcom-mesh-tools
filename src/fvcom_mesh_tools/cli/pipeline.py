@@ -183,24 +183,11 @@ def _stage_finish(recipe, out_dir, artifacts, log):
         optimize_budget_s=float(cfg.get("optimize_budget_s", 600.0)),
         weld_tol_m=float(cfg.get("weld_tol_m", 2.0)),
         utm_epsg=utm,
-        protect_line_utm=_protect_line_utm(recipe, out_dir, utm),
         log=log,
     )
     out14 = out_dir / f"{recipe['name']}_finished.14"
     write_fort14(mesh, out14)
     return {"finished_mesh": str(out14), "finish_info": finfo}
-
-
-def _protect_line_utm(recipe, out_dir, utm):
-    """Effective OBC line in UTM for cap-deletion protection."""
-    line = _obc_line_from(recipe, out_dir)
-    if not line:
-        return None
-    from pyproj import Transformer as _Tr
-
-    tr = _Tr.from_crs("EPSG:4326", f"EPSG:{utm}", always_xy=True)
-    xs, ys = tr.transform([q[0] for q in line], [q[1] for q in line])
-    return list(zip(xs, ys))
 
 
 def _obc_line_from(recipe, out_dir):
@@ -340,7 +327,6 @@ def _stage_polish(recipe, out_dir, artifacts, log):
         optimize_budget_s=float(cfg.get("optimize_budget_s", 300.0)),
         weld_tol_m=float(cfg.get("weld_tol_m", 2.0)),
         utm_epsg=utm,
-        protect_line_utm=_protect_line_utm(recipe, out_dir, utm),
         log=log,
     )
     out14 = out_dir / f"{recipe['name']}_polished.14"

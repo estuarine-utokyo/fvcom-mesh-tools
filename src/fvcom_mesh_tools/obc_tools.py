@@ -435,85 +435,15 @@ def assign_west_south_obc(
             bnd[0] = np.array(obc_list, dtype=bnd[0].dtype)
         return mesh_in, n_closed
 
-    def _derive_arc_membership(mesh_in):
-        """Re-derive the OBC node list PURELY from geometry: outer-
-        ring nodes in the line corridor with interior projections
-        (plus near-line clamped ends), ordered by arc length.
-        Incremental closure walks + coordinate-keyed rebuilds go
-        stale as soon as siteops/polish move nodes (review23: list
-        collapsed 21 -> 8 and the tails to both coasts were left
-        unmarked = artificial walls)."""
-        if obc_line_lonlat is None:
-            return mesh_in, 0
-        import shapely
-        from shapely.geometry import LineString
-
-        to_m5 = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
-                                     always_xy=True)
-        ax5, ay5 = to_m5.transform(
-            [q[0] for q in obc_line_lonlat],
-            [q[1] for q in obc_line_lonlat],
-        )
-        arc5 = LineString(list(zip(ax5, ay5)))
-        loops5 = chain_edges_to_loops(
-            boundary_edges_from_tris(mesh_in.elements)
-        )
-        ring5 = outer_loop(loops5, mesh_in.nodes)[:-1]
-        pts5 = shapely.points(mesh_in.nodes[ring5, 0],
-                              mesh_in.nodes[ring5, 1])
-        d5 = shapely.distance(pts5, arc5)
-        s5 = np.array([
-            arc5.project(shapely.Point(*mesh_in.nodes[v]))
-            for v in ring5
-        ])
-        interior5 = (s5 > 30.0) & (s5 < arc5.length - 30.0)
-        keep5 = ((interior5 & (d5 <= max_move_m))
-                 | (~interior5 & (d5 <= 120.0)))
-        kidx = np.where(keep5)[0]
-        if kidx.size < 2:
-            return mesh_in, 0
-        # OBC = the contiguous RING PATH between the two arc-length
-        # extreme members (guarantees boundary-edge adjacency; s-
-        # sorted member lists violated obc_ordering where corridor
-        # gaps left off-chain stragglers, review24). Direction: the
-        # ring path that contains the most members.
-        i0 = int(kidx[np.argmin(s5[kidx])])
-        i1 = int(kidx[np.argmax(s5[kidx])])
-        n5 = len(ring5)
-        fwd = np.arange(i0, i0 + (i1 - i0) % n5 + 1) % n5
-        bwd = np.arange(i1, i1 + (i0 - i1) % n5 + 1) % n5
-        kset = set(kidx.tolist())
-        n_fwd = sum(1 for j in fwd if j in kset)
-        n_bwd = sum(1 for j in bwd if j in kset)
-        path = fwd if (n_fwd, -len(fwd)) >= (n_bwd, -len(bwd)) else bwd
-        if len(path) > 3 * kidx.size + 8:
-            # degenerate direction pick: fall back to the other side
-            path = bwd if path is fwd else fwd
-        members = ring5[path]
-        if members.size < 2:
-            return mesh_in, 0
-        # orient by increasing arc length for a stable list
-        if s5[path[0]] > s5[path[-1]]:
-            members = members[::-1]
-        bnd5 = mesh_in.open_boundaries
-        members = members.astype(
-            bnd5[0].dtype if bnd5 else np.int64
-        )
-        if bnd5:
-            bnd5[0] = members
-        else:
-            bnd5.append(members)
-        for v in members:
-            snapped_keys.add(_key(mesh_in.nodes[int(v)]))
-            snapped_ids.add(int(v))
-        return mesh_in, int(members.size)
-
-    mesh, n_m1 = _derive_arc_membership(mesh)
-    if n_m1:
-        log(f"[obc] arc membership (pre-aftercare): {n_m1} nodes")
+    mesh, n_cl1 = _junction_closure(mesh)
+    if n_cl1:
+        log(f"[obc] junction closure (pre-aftercare): +{n_cl1}")
 
     for _round in range(8):
         flags = fvcom_boundary_element_flags(mesh)
+        # Pinch nodes break FVCOM's own NBE pairing at setup
+        # ("ELEMENT ... HAS NO NEIGHBORS" despite valid adjacency):
+        # delete them with the fatal classes.
         bad = flags["r4_mask"] | flags["fake_open_mask"] \
             | _pinch_elements(mesh)
         if not bad.any():
@@ -527,9 +457,9 @@ def assign_west_south_obc(
     log(f"[obc] structural aftercare: deleted {n_deleted}, "
         f"n_obc={info['n_obc']}")
 
-    mesh, n_m2 = _derive_arc_membership(mesh)
-    if n_m2:
-        log(f"[obc] arc membership (post-aftercare): {n_m2} nodes")
+    mesh, n_cl2 = _junction_closure(mesh)
+    if n_cl2:
+        log(f"[obc] junction closure (post-aftercare): +{n_cl2}")
         info["n_obc"] = int(mesh.open_boundaries[0].size)
 
     if obc_line_lonlat is not None:

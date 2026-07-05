@@ -78,7 +78,6 @@ def finish_constrained_mesh(
     optimize_budget_s: float = 600.0,
     projector_snap_m: float = 200.0,
     utm_epsg: int = 32654,
-    protect_line_utm=None,
     log: Callable[[str], None] = print,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Finish a CDT-boundary mesh (UTM coordinates) as in PoC #93.
@@ -93,17 +92,6 @@ def finish_constrained_mesh(
     log(f"[finish] input NP={mesh.n_nodes:,} quality={info['input']}")
 
     # 1. cap-triangle deletion (bounded rounds, monotone).
-    protect_arc = None
-    if protect_line_utm is not None:
-        # Elements touching the OBC line are exempt: deleting them
-        # notches the boundary off the line (review25/26: 851 m
-        # step from the polish pass that nothing downstream can
-        # recover without refilling the hole).
-        from shapely.geometry import LineString
-
-        protect_arc = LineString(
-            [(float(q[0]), float(q[1])) for q in protect_line_utm]
-        )
     removed = 0
     for _ in range(cap_rounds):
         bset = _boundary_node_set(mesh)
@@ -111,15 +99,6 @@ def finish_constrained_mesh(
         bad = (mn < cap_min_angle) | (mx > cap_max_angle)
         allb = np.isin(mesh.elements, list(bset)).all(axis=1)
         kill = bad & allb
-        if protect_arc is not None and kill.any():
-            import shapely as _shp
-
-            cand = np.where(kill)[0]
-            cen = mesh.nodes[mesh.elements[cand]].mean(axis=1)
-            d_arc = _shp.distance(
-                _shp.points(cen[:, 0], cen[:, 1]), protect_arc
-            )
-            kill[cand[d_arc < 1000.0]] = False
         if not kill.any():
             break
         mesh = remove_elements(mesh, ~kill)
