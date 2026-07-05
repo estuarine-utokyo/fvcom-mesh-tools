@@ -15,6 +15,7 @@ from typing import Any
 
 __all__ = [
     "auto_utm_epsg",
+    "simplify_outside_region",
     "default_water_shp",
     "cut_domain_at_obc_line",
     "extend_obc_ends_perpendicular",
@@ -338,3 +339,67 @@ def extend_obc_ends_perpendicular(
         [LineString(pts)], crs=utm_epsg,
     ).to_crs(4326).iloc[0]
     return [(float(x), float(y)) for x, y in out.coords]
+
+
+def simplify_outside_region(
+    land_gdf,
+    interest_region: list[tuple[float, float]],
+    *,
+    tol_m: float = 500.0,
+    min_island_outside_m2: float = 1.0e6,
+    utm_epsg: int | None = None,
+):
+    """OM2D-nest parity for the SHORELINE GEOMETRY: outside the
+    interest polygon the coastline is Douglas-Peucker simplified at
+    ``tol_m`` and small islands are dropped. Post-hoc sizing floors
+    coarsen the SIZING field but not the geometry — the h0-detail
+    coastline still forces wiggly constrained chains and small
+    feature widths (Boso south tip, user review 2026-07-05). OM2D
+    nests avoid this by giving outer nests a coarse geodata (h0 =
+    1-10 km); this is the equivalent operator on one shapefile.
+    """
+    import geopandas as gpd
+    from shapely import make_valid, unary_union
+    from shapely.geometry import Polygon
+
+    gdf = land_gdf
+    if gdf.crs is None:
+        gdf = gdf.set_crs(4326)
+    gdf = gdf.to_crs(4326)
+    poly_i = make_valid(Polygon(
+        [(float(q[0]), float(q[1])) for q in interest_region]
+    ))
+    if utm_epsg is None:
+        c = poly_i.centroid
+        utm_epsg = auto_utm_epsg(c.x, c.y)
+    utm = gdf.to_crs(utm_epsg)
+    poly_utm = gpd.GeoSeries([poly_i], crs=4326).to_crs(utm_epsg).iloc[0]
+
+    out_geoms = []
+    for g in utm.geometry:
+        if g is None or g.is_empty:
+            continue
+        inside = make_valid(g.intersection(poly_utm))
+        outside = make_valid(g.difference(poly_utm))
+        keep = [p for p in getattr(inside, "geoms", [inside])
+                if p.geom_type == "Polygon" and not p.is_empty]
+        for p2 in getattr(outside, "geoms", [outside]):
+            if p2.geom_type != "Polygon" or p2.is_empty:
+                continue
+            s = p2.simplify(tol_m, preserve_topology=True)
+            if s.is_empty:
+                continue
+            # islands fully outside: drop the sub-scale ones
+            if (not p2.intersects(poly_utm)
+                    and s.area < min_island_outside_m2):
+                continue
+            keep.append(s)
+        if keep:
+            merged = make_valid(unary_union(keep))
+            out_geoms.extend(
+                p for p in getattr(merged, "geoms", [merged])
+                if p.geom_type == "Polygon" and not p.is_empty
+            )
+    return gpd.GeoDataFrame(
+        geometry=out_geoms, crs=utm_epsg,
+    ).to_crs(4326)

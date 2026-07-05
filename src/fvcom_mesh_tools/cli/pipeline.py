@@ -74,6 +74,14 @@ def _stage_prep(recipe, out_dir, log):
         argv += ["--obc-line"] + [
             str(c) for pt in cfg["obc_line"] for c in pt
         ]
+    ir = (recipe.get("build", {}) or {}).get("interest_region")
+    if ir:
+        argv += ["--interest-region"] + [
+            str(c) for pt in ir for c in pt
+        ]
+        if cfg.get("outside_simplify_m") is not None:
+            argv += ["--outside-simplify",
+                     str(cfg["outside_simplify_m"])]
     if not cfg.get("skeleton", True):
         argv += ["--no-skeleton"]
     rc = prepshoreline.main(argv)

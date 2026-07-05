@@ -76,6 +76,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Skeleton raster cell size.",
     )
     p.add_argument(
+        "--interest-region", type=float, nargs="+", default=None,
+        metavar="LONLAT",
+        help="Interest polygon as lon lat pairs. Coastline OUTSIDE "
+             "it is simplified (OM2D outer-nest parity) — sizing "
+             "floors alone cannot stop detailed coastlines from "
+             "dragging sizes down.",
+    )
+    p.add_argument(
+        "--outside-simplify", type=float, default=500.0,
+        metavar="METRES",
+        help="Douglas-Peucker tolerance for the coastline outside "
+             "the interest region.",
+    )
+    p.add_argument(
         "--obc-line", type=float, nargs="+", default=None,
         metavar="LONLAT",
         help="Artificial open-boundary line as lon lat pairs "
@@ -122,6 +136,21 @@ def main(argv: list[str] | None = None) -> int:
         clip_bbox=tuple(args.bbox),
         utm_epsg=args.utm_epsg,
     )
+    if args.interest_region:
+        from fvcom_mesh_tools.prep.shoreline import (
+            simplify_outside_region,
+        )
+
+        ir = [(args.interest_region[i], args.interest_region[i + 1])
+              for i in range(0, len(args.interest_region), 2)]
+        n_before = len(opened)
+        opened = simplify_outside_region(
+            opened, ir, tol_m=args.outside_simplify,
+            utm_epsg=args.utm_epsg,
+        )
+        print(f"[prep] outside-region coastline simplified at "
+              f"{args.outside_simplify:g} m "
+              f"({n_before} -> {len(opened)} polygons)", flush=True)
     obc_pts = None
     if args.obc_line:
         from fvcom_mesh_tools.prep.shoreline import (
@@ -169,6 +198,8 @@ def main(argv: list[str] | None = None) -> int:
         "skeleton": bool(args.skeleton),
         "half_width_m": list(args.half_width),
         "px_m": args.px,
+        "interest_region": args.interest_region,
+        "outside_simplify_m": args.outside_simplify,
         "obc_line": args.obc_line,
         "obc_line_effective": obc_pts,
         "obc_perpendicular_ends": bool(args.obc_perpendicular_ends),
