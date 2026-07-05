@@ -46,6 +46,7 @@ obc:
 
 siteops:
   passes: 2
+  min_edge_m: 75   # solver hazard: sub-scale edges NaN'd the M2 test
 
 polish:
   optimize_budget_s: 300

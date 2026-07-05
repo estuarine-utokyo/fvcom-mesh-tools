@@ -27,7 +27,7 @@ from fvcom_mesh_tools.algorithms.site_edits import (
 from fvcom_mesh_tools.io import Fort14Mesh
 from fvcom_mesh_tools.qa import run_qa
 
-__all__ = ["apply_site_operators"]
+__all__ = ["apply_site_operators", "collapse_short_edges"]
 
 
 def _boundary_codes(mesh: Fort14Mesh) -> set[int]:
@@ -44,6 +44,44 @@ def _find_element(mesh: Fort14Mesh, triple: frozenset):
         if frozenset(int(x) for x in tri) == triple:
             return k
     return None
+
+
+def collapse_short_edges(
+    mesh: Fort14Mesh,
+    lines,
+    *,
+    min_len: float,
+    log=print,
+) -> tuple[Fort14Mesh, int]:
+    """Single ascending sweep collapsing edges shorter than
+    ``min_len`` (gated collapse_edge; OBC nodes protected). Sub-scale
+    edges are a SOLVER hazard, not just a QA item: the v5 M2 test
+    went NaN in T/S with a 24 m minimum edge at hmin=300."""
+    protected = [int(v) for s in mesh.open_boundaries for v in s]
+    els = mesh.elements
+    raw = np.vstack([els[:, [0, 1]], els[:, [1, 2]], els[:, [2, 0]]])
+    raw.sort(axis=1)
+    uv = np.unique(raw, axis=0)
+    lens = np.linalg.norm(mesh.nodes[uv[:, 0]] - mesh.nodes[uv[:, 1]],
+                          axis=1)
+    order = np.argsort(lens)
+    n_done = 0
+    for k in order:
+        if lens[k] >= min_len:
+            break
+        u, v = int(uv[k, 0]), int(uv[k, 1])
+        if u >= mesh.n_nodes or v >= mesh.n_nodes:
+            continue
+        d = float(np.linalg.norm(mesh.nodes[u] - mesh.nodes[v]))
+        if d >= min_len:
+            continue
+        res = collapse_edge(mesh, u, v, lines=lines,
+                            protected=protected, gate_metric=True)
+        if res is not None:
+            mesh, _ = res
+            n_done += 1
+    log(f"[siteops] short-edge collapse (<{min_len:g} m): {n_done}")
+    return mesh, n_done
 
 
 def apply_site_operators(

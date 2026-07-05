@@ -191,6 +191,13 @@ def _stage_siteops(recipe, out_dir, artifacts, log):
     shoreline = Path(artifacts.get("land_opened")
                      or recipe["build"]["coastline"])
     lines = load_polylines(shoreline, to_crs=utm)
+    min_edge = cfg.get("min_edge_m")
+    if min_edge:
+        from fvcom_mesh_tools.site_session import collapse_short_edges
+
+        mesh, n_short = collapse_short_edges(
+            mesh, lines, min_len=float(min_edge), log=log,
+        )
     mesh, edit_log = apply_site_operators(
         mesh, lines, passes=int(cfg.get("passes", 2)), log=log,
     )
