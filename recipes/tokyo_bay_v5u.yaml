@@ -50,6 +50,18 @@ build:
   minimum_area_mult: 36      # island threshold vs the 300 m floor
   enforce_hmin_floor: true
   constrain_boundary: true   # CDT egfix: boundary IS the shoreline
+  # Reference nesting (goto2023 MATLAB: fine ONLY inside the interest
+  # polygon; outside 1-2 km+). Everything south of the narrows and
+  # the outer Boso/Miura coasts coarsen to >= 1 km.
+  interest_region:
+    - [139.58, 35.18]
+    - [139.58, 35.74]
+    - [140.16, 35.74]
+    - [140.16, 35.18]
+    - [139.92, 35.02]
+    - [139.72, 35.02]
+  outside_min_m: 1000.0
+  outside_blend_m: 5000.0
 
 finish:
   utm_epsg: 32654

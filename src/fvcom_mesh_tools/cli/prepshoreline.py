@@ -83,6 +83,13 @@ def main(argv: list[str] | None = None) -> int:
              "off so the domain ends at the line.",
     )
     p.add_argument(
+        "--obc-perpendicular-ends",
+        action=argparse.BooleanOptionalAction, default=True,
+        help="Replace each OBC-line end with a straight segment "
+             "along the local coast normal (perpendicular junction; "
+             "storm-surge stability practice).",
+    )
+    p.add_argument(
         "--utm-epsg", type=int, default=None,
         help="Metric CRS override (default: auto UTM zone).",
     )
@@ -115,15 +122,24 @@ def main(argv: list[str] | None = None) -> int:
         clip_bbox=tuple(args.bbox),
         utm_epsg=args.utm_epsg,
     )
+    obc_pts = None
     if args.obc_line:
         from fvcom_mesh_tools.prep.shoreline import (
             cut_domain_at_obc_line,
+            extend_obc_ends_perpendicular,
         )
 
-        pts = [(args.obc_line[i], args.obc_line[i + 1])
-               for i in range(0, len(args.obc_line), 2)]
-        opened = cut_domain_at_obc_line(opened, pts, tuple(args.bbox))
-        print(f"[prep] domain cut at OBC line ({len(pts)} pts)",
+        obc_pts = [(args.obc_line[i], args.obc_line[i + 1])
+                   for i in range(0, len(args.obc_line), 2)]
+        if args.obc_perpendicular_ends:
+            obc_pts = extend_obc_ends_perpendicular(
+                obc_pts, opened, utm_epsg=args.utm_epsg,
+            )
+            print("[prep] OBC ends extended perpendicular to the "
+                  "coast", flush=True)
+        opened = cut_domain_at_obc_line(opened, obc_pts,
+                                        tuple(args.bbox))
+        print(f"[prep] domain cut at OBC line ({len(obc_pts)} pts)",
               flush=True)
     land_path = out_dir / "land_opened.shp"
     opened.to_file(land_path)
@@ -154,6 +170,8 @@ def main(argv: list[str] | None = None) -> int:
         "half_width_m": list(args.half_width),
         "px_m": args.px,
         "obc_line": args.obc_line,
+        "obc_line_effective": obc_pts,
+        "obc_perpendicular_ends": bool(args.obc_perpendicular_ends),
         "utm_epsg": args.utm_epsg,
         "outputs": {
             "land_opened": str(land_path),

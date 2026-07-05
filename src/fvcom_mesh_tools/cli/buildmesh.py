@@ -192,6 +192,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="[oceanmesh] Inland decay radius of the OBC size floor.",
     )
     p.add_argument(
+        "--om-interest-region", type=float, nargs="+", default=None,
+        metavar="LONLAT",
+        help="[oceanmesh] Interest polygon as lon lat pairs; sizing "
+             "outside it is floored (reference practice: fine mesh "
+             "only inside the interest region).",
+    )
+    p.add_argument(
+        "--om-outside-min-m", type=float, default=1000.0,
+        help="[oceanmesh] Size floor outside the interest region.",
+    )
+    p.add_argument(
+        "--om-outside-blend-m", type=float, default=5000.0,
+        help="[oceanmesh] Blend distance for the outside floor.",
+    )
+    p.add_argument(
         "--om-enforce-hmin-floor", action="store_true",
         help="[oceanmesh] Clamp the feature sizing grid at --hmin "
              "(its native min_edge_length argument is not a floor). "
@@ -543,6 +558,14 @@ def main(argv: list[str] | None = None) -> int:
             ),
             obc_coarsen_size_m=args.om_obc_coarsen_size_m,
             obc_coarsen_radius_m=args.om_obc_coarsen_radius_m,
+            interest_region=(
+                [(args.om_interest_region[i],
+                  args.om_interest_region[i + 1])
+                 for i in range(0, len(args.om_interest_region), 2)]
+                if args.om_interest_region else None
+            ),
+            outside_min_m=args.om_outside_min_m,
+            outside_blend_m=args.om_outside_blend_m,
             use_wavelength_sizing=args.om_wavelength_sizing,
             wavelength_period_s=args.om_wavelength_period,
             wavelength_grid_spacing=args.om_wavelength_grid_spacing,

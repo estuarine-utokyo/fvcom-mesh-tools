@@ -16,6 +16,7 @@ from typing import Any
 __all__ = [
     "auto_utm_epsg",
     "cut_domain_at_obc_line",
+    "extend_obc_ends_perpendicular",
     "default_land_shp",
     "fetch_true_land",
     "open_land",
@@ -182,3 +183,70 @@ def cut_domain_at_obc_line(
         geometry=list(gdf.to_crs(4326).geometry) + [wall], crs=4326,
     )
     return out
+
+
+def extend_obc_ends_perpendicular(
+    obc_line: list[tuple[float, float]],
+    land_gdf,
+    *,
+    seaward_m: float = 1500.0,
+    overshoot_m: float = 800.0,
+    utm_epsg: int | None = None,
+) -> list[tuple[float, float]]:
+    """Replace each end of the OBC line with a straight segment along
+    the local coast NORMAL, so the open boundary meets the coastline
+    exactly at right angles (stability requirement: oblique OBC-coast
+    junctions are a known storm-surge instability source; the sample
+    mesh practice is bold simplification near the boundary).
+
+    The terminal segment runs from ``seaward_m`` off the coast along
+    the normal to ``overshoot_m`` INTO the land (the wall/domain cut
+    consumes the overshoot).
+    """
+    import geopandas as gpd
+    import numpy as np
+    import shapely
+    from shapely import unary_union
+    from shapely.geometry import LineString
+
+    from fvcom_mesh_tools.prep.shoreline import auto_utm_epsg
+
+    if utm_epsg is None:
+        c = obc_line[len(obc_line) // 2]
+        utm_epsg = auto_utm_epsg(c[0], c[1])
+    land = unary_union(list(
+        land_gdf.to_crs(utm_epsg).geometry.values
+    ))
+    line_utm = gpd.GeoSeries(
+        [LineString(obc_line)], crs=4326,
+    ).to_crs(utm_epsg).iloc[0]
+    pts = list(line_utm.coords)
+
+    def _fix_end(pts, end):
+        P = np.asarray(pts[-1] if end else pts[0])
+        boundary = land.boundary
+        q = boundary.interpolate(boundary.project(shapely.Point(P)))
+        Q = np.asarray([q.x, q.y])
+        # local coast tangent from a short chord around Q
+        s = boundary.project(shapely.Point(P))
+        q1 = boundary.interpolate(max(0.0, s - 400.0))
+        q2 = boundary.interpolate(s + 400.0)
+        tvec = np.asarray([q2.x - q1.x, q2.y - q1.y])
+        n = np.asarray([-tvec[1], tvec[0]])
+        n = n / (np.linalg.norm(n) or 1.0)
+        # orient the normal seaward (away from land): the seaward
+        # side is where the original end point lies
+        if np.dot(P - Q, n) < 0:
+            n = -n
+        sea_pt = Q + n * seaward_m
+        land_pt = Q - n * overshoot_m
+        if end:
+            return pts[:-1] + [tuple(sea_pt), tuple(land_pt)]
+        return [tuple(land_pt), tuple(sea_pt)] + pts[1:]
+
+    pts = _fix_end(pts, end=False)
+    pts = _fix_end(pts, end=True)
+    out = gpd.GeoSeries(
+        [LineString(pts)], crs=utm_epsg,
+    ).to_crs(4326).iloc[0]
+    return [(float(x), float(y)) for x, y in out.coords]

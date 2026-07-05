@@ -247,6 +247,9 @@ def build(
     obc_coarsen_line: list | None = None,
     obc_coarsen_size_m: float = 1600.0,
     obc_coarsen_radius_m: float = 10000.0,
+    interest_region: list | None = None,
+    outside_min_m: float = 1000.0,
+    outside_blend_m: float = 5000.0,
     log: Callable[[str], None] = print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate a mesh with oceanmesh + DistMesh.
@@ -476,6 +479,32 @@ def build(
                 f"[oceanmesh] OBC coarsening: raised {n_raised:,} "
                 f"cells (size {obc_coarsen_size_m:g} m at the arc, "
                 f"radius {obc_coarsen_radius_m:g} m)"
+            )
+        if interest_region:
+            # Reference-mesh architecture (goto2023 MATLAB scripts:
+            # 3-level nest, fine ONLY inside the interest polygon;
+            # outside is 1-2 km+). Outside the polygon the sizing is
+            # floored at outside_min_m, blended over outside_blend_m.
+            import shapely
+            from shapely.geometry import Polygon
+
+            poly = Polygon(
+                [(float(q[0]), float(q[1])) for q in interest_region]
+            )
+            xg2, yg2 = combined.create_grid()
+            pts2 = shapely.points(xg2.ravel(), yg2.ravel())
+            d_out_deg = shapely.distance(pts2, poly).reshape(xg2.shape)
+            deg_per_m2 = float(_m_to_deg_lat(1.0))
+            d_out_m = d_out_deg / deg_per_m2
+            floor2 = (outside_min_m * deg_per_m2) * np.clip(
+                d_out_m / max(outside_blend_m, 1.0), 0.0, 1.0,
+            )
+            n_up = int((combined.values < floor2).sum())
+            combined.values = np.maximum(combined.values, floor2)
+            log(
+                f"[oceanmesh] interest-region floor: raised {n_up:,} "
+                f"cells outside the polygon "
+                f"(min {outside_min_m:g} m, blend {outside_blend_m:g} m)"
             )
         edge = om.enforce_mesh_gradation(combined, gradation=gradation)
 

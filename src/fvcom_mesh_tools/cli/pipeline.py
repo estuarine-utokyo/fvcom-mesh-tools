@@ -113,6 +113,14 @@ def _stage_build(recipe, out_dir, artifacts, log):
                  str(cfg.get("obc_coarsen_size_m", 1600.0)),
                  "--om-obc-coarsen-radius-m",
                  str(cfg.get("obc_coarsen_radius_m", 10000.0))]
+    if cfg.get("interest_region"):
+        argv += ["--om-interest-region"] + [
+            str(c) for pt in cfg["interest_region"] for c in pt
+        ]
+        argv += ["--om-outside-min-m",
+                 str(cfg.get("outside_min_m", 1000.0)),
+                 "--om-outside-blend-m",
+                 str(cfg.get("outside_blend_m", 5000.0))]
     argv += [
         "--coastline", str(coast),
         "--hmin", str(cfg["hmin_m"]),
@@ -166,6 +174,20 @@ def _stage_finish(recipe, out_dir, artifacts, log):
     return {"finished_mesh": str(out14), "finish_info": finfo}
 
 
+def _obc_line_from(recipe, out_dir):
+    """Effective OBC line: prep may extend the ends perpendicular to
+    the coast; prefer its recorded result."""
+    prov = out_dir / "prep" / "provenance.json"
+    if prov.exists():
+        import json as _json
+
+        d = _json.loads(prov.read_text())
+        eff = d.get("obc_line_effective")
+        if eff:
+            return [tuple(q) for q in eff]
+    return (recipe.get("prep", {}) or {}).get("obc_line")
+
+
 def _stage_obc(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io import read_fort14, write_fort14
     from fvcom_mesh_tools.obc_tools import assign_west_south_obc
@@ -186,7 +208,7 @@ def _stage_obc(recipe, out_dir, artifacts, log):
         trim=int(cfg.get("trim", 1)),
         max_move_m=float(cfg.get("max_move_m", 600.0)),
         min_depth_m=cfg.get("min_depth_m"),
-        obc_line_lonlat=(recipe.get("prep", {}) or {}).get("obc_line"),
+        obc_line_lonlat=_obc_line_from(recipe, out_dir),
         log=log,
     )
     out14 = out_dir / f"{recipe['name']}_obc.14"
@@ -318,7 +340,7 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
         min_depth_m=cfg.get("min_depth_m"),
         perp_seed=9900,
         snap=False,
-        obc_line_lonlat=(recipe.get("prep", {}) or {}).get("obc_line"),
+        obc_line_lonlat=_obc_line_from(recipe, out_dir),
         log=log,
     )
     out14 = out_dir / f"{recipe['name']}_final.14"
