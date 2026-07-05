@@ -1,0 +1,92 @@
+# Uraga-arc variant: goto2023's open-boundary geometry on the
+# automated pipeline. Supersedes tokyo_bay_v5s (box-edge OBC
+# across the trough).
+# Southern-extension variant: 90 m DEM (covers to 34.82 N) so
+# the domain reaches the Uraga narrows like goto2023 (34.97).
+# Sizing needs no better than 90 m; the M7001-based depth
+# product is a later, depth-phase task.
+# Tokyo Bay v5 — the CDT-constrained true-300m recipe.
+# Reproduces PoC #92/#93 (see docs/DESIGN_HISTORY.md) end to end:
+#   fmesh-pipeline recipes/tokyo_bay_v5.yaml
+# DEM path comes from the group data share; fail loudly if DATA_DIR
+# is unset (GENKAI rule) by leaving the ${DATA_DIR} reference.
+name: tokyo_bay_v5u
+out_dir: outputs/pipeline_v5u
+
+prep:
+  bbox: [139.40, 34.90, 140.30, 35.90]
+  # goto2023's Uraga-narrows OBC arc (extracted from
+  # TB-FVCOM/input/goto2023): the domain is CUT here — never
+  # run the open boundary across the Sagami trough (v5s
+  # lesson: 2.4 km depths under a box-edge OBC blew up in 1 h).
+  obc_line:
+    - [139.7497, 34.9750]
+    - [139.7373, 34.9916]
+    - [139.7289, 35.0047]
+    - [139.7216, 35.0184]
+    - [139.7134, 35.0327]
+    - [139.7069, 35.0445]
+    - [139.7000, 35.0576]
+    - [139.6946, 35.0705]
+    - [139.6871, 35.0877]
+    - [139.6816, 35.1031]
+    - [139.6772, 35.1168]
+    - [139.6737, 35.1288]
+    - [139.6713, 35.1396]
+  r_open_m: 150.0            # erase land features thinner than 300 m
+  min_island_area_m2: 3.6e5  # 4 * (300 m)^2
+  skeleton: true
+  skeleton_half_width_m: [140.0, 460.0]
+  skeleton_px_m: 50.0
+
+build:
+  dem: ${DATA_DIR}/bathymetry/tokyo_bay/depth_0090-05+06+07.nc
+  engine: oceanmesh
+  hmin_m: 300
+  hmax_m: 1500
+  zmax: 0.0
+  seed: 0
+  shoreline_h0_m: 100        # domain detail decoupled from sizing
+  minimum_area_mult: 36      # island threshold vs the 300 m floor
+  enforce_hmin_floor: true
+  constrain_boundary: true   # CDT egfix: boundary IS the shoreline
+
+finish:
+  utm_epsg: 32654
+  optimize_budget_s: 600     # SMS cadence: 10 minutes, then stop
+  weld_tol_m: 2.0
+
+obc:
+  band_deg: 0.012
+  trim: 1
+  max_move_m: 600.0
+  # min_depth_m: 2.0     # depth work is OUT OF SCOPE for mesh
+  #                      # generation (value clamp only, never
+  #                      # moves nodes); enable when a real depth
+  #                      # field is attached later
+
+siteops:
+  passes: 2
+  min_edge_m: 75   # solver hazard: sub-scale edges NaN'd the M2 test
+
+polish:
+  optimize_budget_s: 300
+
+obcfinal: {}   # motionless list rebuild + perp after repairs
+
+qa:
+  lang: ja
+  skip_checks: [min_depth_clip]   # depth work is out of scope
+
+export:
+  casename: tokyo_bay_v5u
+  obc_type: 1
+  sponge_radius_m: 3000.0   # forced runs REQUIRE a sponge (v2 lesson)
+  sponge_coeff: 0.001
+
+figures:
+  coast_bbox: [139.4, 34.9, 140.4, 35.85]
+  views:
+    full: null
+    tokyoport: [139.72, 35.53, 139.90, 35.68]
+    banzu: [139.85, 35.33, 140.02, 35.46]

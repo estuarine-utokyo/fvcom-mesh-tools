@@ -13,7 +13,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-__all__ = ["auto_utm_epsg", "default_land_shp", "fetch_true_land", "open_land"]
+__all__ = [
+    "auto_utm_epsg",
+    "cut_domain_at_obc_line",
+    "default_land_shp",
+    "fetch_true_land",
+    "open_land",
+]
 
 
 def auto_utm_epsg(lon: float, lat: float) -> int:
@@ -138,3 +144,41 @@ def open_land(
         )
     out = out[out.geometry.is_valid & ~out.geometry.is_empty]
     return out.reset_index(drop=True)
+
+
+def cut_domain_at_obc_line(
+    land_gdf,
+    obc_line: list[tuple[float, float]],
+    bbox: tuple[float, float, float, float],
+):
+    """Close the domain at an artificial open-boundary LINE: all
+    water on the seaward side of ``obc_line`` becomes a wall polygon
+    merged into the land, so the generated mesh ends exactly at the
+    line (goto2023 practice: a short smooth arc at the Uraga narrows
+    instead of box edges across the Sagami trough).
+
+    ``obc_line`` runs from its southern/eastern end to its
+    northern/western end (lon, lat); the wall fills the bbox region
+    south of the line.
+    """
+    import geopandas as gpd
+    from shapely import make_valid
+    from shapely.geometry import Polygon
+
+    lon_min, lat_min, lon_max, lat_max = bbox
+    pts = list(obc_line)
+    s_end, n_end = pts[0], pts[-1]
+    ring = (
+        pts
+        + [(lon_min, n_end[1]), (lon_min, lat_min),
+           (lon_max, lat_min), (lon_max, s_end[1])]
+        + [pts[0]]
+    )
+    wall = make_valid(Polygon(ring))
+    gdf = land_gdf
+    if gdf.crs is None:
+        gdf = gdf.set_crs(4326)
+    out = gpd.GeoDataFrame(
+        geometry=list(gdf.to_crs(4326).geometry) + [wall], crs=4326,
+    )
+    return out

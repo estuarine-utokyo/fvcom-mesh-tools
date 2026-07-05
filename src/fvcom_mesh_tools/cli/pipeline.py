@@ -68,6 +68,10 @@ def _stage_prep(recipe, out_dir, log):
     ]
     if cfg.get("cache_dir"):
         argv += ["--cache-dir", str(cfg["cache_dir"])]
+    if cfg.get("obc_line"):
+        argv += ["--obc-line"] + [
+            str(c) for pt in cfg["obc_line"] for c in pt
+        ]
     if not cfg.get("skeleton", True):
         argv += ["--no-skeleton"]
     rc = prepshoreline.main(argv)
@@ -168,6 +172,7 @@ def _stage_obc(recipe, out_dir, artifacts, log):
         trim=int(cfg.get("trim", 1)),
         max_move_m=float(cfg.get("max_move_m", 600.0)),
         min_depth_m=cfg.get("min_depth_m"),
+        obc_line_lonlat=(recipe.get("prep", {}) or {}).get("obc_line"),
         log=log,
     )
     out14 = out_dir / f"{recipe['name']}_obc.14"
@@ -299,6 +304,7 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
         min_depth_m=cfg.get("min_depth_m"),
         perp_seed=9900,
         snap=False,
+        obc_line_lonlat=(recipe.get("prep", {}) or {}).get("obc_line"),
         log=log,
     )
     out14 = out_dir / f"{recipe['name']}_final.14"

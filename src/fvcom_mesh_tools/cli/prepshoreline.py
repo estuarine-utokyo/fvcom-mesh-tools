@@ -76,6 +76,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Skeleton raster cell size.",
     )
     p.add_argument(
+        "--obc-line", type=float, nargs="+", default=None,
+        metavar="LONLAT",
+        help="Artificial open-boundary line as lon lat pairs "
+             "(southern end first). Water seaward of it is walled "
+             "off so the domain ends at the line.",
+    )
+    p.add_argument(
         "--utm-epsg", type=int, default=None,
         help="Metric CRS override (default: auto UTM zone).",
     )
@@ -108,6 +115,16 @@ def main(argv: list[str] | None = None) -> int:
         clip_bbox=tuple(args.bbox),
         utm_epsg=args.utm_epsg,
     )
+    if args.obc_line:
+        from fvcom_mesh_tools.prep.shoreline import (
+            cut_domain_at_obc_line,
+        )
+
+        pts = [(args.obc_line[i], args.obc_line[i + 1])
+               for i in range(0, len(args.obc_line), 2)]
+        opened = cut_domain_at_obc_line(opened, pts, tuple(args.bbox))
+        print(f"[prep] domain cut at OBC line ({len(pts)} pts)",
+              flush=True)
     land_path = out_dir / "land_opened.shp"
     opened.to_file(land_path)
     print(f"[prep] wrote {land_path} ({len(opened)} polygons, "
@@ -136,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         "skeleton": bool(args.skeleton),
         "half_width_m": list(args.half_width),
         "px_m": args.px,
+        "obc_line": args.obc_line,
         "utm_epsg": args.utm_epsg,
         "outputs": {
             "land_opened": str(land_path),

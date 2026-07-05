@@ -42,6 +42,7 @@ def assign_west_south_obc(
     perp_seed: int = 9500,
     min_depth_m: float | None = None,
     snap: bool = True,
+    obc_line_lonlat=None,
     log=print,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Detect the west+south open-sea edges of the outer ring, snap
@@ -147,6 +148,37 @@ def assign_west_south_obc(
 
     snapped_keys: set = set()
     snapped_ids: set[int] = set()
+    if obc_line_lonlat is not None and snap:
+        # Project every open-sea node onto the artificial ARC line
+        # (goto2023-style curved OBC) instead of straight chords.
+        import shapely
+        from shapely.geometry import LineString
+
+        to_m = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
+                                    always_xy=True)
+        lx, ly = to_m.transform(
+            [q[0] for q in obc_line_lonlat],
+            [q[1] for q in obc_line_lonlat],
+        )
+        arc = LineString(list(zip(lx, ly)))
+        all_arc = np.concatenate(parts) if len(parts) else np.array([])
+        n_arc_snap = 0
+        for v in all_arc:
+            v = int(v)
+            q = arc.interpolate(arc.project(
+                shapely.Point(mesh.nodes[v, 0], mesh.nodes[v, 1])
+            ))
+            move = float(np.hypot(q.x - mesh.nodes[v, 0],
+                                  q.y - mesh.nodes[v, 1]))
+            if move <= max_move_m:
+                mesh.nodes[v] = (q.x, q.y)
+                n_arc_snap += 1
+            snapped_keys.add(_key(mesh.nodes[v]))
+            snapped_ids.add(v)
+        info["arc_snap"] = {"n": int(n_arc_snap),
+                            "of": int(all_arc.size)}
+        log(f"[obc] arc snap: {n_arc_snap}/{all_arc.size}")
+        parts = []
     for run_nodes, label in zip(parts, labels):
         if run_nodes.size >= 2:
             if snap:
