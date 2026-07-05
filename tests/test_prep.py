@@ -74,3 +74,20 @@ def test_water_skeleton_lines_traces_channel():
     ys = np.concatenate([np.asarray(g.coords)[:, 1] for g in utm])
     y0 = 35.0 / 1.0  # noqa: F841 - band computed from fixture layout
     assert ((ys > 3.873e6) & (ys < 3.876e6)).any() or len(seeds) >= 1
+
+
+def test_pipeline_recipe_loads_and_validates(tmp_path):
+    import json
+
+    from fvcom_mesh_tools.cli.pipeline import _load_recipe
+
+    good = tmp_path / "r.yaml"
+    good.write_text("name: t\nout_dir: /tmp/x\nqa: {lang: en}\n")
+    r = _load_recipe(good)
+    assert r["name"] == "t" and "qa" in r
+
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("out_dir: /tmp/x\n")
+    with pytest.raises(SystemExit):
+        _load_recipe(bad)
+    del json
