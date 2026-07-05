@@ -267,6 +267,25 @@ def _stage_polish(recipe, out_dir, artifacts, log):
         utm_epsg=utm,
         log=log,
     )
+    # Element removal/renumbering inside finishing does not maintain
+    # the boundary lists (the tide-case generator found the polished
+    # mesh with 0 open segments) — re-derive the OBC afterwards.
+    from fvcom_mesh_tools.obc_tools import assign_west_south_obc
+
+    ocfg = recipe.get("obc", {}) or {}
+    mesh, oinfo = assign_west_south_obc(
+        mesh,
+        utm_epsg=utm,
+        shoreline_shp=shoreline,
+        coast_tol_m=float(ocfg.get("coast_tol_m", 500.0)),
+        trim=int(ocfg.get("trim", 1)),
+        max_move_m=float(ocfg.get("max_move_m", 600.0)),
+        min_depth_m=ocfg.get("min_depth_m"),
+        perp_seed=9800,
+        log=log,
+    )
+    finfo["obc_reassign"] = {k: v for k, v in oinfo.items()
+                             if k in ("n_obc", "perp")}
     out14 = out_dir / f"{recipe['name']}_polished.14"
     write_fort14(mesh, out14)
     return {"polish_mesh": str(out14), "polish_info": finfo}
