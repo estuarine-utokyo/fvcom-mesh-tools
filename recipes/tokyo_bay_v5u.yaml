@@ -53,13 +53,17 @@ build:
   # Reference nesting (goto2023 MATLAB: fine ONLY inside the interest
   # polygon; outside 1-2 km+). Everything south of the narrows and
   # the outer Boso/Miura coasts coarsen to >= 1 km.
+  # SW edge retreats north of the Uraga narrows: the mouth coasts
+  # must be COARSE (reference level-02 practice) or 0.15 gradation
+  # from a 300 m coastline defeats the OBC floor and the boundary
+  # zigzags between constrained anchors at the junctions.
   interest_region:
-    - [139.58, 35.18]
+    - [139.58, 35.32]
     - [139.58, 35.74]
     - [140.16, 35.74]
     - [140.16, 35.18]
     - [139.92, 35.02]
-    - [139.72, 35.02]
+    - [139.80, 35.10]
   outside_min_m: 1200.0
   outside_blend_m: 2000.0
 
