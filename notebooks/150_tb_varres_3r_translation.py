@@ -91,7 +91,14 @@ NESTS = [
 ]
 
 sdfs, edges, gdats = [], [], []
+import time as _time
+_t0 = _time.time()
+
+def _tick(msg):
+    print(f"[time +{_time.time()-_t0:6.0f}s] {msg}", flush=True)
+
 for k, nz in enumerate(NESTS, 1):
+    _tick(f"nest{k} geodata start")
     print(f"[nest{k}] geodata: {Path(nz['shp']).name} "
           f"h0={nz['h0']:g} m", flush=True)
     reg = Region((float(nz['bbox'][:, 0].min()),
@@ -127,14 +134,17 @@ for k, nz in enumerate(NESTS, 1):
     )
     print(f"[nest{k}] finalize done (auto dt = {dt_used})",
           flush=True)
+    _tick(f"nest{k} sizing done")
     sdfs.append(sdf)
     edges.append(grid)
     gdats.append((shore, dem))
 
+_tick("meshgen start")
 print("[meshgen] build (itmax=%d) ..." % MESH_ITMAX, flush=True)
 p, t = om.generate_multiscale_mesh(sdfs, edges, max_iter=MESH_ITMAX,
                                    seed=0)
 print(f"[meshgen] NP={len(p):,} NE={len(t):,}", flush=True)
+_tick("meshgen done")
 p, t = om.make_mesh_boundaries_traversable(p, t)
 p, t = om.delete_faces_connected_to_one_face(p, t)
 from oceanmesh.mesh_improve import area_length_quality  # noqa: E402
