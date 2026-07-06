@@ -22,8 +22,8 @@ import xarray as xr
 from pyproj import Transformer
 
 REPO = Path(__file__).resolve().parents[1]
-OUT_NC = REPO / "outputs" / "fvcom_tide" / "output" / "tokyo_bay_v4_tide_0001.nc"
-VERDICT = REPO / "outputs" / "fvcom_tide" / "84b_tide_verdict.json"
+OUT_NC = REPO / "outputs" / "fvcom_tide_v4" / "output" / "tokyo_bay_v4_tide_0001.nc"
+VERDICT = REPO / "outputs" / "fvcom_tide_v4" / "84b_tide_verdict.json"
 FIG = REPO / "outputs" / "figures" / "84b_m2_amplitude.png"
 
 M2_H = 12.4206012

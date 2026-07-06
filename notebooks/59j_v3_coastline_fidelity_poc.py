@@ -54,9 +54,10 @@ HMAX_M = 5000.0
 GRADATION = 0.10
 SLOPE_PARAMETER = 20.0
 MAX_ITER = 50
-# East edge extended to the DEM limit so the Chiba 140.10E clip
-# disappears (v1 used 140.10).
-BBOX = ("139.46", "34.99", "140.18", "35.74")
+# The build region comes from the DEM extent (139.565-140.172E,
+# 35.10-35.86N), so the domain automatically reaches the real Chiba
+# coast — the v1 Chiba clip at 140.10E was the old pipeline bbox and
+# disappears here.
 
 # Zoom windows (lon/lat) for visual comparison: Banzu flat off
 # Kisarazu, and the Keihin port area.
@@ -133,7 +134,6 @@ def main() -> int:
         "--om-gradation", str(GRADATION),
         "--om-max-iter", str(MAX_ITER),
         "--om-seed", "0",
-        "--bbox", *BBOX,
         "--bbox-tol-m", "150",
         "--open-merge-coast-gap", "50",
         "--river-inflow-points", str(RIVERS),
