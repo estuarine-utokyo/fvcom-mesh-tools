@@ -16,6 +16,7 @@ from typing import Any
 __all__ = [
     "auto_utm_epsg",
     "smooth_land_per_polygon",
+    "junction_tail_constraints",
     "projector_lines",
     "simplify_outside_region",
     "default_water_shp",
@@ -460,3 +461,43 @@ def projector_lines(land_inner_gdf, land_outer_gdf, inner_polygon,
                 if q.geom_type == "LineString" and len(q.coords) > 1:
                     lines.append(q)
     return gpd.GeoDataFrame(geometry=lines, crs=4326)
+
+
+def junction_tail_constraints(eff_line_lonlat, land_sm_gdf,
+                              tail_len_m=1500.0, utm_epsg=32654):
+    """Perpendicular-junction constraints for constrained meshing:
+    for each end of the effective OBC line, the TOUCHDOWN (first
+    crossing of the smoothed coastline walking in from that end)
+    and a KNEE point ``tail_len_m`` further along the line. Feeding
+    [touchdown, knee] per end as egfix edges forces the mesh
+    boundary to realize the engineered 90-degree tail. Returns
+    [[td, knee], [td, knee]] in lon/lat."""
+    from pyproj import Transformer
+    from shapely.geometry import LineString
+    from shapely.ops import unary_union
+
+    tr = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
+                              always_xy=True)
+    tri = Transformer.from_crs(f"EPSG:{utm_epsg}", "EPSG:4326",
+                               always_xy=True)
+    lx, ly = tr.transform([q[0] for q in eff_line_lonlat],
+                          [q[1] for q in eff_line_lonlat])
+    line = LineString(list(zip(lx, ly)))
+    g = land_sm_gdf if land_sm_gdf.crs is not None         else land_sm_gdf.set_crs(4326)
+    coast = unary_union(list(g.to_crs(utm_epsg).geometry)).boundary
+    cross = line.intersection(coast)
+    pts = ([cross] if cross.geom_type == "Point"
+           else [q for q in getattr(cross, "geoms", [])
+                 if q.geom_type == "Point"])
+    if not pts:
+        return None
+    ss = sorted(line.project(q) for q in pts)
+    out = []
+    for s_td, sgn in ((ss[0], +1.0), (ss[-1], -1.0)):
+        s_kn = s_td + sgn * tail_len_m
+        s_kn = min(max(s_kn, 0.0), line.length)
+        td = line.interpolate(s_td)
+        kn = line.interpolate(s_kn)
+        out.append([list(tri.transform(td.x, td.y)),
+                    list(tri.transform(kn.x, kn.y))])
+    return out

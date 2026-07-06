@@ -114,6 +114,7 @@ def _stage_prep(recipe, out_dir, log):
             "nests", {}).get("inner", {}).get("polygon")
         land = gpd.read_file(out["land_opened"])  # no wall yet
         outer_gdf = smooth_land_per_polygon(land, r_m=float(r_sm))
+        outer_pre_cut = outer_gdf.copy()
         eff = None
         if cfg.get("obc_line"):
             eff = extend_obc_ends_perpendicular(
@@ -127,6 +128,17 @@ def _stage_prep(recipe, out_dir, log):
             prov = (_json.loads(prov_path.read_text())
                     if prov_path.exists() else {})
             prov["obc_line_effective"] = [list(q) for q in eff]
+            from fvcom_mesh_tools.prep.shoreline import (
+                junction_tail_constraints,
+            )
+
+            jc = junction_tail_constraints(
+                eff, outer_pre_cut,
+                tail_len_m=float(cfg.get("junction_tail_m", 1500.0)),
+            )
+            if jc:
+                prov["junction_constraints"] = jc
+                log(f"[prep] junction tail constraints: {len(jc)}")
             prov_path.write_text(_json.dumps(prov, indent=2))
             log(f"[prep] wall cut into both coastlines "
                 f"({len(eff)} effective pts)")
@@ -167,6 +179,13 @@ def _stage_build(recipe, out_dir, artifacts, log):
         )
 
         nests = cfg.get("nests", {})
+        jc = None
+        prov_path = out_dir / "prep" / "provenance.json"
+        if prov_path.exists():
+            import json as _json
+
+            jc = _json.loads(prov_path.read_text()).get(
+                "junction_constraints")
         pts, cls, dep = build_multiscale(
             land_detailed_shp=Path(artifacts["land_opened"]),
             land_outer_shp=Path(artifacts["land_outer"]),
@@ -178,6 +197,7 @@ def _stage_build(recipe, out_dir, artifacts, log):
                    if k != "polygon"},
             courant=cfg.get("courant"),
             seed=int(cfg.get("seed", 0)),
+            junction_constraints=jc,
             log=log,
         )
         mesh = Fort14Mesh(
@@ -448,7 +468,7 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
     )
     eff = _obc_line_from(recipe, out_dir)
     proj_lines = artifacts.get("projector_lines")
-    if eff and proj_lines:
+    if eff and proj_lines and cfg.get("junction_realize", False):
         from pyproj import Transformer
         from shapely.geometry import LineString
 

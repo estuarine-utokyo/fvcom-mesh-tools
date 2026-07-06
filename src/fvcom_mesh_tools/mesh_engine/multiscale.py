@@ -38,6 +38,7 @@ def build_multiscale(
     inner: dict[str, Any] | None = None,
     courant: dict[str, Any] | None = None,
     seed: int = 0,
+    junction_constraints: list | None = None,
     log=print,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build the two-nest multiscale mesh; returns (points, cells)
@@ -100,9 +101,22 @@ def build_multiscale(
     )
     log(f"[ms] inner sizing done (dt={dt_i})")
 
+    ms_kw = {}
+    if junction_constraints:
+        pf = np.asarray(
+            [q for pair in junction_constraints for q in pair],
+            dtype=float,
+        )
+        eg = np.asarray(
+            [[2 * k, 2 * k + 1]
+             for k in range(len(junction_constraints))], dtype=int,
+        )
+        ms_kw = {"pfix": pf, "egfix": eg}
+        log(f"[ms] junction constraints: {len(pf)} pfix, "
+            f"{len(eg)} egfix")
     log("[ms] generate_multiscale_mesh ...")
     points, cells = om.generate_multiscale_mesh(
-        [sdf_o, sdf_i], [edge_o, edge_i], seed=seed,
+        [sdf_o, sdf_i], [edge_o, edge_i], seed=seed, **ms_kw,
     )
     log(f"[ms] raw NP={len(points):,} NE={len(cells):,}")
 
