@@ -21,7 +21,9 @@ COAST2 = Path("/home/pj24001722/share/Data/coastline/tokyo_bay/"
 # sliced DEMs (the .m used 'SRTM15_V2.3_sliced.nc'; full-global
 # SRTM15+ made nest-1 sizing a 170M-cell computation)
 SRTM_PACIFIC = OM2D / "datasets/TokyoBay/dem/SRTM15_pacific_4min.nc"
-SRTM_KANTO = OM2D / "datasets/TokyoBay/dem/SRTM15_kanto_15s.nc"
+# project bathymetry policy: M7001 (J-BIRD, full Southern-Kanto
+# extent) wherever it covers; SRTM only outside its hull / on land
+SRTM_KANTO = OM2D / "datasets/TokyoBay/dem/kanto_M7001full_srtm_15s.nc"
 OUT = Path("outputs/tb_varres_3r")
 OUT.mkdir(parents=True, exist_ok=True)
 DEG = 1.0 / 111e3  # OM2D uses /111e3 throughout
