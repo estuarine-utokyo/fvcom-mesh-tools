@@ -8,7 +8,11 @@ out_dir: outputs/pipeline_v6s
 
 prep:
   bbox: [139.40, 34.90, 140.30, 35.90]
-  min_water_area: 1.0          # subtract nothing: rivers closed
+  # closing ALL rivers merges Kanto into one bbox-wide polygon and
+  # inverts oceanmesh's shoreline classification (v6s incident).
+  # Keep MAJOR rivers open (preserves the polygon split); canals
+  # and small waterways close. Tamagawa mouth = 1.1 km2 stays.
+  min_water_area: 5.0e-5
   r_open_m: 150.0
   min_island_area_m2: 2.0e6    # sample has essentially no islets
   # inner_smooth_r_m: 250.0 -- DISABLED: exposes an inversion
