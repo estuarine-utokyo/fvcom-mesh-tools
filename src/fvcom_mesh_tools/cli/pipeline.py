@@ -480,8 +480,8 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io import read_fort14, write_fort14
 
     cfg = (recipe.get("finishing") or {}).get("auto") or {}
-    src = Path(artifacts.get("obc_mesh")
-               or artifacts.get("finished_mesh")
+    src = Path(artifacts.get("final_mesh")
+               or artifacts.get("obc_mesh")
                or artifacts["raw_mesh"])
     mesh = read_fort14(src)
     dcfg = (recipe.get("finishing") or {}).get("directives")
@@ -518,7 +518,8 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
         )
     write_ledger(list(dledger) + list(ledger or patches),
                  out_dir / "finishing_ledger.json")
-    out14 = out_dir / f"{recipe['name']}_finishing.14"
+    out14 = Path(artifacts.get("final_mesh")
+                 or out_dir / f"{recipe['name']}_finishing.14")
     write_fort14(mesh, out14)
     unfixed = [q for q in ledger
                if "outcome" in q
@@ -526,7 +527,8 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
     if unfixed:
         log(f"[finishing] {len(unfixed)} patches NOT fixed "
             "(see ledger)")
-    return {"finishing_mesh": str(out14)}
+    return {"finishing_mesh": str(out14),
+            "final_mesh": str(out14)}
 
 
 def _stage_obcfinal(recipe, out_dir, artifacts, log):
@@ -534,8 +536,7 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.obc_tools import assign_west_south_obc
 
     cfg = recipe.get("obcfinal", recipe.get("obc", {})) or {}
-    src = Path(artifacts.get("finishing_mesh")
-               or artifacts.get("polish_mesh")
+    src = Path(artifacts.get("polish_mesh")
                or artifacts.get("siteops_mesh")
                or artifacts["obc_mesh"])
     mesh = read_fort14(src)
@@ -668,8 +669,8 @@ STAGES = [
     ("obc", _stage_obc),
     ("siteops", _stage_siteops),
     ("polish", _stage_polish),
-    ("finishing", _stage_finishing),
     ("obcfinal", _stage_obcfinal),
+    ("finishing", _stage_finishing),
     ("qa", _stage_qa),
     ("export", _stage_export),
     ("figures", _stage_figures),
