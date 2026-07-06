@@ -448,7 +448,12 @@ def smooth_land_per_polygon(land_gdf, r_m=1000.0,
         sm = make_valid(geom.buffer(r_m).buffer(-2.0 * r_m).buffer(r_m))
         for q in getattr(sm, "geoms", [sm]):
             if q.geom_type == "Polygon" and q.area >= min_area_m2:
-                parts.append(q)
+                # normalize winding: buffer chains can flip ring
+                # orientation, inverting land/water in the SDF
+                # (v6s northern-bay inversion)
+                from shapely.geometry.polygon import orient
+
+                parts.append(orient(q, sign=1.0))
     return gpd.GeoDataFrame(geometry=parts, crs=utm_epsg).to_crs(4326)
 
 
