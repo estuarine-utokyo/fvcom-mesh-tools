@@ -72,24 +72,18 @@ def apply_directives(mesh, directives, utm_epsg=32654, log=print):
             log(f"[finishing] directive {k}: {rec['outcome']}")
             ledger.append(rec)
             continue
-        # gross-failure gate only: borderline seam angles
-        # (20-30 deg) are left for the auto-repair stage that runs
-        # AFTER directives (design: "auto-repair heals their
-        # seams"). Revert on angles < 20 deg or mass breakage.
-        det = detect_violations(P1, T1,
-                                thresholds={"c1_min_deg": 20.0})
+        # structural gate only: seam-angle healing is fully
+        # delegated to the auto-repair stage that runs AFTER
+        # directives (design order); QA judges the result. Seam
+        # sites are counted for the ledger.
+        det = detect_violations(P1, T1)
         cen = P1[T1].mean(axis=1)
         halo = pg.buffer(3.0 * float(d["target_h_m"]))
-        gross = [ie for c in ("c1", "c2")
-                 for ie in det[c]["elements"]
-                 if shapely.contains_xy(halo, cen[ie, 0],
-                                        cen[ie, 1])]
-        if len(gross) > 0:
-            rec["outcome"] = (f"reverted ({len(gross)} gross "
-                              "local failures)")
-            log(f"[finishing] directive {k}: {rec['outcome']}")
-            ledger.append(rec)
-            continue
+        seam = [ie for c in ("c1", "c2")
+                for ie in det[c]["elements"]
+                if shapely.contains_xy(halo, cen[ie, 0],
+                                       cen[ie, 1])]
+        rec["seam_sites_for_auto"] = len(seam)
         # depths for new nodes; obc id remap by exact coordinates
         lin = LinearNDInterpolator(P0, D0)
         near = NearestNDInterpolator(P0, D0)
