@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 faulthandler.enable()
+faulthandler.dump_traceback_later(120, repeat=True)
 logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                     format="%(levelname)s %(name)s: %(message)s")
 
