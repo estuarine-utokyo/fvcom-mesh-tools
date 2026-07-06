@@ -461,6 +461,15 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
     dledger = []
     if dcfg:
         from fvcom_mesh_tools.finishing import apply_directives
+        from fvcom_mesh_tools.gridref import GridRef
+
+        bbox = recipe["prep"]["bbox"]
+        grid = GridRef(bbox[0], bbox[1], bbox[2], bbox[3])
+        for d in dcfg:
+            if "cell" in d and "polygon" not in d:
+                d["polygon"] = grid.cell_polygon(d["cell"])
+                log(f"[finishing] directive cell {d['cell']} -> "
+                    "polygon")
 
         utm = int((recipe.get("finish") or {})
                   .get("utm_epsg", 32654))
