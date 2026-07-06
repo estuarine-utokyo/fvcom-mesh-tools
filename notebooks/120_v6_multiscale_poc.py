@@ -91,7 +91,13 @@ if not shp_outer.exists():
     # and the outer-nest SDF collapses (the review20 failure class,
     # reproduced by PoC #123 v1: the mouth vanished).
     g = gpd.read_file(shp_path).to_crs(32654)
-    r = 500.0
+    # PoC #124: r=1000 — the 1.5-3 km Boso coves survive r=500 and
+    # geometrically force 400-700 m fringes against the 1-2 km
+    # sizing; the sample's mouth-east coast is nearly straight.
+    # Inside the interest polygon only the INNER (detailed) SDF is
+    # active (multiscale nests are Difference-constructed), so the
+    # aggressive outer smoothing cannot touch Futtsu or the ports.
+    r = 1000.0
     parts = []
     for geom in g.geometry:
         if geom is None or geom.is_empty:
