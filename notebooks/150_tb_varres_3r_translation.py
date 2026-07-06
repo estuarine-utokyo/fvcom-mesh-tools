@@ -4,10 +4,17 @@
 # polygons, same edgefx parameters, same pipeline order
 # (geodata -> edgefx -> meshgen.build -> interp -> make_bc).
 # NO walls, NO cuts, NO morphological preprocessing.
+import faulthandler
+import logging
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
+
+faulthandler.enable()
+logging.basicConfig(level=logging.INFO, stream=sys.stdout,
+                    format="%(levelname)s %(name)s: %(message)s")
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
