@@ -68,6 +68,9 @@ siteops:
 polish:
   optimize_budget_s: 300.0
 
+finishing:
+  auto: {}
+
 obcfinal: {}
 
 qa:
