@@ -1,0 +1,81 @@
+# tokyo_bay_v6: OM2D-parity MULTISCALE stage 1 (validated PoC #124)
+# + the existing stage-2 finishing. Two nests from per-nest
+# coastline sources; NO outside-region simplification anywhere.
+name: tokyo_bay_v6
+out_dir: outputs/pipeline_v6r
+
+prep:
+  bbox: [139.40, 34.90, 140.30, 35.90]
+  min_water_area: 1.0e-6   # opens Tamagawa/Arakawa/Keihin canals
+  r_open_m: 150.0
+  min_island_area_m2: 3.6e5
+  outer_smooth_r_m: 1000.0 # outer-nest coastline (per-polygon)
+  skeleton: true           # seeds recorded (not used by multiscale)
+  # goto2023 Uraga arc (extracted from TB-FVCOM goto2023 grid)
+  obc_line:
+    - [139.7497, 34.9750]
+    - [139.7373, 34.9916]
+    - [139.7289, 35.0047]
+    - [139.7216, 35.0184]
+    - [139.7134, 35.0327]
+    - [139.7069, 35.0445]
+    - [139.7000, 35.0576]
+    - [139.6946, 35.0705]
+    - [139.6871, 35.0877]
+    - [139.6816, 35.1031]
+    - [139.6772, 35.1168]
+    - [139.6737, 35.1288]
+    - [139.6713, 35.1396]
+
+build:
+  engine: oceanmesh-multiscale
+  dem: ${DATA_DIR}/bathymetry/tokyo_bay/depth_0090-05+06+07.nc
+  seed: 0
+  courant: {timestep: 16.0, max: 0.5}   # OM2D dt-limiter, sample-calibrated
+  nests:
+    outer:                # whole walled domain, coarse source
+      h0_m: 1000.0
+      hmin_m: 1000.0
+      hmax_m: 2000.0
+      wl: 30
+      grade: 0.10
+    inner:                # bay interior, detailed source
+      h0_m: 100.0
+      hmin_m: 400.0
+      hmax_m: 500.0
+      r: 3
+      grade: 0.10
+      # fine/coarse transition = the sample's ~35.20N line
+      polygon:
+        - [139.58, 35.20]
+        - [139.58, 35.74]
+        - [140.16, 35.74]
+        - [140.16, 35.32]
+        - [139.90, 35.20]
+
+finish:
+  utm_epsg: 32654
+  optimize_budget_s: 600.0
+
+obc:
+  trim: 2
+  max_move_m: 900.0
+
+siteops:
+  passes: 2
+  min_edge_m: 100.0        # inner hmin 400 -> sweep <100 m only
+
+polish:
+  optimize_budget_s: 300.0
+
+obcfinal: {}
+
+qa:
+  lang: ja
+  skip_checks: [min_depth_clip]
+
+export:
+  sponge_radius_m: 3000.0
+  sponge_coeff: 0.001
+
+figures: {}

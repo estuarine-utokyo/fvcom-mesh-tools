@@ -87,10 +87,35 @@ def _stage_prep(recipe, out_dir, log):
     rc = prepshoreline.main(argv)
     if rc:
         raise SystemExit(f"prep stage failed (rc={rc})")
-    return {
+    out = {
         "land_opened": str(prep_dir / "land_opened.shp"),
         "skeleton_seeds": str(prep_dir / "skeleton_seeds.shp"),
     }
+    r_sm = cfg.get("outer_smooth_r_m")
+    if r_sm:
+        import geopandas as gpd
+
+        from fvcom_mesh_tools.prep.shoreline import (
+            projector_lines,
+            smooth_land_per_polygon,
+        )
+
+        inner_poly = (recipe.get("build", {}) or {}).get(
+            "nests", {}).get("inner", {}).get("polygon")
+        land = gpd.read_file(out["land_opened"])
+        outer_gdf = smooth_land_per_polygon(land, r_m=float(r_sm))
+        outer_path = prep_dir / "land_outer.shp"
+        outer_gdf.to_file(outer_path)
+        out["land_outer"] = str(outer_path)
+        log(f"[prep] land_outer.shp: {len(outer_gdf)} polygons "
+            f"(r={r_sm:g} m)")
+        if inner_poly:
+            proj_gdf = projector_lines(land, outer_gdf, inner_poly)
+            proj_path = prep_dir / "projector_lines.shp"
+            proj_gdf.to_file(proj_path)
+            out["projector_lines"] = str(proj_path)
+            log(f"[prep] projector_lines.shp: {len(proj_gdf)} lines")
+    return out
 
 
 def _stage_build(recipe, out_dir, artifacts, log):
@@ -100,13 +125,46 @@ def _stage_build(recipe, out_dir, artifacts, log):
 
     cfg = recipe["build"]
     raw14 = out_dir / f"{recipe['name']}_raw.14"
-    coast = artifacts.get("land_opened") or cfg["coastline"]
+    coast = artifacts.get("land_opened") or cfg.get("coastline")
     dem = os.path.expandvars(str(cfg["dem"]))
     if "$" in dem:
         raise SystemExit(
             f"unresolved environment variable in dem path: {dem} "
             "(is DATA_DIR set? GENKAI rule: fail loudly)"
         )
+    if cfg.get("engine") == "oceanmesh-multiscale":
+        import numpy as np
+
+        from fvcom_mesh_tools.io import Fort14Mesh, write_fort14
+        from fvcom_mesh_tools.mesh_engine.multiscale import (
+            build_multiscale,
+        )
+
+        nests = cfg.get("nests", {})
+        pts, cls, dep = build_multiscale(
+            land_detailed_shp=Path(artifacts["land_opened"]),
+            land_outer_shp=Path(artifacts["land_outer"]),
+            dem_path=Path(dem),
+            bbox=tuple(recipe["prep"]["bbox"]),
+            inner_polygon=nests["inner"]["polygon"],
+            outer=nests.get("outer"),
+            inner={k: v for k, v in nests.get("inner", {}).items()
+                   if k != "polygon"},
+            courant=cfg.get("courant"),
+            seed=int(cfg.get("seed", 0)),
+            log=log,
+        )
+        mesh = Fort14Mesh(
+            title=f"{recipe['name']} multiscale raw",
+            nodes=np.asarray(pts, dtype=float),
+            depths=np.asarray(dep, dtype=float),
+            elements=np.asarray(cls, dtype=np.int64),
+            open_boundaries=[],
+            land_boundaries=[],
+        )
+        write_fort14(mesh, raw14)
+        log(f"[pipeline] multiscale raw -> {raw14}")
+        return {"raw_mesh": str(raw14)}
     argv = [
         dem, str(raw14),
         "--engine", cfg.get("engine", "oceanmesh"),
@@ -176,7 +234,8 @@ def _stage_finish(recipe, out_dir, artifacts, log):
     tr = Transformer.from_crs("EPSG:4326", f"EPSG:{utm}", always_xy=True)
     x, y = tr.transform(mesh.nodes[:, 0], mesh.nodes[:, 1])
     mesh.nodes = np.column_stack([x, y])
-    shoreline = Path(artifacts.get("land_opened")
+    shoreline = Path(artifacts.get("projector_lines")
+                     or artifacts.get("land_opened")
                      or recipe["build"]["coastline"])
     mesh, finfo = finish_constrained_mesh(
         mesh, shoreline, out_dir / "work",
@@ -245,7 +304,8 @@ def _stage_siteops(recipe, out_dir, artifacts, log):
                or artifacts["raw_mesh"])
     mesh = read_fort14(src)
     utm = int((recipe.get("finish") or {}).get("utm_epsg", 32654))
-    shoreline = Path(artifacts.get("land_opened")
+    shoreline = Path(artifacts.get("projector_lines")
+                     or artifacts.get("land_opened")
                      or recipe["build"]["coastline"])
     lines = load_polylines(shoreline, to_crs=utm)
     min_edge = cfg.get("min_edge_m")
@@ -319,7 +379,8 @@ def _stage_polish(recipe, out_dir, artifacts, log):
     src = Path(artifacts.get("siteops_mesh")
                or artifacts["finished_mesh"])
     mesh = read_fort14(src)
-    shoreline = Path(artifacts.get("land_opened")
+    shoreline = Path(artifacts.get("projector_lines")
+                     or artifacts.get("land_opened")
                      or recipe["build"]["coastline"])
     utm = int((recipe.get("finish") or {}).get("utm_epsg", 32654))
     mesh, finfo = finish_constrained_mesh(

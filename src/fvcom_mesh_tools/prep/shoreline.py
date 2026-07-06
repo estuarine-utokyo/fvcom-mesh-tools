@@ -15,6 +15,8 @@ from typing import Any
 
 __all__ = [
     "auto_utm_epsg",
+    "smooth_land_per_polygon",
+    "projector_lines",
     "simplify_outside_region",
     "default_water_shp",
     "cut_domain_at_obc_line",
@@ -403,3 +405,58 @@ def simplify_outside_region(
     return gpd.GeoDataFrame(
         geometry=out_geoms, crs=utm_epsg,
     ).to_crs(4326)
+
+
+def smooth_land_per_polygon(land_gdf, r_m=1000.0,
+                            min_area_m2=1.0e6, utm_epsg=32654):
+    """Outer-nest coastline source: closing+opening each polygon
+    SEPARATELY at ``r_m`` (features thinner than ``2*r_m`` vanish).
+    Per-polygon is mandatory: a global union turns land+wall into a
+    ring polygon holding the bay as an interior hole and the SDF
+    collapses (review20 / PoC#123-v1 failure class)."""
+    import geopandas as gpd
+    from shapely import make_valid
+
+    g = land_gdf
+    if g.crs is None:
+        g = g.set_crs(4326)
+    utm = g.to_crs(utm_epsg)
+    parts = []
+    for geom in utm.geometry:
+        if geom is None or geom.is_empty:
+            continue
+        sm = make_valid(geom.buffer(r_m).buffer(-2.0 * r_m).buffer(r_m))
+        for q in getattr(sm, "geoms", [sm]):
+            if q.geom_type == "Polygon" and q.area >= min_area_m2:
+                parts.append(q)
+    return gpd.GeoDataFrame(geometry=parts, crs=utm_epsg).to_crs(4326)
+
+
+def projector_lines(land_inner_gdf, land_outer_gdf, inner_polygon,
+                    utm_epsg=32654):
+    """Finishing-projector target polylines: detailed coastline
+    INSIDE the inner-nest polygon + smoothed coastline OUTSIDE it.
+    Pure 1-D clipping — the polygon seam-gap class cannot occur."""
+    import geopandas as gpd
+    from shapely import make_valid
+    from shapely.geometry import Polygon
+
+    poly = make_valid(Polygon(
+        [(float(q[0]), float(q[1])) for q in inner_polygon]
+    ))
+    lines = []
+    for gdf, keep_inside in ((land_inner_gdf, True),
+                             (land_outer_gdf, False)):
+        g = gdf if gdf.crs is not None else gdf.set_crs(4326)
+        for geom in g.to_crs(4326).geometry:
+            if geom is None or geom.is_empty:
+                continue
+            b = geom.boundary
+            piece = (b.intersection(poly) if keep_inside
+                     else b.difference(poly))
+            if piece.is_empty:
+                continue
+            for q in getattr(piece, "geoms", [piece]):
+                if q.geom_type == "LineString" and len(q.coords) > 1:
+                    lines.append(q)
+    return gpd.GeoDataFrame(geometry=lines, crs=4326)
