@@ -76,6 +76,27 @@ else:
     eff = json.loads((PREP / "obc_line_effective.json").read_text())
     print("[prep] reusing existing shoreline", flush=True)
 
+# Outer-nest coastline SOURCE (PoC #123): a uniformly smoothed copy
+# of the whole engineered shoreline (closing r=500 then opening
+# r=500 in UTM -> coves and spits narrower than ~1 km vanish).
+# This is the OM2D pattern of a COARSE coastline file for the outer
+# nest (their coastline_01 / GSHHS); a whole-domain single-scale
+# operation, so the seam-gap class of review18-23 cannot occur.
+shp_outer = PREP / "land_outer.shp"
+if not shp_outer.exists():
+    from shapely import make_valid, unary_union
+
+    g = gpd.read_file(shp_path).to_crs(32654)
+    u = unary_union(list(g.geometry))
+    r = 500.0
+    sm = make_valid(u.buffer(r).buffer(-2 * r).buffer(r))
+    parts = [q for q in getattr(sm, "geoms", [sm])
+             if q.geom_type == "Polygon" and q.area >= 1.0e6]
+    gpd.GeoDataFrame(geometry=parts, crs=32654).to_crs(4326).to_file(
+        shp_outer)
+    print(f"[prep] wrote {shp_outer} ({len(parts)} polygons)",
+          flush=True)
+
 DEG = 1.0 / 111194.9266
 
 # --- nest definitions (varres_3r parity, adapted to walled domain) ---
@@ -88,7 +109,7 @@ region_outer = Region((BBOX[0], BBOX[2], BBOX[1], BBOX[3]), 4326)
 poly_inner = np.asarray(INTEREST + [INTEREST[0]], dtype=float)
 
 print("[nest1] outer Shoreline h0=1000 m ...", flush=True)
-shore_o = om.Shoreline(str(shp_path), region_outer.bbox, 1000.0 * DEG)
+shore_o = om.Shoreline(str(shp_outer), region_outer.bbox, 1000.0 * DEG)
 sdf_o = om.signed_distance_function(shore_o)
 dem = om.DEM(DEM_PATH, bbox=region_outer)
 
@@ -128,6 +149,24 @@ print(f"[multiscale] raw NP={len(points):,} NE={len(cells):,}", flush=True)
 points, cells = om.make_mesh_boundaries_traversable(points, cells)
 points, cells = om.delete_faces_connected_to_one_face(points, cells)
 points, cells = om.laplacian2(points, cells)
+
+# keep only the largest connected component (drops the Pacific-side
+# remnant seaward of the wall band)
+from scipy.sparse import coo_matrix  # noqa: E402
+from scipy.sparse.csgraph import connected_components  # noqa: E402
+
+e_cc = np.vstack([cells[:, [0, 1]], cells[:, [1, 2]], cells[:, [2, 0]]])
+A_cc = coo_matrix((np.ones(len(e_cc)), (e_cc[:, 0], e_cc[:, 1])),
+                  shape=(len(points), len(points)))
+ncc, lab = connected_components(A_cc, directed=False)
+if ncc > 1:
+    keep_lab = np.argmax(np.bincount(lab))
+    keep_el = (lab[cells] == keep_lab).all(axis=1)
+    cells = cells[keep_el]
+    from oceanmesh.fix_mesh import fix_mesh as _fx
+    points, cells, _ = _fx(points, cells, delete_unused=True)
+    print(f"[clean] kept largest of {ncc} components "
+          f"-> NP={len(points):,}", flush=True)
 from oceanmesh.mesh_improve import area_length_quality  # noqa: E402
 
 q = area_length_quality(points, cells)
