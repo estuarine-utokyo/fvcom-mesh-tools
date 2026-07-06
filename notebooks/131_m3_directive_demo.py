@@ -5,7 +5,7 @@ import os
 import numpy as np
 os.environ.setdefault("MPLBACKEND", "Agg")
 from fvcom_mesh_tools.io import read_fort14, write_fort14
-from fvcom_mesh_tools.finishing import (apply_directives,
+from fvcom_mesh_tools.autofinish import (apply_directives,
     detect_violations, execute_patches, plan_patches)
 
 m = read_fort14('outputs/pipeline_v6r/tokyo_bay_v6_final.14')

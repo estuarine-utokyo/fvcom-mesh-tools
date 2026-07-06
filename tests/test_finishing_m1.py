@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from fvcom_mesh_tools.finishing import detect_violations, plan_patches
+from fvcom_mesh_tools.autofinish import detect_violations, plan_patches
 
 
 def _lattice(nx=8, ny=8):
@@ -80,7 +80,7 @@ def test_directive_refine_and_obc_protection():
 
     from pyproj import Transformer
 
-    from fvcom_mesh_tools.finishing import apply_directives
+    from fvcom_mesh_tools.autofinish import apply_directives
 
     P, T = _lattice(12, 12)
     P = P * 20000.0  # ~20 km square in fake UTM
@@ -106,7 +106,7 @@ def test_directive_refine_and_obc_protection():
     assert np.isfinite(mesh.depths).all()
     assert len(mesh.open_boundaries[0]) == 4    # obc preserved
     # seam leftovers are healed by the auto stage (design order)
-    from fvcom_mesh_tools.finishing import execute_patches, plan_patches
+    from fvcom_mesh_tools.autofinish import execute_patches, plan_patches
 
     det = detect_violations(mesh.nodes, mesh.elements)
     patches = plan_patches(mesh.nodes, mesh.elements, det)

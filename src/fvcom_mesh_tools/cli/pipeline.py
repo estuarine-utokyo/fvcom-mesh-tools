@@ -471,7 +471,7 @@ def _stage_polish(recipe, out_dir, artifacts, log):
 def _stage_finishing(recipe, out_dir, artifacts, log):
     """Stage-2 automated finishing (docs/STAGE2_DESIGN.md):
     detect -> plan -> execute, single pass, per-patch atomic."""
-    from fvcom_mesh_tools.finishing import (
+    from fvcom_mesh_tools.autofinish import (
         detect_violations,
         execute_patches,
         plan_patches,
@@ -487,7 +487,7 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
     dcfg = (recipe.get("finishing") or {}).get("directives")
     dledger = []
     if dcfg:
-        from fvcom_mesh_tools.finishing import apply_directives
+        from fvcom_mesh_tools.autofinish import apply_directives
         from fvcom_mesh_tools.gridref import GridRef
 
         bbox = recipe["prep"]["bbox"]
