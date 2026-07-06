@@ -668,6 +668,7 @@ STAGES = [
     ("obc", _stage_obc),
     ("siteops", _stage_siteops),
     ("polish", _stage_polish),
+    ("finishing", _stage_finishing),
     ("obcfinal", _stage_obcfinal),
     ("qa", _stage_qa),
     ("export", _stage_export),

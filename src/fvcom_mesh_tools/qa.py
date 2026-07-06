@@ -981,7 +981,12 @@ def run_qa(
         _g = _gpd.read_file(land_solid_shp)
         if _g.crs is None:
             _g = _g.set_crs(4326)
-        _solid = _uu(list(_g.to_crs(utm_epsg).geometry)).buffer(
+        _gm = _g.to_crs(utm_epsg)
+        # exclude small islands (intentionally removed by prep's
+        # min_island filter; a 0.379 km2 island sat 5% above the
+        # 0.36 km2 threshold pre-opening and below it after)
+        _gm = _gm[_gm.geometry.area >= 5.0e5]
+        _solid = _uu(list(_gm.geometry)).buffer(
             -float(land_interior_m))
         _cen = mesh.nodes[mesh.elements].mean(axis=1)
         if coords_resolved == "lonlat":
