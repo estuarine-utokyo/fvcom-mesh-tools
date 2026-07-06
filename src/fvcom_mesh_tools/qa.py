@@ -85,6 +85,7 @@ _CATEGORY_LABELS: dict[str, dict[str, str]] = {
 }
 
 _CHECK_LABELS: dict[str, dict[str, str]] = {
+    "land_overlap": {"ja": "固形陸上へのメッシュ", "en": "mesh over solid land"},
     "node_index_valid": {"ja": "節点参照の整合", "en": "node index integrity"},
     "ccw_all_elements": {"ja": "全要素CCW(反転なし)", "en": "all elements CCW"},
     "no_isolated_elements": {"ja": "孤立要素なし", "en": "no isolated elements"},
@@ -991,7 +992,7 @@ def run_qa(
             _cx, _cy = _cen[:, 0], _cen[:, 1]
         _bad = np.where(_sh.contains_xy(_solid, _cx, _cy))[0]
         checks.append(QACheck(
-            "land_overlap", "structure", True, len(_bad) == 0,
+            "land_overlap", "fvcom", True, len(_bad) == 0,
             f"no element centroid > {land_interior_m:g} m inside "
             "solid pre-prep land",
             f"{len(_bad)} elements over solid land",
