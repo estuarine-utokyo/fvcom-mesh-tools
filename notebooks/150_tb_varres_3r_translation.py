@@ -16,14 +16,15 @@ from oceanmesh import DEM, Region, Shoreline  # noqa: E402
 
 OM2D = Path(os.path.expanduser("~/Github/OceanMesh2D"))
 GSHHS = OM2D / "datasets/GSHHS_shp/f/GSHHS_f_L1.shp"
-COAST2 = Path("/home/pj24001722/share/Data/coastline/tokyo_bay/"
-              "Futtsu/coastline_2.shp")
+# user policy: the engineered OSM coastline for the bay/Kanto
+# nests (coastline_2 was the .m's hand-made composite)
+COAST2 = Path("outputs/tb_varres_3r/land_osm_wide.shp")
 # sliced DEMs (the .m used 'SRTM15_V2.3_sliced.nc'; full-global
 # SRTM15+ made nest-1 sizing a 170M-cell computation)
 SRTM_PACIFIC = OM2D / "datasets/TokyoBay/dem/SRTM15_pacific_4min.nc"
-# project bathymetry policy: M7001 (J-BIRD, full Southern-Kanto
-# extent) wherever it covers; SRTM only outside its hull / on land
-SRTM_KANTO = OM2D / "datasets/TokyoBay/dem/kanto_M7001full_srtm_15s.nc"
+# user policy (this stage): the same DEM family the .m used —
+# SRTM15 (sliced); M7001 comes later with the production pipeline
+SRTM_KANTO = OM2D / "datasets/TokyoBay/dem/SRTM15_kanto_15s.nc"
 OUT = Path("outputs/tb_varres_3r")
 OUT.mkdir(parents=True, exist_ok=True)
 DEG = 1.0 / 111e3  # OM2D uses /111e3 throughout
