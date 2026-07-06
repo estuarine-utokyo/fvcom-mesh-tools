@@ -111,26 +111,41 @@ def execute_patches(points, cells, patches, obc_nodes=None,
             good, r1, a1 = accept(P_try)
             if good:
                 best = (P_try, r1, a1, "deterministic")
-        # 2) stochastic (free interior) / boundary slide
-        if best is None and (free or slide):
-            for _ in range(n_trials):
+        # 2) stochastic escalation ladder (single attempt, staged:
+        # sigma sweep, then widened 2-ring free set) — free interior
+        # and boundary-slide nodes perturbed together
+        def _trial_set(freeset, sigma, trials):
+            found = None
+            for _ in range(trials):
                 P_try = P.copy()
-                # free interior nodes and boundary-slide nodes are
-                # perturbed TOGETHER: 'bound' patches often need
-                # both (interior-only misses coast-pair C4 sites)
-                for v in free:
-                    P_try[v] = P[v] + rng.normal(0, 0.10 * h, 2)
+                for v in freeset:
+                    P_try[v] = P[v] + rng.normal(0, sigma * h, 2)
                 for v in slide:
                     n1, n2 = bnd_nb[v]
                     tpar = rng.uniform(-0.45, 0.45)
                     tgt = n1 if tpar < 0 else n2
                     P_try[v] = P[v] + abs(tpar) * (P[tgt] - P[v])
                 good, r1, a1 = accept(P_try)
-                if good and (best is None or r1 < best[1]):
-                    best = (P_try, r1, a1,
-                            "stochastic+slide" if (free and slide)
-                            else ("stochastic" if free
-                                  else "boundary-slide"))
+                if good and (found is None or r1 < found[1]):
+                    found = (P_try, r1, a1)
+            return found
+
+        if best is None and (free or slide):
+            lab = ("stochastic+slide" if (free and slide)
+                   else ("stochastic" if free else "boundary-slide"))
+            for sigma in (0.10, 0.05, 0.20):
+                got = _trial_set(free, sigma, n_trials)
+                if got is not None:
+                    best = (*got, lab)
+                    break
+            if best is None and free:
+                # widen: 2-ring interior nodes
+                nodes2 = {int(v) for ie in ring for v in T[ie]}
+                free2 = [v for v in nodes2
+                         if v not in bnd_nodes and v not in obc]
+                got = _trial_set(free2, 0.10, n_trials)
+                if got is not None:
+                    best = (*got, lab + "+2ring")
         if best is None:
             rec["outcome"] = f"unfixed (r0={r0:.2f}, a0={a0:.1f})"
         else:
