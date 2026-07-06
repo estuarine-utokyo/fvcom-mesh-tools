@@ -96,7 +96,9 @@ def apply_directives(mesh, directives, utm_epsg=32654, log=print):
         ok = True
         for b in mesh.open_boundaries:
             dd, jj = tree.query(P0[np.asarray(b, int)])
-            if dd.max() > 1e-6:
+            # 1 mm: fix_mesh's dedup rounding shifts coordinates
+            # at micrometre level
+            if dd.max() > 1e-3:
                 ok = False
                 break
             new_obc.append(jj.astype(int))
