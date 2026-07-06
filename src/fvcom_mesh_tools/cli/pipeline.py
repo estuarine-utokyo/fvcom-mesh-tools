@@ -70,7 +70,8 @@ def _stage_prep(recipe, out_dir, log):
         argv += ["--cache-dir", str(cfg["cache_dir"])]
     if cfg.get("min_water_area") is not None:
         argv += ["--min-water-area", str(cfg["min_water_area"])]
-    if cfg.get("obc_line"):
+    v6_outer = bool(cfg.get("outer_smooth_r_m"))
+    if cfg.get("obc_line") and not v6_outer:
         argv += ["--obc-line"] + [
             str(c) for pt in cfg["obc_line"] for c in pt
         ]
@@ -93,17 +94,42 @@ def _stage_prep(recipe, out_dir, log):
     }
     r_sm = cfg.get("outer_smooth_r_m")
     if r_sm:
+        # v6 ordering: smooth FIRST, extend the OBC ends against the
+        # SMOOTHED coast (the mouth coasts in the final mesh follow
+        # it; extending against the detailed coast left the junction
+        # corner ~1 element off the effective line), then cut the
+        # wall into BOTH coastlines with the SAME effective line.
+        import json as _json
+
         import geopandas as gpd
 
         from fvcom_mesh_tools.prep.shoreline import (
+            cut_domain_at_obc_line,
+            extend_obc_ends_perpendicular,
             projector_lines,
             smooth_land_per_polygon,
         )
 
         inner_poly = (recipe.get("build", {}) or {}).get(
             "nests", {}).get("inner", {}).get("polygon")
-        land = gpd.read_file(out["land_opened"])
+        land = gpd.read_file(out["land_opened"])  # no wall yet
         outer_gdf = smooth_land_per_polygon(land, r_m=float(r_sm))
+        eff = None
+        if cfg.get("obc_line"):
+            eff = extend_obc_ends_perpendicular(
+                [tuple(q) for q in cfg["obc_line"]], outer_gdf,
+            )
+            bbox = tuple(cfg["bbox"])
+            land = cut_domain_at_obc_line(land, eff, bbox)
+            outer_gdf = cut_domain_at_obc_line(outer_gdf, eff, bbox)
+            land.to_file(out["land_opened"])
+            prov_path = prep_dir / "provenance.json"
+            prov = (_json.loads(prov_path.read_text())
+                    if prov_path.exists() else {})
+            prov["obc_line_effective"] = [list(q) for q in eff]
+            prov_path.write_text(_json.dumps(prov, indent=2))
+            log(f"[prep] wall cut into both coastlines "
+                f"({len(eff)} effective pts)")
         outer_path = prep_dir / "land_outer.shp"
         outer_gdf.to_file(outer_path)
         out["land_outer"] = str(outer_path)
