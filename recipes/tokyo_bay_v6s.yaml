@@ -1,0 +1,86 @@
+# tokyo_bay_v6s: goto2023 SAMPLE-REPRODUCTION profile.
+# Same sizing/OBC architecture as tokyo_bay_v6; the coastline
+# information content is reduced to the sample's level: rivers and
+# canals closed, islands < 2 km2 removed, detailed coastline read
+# at 400 m and rounded at r=250 m (the SMS-hand-simplified look).
+name: tokyo_bay_v6s
+out_dir: outputs/pipeline_v6s
+
+prep:
+  bbox: [139.40, 34.90, 140.30, 35.90]
+  min_water_area: 1.0          # subtract nothing: rivers closed
+  r_open_m: 150.0
+  min_island_area_m2: 2.0e6    # sample has essentially no islets
+  inner_smooth_r_m: 250.0      # round coves/piers (SMS look)
+  outer_smooth_r_m: 1000.0
+  skeleton: false
+  obc_line:
+    - [139.7497, 34.9750]
+    - [139.7373, 34.9916]
+    - [139.7289, 35.0047]
+    - [139.7216, 35.0184]
+    - [139.7134, 35.0327]
+    - [139.7069, 35.0445]
+    - [139.7000, 35.0576]
+    - [139.6946, 35.0705]
+    - [139.6871, 35.0877]
+    - [139.6816, 35.1031]
+    - [139.6772, 35.1168]
+    - [139.6737, 35.1288]
+    - [139.6713, 35.1396]
+
+build:
+  engine: oceanmesh-multiscale
+  dem: ${DATA_DIR}/bathymetry/tokyo_bay/depth_0090-05+06+07.nc
+  seed: 0
+  courant: {timestep: 16.0, max: 0.5}
+  nests:
+    outer:
+      h0_m: 1000.0
+      hmin_m: 1000.0
+      hmax_m: 2000.0
+      wl: 30
+      grade: 0.10
+    inner:
+      h0_m: 400.0              # sample-level boundary density
+      hmin_m: 400.0
+      hmax_m: 500.0
+      r: 3
+      grade: 0.10
+      polygon:
+        - [139.58, 35.20]
+        - [139.58, 35.74]
+        - [140.16, 35.74]
+        - [140.16, 35.32]
+        - [139.90, 35.20]
+
+finish:
+  utm_epsg: 32654
+  optimize_budget_s: 600.0
+
+obc:
+  trim: 2
+  max_move_m: 900.0
+
+siteops:
+  passes: 2
+  min_edge_m: 100.0
+
+polish:
+  optimize_budget_s: 300.0
+
+obcfinal: {}
+
+finishing:
+  auto: {}
+
+qa:
+  lang: ja
+  land_interior_m: 600.0       # inner smoothing r=250 deviates by design
+  skip_checks: [min_depth_clip]
+
+export:
+  sponge_radius_m: 3000.0
+  sponge_coeff: 0.001
+
+figures: {}

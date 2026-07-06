@@ -113,6 +113,18 @@ def _stage_prep(recipe, out_dir, log):
         inner_poly = (recipe.get("build", {}) or {}).get(
             "nests", {}).get("inner", {}).get("polygon")
         land = gpd.read_file(out["land_opened"])  # no wall yet
+        r_in = cfg.get("inner_smooth_r_m")
+        if r_in:
+            # sample-like profile: round coves/piers on the DETAILED
+            # coastline too (goto2023's SMS-simplified shoreline)
+            land = smooth_land_per_polygon(
+                land, r_m=float(r_in),
+                min_area_m2=float(cfg.get("min_island_area_m2",
+                                          3.6e5)),
+            )
+            land.to_file(out["land_opened"])
+            log(f"[prep] inner coastline smoothed r={r_in:g} m "
+                f"({len(land)} polygons)")
         outer_gdf = smooth_land_per_polygon(land, r_m=float(r_sm))
         outer_pre_cut = outer_gdf.copy()
         eff = None
@@ -605,6 +617,8 @@ def _stage_qa(recipe, out_dir, artifacts, log):
                                     else None),
                     utm_epsg=int((recipe.get("finish") or {})
                                  .get("utm_epsg", 32654)),
+                    land_interior_m=float(
+                        cfg.get("land_interior_m", 200.0)),
                     land_strict_polygon=(recipe.get("build", {})
                                          .get("nests", {})
                                          .get("inner", {})
