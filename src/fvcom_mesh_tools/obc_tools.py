@@ -415,7 +415,8 @@ def assign_west_south_obc(
                 s = float(arc3.project(pt))
                 interior = 30.0 < s < arc3.length - 30.0
                 if not ((interior and d <= max_move_m)
-                        or (not interior and d <= 120.0)):
+                        or (not interior
+                            and d <= max(120.0, 0.5 * max_move_m))):
                     break
                 q = arc3.interpolate(s)
                 old_pos = mesh_in.nodes[w].copy()
