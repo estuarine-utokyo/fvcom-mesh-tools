@@ -441,12 +441,56 @@ def _stage_polish(recipe, out_dir, artifacts, log):
     return {"polish_mesh": str(out14), "polish_info": finfo}
 
 
+def _stage_finishing(recipe, out_dir, artifacts, log):
+    """Stage-2 automated finishing (docs/STAGE2_DESIGN.md):
+    detect -> plan -> execute, single pass, per-patch atomic."""
+    from fvcom_mesh_tools.finishing import (
+        detect_violations,
+        execute_patches,
+        plan_patches,
+        write_ledger,
+    )
+    from fvcom_mesh_tools.io import read_fort14, write_fort14
+
+    cfg = (recipe.get("finishing") or {}).get("auto") or {}
+    src = Path(artifacts.get("obc_mesh")
+               or artifacts.get("finished_mesh")
+               or artifacts["raw_mesh"])
+    mesh = read_fort14(src)
+    obc = [int(v) for b in mesh.open_boundaries for v in b]
+    det = detect_violations(mesh.nodes, mesh.elements)
+    patches = plan_patches(
+        mesh.nodes, mesh.elements, det, obc_nodes=obc,
+        kring=int(cfg.get("patch_kring", 2)),
+        max_patches=int(cfg.get("max_patches", 50)),
+    )
+    log(f"[finishing] {len(patches)} patches planned")
+    ledger = []
+    if patches:
+        mesh.nodes, ledger = execute_patches(
+            mesh.nodes, mesh.elements, patches, obc_nodes=obc,
+            log=log,
+        )
+    write_ledger(ledger or patches,
+                 out_dir / "finishing_ledger.json")
+    out14 = out_dir / f"{recipe['name']}_finishing.14"
+    write_fort14(mesh, out14)
+    unfixed = [q for q in ledger
+               if "outcome" in q
+               and not q["outcome"].startswith("fixed")]
+    if unfixed:
+        log(f"[finishing] {len(unfixed)} patches NOT fixed "
+            "(see ledger)")
+    return {"finishing_mesh": str(out14)}
+
+
 def _stage_obcfinal(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io import read_fort14, write_fort14
     from fvcom_mesh_tools.obc_tools import assign_west_south_obc
 
     cfg = recipe.get("obcfinal", recipe.get("obc", {})) or {}
-    src = Path(artifacts.get("polish_mesh")
+    src = Path(artifacts.get("finishing_mesh")
+               or artifacts.get("polish_mesh")
                or artifacts.get("siteops_mesh")
                or artifacts["obc_mesh"])
     mesh = read_fort14(src)
