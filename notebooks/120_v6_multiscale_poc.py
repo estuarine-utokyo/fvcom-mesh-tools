@@ -84,14 +84,22 @@ else:
 # operation, so the seam-gap class of review18-23 cannot occur.
 shp_outer = PREP / "land_outer.shp"
 if not shp_outer.exists():
-    from shapely import make_valid, unary_union
+    from shapely import make_valid
 
+    # smooth EACH polygon separately: a union+closing fuses land and
+    # wall into one ring polygon holding the bay as an interior HOLE
+    # and the outer-nest SDF collapses (the review20 failure class,
+    # reproduced by PoC #123 v1: the mouth vanished).
     g = gpd.read_file(shp_path).to_crs(32654)
-    u = unary_union(list(g.geometry))
     r = 500.0
-    sm = make_valid(u.buffer(r).buffer(-2 * r).buffer(r))
-    parts = [q for q in getattr(sm, "geoms", [sm])
-             if q.geom_type == "Polygon" and q.area >= 1.0e6]
+    parts = []
+    for geom in g.geometry:
+        if geom is None or geom.is_empty:
+            continue
+        sm = make_valid(geom.buffer(r).buffer(-2 * r).buffer(r))
+        for q in getattr(sm, "geoms", [sm]):
+            if q.geom_type == "Polygon" and q.area >= 1.0e6:
+                parts.append(q)
     gpd.GeoDataFrame(geometry=parts, crs=32654).to_crs(4326).to_file(
         shp_outer)
     print(f"[prep] wrote {shp_outer} ({len(parts)} polygons)",
