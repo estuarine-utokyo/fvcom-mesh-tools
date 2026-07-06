@@ -167,6 +167,7 @@ b = om.interp_bathymetry(p, t, dem3, method="cell-averaging",
                          min_depth=0.01)
 # m = make_bc(m,'auto',gdat_01,'both')
 bc = om.make_bc_auto(p, t, depth=b, classifier="both",
+                     shoreline=gdats[0][0],
                      depth_lim=10.0, cut_lim=10)
 om.write_fort14(str(OUT / "tb_varres_3regions.14"), p, t, depth=b,
                 boundaries=bc)
