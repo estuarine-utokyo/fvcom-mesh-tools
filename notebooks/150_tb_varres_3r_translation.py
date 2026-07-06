@@ -18,7 +18,10 @@ OM2D = Path(os.path.expanduser("~/Github/OceanMesh2D"))
 GSHHS = OM2D / "datasets/GSHHS_shp/f/GSHHS_f_L1.shp"
 COAST2 = Path("/home/pj24001722/share/Data/coastline/tokyo_bay/"
               "Futtsu/coastline_2.shp")
-SRTM = OM2D / "datasets/SRTM15+.nc"
+# sliced DEMs (the .m used 'SRTM15_V2.3_sliced.nc'; full-global
+# SRTM15+ made nest-1 sizing a 170M-cell computation)
+SRTM_PACIFIC = OM2D / "datasets/TokyoBay/dem/SRTM15_pacific_4min.nc"
+SRTM_KANTO = OM2D / "datasets/TokyoBay/dem/SRTM15_kanto_15s.nc"
 OUT = Path("outputs/tb_varres_3r")
 OUT.mkdir(parents=True, exist_ok=True)
 DEG = 1.0 / 111e3  # OM2D uses /111e3 throughout
@@ -94,7 +97,8 @@ for k, nz in enumerate(NESTS, 1):
                   float(nz['bbox'][:, 1].max())), 4326)
     shore = Shoreline(str(nz['shp']), nz['bbox'], nz['h0'] * DEG)
     sdf = om.signed_distance_function(shore)
-    dem = DEM(str(SRTM), bbox=reg)
+    dem = DEM(str(SRTM_PACIFIC if k == 1 else SRTM_KANTO),
+              bbox=reg)
     print(f"[nest{k}] edgefx: fs={nz['R']} wl={nz['wl']} "
           f"slp={nz['slp']} fl={nz['fl']} max_el={nz['max_el']:g} "
           f"dt={nz['dt']:g} g={nz['grade']}", flush=True)
