@@ -42,6 +42,26 @@ def apply_directives(mesh, directives, utm_epsg=32654, log=print):
             ledger.append(rec)
             continue
         P0, T0, D0 = mesh.nodes, mesh.elements, mesh.depths
+        # v1 scope: interior (water-only) polygons. A polygon that
+        # captures coastline nodes regenerates against stale
+        # boundary outlines and fails the gross gate (Tokyo-port
+        # demo, 2026-07-06); detect and skip with a clear message.
+        from collections import defaultdict
+
+        ecnt = defaultdict(int)
+        for a2, b2, c2 in T0:
+            for e2 in ((a2, b2), (b2, c2), (c2, a2)):
+                ecnt[tuple(sorted(e2))] += 1
+        bset = {v for e2, n2 in ecnt.items() if n2 == 1 for v in e2}
+        bmask = np.zeros(len(P0), bool)
+        bmask[list(bset)] = True
+        if shapely.contains_xy(pg, P0[bmask, 0], P0[bmask, 1]).any():
+            rec["outcome"] = ("skipped (polygon touches mesh "
+                              "boundary; v1 supports water-only "
+                              "polygons)")
+            log(f"[finishing] directive {k}: {rec['outcome']}")
+            ledger.append(rec)
+            continue
         try:
             P1, T1 = remesh_patch(
                 P0, T0, poly_utm,

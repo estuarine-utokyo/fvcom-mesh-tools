@@ -10,8 +10,8 @@ from fvcom_mesh_tools.finishing import (apply_directives,
 
 m = read_fort14('outputs/pipeline_v6r/tokyo_bay_v6_final.14')
 n0 = len(m.elements)
-d = [{"polygon": [[139.795, 35.545], [139.845, 35.545],
-                  [139.845, 35.585], [139.795, 35.585]],
+d = [{"polygon": [[139.80, 35.44], [139.86, 35.44],
+                  [139.86, 35.49], [139.80, 35.49]],
       "target_h_m": 150.0}]
 m, led = apply_directives(m, d, utm_epsg=32654)
 print(led, flush=True)
@@ -33,8 +33,8 @@ tr = Transformer.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
 lon, lat = tr.transform(m.nodes[:, 0], m.nodes[:, 1])
 fig, ax = plt.subplots(figsize=(10, 9))
 ax.triplot(lon, lat, m.elements, lw=0.3, color="steelblue")
-ax.set_xlim(139.77, 139.87); ax.set_ylim(35.52, 35.61)
-ax.set_aspect(1 / np.cos(np.deg2rad(35.55)))
+ax.set_xlim(139.78, 139.88); ax.set_ylim(35.42, 35.51)
+ax.set_aspect(1 / np.cos(np.deg2rad(35.46)))
 ax.set_title(f"M3 directive demo: Tokyo port 150 m "
              f"(NE {n0:,} -> {len(m.elements):,})")
 fig.savefig('outputs/figures/m3_directive_demo.png', dpi=200,
