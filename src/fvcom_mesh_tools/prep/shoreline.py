@@ -17,6 +17,7 @@ __all__ = [
     "auto_utm_epsg",
     "smooth_land_per_polygon",
     "junction_tail_constraints",
+    "subtract_sea_connected_water",
     "projector_lines",
     "simplify_outside_region",
     "default_water_shp",
@@ -92,9 +93,12 @@ def fetch_true_land(
     # Obitsu-mouth hinterland (I11/J11) into meshed "water". For
     # FVCOM, wetlands/reservoirs are LAND (inundation belongs to
     # the floodplain feature, not the base mesh).
+    # xcoast-side subtraction disabled: model-semantics filtering
+    # (sea-connectivity) happens below in
+    # subtract_sea_connected_water
     kwargs: dict[str, Any] = {
         "min_water_area_deg2": min_water_area_deg2,
-        "water_fclasses": tuple(water_fclasses),
+        "subtract_water": False,
     }
     if land_shp_path is None:
         land_shp_path = default_land_shp()
@@ -110,7 +114,13 @@ def fetch_true_land(
     gdf = mask.land_gdf
     if gdf.crs is None:
         gdf = gdf.set_crs(4326)
-    return gdf.to_crs(4326)
+    gdf = gdf.to_crs(4326)
+    if water_shp is not None:
+        gdf = subtract_sea_connected_water(
+            gdf, water_shp, bbox,
+            min_water_area_deg2=min_water_area_deg2,
+        )
+    return gdf
 
 
 def open_land(
@@ -509,4 +519,63 @@ def junction_tail_constraints(eff_line_lonlat, land_sm_gdf,
         kn = line.interpolate(s_kn)
         out.append([list(tri.transform(td.x, td.y)),
                     list(tri.transform(kn.x, kn.y))])
+    return out
+
+
+def subtract_sea_connected_water(land_gdf, water_shp_path, bbox,
+                                 min_water_area_deg2=1e-6,
+                                 exclude_fclass=("wetland", "glacier"),
+                                 log=print):
+    """Subtract only SEA-CONNECTED water polygons from the land.
+
+    The physically meaningful criterion for a coastal mesh: rivers,
+    river mouths (whatever their OSM fclass — Tamagawa's mouth is
+    fclass "water") and docks open to the bay are carved out;
+    enclosed inland water (lakes, ponds, reservoirs) stays land.
+    Wetlands are always land (they touch river channels and would
+    leak through a pure connectivity test; the Obitsu I11/J11
+    incident). Connectivity = BFS over touching water polygons
+    seeded from the sea region (bbox minus land).
+    """
+    import geopandas as gpd
+    import numpy as np
+    import shapely
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+
+    g = land_gdf if land_gdf.crs is not None else land_gdf.set_crs(4326)
+    water = gpd.read_file(water_shp_path, bbox=tuple(bbox))
+    if "fclass" in water.columns:
+        water = water[~water["fclass"].isin(list(exclude_fclass))]
+    water = water[water.geometry.area >= float(min_water_area_deg2)]
+    water = water[water.geometry.is_valid & ~water.geometry.is_empty]
+    water = water.reset_index(drop=True)
+    if not len(water):
+        return g
+    sea = box(*bbox).difference(unary_union(list(g.geometry)))
+    geoms = list(water.geometry)
+    tree = shapely.STRtree(geoms)
+    touch_sea = shapely.intersects(np.array(geoms, dtype=object),
+                                   sea)
+    keep = set(np.where(touch_sea)[0])
+    frontier = list(keep)
+    while frontier:
+        nxt = []
+        for i in frontier:
+            for j in tree.query(geoms[i], predicate="intersects"):
+                j = int(j)
+                if j not in keep:
+                    keep.add(j)
+                    nxt.append(j)
+        frontier = nxt
+    kept = [geoms[i] for i in sorted(keep)]
+    log(f"[prep] water subtraction: {len(kept)}/{len(geoms)} "
+        f"polygons sea-connected (others stay land)")
+    if not kept:
+        return g
+    carved = g.geometry.difference(unary_union(kept))
+    out = gpd.GeoDataFrame(geometry=[q for geom in carved
+                                     for q in getattr(geom, "geoms",
+                                                      [geom])
+                                     if not q.is_empty], crs=4326)
     return out
