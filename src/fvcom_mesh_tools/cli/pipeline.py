@@ -446,6 +446,34 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
         obc_line_lonlat=_obc_line_from(recipe, out_dir),
         log=log,
     )
+    eff = _obc_line_from(recipe, out_dir)
+    proj_lines = artifacts.get("projector_lines")
+    if eff and proj_lines:
+        from pyproj import Transformer
+        from shapely.geometry import LineString
+
+        from fvcom_mesh_tools.algorithms.boundary_snap import (
+            load_polylines,
+        )
+        from fvcom_mesh_tools.obc_tools import (
+            realize_perpendicular_junctions,
+        )
+
+        utm = int((recipe.get("finish") or {})
+                  .get("utm_epsg", 32654))
+        trj = Transformer.from_crs("EPSG:4326", f"EPSG:{utm}",
+                                   always_xy=True)
+        ax, ay = trj.transform([q[0] for q in eff],
+                               [q[1] for q in eff])
+        arc = LineString(list(zip(ax, ay)))
+        lines = load_polylines(Path(proj_lines), to_crs=utm)
+        mesh, jinfo = realize_perpendicular_junctions(
+            mesh, arc, lines,
+            max_move_m=float(cfg.get(
+                "junction_realize_max_move_m", 1800.0)),
+            log=log,
+        )
+        info["junction_realized"] = jinfo
     out14 = out_dir / f"{recipe['name']}_final.14"
     write_fort14(mesh, out14)
     return {"final_mesh": str(out14), "obcfinal_info": info}

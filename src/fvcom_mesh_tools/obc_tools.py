@@ -526,3 +526,79 @@ def assign_west_south_obc(
         info["depth_clipped"] = n_clip
         log(f"[obc] depth clip @{min_depth_m:g} m: {n_clip} nodes")
     return mesh, info
+
+
+def realize_perpendicular_junctions(mesh, arc_utm, shore_lines_utm,
+                                    max_move_m=1800.0, log=print):
+    """Realize the engineered perpendicular OBC-coast junction in
+    the mesh. The marked OBC ends one lattice edge short of the
+    coast and the closing chord cuts the corner at an uncontrolled
+    angle. For each end, move the coast-side junction node onto the
+    TOUCHDOWN point (arc x coastline intersection, which lies ON
+    the coastline, so the boundary-node whitelist is respected);
+    the junction edge then runs along the perpendicular tail.
+    Reverts a move that flips any incident element."""
+    from collections import defaultdict
+
+    import numpy as np
+    from shapely.geometry import Point
+    from shapely.ops import unary_union
+
+    tris = mesh.elements
+    cnt = defaultdict(int)
+    for a, b, c in tris:
+        for e in ((a, b), (b, c), (c, a)):
+            cnt[tuple(sorted(e))] += 1
+    adj = defaultdict(list)
+    for (a, b), k in cnt.items():
+        if k == 1:
+            adj[a].append(b)
+            adj[b].append(a)
+    if not mesh.open_boundaries:
+        return mesh, {"moved": 0}
+    obc = [int(v) for v in mesh.open_boundaries[0]]
+    s_obc = set(obc)
+    coast = unary_union(list(shore_lines_utm))
+    cross = arc_utm.intersection(coast)
+    cands = ([cross] if cross.geom_type == "Point"
+             else list(getattr(cross, "geoms", [])))
+    cands = [g for g in cands if g.geom_type == "Point"]
+    incid = defaultdict(list)
+    for ie, tri in enumerate(tris):
+        for v in tri:
+            incid[int(v)].append(ie)
+
+    def _areas(ids, pts):
+        a = pts[tris[ids, 0]]
+        b = pts[tris[ids, 1]]
+        c = pts[tris[ids, 2]]
+        return np.cross(b - a, c - a)
+
+    moved = 0
+    for end in (obc[0], obc[-1]):
+        others = [w for w in adj[end] if w not in s_obc]
+        if len(others) != 1 or not cands:
+            continue
+        w = others[0]
+        td = min(cands,
+                 key=lambda g: g.distance(Point(*mesh.nodes[w])))
+        dv = np.array([td.x, td.y]) - mesh.nodes[w]
+        dist = float(np.hypot(*dv))
+        if dist > max_move_m or dist < 1.0:
+            log(f"[obcfinal] junction realize: skip node {w} "
+                f"(move {dist:.0f} m)")
+            continue
+        ids = incid[int(w)]
+        old = mesh.nodes[w].copy()
+        sign_old = np.sign(_areas(ids, mesh.nodes))
+        mesh.nodes[w] = [td.x, td.y]
+        sign_new = np.sign(_areas(ids, mesh.nodes))
+        if (sign_new != sign_old).any() or (sign_new == 0).any():
+            mesh.nodes[w] = old
+            log(f"[obcfinal] junction realize: node {w} flip, "
+                "reverted")
+            continue
+        moved += 1
+        log(f"[obcfinal] junction realize: node {w} -> touchdown "
+            f"({dist:.0f} m along coast)")
+    return mesh, {"moved": moved}
