@@ -68,6 +68,7 @@ def fetch_true_land(
     *,
     land_shp_path: Path | None = None,
     min_water_area_deg2: float = 1e-5,
+    water_fclasses: tuple = ("water", "dock"),
     cache_dir: Path | None = None,
     force: bool = False,
 ):
@@ -86,7 +87,15 @@ def fetch_true_land(
             "(install the local clone: pip install -e ../xcoast)"
         ) from exc
 
-    kwargs: dict[str, Any] = {"min_water_area_deg2": min_water_area_deg2}
+    # NOTE: xcoast's default water_fclasses includes "wetland" and
+    # "reservoir"; subtracting wetlands turned ~3.4 km2 of the
+    # Obitsu-mouth hinterland (I11/J11) into meshed "water". For
+    # FVCOM, wetlands/reservoirs are LAND (inundation belongs to
+    # the floodplain feature, not the base mesh).
+    kwargs: dict[str, Any] = {
+        "min_water_area_deg2": min_water_area_deg2,
+        "water_fclasses": tuple(water_fclasses),
+    }
     if land_shp_path is None:
         land_shp_path = default_land_shp()
     if land_shp_path is not None:

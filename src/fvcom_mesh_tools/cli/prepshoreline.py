@@ -129,6 +129,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"[prep] true-land polygons: {len(land)}", flush=True)
 
+    # solid true land BEFORE opening/wall: the QA land-overlap
+    # gate and the prep tripwire compare against this
+    land.to_file(out_dir / "land_solid.shp")
     opened = open_land(
         land,
         r_open_m=args.r_open,

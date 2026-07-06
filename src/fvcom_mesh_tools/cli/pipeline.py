@@ -147,6 +147,33 @@ def _stage_prep(recipe, out_dir, log):
         out["land_outer"] = str(outer_path)
         log(f"[prep] land_outer.shp: {len(outer_gdf)} polygons "
             f"(r={r_sm:g} m)")
+        solid_p = prep_dir / "land_solid.shp"
+        if solid_p.exists():
+            # tripwire: land converted to water by prep, deep
+            # interior only, > 0.25 km2 -> warn with grid cells
+            from shapely import unary_union
+
+            from fvcom_mesh_tools.gridref import GridRef
+
+            solid = gpd.read_file(solid_p).to_crs(32654)
+            opened_u = unary_union(list(
+                land.to_crs(32654).geometry))
+            lost = unary_union(list(solid.geometry)).difference(
+                opened_u).buffer(-200.0)
+            grid = GridRef(*cfg["bbox"])
+            import geopandas as _gpd2
+            for geom in getattr(lost, "geoms", [lost]):
+                if geom.is_empty or geom.area < 2.5e5:
+                    continue
+                cen = _gpd2.GeoSeries([geom.centroid], crs=32654
+                                      ).to_crs(4326).iloc[0]
+                try:
+                    cell = grid.point_to_cell(cen.x, cen.y)
+                except ValueError:
+                    cell = "?"
+                log(f"[prep] WARNING: {geom.area/1e6:.2f} km2 of "
+                    f"solid land became water near {cell} "
+                    f"({cen.x:.3f},{cen.y:.3f})")
         if inner_poly:
             proj_gdf = projector_lines(land, outer_gdf, inner_poly)
             proj_path = prep_dir / "projector_lines.shp"
@@ -570,8 +597,13 @@ def _stage_qa(recipe, out_dir, artifacts, log):
                   or artifacts.get("obc_mesh")
                   or artifacts["raw_mesh"])
     mesh = read_fort14(target)
+    land_solid = out_dir / "prep" / "land_solid.shp"
     report = run_qa(mesh, name=target.name, path=target,
-                    max_offenders=int(cfg.get("max_offenders", 1000)))
+                    max_offenders=int(cfg.get("max_offenders", 1000)),
+                    land_solid_shp=(land_solid if land_solid.exists()
+                                    else None),
+                    utm_epsg=int((recipe.get("finish") or {})
+                                 .get("utm_epsg", 32654)))
     txt = format_report(report, lang=cfg.get("lang", "ja"))
     (out_dir / "qa_report.txt").write_text(txt, encoding="utf-8")
     (out_dir / "qa_report.json").write_text(

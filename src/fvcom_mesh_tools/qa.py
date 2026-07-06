@@ -473,6 +473,9 @@ def run_qa(
     tiny_area_m2: float = 1e-6,
     duplicate_tol_m: float = 1e-3,
     max_offenders: int = 5,
+    land_solid_shp: Path | None = None,
+    utm_epsg: int = 32654,
+    land_interior_m: float = 200.0,
 ) -> QAReport:
     """Run the full QA battery and return a :class:`QAReport`.
 
@@ -962,6 +965,40 @@ def run_qa(
             limit=max_offenders, value_key="dt_s"),
         data={"dt_min_s": dt_min, "worst_element": int(dt_elem.argmin())},
     ))
+
+    if land_solid_shp is not None and Path(land_solid_shp).exists():
+        # mesh-over-land tripwire (I11/J11 wetland incident): no
+        # element centroid may lie in the DEEP interior (more than
+        # land_interior_m inside) of the solid pre-prep land;
+        # near-boundary overlap from coastline conformity and
+        # r_open-scale river openings is tolerated by construction.
+        import geopandas as _gpd
+        import shapely as _sh
+        from pyproj import Transformer as _Tr
+        from shapely.ops import unary_union as _uu
+
+        _g = _gpd.read_file(land_solid_shp)
+        if _g.crs is None:
+            _g = _g.set_crs(4326)
+        _solid = _uu(list(_g.to_crs(utm_epsg).geometry)).buffer(
+            -float(land_interior_m))
+        _cen = mesh.nodes[mesh.elements].mean(axis=1)
+        if coords_resolved == "lonlat":
+            _tr = _Tr.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
+                               always_xy=True)
+            _cx, _cy = _tr.transform(_cen[:, 0], _cen[:, 1])
+        else:
+            _cx, _cy = _cen[:, 0], _cen[:, 1]
+        _bad = np.where(_sh.contains_xy(_solid, _cx, _cy))[0]
+        checks.append(QACheck(
+            "land_overlap", "structure", True, len(_bad) == 0,
+            f"no element centroid > {land_interior_m:g} m inside "
+            "solid pre-prep land",
+            f"{len(_bad)} elements over solid land",
+            int(len(_bad)),
+            offenders=[{"element": int(v)} for v in
+                       _bad[:max_offenders]],
+        ))
 
     return _report(coords_resolved)
 
