@@ -73,3 +73,54 @@ def test_max_patches_cap():
     det = detect_violations(P, T)
     patches = plan_patches(P, T, det, max_patches=1)
     assert "note" in patches[-1]
+
+
+def test_directive_refine_and_obc_protection():
+    import types
+
+    from pyproj import Transformer
+
+    from fvcom_mesh_tools.finishing import apply_directives
+
+    P, T = _lattice(12, 12)
+    P = P * 20000.0  # ~20 km square in fake UTM
+    tr = Transformer.from_crs("EPSG:32654", "EPSG:4326",
+                              always_xy=True)
+
+    def to_lonlat(ring):
+        x, y = tr.transform(ring[:, 0], ring[:, 1])
+        return np.column_stack([x, y]).tolist()
+
+    mesh = types.SimpleNamespace(
+        nodes=P.copy(), elements=T.copy(),
+        depths=np.full(len(P), 10.0),
+        open_boundaries=[np.array([0, 1, 2, 3])],
+    )
+    inner = np.array([[6000., 6000.], [14000., 6000.],
+                      [14000., 14000.], [6000., 14000.]])
+    mesh, led = apply_directives(
+        mesh, [{"polygon": to_lonlat(inner), "target_h_m": 700.0}],
+        utm_epsg=32654)
+    assert led[0]["outcome"].startswith("applied")
+    assert len(mesh.elements) > len(T)          # refined
+    assert np.isfinite(mesh.depths).all()
+    assert len(mesh.open_boundaries[0]) == 4    # obc preserved
+    # seam leftovers are healed by the auto stage (design order)
+    from fvcom_mesh_tools.finishing import execute_patches, plan_patches
+
+    det = detect_violations(mesh.nodes, mesh.elements)
+    patches = plan_patches(mesh.nodes, mesh.elements, det)
+    mesh.nodes, _ = execute_patches(mesh.nodes, mesh.elements,
+                                    patches, log=lambda *a: None)
+    det2 = detect_violations(mesh.nodes, mesh.elements)
+    n_after = sum(len(det2[c]["elements"]) for c in ("c1", "c2"))
+    n_before = sum(len(det[c]["elements"]) for c in ("c1", "c2"))
+    assert n_after <= n_before
+
+    # directive over the OBC -> skipped
+    over = np.array([[-1000., -1000.], [8000., -1000.],
+                     [8000., 3000.], [-1000., 3000.]])
+    mesh, led2 = apply_directives(
+        mesh, [{"polygon": to_lonlat(over), "target_h_m": 500.0}],
+        utm_epsg=32654)
+    assert "skipped" in led2[0]["outcome"]

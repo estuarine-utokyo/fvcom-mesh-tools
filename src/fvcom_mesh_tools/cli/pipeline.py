@@ -457,6 +457,15 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
                or artifacts.get("finished_mesh")
                or artifacts["raw_mesh"])
     mesh = read_fort14(src)
+    dcfg = (recipe.get("finishing") or {}).get("directives")
+    dledger = []
+    if dcfg:
+        from fvcom_mesh_tools.finishing import apply_directives
+
+        utm = int((recipe.get("finish") or {})
+                  .get("utm_epsg", 32654))
+        mesh, dledger = apply_directives(mesh, dcfg,
+                                         utm_epsg=utm, log=log)
     obc = [int(v) for b in mesh.open_boundaries for v in b]
     det = detect_violations(mesh.nodes, mesh.elements)
     patches = plan_patches(
@@ -471,7 +480,7 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
             mesh.nodes, mesh.elements, patches, obc_nodes=obc,
             log=log,
         )
-    write_ledger(ledger or patches,
+    write_ledger(list(dledger) + list(ledger or patches),
                  out_dir / "finishing_ledger.json")
     out14 = out_dir / f"{recipe['name']}_finishing.14"
     write_fort14(mesh, out14)
