@@ -997,8 +997,10 @@ def run_qa(
             "solid pre-prep land",
             f"{len(_bad)} elements over solid land",
             int(len(_bad)),
-            offenders=[{"element": int(v)} for v in
-                       _bad[:max_offenders]],
+            offenders=[{"kind": "element", "id": int(v),
+                        "x": float(_cen[v, 0]),
+                        "y": float(_cen[v, 1])}
+                       for v in _bad[:max_offenders]],
         ))
 
     return _report(coords_resolved)
