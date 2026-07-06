@@ -73,16 +73,21 @@ def local_metrics(P, ring):
     ar = tri_areas(P, T[ring])
     ok = (np.sign(ar) == sign0[ring]).all()
     aa = np.abs(ar)
-    worst = 1.0
     idx = {e: i for i, e in enumerate(ring)}
+    worst = 1.0
     for e in ring:
         for ed in ((T[e, 0], T[e, 1]), (T[e, 1], T[e, 2]),
                    (T[e, 2], T[e, 0])):
             for o in e2t[tuple(sorted(ed))]:
-                if o != e and o in idx:
-                    r = max(aa[idx[e]], aa[idx[o]]) / max(
-                        1e-30, min(aa[idx[e]], aa[idx[o]]))
-                    worst = max(worst, r)
+                if o == e:
+                    continue
+                # cross-boundary pairs too: an outside neighbour's
+                # area is unchanged but the RATIO changes
+                a_o = (aa[idx[o]] if o in idx
+                       else float(np.abs(tri_areas(P, T[[o]]))[0]))
+                a_e = aa[idx[e]]
+                r = max(a_e, a_o) / max(1e-30, min(a_e, a_o))
+                worst = max(worst, r)
     return ok, worst, min_angles(P, T[ring]).min()
 
 
@@ -94,14 +99,28 @@ for ea, eb in pairs:
     ring = set()
     for v in patch_nodes:
         ring.update(n2t[v])
+    slide_nodes = []
     if not free:
-        print(f"[fix] site ({ea},{eb}): all nodes on boundary — skipped")
-        continue
+        # whitelist-compliant boundary op: slide nodes ALONG the
+        # boundary polyline (never off it); OBC members excluded
+        obc_set = set(
+            int(v) for b in mesh.open_boundaries for v in b
+        )
+        bnd_nb = defaultdict(list)
+        for e, ts in e2t.items():
+            if len(ts) == 1:
+                bnd_nb[e[0]].append(e[1])
+                bnd_nb[e[1]].append(e[0])
+        slide_nodes = [v for v in patch_nodes
+                       if v not in obc_set and len(bnd_nb[v]) == 2]
+        if not slide_nodes:
+            print(f"[fix] site ({ea},{eb}): no movable node — skipped")
+            continue
     _, r0, a0 = local_metrics(P, ring)
     best = None
     # deterministic: area-weighted centroid of each free node's ring
     P_try = P.copy()
-    for v in free:
+    for v in (free or []):
         elems = n2t[v]
         cent = P[T[elems]].mean(axis=1)
         w = np.abs(tri_areas(P, T[elems]))
@@ -113,13 +132,21 @@ for ea, eb in pairs:
         h = float(np.sqrt(np.abs(areas[ea]) + np.abs(areas[eb])))
         for _ in range(400):
             P_try = P.copy()
-            for v in free:
-                P_try[v] = P[v] + rng.normal(0.0, 0.10 * h, 2)
+            if free:
+                for v in free:
+                    P_try[v] = P[v] + rng.normal(0.0, 0.10 * h, 2)
+            else:
+                for v in slide_nodes:
+                    nb1, nb2 = bnd_nb[v]
+                    tpar = rng.uniform(-0.45, 0.45)
+                    tgt = nb1 if tpar < 0 else nb2
+                    P_try[v] = P[v] + abs(tpar) * (P[tgt] - P[v])
             ok, r1, a1 = local_metrics(P_try, ring)
             if (ok and r1 < THRESH
                     and a1 >= min(a0, 30.0) - 1e-9
                     and (best is None or r1 < best[1])):
-                best = (P_try, r1, a1, "stochastic")
+                best = (P_try, r1, a1,
+                        "stochastic" if free else "boundary-slide")
     if best is None:
         print(f"[fix] site ({ea},{eb}): r0={r0:.2f} NOT fixed "
               "(reported as residual)")
