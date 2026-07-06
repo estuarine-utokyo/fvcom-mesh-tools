@@ -477,6 +477,7 @@ def run_qa(
     land_solid_shp: Path | None = None,
     utm_epsg: int = 32654,
     land_interior_m: float = 200.0,
+    land_strict_polygon: list | None = None,
 ) -> QAReport:
     """Run the full QA battery and return a :class:`QAReport`.
 
@@ -995,7 +996,21 @@ def run_qa(
             _cx, _cy = _tr.transform(_cen[:, 0], _cen[:, 1])
         else:
             _cx, _cy = _cen[:, 0], _cen[:, 1]
-        _bad = np.where(_sh.contains_xy(_solid, _cx, _cy))[0]
+        _hit = _sh.contains_xy(_solid, _cx, _cy)
+        if land_strict_polygon is not None:
+            # strict fidelity applies INSIDE the fine-nest polygon;
+            # outside it the outer nest follows the intentionally
+            # smoothed coastline (approved bold simplification near
+            # the OBC) and may deviate ~1 km from true land
+            from shapely.geometry import Polygon as _P2
+
+            _tr2 = _Tr.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
+                                always_xy=True)
+            _rp = np.asarray(land_strict_polygon, float)
+            _rx, _ry = _tr2.transform(_rp[:, 0], _rp[:, 1])
+            _strict = _P2(np.column_stack([_rx, _ry]))
+            _hit &= _sh.contains_xy(_strict, _cx, _cy)
+        _bad = np.where(_hit)[0]
         checks.append(QACheck(
             "land_overlap", "fvcom", True, len(_bad) == 0,
             f"no element centroid > {land_interior_m:g} m inside "

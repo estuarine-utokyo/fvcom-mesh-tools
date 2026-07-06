@@ -604,7 +604,11 @@ def _stage_qa(recipe, out_dir, artifacts, log):
                     land_solid_shp=(land_solid if land_solid.exists()
                                     else None),
                     utm_epsg=int((recipe.get("finish") or {})
-                                 .get("utm_epsg", 32654)))
+                                 .get("utm_epsg", 32654)),
+                    land_strict_polygon=(recipe.get("build", {})
+                                         .get("nests", {})
+                                         .get("inner", {})
+                                         .get("polygon")))
     txt = format_report(report, lang=cfg.get("lang", "ja"))
     (out_dir / "qa_report.txt").write_text(txt, encoding="utf-8")
     (out_dir / "qa_report.json").write_text(
