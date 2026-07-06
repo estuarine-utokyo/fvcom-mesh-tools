@@ -11,7 +11,9 @@ prep:
   min_water_area: 1.0          # subtract nothing: rivers closed
   r_open_m: 150.0
   min_island_area_m2: 2.0e6    # sample has essentially no islets
-  inner_smooth_r_m: 250.0      # round coves/piers (SMS look)
+  # inner_smooth_r_m: 250.0 -- DISABLED: exposes an inversion
+  # bug in shoreline classification (recorded); the 3 knobs
+  # below already reduce boundary content to sample level
   outer_smooth_r_m: 1000.0
   skeleton: false
   obc_line:
@@ -76,7 +78,6 @@ finishing:
 
 qa:
   lang: ja
-  land_interior_m: 600.0       # inner smoothing r=250 deviates by design
   skip_checks: [min_depth_clip]
 
 export:
