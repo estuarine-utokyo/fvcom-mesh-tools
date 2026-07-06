@@ -203,6 +203,65 @@ def _add_coast(ax, coast, crs: str, coast_config=None, *, zorder: float = 0.5) -
         return False
 
 
+def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
+                   color: str = "crimson", labels: bool = True):
+    """Overlay the atlas reference grid (user-AI location pointing:
+    column letters west->east, row numbers north->south, quadrant
+    a/b/c/d). Default grid = gridref.TOKYO_BAY_GRID. Draws only
+    within the current axis limits; call AFTER setting xlim/ylim."""
+    import numpy as np
+    from pyproj import Transformer
+
+    from fvcom_mesh_tools.gridref import TOKYO_BAY_GRID
+
+    g = grid or TOKYO_BAY_GRID
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    if crs in ("EPSG:4326", "lonlat", "4326"):
+        def tf(lon, lat):
+            return lon, lat
+        inv = tf
+    else:
+        _t = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+        _i = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+        tf, inv = _t.transform, _i.transform
+    lo0, la0 = inv(x0, y0)
+    lo1, la1 = inv(x1, y1)
+    for i in range(g.ncol + 1):
+        gx = g.lon0 + i * g.dlon
+        if lo0 - g.dlon < gx < lo1 + g.dlon:
+            xs, ys = tf(np.full(50, gx),
+                        np.linspace(la0, la1, 50))
+            ax.plot(xs, ys, color=color, lw=0.5, alpha=0.5,
+                    zorder=4)
+    for j in range(g.nrow + 1):
+        gy = g.lat1 - j * g.dlat
+        if la0 - g.dlat < gy < la1 + g.dlat:
+            xs, ys = tf(np.linspace(lo0, lo1, 50),
+                        np.full(50, gy))
+            ax.plot(xs, ys, color=color, lw=0.5, alpha=0.5,
+                    zorder=4)
+    if not labels:
+        return
+    for i in range(g.ncol):
+        gx = g.lon0 + (i + 0.5) * g.dlon
+        if lo0 < gx < lo1:
+            for la in (la0 + 0.012 * (la1 - la0),
+                       la1 - 0.02 * (la1 - la0)):
+                px, py = tf(gx, la)
+                ax.text(px, py, g.col_letter(i), color=color,
+                        ha="center", fontsize=11,
+                        fontweight="bold", zorder=5)
+    for j in range(1, g.nrow + 1):
+        gy = g.lat1 - (j - 0.5) * g.dlat
+        if la0 < gy < la1:
+            for lo in (lo0 + 0.008 * (lo1 - lo0),
+                       lo1 - 0.02 * (lo1 - lo0)):
+                px, py = tf(lo, gy)
+                ax.text(px, py, str(j), color=color, va="center",
+                        fontsize=11, fontweight="bold", zorder=5)
+
+
 def plot_mesh_overview(
     mesh: Fort14Mesh,
     out_png: str | Path,
@@ -216,6 +275,7 @@ def plot_mesh_overview(
     zoom_margin_frac: float = 0.05,
     dpi: int = 200,
     title: str | None = None,
+    atlas: bool = True,
 ) -> Path:
     """Whole-domain (or zoomed) mesh figure per kickoff §10.
 
@@ -267,6 +327,13 @@ def plot_mesh_overview(
     ax.set_aspect("equal")
     ax.set_xlabel(f"x (m, {crs})")
     ax.set_ylabel(f"y (m, {crs})")
+    if atlas:
+        try:
+            add_atlas_grid(ax, crs=crs)
+        except Exception as exc:  # never block a figure on the grid
+            import warnings
+
+            warnings.warn(f"atlas grid overlay failed: {exc}")
     zoom_note = f"  zoom={zoom}" if isinstance(zoom, str) else ""
     ax.set_title(
         title
