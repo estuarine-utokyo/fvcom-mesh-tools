@@ -5,12 +5,14 @@ import matplotlib.pyplot as plt
 from pyproj import Transformer
 from fvcom_mesh_tools.io import read_fort14
 from fvcom_mesh_tools.gridref import TOKYO_BAY_GRID as G
-import geopandas as gpd
+from fvcom_mesh_tools.plotting import _add_coast
 
 m = read_fort14('outputs/pipeline_v6r/tokyo_bay_v6_final.14')
 tr = Transformer.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
 lon, lat = tr.transform(m.nodes[:, 0], m.nodes[:, 1])
-land = gpd.read_file('outputs/pipeline_v6r/prep/land_opened.shp')
+COAST = (139.0, 34.5, 141.3, 36.2)  # true OSM land via xcoast —
+# land_opened.shp contains the artificial OBC wall band and must
+# not be used for display
 
 LANDMARKS = {
     "Tokyo": (139.79, 35.635), "Kawasaki": (139.76, 35.51),
@@ -23,8 +25,14 @@ LANDMARKS = {
 def draw(fname, x0, y0, x1, y1, lw, dpi, title):
     fig, ax = plt.subplots(figsize=(12, 12 * (y1 - y0) * 1.22 /
                                     (x1 - x0)))
-    land.plot(ax=ax, color="0.85", edgecolor="0.6", linewidth=0.3)
+    _add_coast(ax, COAST, "EPSG:4326")
     ax.triplot(lon, lat, m.elements, lw=lw, color="steelblue")
+    for seg in m.open_boundaries:
+        seg = [int(v) for v in seg]
+        ax.plot(lon[seg], lat[seg], color="red", lw=2.4, zorder=6,
+                label="open boundary")
+    if m.open_boundaries:
+        ax.legend(loc="lower right", fontsize=9)
     # grid lines + labels
     for i in range(G.ncol + 1):
         gx = G.lon0 + i * G.dlon
