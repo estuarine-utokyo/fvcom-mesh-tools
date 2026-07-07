@@ -49,7 +49,11 @@ print(f"[ex1] meshgen done +{time.time()-t0:.0f}s", flush=True)
 
 from oceanmesh.fix_mesh import simp_qual  # noqa: E402
 
-q = simp_qual(p, t)
+# quality in the physical (locally isotropic) frame, as OM2D
+# reports it from the projected plane
+pp = p.copy()
+pp[:, 0] *= np.cos(np.deg2rad(-44.0))
+q = simp_qual(pp, t)
 print(f"[ex1] RAW    NP={len(p):,} NT={len(t):,} qual "
       f"mean/L3/min = {q.mean():.4f}/"
       f"{np.mean(np.sort(q)[:max(1, len(q)//3)]):.4f}/{q.min():.4f}",
