@@ -14,11 +14,15 @@ results, not to waiting.
    action (a log line, a timing, a stack frame) and how early it
    appears. Watch THAT; never wait for job completion when the
    verdict is available mid-run.
-2. **Prefer signals from work that must run anyway.** If the
-   production run itself prints the deciding quantity in its first
-   minutes (e.g. `dt_auto` at +9 min), submit production and judge
-   it live; a dedicated probe is justified only when it decides
-   FASTER than the production run's own first signal.
+2. **Time-to-decision includes QUEUE WAIT, and queue wait
+   dominates for large jobs on a congested cluster.** During
+   debugging, design the SMALLEST job that decides the question
+   (fewest cores, smallest dataset that exhibits the effect) and
+   clear questions ONE BY ONE — a 4-core probe backfills in
+   minutes while a 32-core production job waits hours-days.
+   Never use a production-scale run as the debug vehicle unless
+   it is ALREADY RUNNING; a running job's early log lines are
+   free, a queued one's are not (owner correction, 2026-07-09).
 3. **Instrument before re-running.** Every long-running stage gets
    elapsed-time logs; every runner arms
    `faulthandler.dump_traceback_later(900, repeat=True)` so a hang
