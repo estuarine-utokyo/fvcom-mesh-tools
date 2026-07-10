@@ -22,10 +22,11 @@ t0 = time.time()
 bbox = (-180.0, 180.0, -89.0, 90.0)
 reg = Region(bbox, 4326)
 dem = DEM(str(DS/"SRTM15+.nc"), bbox=reg)
+# Example_7: no 'fl' -> edgefx.m defval=0 -> slope filter OFF
 s = om.bathymetric_gradient_sizing_function(
-    dem, slope_parameter=10, filter_quotient=50,
+    dem, slope_parameter=10,
     min_edge_length=4e3*DEG, max_edge_length=20e3*DEG,
-    type_of_filter="barotropic", grid_dx=4e3*DEG)
+    type_of_filter="none", grid_dx=4e3*DEG)
 g, _ = om.finalize_sizing([s], dem=dem, hmin=4e3,
                           max_edge_length=20e3, gradation=0.25)
 np.save(SCR/"g_slponly.npy", np.asarray(g.values, dtype=float))

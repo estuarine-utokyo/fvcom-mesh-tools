@@ -62,10 +62,14 @@ w = om.wavelength_sizing_function(dem, wl=30,
                                   min_edgelength=4e3*DEG,
                                   max_edge_length=20e3*DEG,
                                   grid_dx=4e3*DEG)
+# Example_7 passes 'slp' WITHOUT 'fl'; edgefx.m defval=0 => the
+# slope filter is OFF (gradient of the raw decimated bathymetry).
+# The barotropic/50 filter we first used smoothed the 10-19 km
+# transition band ~12% coarser than the golden field.
 s = om.bathymetric_gradient_sizing_function(
-    dem, slope_parameter=10, filter_quotient=50,
+    dem, slope_parameter=10,
     min_edge_length=4e3*DEG, max_edge_length=20e3*DEG,
-    type_of_filter="barotropic", grid_dx=4e3*DEG)
+    type_of_filter="none", grid_dx=4e3*DEG)
 g, dta = om.finalize_sizing([f, w, s], dem=dem, shoreline=sh,
                             hmin=4e3, max_edge_length=20e3,
                             gradation=0.25,
