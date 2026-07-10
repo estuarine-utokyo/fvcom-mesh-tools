@@ -15,7 +15,8 @@ import matplotlib.pyplot as plt
 
 DEG = 1.0 / 111e3
 OUT = Path("outputs/om2d_examples/ex6bfp")
-bbox = (-95.40, -94.4, 29.14, 30.09)
+# Example_6b bbox = DEM footprint (geodata default; see 303)
+bbox = (-95.25, -94.30, 28.85, 29.80)
 
 with h5py.File(OUT/"matlab_ex6b.mat", "r") as f:
     g_puw = np.array(f["puw"]).T; g_tuw = np.array(f["tuw"], dtype=int).T - 1

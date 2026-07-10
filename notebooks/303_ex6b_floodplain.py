@@ -27,14 +27,24 @@ channels = [np.asarray(a, dtype=float)
             for a in mm["pts2"].ravel() if np.size(a) >= 4]
 
 # --- STAGE 1: underwater mesh (Example_6 config, banded max_el/grade) ---
-bbox = (-95.40, -94.4, 29.14, 30.09)
+# Example_6b passes NO bbox to geodata, so the meshing bbox is the
+# DEM footprint (geodata.m defaults bbox to the DEM extent). Using
+# the Example_6 bbox here shifted the whole domain (golden spans
+# -95.25..-94.30 x 28.85..29.80) and cost 15% of the nodes.
+import xarray as xr
+with xr.open_dataset(DS/"galveston_13_mhw_2007.nc") as _ds:
+    _xv = _ds[[v for v in ("x", "lon", "longitude") if v in _ds][0]].values
+    _yv = _ds[[v for v in ("y", "lat", "latitude") if v in _ds][0]].values
+bbox = (float(_xv.min()), float(_xv.max()),
+        float(_yv.min()), float(_yv.max()))
 reg = Region(bbox, 4326)
+print(f"[ex6b] bbox from DEM: {bbox}", flush=True)
+dem = DEM(str(DS/"galveston_13_mhw_2007.nc"), bbox=reg)
 sh = Shoreline(
     str(DS/"US_Medium_Shoreline/us_medium_shoreline_polygon.shp"),
     reg.bbox, 60.0*DEG)
 sh.detect_inpoly_flip(str(DS/"GSHHS_shp/l/GSHHS_l_L1.shp"))
 sdf = om.signed_distance_function(sh)
-dem = DEM(str(DS/"galveston_13_mhw_2007.nc"), bbox=reg)
 f = om.feature_sizing_function(sh, sdf, r=3,
                                max_edge_length=1e3*DEG,
                                lattice_anchor=(dem.bbox[0],
