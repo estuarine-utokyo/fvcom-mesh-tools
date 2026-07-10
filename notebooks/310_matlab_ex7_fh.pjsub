@@ -1,0 +1,26 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=03:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlfh7
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Examples"
+matlab -nodisplay -batch "\
+try; \
+  run('../setup_oceanmesh2d.m'); \
+  bbox = [-180 180; -89 90]; \
+  min_el = 4e3; max_el = 20e3; wl = 30; dt = 0; grade = 0.25; R = 3; slp = 10; \
+  coastline = {'GSHHS_f_L1','GSHHS_f_L6'}; \
+  dem = 'SRTM15+.nc'; \
+  gdat = geodata('shp',coastline,'dem',dem,'bbox',bbox,'h0',min_el); \
+  fh = edgefx('geodata',gdat,'fs',R,'wl',wl,'max_el',max_el,'slp',slp,'dt',dt,'g',grade); \
+  F = fh.F; \
+  gv = F.GridVectors; xg = gv{1}; yg = gv{2}; hh = F.Values; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex7glob/matlab_ex7_fh.mat','xg','yg','hh','-v7.3'); \
+  disp(size(hh)); disp('FH7 DUMP OK'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

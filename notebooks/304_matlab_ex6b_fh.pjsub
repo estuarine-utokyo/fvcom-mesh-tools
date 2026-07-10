@@ -1,0 +1,29 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=01:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlfh6b
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tests"
+matlab -nodisplay -batch "\
+try; \
+  run('../setup_oceanmesh2d.m'); \
+  min_el = 60; \
+  max_el = [1e3 -inf 0; 500 0 +inf]; \
+  grade = [0.25 -inf 0; 0.05 0 +inf]; \
+  angleOfReslope = 60; ch = 0.1; fs = 3; \
+  coastline = 'us_medium_shoreline_polygon'; \
+  demfile = 'galveston_13_mhw_2007.nc'; \
+  gdatuw = geodata('shp',coastline,'dem',demfile,'h0',min_el); \
+  load ECGC_Thalwegs.mat; \
+  fh = edgefx('geodata',gdatuw,'fs',fs,'ch',ch,'AngOfRe',angleOfReslope,'Channels',pts2,'g',grade,'max_el',max_el); \
+  F = fh.F; \
+  gv = F.GridVectors; xg = gv{1}; yg = gv{2}; hh = F.Values; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex6bfp/matlab_ex6b_fh.mat','xg','yg','hh','-v7.3'); \
+  disp(size(hh)); disp('FH DUMP OK'); \
+catch e; disp(getReport(e)); exit(1); \
+end"
