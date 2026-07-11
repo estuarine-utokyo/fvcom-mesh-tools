@@ -159,8 +159,14 @@ for k, nz in enumerate(NESTS, 1):
 
 _tick("meshgen start")
 print("[meshgen] build (itmax=%d) ..." % MESH_ITMAX, flush=True)
+# smooth_outer relaxes each OUTER grid at its OWN grade
+# (meshgen.m:394); omitting this used the 0.15 default and let the
+# nest-2/3 fine sizes spread twice as far into nest 1 (+5.8k nodes
+# ringing the nest-2 polygon)
 p, t = om.generate_multiscale_mesh(sdfs, edges, max_iter=MESH_ITMAX,
-                                   seed=0)
+                                   seed=0,
+                                   gradation=[NESTS[0]['grade'],
+                                              NESTS[1]['grade']])
 print(f"[meshgen] NP={len(p):,} NE={len(t):,}", flush=True)
 _tick("meshgen done")
 p, t = om.make_mesh_boundaries_traversable(p, t)
