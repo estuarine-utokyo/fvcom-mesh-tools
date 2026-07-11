@@ -144,45 +144,14 @@ else:
 # the built-in msh.clean('default') runs with pfix nodes pinned and
 # (fork feature) egfix-carrying faces excluded from the boundary
 # deletion loop, so the constrained OBC line survives the clean
-p, t = om.generate_mesh(sdf, g, max_iter=60, seed=0,
-                        pfix=PFIX, egfix=SEGS)
-# prune 1-element-wide dead-end strips (upstream river reaches):
-# the sample meshes no 1-wide reaches (e.g. the Tama mouth) --
-# iteratively removing faces with a single face-neighbour eats each
-# chain back to the >=2-wide junction. Deletion-only operations, so
-# the constrained OBC line and all node positions are untouched.
-ne0 = len(t)
-
-
 from scipy.spatial import cKDTree
+import shapely
 from fvcom_mesh_tools.algorithms.obc_finish import (
     prune_one_wide_protected,
 )
-p, t = prune_one_wide_protected(p, t, PFIX)
-p, t = om.make_mesh_boundaries_traversable(p, t)
-print(f"[sr] 1-wide pruning (pfix-protected): NE {ne0:,} -> "
-      f"{len(t):,}", flush=True)
-print(f"[sr] mesh NP={len(p):,} NE={len(t):,} +{time.time()-t0:.0f}s",
-      flush=True)
 
-# resolve the constrained arc nodes; STOP if any was lost (no
-# silent fallback: a missing arc node means the cleanup destroyed
-# the constrained boundary)
-d_arc, arc_idx = cKDTree(p).query(OBC_ARC)
-if (d_arc > 1e-8).any():
-    bad = np.where(d_arc > 1e-8)[0]
-    raise RuntimeError(
-        f"OBC arc nodes lost during cleanup: arc rows {bad.tolist()} "
-        f"(nearest-node offsets {d_arc[bad]} deg). Options: relax "
-        "delete_boundary_faces min_qual, or inspect the cleanup "
-        "steps -- the constrained line must survive untouched.")
-
-b = om.interp_bathymetry(p, t, dem, method="cell-averaging",
-                         min_depth=2.0)
-
-# open boundary = the input arc, by construction; land/islands from
-# the boundary loops (outer loop split at the arc ends)
-loops = om.boundary_loops(t)
+arc_line = shapely.LineString(OBC_ARC)
+TOL = 1e-6  # deg (~0.1 m): constrained nodes are exact
 
 
 def _loop_area(pts, lp):
@@ -191,43 +160,117 @@ def _loop_area(pts, lp):
                        - np.dot(y, np.roll(x, -1)))
 
 
-outer = max(loops, key=lambda lp: abs(_loop_area(p, lp)))
-arc_set = set(arc_idx.tolist())
-if not arc_set.issubset(set(outer.tolist())):
-    raise RuntimeError("OBC arc nodes are not all on the outer "
-                       "boundary loop -- inspect the mesh.")
-# rotate the outer loop to start at the NW arc end and walk toward
-# the SE arc end: the open string is that run. Constrained-edge
-# splits may insert extra nodes ON the line (local sizing finer
-# than the arc spacing); verify every run node sits on the polyline.
-import shapely
+def build_mesh(g):
+    """One full generate->clean->bc pass on the current sizing."""
+    p, t = om.generate_mesh(sdf, g, max_iter=60, seed=0,
+                            pfix=PFIX, egfix=SEGS)
+    ne0 = len(t)
+    p, t = prune_one_wide_protected(p, t, PFIX)
+    p, t = om.make_mesh_boundaries_traversable(p, t)
+    print(f"[sr] 1-wide pruning (pfix-protected): NE {ne0:,} -> "
+          f"{len(t):,}", flush=True)
+    print(f"[sr] mesh NP={len(p):,} NE={len(t):,} "
+          f"+{time.time()-t0:.0f}s", flush=True)
+    d_arc, arc_idx = cKDTree(p).query(OBC_ARC)
+    if (d_arc > 1e-8).any():
+        bad = np.where(d_arc > 1e-8)[0]
+        raise RuntimeError(
+            f"OBC arc nodes lost during cleanup: arc rows "
+            f"{bad.tolist()} (offsets {d_arc[bad]} deg).")
+    b = om.interp_bathymetry(p, t, dem, method="cell-averaging",
+                             min_depth=2.0)
+    loops = om.boundary_loops(t)
+    outer = max(loops, key=lambda lp: abs(_loop_area(p, lp)))
+    arc_set = set(arc_idx.tolist())
+    if not arc_set.issubset(set(outer.tolist())):
+        raise RuntimeError("OBC arc nodes are not all on the outer "
+                           "boundary loop -- inspect the mesh.")
+    start = int(np.where(outer == arc_idx[0])[0][0])
+    ring = np.roll(outer, -start)
+    if shapely.distance(shapely.Point(p[ring[1]]), arc_line) > TOL:
+        ring = np.roll(ring[::-1], 1)
+    stop = int(np.where(ring == arc_idx[-1])[0][0])
+    open_str = ring[:stop + 1]
+    off = np.array([shapely.distance(shapely.Point(p[v]), arc_line)
+                    for v in open_str])
+    if (off > TOL).any() or not arc_set.issubset(
+            set(open_str.tolist())):
+        raise RuntimeError(
+            "outer-loop run between the OBC arc ends leaves the "
+            f"constrained line (max offset {off.max():.2e} deg).")
+    land_str = np.append(ring[stop:], ring[0])
+    bc = {"open": [open_str], "land": [land_str],
+          "island": [lp for lp in loops if lp is not outer]}
+    print(f"[sr] bc: open={len(bc['open'])} land={len(bc['land'])} "
+          f"island={len(bc['island'])}", flush=True)
+    for kk, s2 in enumerate(bc["open"]):
+        print(f"[sr]  open[{kk}]: {len(s2)} nodes at "
+              f"({p[s2, 0].min():.3f}-{p[s2, 0].max():.3f}, "
+              f"{p[s2, 1].min():.3f}-{p[s2, 1].max():.3f})",
+              flush=True)
+    return p, t, b, bc
 
-arc_line = shapely.LineString(OBC_ARC)
-TOL = 1e-6  # deg (~0.1 m): constrained nodes are exact
-start = int(np.where(outer == arc_idx[0])[0][0])
-ring = np.roll(outer, -start)
-if shapely.distance(shapely.Point(p[ring[1]]), arc_line) > TOL:
-    ring = np.roll(ring[::-1], 1)  # reverse, keep start position
-stop = int(np.where(ring == arc_idx[-1])[0][0])
-open_str = ring[:stop + 1]
-off = np.array([shapely.distance(shapely.Point(p[v]), arc_line)
-                for v in open_str])
-if (off > TOL).any() or not arc_set.issubset(set(open_str.tolist())):
-    raise RuntimeError(
-        "outer-loop run between the OBC arc ends leaves the "
-        f"constrained line (max offset {off.max():.2e} deg, "
-        f"{len(open_str)} nodes, arc coverage "
-        f"{len(arc_set & set(open_str.tolist()))}/{len(arc_set)}). "
-        "Inspect the constrained boundary before trusting the bc.")
-land_str = np.append(ring[stop:], ring[0])    # junctions shared
-bc = {"open": [open_str], "land": [land_str],
-      "island": [lp for lp in loops if lp is not outer]}
-print(f"[sr] bc: open={len(bc['open'])} land={len(bc['land'])} "
-      f"island={len(bc['island'])}", flush=True)
-for kk, s in enumerate(bc["open"]):
-    print(f"[sr]  open[{kk}]: {len(s)} nodes at "
-          f"({p[s, 0].min():.3f}-{p[s, 0].max():.3f}, "
-          f"{p[s, 1].min():.3f}-{p[s, 1].max():.3f})", flush=True)
+
+p, t, b, bc = build_mesh(g)
+
+# TWO-PASS canal refinement (owner: a through-channel must carry a
+# real 2-cell cross-section; that needs local h ~ width/2 -- fans
+# get undone by C1 finishing). Pass 1 detects the widen clusters,
+# lays refinement corridors, pass 2 regenerates. Fixed two passes.
+from fvcom_mesh_tools.channel_policy import resolve_narrow_channels
+from fvcom_mesh_tools.io import Fort14Mesh
+from pyproj import Transformer as _T
+
+_tr = _T.from_crs("EPSG:4326", "EPSG:32654", always_xy=True)
+_xu, _yu = _tr.transform(p[:, 0], p[:, 1])
+_mesh1 = Fort14Mesh(
+    title="pass1", nodes=np.column_stack([_xu, _yu]),
+    depths=np.asarray(b, dtype=float), elements=np.asarray(t, int),
+    open_boundaries=[np.asarray(s2, int) for s2 in bc["open"]],
+    land_boundaries=[(20, np.asarray(bc["land"][0], int))]
+    + [(21, np.append(lp, lp[0])) for lp in bc["island"]],
+)
+_, cinfo = resolve_narrow_channels(_mesh1, min_basin_elements=6,
+                                   analyze_only=True)
+wid = [cl for cl in cinfo["clusters"] if cl["action"] == "widen"
+       and np.isfinite(cl["width_m"])]
+print(f"[sr] canal analysis: {len(cinfo['clusters'])} clusters, "
+      f"{len(wid)} widen -> refinement corridors", flush=True)
+if wid:
+    _tri = _T.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
+    pts_m2 = []
+    tgt_m2 = []
+    rad_m2 = []
+    for cl in wid:
+        c_ll = np.column_stack(
+            _tri.transform(cl["centroids"][:, 0],
+                           cl["centroids"][:, 1]))
+        w2 = max(cl["width_m"] / 2.0, 120.0)
+        for q2 in c_ll:
+            pts_m2.append([q2[0] * np.cos(np.deg2rad(q2[1]))
+                           * 111e3, q2[1] * 111e3])
+            tgt_m2.append(w2 / 1.2)          # field scale
+            rad_m2.append(2.0 * cl["width_m"])
+    pts_m2 = np.asarray(pts_m2)
+    tgt_m2 = np.asarray(tgt_m2)
+    rad_m2 = np.asarray(rad_m2)
+    lon_g3, lat_g3 = g.create_grid()
+    qm = np.column_stack([
+        lon_g3.ravel() * np.cos(np.deg2rad(lat_g3.ravel())) * 111e3,
+        lat_g3.ravel() * 111e3])
+    dq, iq = cKDTree(pts_m2).query(qm, workers=-1)
+    cap = (tgt_m2[iq] + GRADE * np.maximum(0.0, dq - rad_m2[iq]))
+    gv = np.asarray(g.values, dtype=float)
+    cap = cap.reshape(gv.shape) * DEG
+    n_dn = int((cap < gv).sum())
+    g.values = np.minimum(gv, cap)
+    g.hmin = min(float(g.hmin), float(tgt_m2.min()) * DEG * 0.9)
+    g.build_interpolant()
+    print(f"[sr] canal refinement corridors: lowered {n_dn} "
+          f"lattice cells (targets "
+          f"{tgt_m2.min()*1.2:.0f}-{tgt_m2.max()*1.2:.0f} m mesh)",
+          flush=True)
+    p, t, b, bc = build_mesh(g)   # pass 2
 
 om.write_fort14(str(OUT / "sample_repro.14"), p, t, depth=b,
                 boundaries=bc)

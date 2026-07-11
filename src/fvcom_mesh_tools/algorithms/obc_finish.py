@@ -24,6 +24,7 @@ __all__ = [
     "prune_one_wide_protected",
     "flip_for_obc_perp",
     "fix_r4",
+    "split_r4_end_cells",
     "flip_c4_edges",
     "finish_obc_mesh",
 ]
@@ -272,6 +273,122 @@ def flip_c4_edges(
     return {"fixed": fixed, "unfixed": unfixed}
 
 
+
+
+def split_r4_end_cells(
+    mesh: Fort14Mesh, elem_ids: list[int],
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """R4 cells whose only flip candidate fails the angle gate
+    (single-internal-edge end cells): split that internal edge at
+    the fraction (30-75%) that maximises min angle subject to the
+    C4 bound over the 4 new sub-triangles (internal seams AND
+    external neighbours). Deterministic; run it after all
+    node-moving stages so nothing can undo the insertion."""
+    import dataclasses
+
+    nodes2, els2, dep2 = mesh.nodes, mesh.elements, mesh.depths
+    ee2 = np.vstack([els2[:, [0, 1]], els2[:, [1, 2]],
+                     els2[:, [2, 0]]])
+    ee2.sort(axis=1)
+    uq2, ct2 = np.unique(ee2, axis=0, return_counts=True)
+    ob2 = set(int(v) for v in np.asarray(mesh.open_boundaries[0]))
+    done, failed = [], []
+    for ei in list(elem_ids):
+        tri = [int(x) for x in els2[ei]]
+        obe = [(a3, b3) for a3, b3 in ((tri[0], tri[1]),
+                                       (tri[1], tri[2]),
+                                       (tri[2], tri[0]))
+               if a3 in ob2 and b3 in ob2]
+        if not obe:
+            failed.append(ei)
+            continue
+        o1, o2 = obe[0]
+        w = [v for v in tri if v not in (o1, o2)][0]
+        cand = None
+        for oo in (o1, o2):
+            nb = [int(ej) for ej in np.where(
+                ((els2 == oo).any(axis=1))
+                & ((els2 == w).any(axis=1)))[0] if ej != ei]
+            if nb:
+                cand = (oo, o2 if oo == o1 else o1, nb[0])
+        if cand is None:
+            failed.append(ei)
+            continue
+        oo, other, ej = cand
+        mfar = int([x for x in els2[ej]
+                    if int(x) not in (oo, w)][0])
+
+        def _ext_area(a4, b4):
+            nb4 = [int(ek) for ek in np.where(
+                ((els2 == a4).any(axis=1))
+                & ((els2 == b4).any(axis=1)))[0]
+                if ek not in (ei, ej)]
+            if not nb4:
+                return None
+            t4 = [int(x) for x in els2[nb4[0]]]
+            return abs(_area(*nodes2[t4]))
+
+        ext = {(other, oo): _ext_area(other, oo),
+               (other, w): _ext_area(other, w),
+               (oo, mfar): _ext_area(oo, mfar),
+               (mfar, w): _ext_area(mfar, w)}
+        best = None
+        for fr in np.linspace(0.30, 0.75, 19):
+            sN = (1 - fr) * nodes2[oo] + fr * nodes2[w]
+            tris = [[other, oo, -1], [other, -1, w],
+                    [oo, mfar, -1] if _area(
+                        nodes2[oo], nodes2[mfar], sN) > 0
+                    else [mfar, oo, -1],
+                    [mfar, w, -1] if _area(
+                        nodes2[mfar], nodes2[w], sN) > 0
+                    else [w, mfar, -1]]
+            angs = []
+            areas4 = []
+            ok = True
+            for t3 in tris:
+                P3 = [nodes2[v] if v >= 0 else sN for v in t3]
+                A3 = _area(*P3)
+                if A3 <= 0:
+                    ok = False
+                    break
+                areas4.append(A3)
+                angs += _tri_angles(*P3)
+            if not ok:
+                continue
+            c4v = []
+            for (ia, ib) in ((0, 1), (0, 2), (1, 3), (2, 3)):
+                c4v.append(abs(areas4[ia] - areas4[ib])
+                           / max(areas4[ia], areas4[ib]))
+            for k4, key in enumerate(((other, oo), (other, w),
+                                      (oo, mfar), (mfar, w))):
+                Ae = ext[key]
+                if Ae is not None:
+                    c4v.append(abs(areas4[k4] - Ae)
+                               / max(areas4[k4], Ae))
+            feas = (min(angs) >= 30.0 and max(angs) <= 130.0
+                    and max(c4v) <= 0.5)
+            score = (1 if feas else 0, min(angs) - max(c4v))
+            if best is None or score > best[0]:
+                best = (score, fr, sN, tris)
+        if best is None:
+            failed.append(ei)
+            continue
+        score, fr, sN, tris = best
+        si = len(nodes2)
+        nodes2 = np.vstack([nodes2, sN[None, :]])
+        dep2 = np.append(dep2, 0.5 * (dep2[oo] + dep2[w]))
+        tt = [[si if v < 0 else v for v in t3] for t3 in tris]
+        els2 = els2.copy()
+        els2[ei] = tt[0]
+        els2[ej] = tt[2]
+        els2 = np.vstack([els2, [tt[1]], [tt[3]]])
+        done.append((int(ei), round(float(fr), 2)))
+        mesh = dataclasses.replace(mesh, nodes=nodes2,
+                                   depths=dep2, elements=els2)
+        nodes2, els2, dep2 = mesh.nodes, mesh.elements, mesh.depths
+    return mesh, {"split": done, "failed": failed}
+
+
 def finish_obc_mesh(
     mesh: Fort14Mesh,
     *,
@@ -309,6 +426,8 @@ def finish_obc_mesh(
     mesh, info["compact_2"] = compact_nodes(mesh)
     info["r4_recheck"] = fix_r4(mesh)
     if info["r4_recheck"]["unfixed"]:
+        mesh, info["r4_split"] = split_r4_end_cells(
+            mesh, info["r4_recheck"]["unfixed"])
         info["polish"] = _stochastic_local_fix_round(
             mesh, np.random.default_rng(seed * 101),
             min_angle_target=30.0, max_angle_target=130.0,

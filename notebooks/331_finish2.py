@@ -13,7 +13,11 @@ DST = "outputs/sample_repro/sample_repro_final.14"
 mesh = read_fort14(SRC)
 # narrow-channel policy (owner): through/big-port -> widen,
 # dead-end/small-port -> delete basin and all
-mesh, cinfo = resolve_narrow_channels(mesh, min_basin_elements=6)
+# delete-only here: through-canal widening is done properly by the
+# two-pass refinement in the generator (fans violate C1 in narrow
+# canals and get undone by phase_h -- churn)
+mesh, cinfo = resolve_narrow_channels(mesh, min_basin_elements=6,
+                                      apply_widen=False)
 print(f"[fin] channel policy: flagged={cinfo['n_flagged']} "
       f"widened={cinfo['n_widened']} "
       f"deleted={cinfo['n_deleted_elements']}", flush=True)

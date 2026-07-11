@@ -125,11 +125,21 @@ def resolve_narrow_channels(
     min_basin_elements: int = 6,
     min_w_h: float = 1.0,
     coords: str = "metric",
+    analyze_only: bool = False,
+    apply_widen: bool = True,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Apply the owner's narrow-channel policy. Returns
     ``(new_mesh, info)``; raises if the open boundary cannot be
-    preserved through a deletion."""
-    flag, _ = under_resolved_channels_flag(
+    preserved through a deletion. With ``analyze_only`` the mesh is
+    returned unchanged and ``info["clusters"]`` carries the decision
+    per cluster plus centroids/widths -- callers use this to lay
+    REFINEMENT corridors (width/2) for the widen clusters and
+    REGENERATE, because a true 2-cell cross-section in a narrow
+    canal needs local h ~ width/2 (centroid fans violate C1 there
+    and get undone by quality finishing). For the same reason pass
+    ``apply_widen=False`` in a FINISHING context (after the two-pass
+    refinement): widen clusters are then only reported."""
+    flag, chinfo = under_resolved_channels_flag(
         mesh, min_w_h=min_w_h, coords=coords)
     ob_nodes = set(
         int(v) for s in mesh.open_boundaries
@@ -181,14 +191,21 @@ def resolve_narrow_channels(
             delete[members] = True
             for l in small:
                 delete[lab == l] = True
+        wvals = chinfo["channel_width_m"][members]
+        wvals = wvals[np.isfinite(wvals)]
         clusters.append({
             "n_members": int(len(members)),
             "action": action,
             "neighbor_sizes": sorted(
                 int(sizes[l]) for l in nonmain),
-            "center_xy": els[members[0]].tolist(),
+            "centroids": mesh.nodes[els[members]].mean(axis=1),
+            "width_m": float(np.median(wvals)) if wvals.size
+            else float("nan"),
         })
     info["clusters"] = clusters
+    if analyze_only:
+        info.update(n_widened=0, n_deleted_elements=0)
+        return mesh, info
 
     if delete.any():
         arc_xy = {i: mesh.nodes[np.asarray(s, int)].copy()
@@ -263,11 +280,12 @@ def resolve_narrow_channels(
             mesh, open_boundaries=opens, land_boundaries=lands)
     info["n_deleted_elements"] = int(delete.sum())
 
-    if widen.any():
+    if widen.any() and apply_widen:
         mesh, winfo = widen_thin_elements_at_centroid(mesh, widen)
         info["n_widened"] = int(widen.sum())
         info["widen_info"] = {k: v for k, v in winfo.items()
                               if isinstance(v, (int, float))}
     else:
         info["n_widened"] = 0
+        info["n_widen_skipped"] = int(widen.sum())
     return mesh, info
