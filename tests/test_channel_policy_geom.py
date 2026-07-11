@@ -72,6 +72,32 @@ class TestCloseCases:
         assert not w.contains(Point(3300, 7500))   # slot filled
 
 
+class TestRiverMouth:
+    def test_river_touching_one_body_is_closed(self):
+        # a long 300 m river entering from land: touches the main
+        # body exactly once -> close, no matter how big main is
+        land = box(8000, 0, 20000, 10000).difference(
+            box(8000, 4850, 20000, 5150))    # river to the edge
+        new_land, info = apply_channel_policy_to_land(
+            land, DOMAIN, h_mesh_m=H, obc_point=OBC)
+        assert len(info["widened"]) == 0
+        assert len(info["closed"]) >= 1
+        assert not _water(new_land).contains(Point(16000, 5000))
+
+    def test_phantom_water_is_dropped(self):
+        # land coverage gap far from the sea: an isolated "water"
+        # pocket must not participate at all
+        land = box(8000, 0, 20000, 10000).difference(
+            box(15000, 2000, 18000, 4000))   # inland no-data hole
+        new_land, info = apply_channel_policy_to_land(
+            land, DOMAIN, h_mesh_m=H, obc_point=OBC)
+        assert info["n_phantom_water_dropped"] >= 1
+        # the hole is untouched land-side (not analysed, not edited)
+        assert info["n_narrow"] == 0 or all(
+            r["center"][0] < 15000 for r in
+            info["widened"] + info["closed"])
+
+
 class TestValidation:
     def test_anisotropic_scale_raises(self):
         with pytest.raises(ValueError, match="anisotropic"):

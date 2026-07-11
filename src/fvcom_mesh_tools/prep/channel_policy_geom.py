@@ -53,7 +53,8 @@ def apply_channel_policy_to_land(
     obc_point,
     min_basin_cells: int = 6,
     detect_factor: float = 1.2,
-    widen_factor: float = 1.8,
+    widen_factor: float = 2.2,
+    shortcut_ratio: float = 2.2,
     metric_scale: tuple[float, float] | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Apply the policy to a land-polygon union within a domain.
@@ -95,6 +96,19 @@ def apply_channel_policy_to_land(
     a_basin = min_basin_cells * a_cell
 
     water = domain_poly.difference(land_union)
+    # keep ONLY the sea-connected component: where the land layer
+    # has no coverage (inland shapefile gaps), domain-minus-land
+    # fabricates phantom water bodies -- a 2,261-cell phantom in
+    # inland Boso made river corridors look like big-basin
+    # connectors and chain-widened the Hanami-gawa (2026-07-12)
+    obc_pt0 = shapely.Point(obc_point)
+    wpolys = _polys(water)
+    if not wpolys:
+        raise RuntimeError("domain minus land left no water")
+    d0 = [obc_pt0.distance(g) for g in wpolys]
+    sea = wpolys[int(np.argmin(d0))]
+    n_phantom = len(wpolys) - 1
+    water = sea
     wide = water.buffer(-r_open).buffer(
         r_open * 1.02, join_style="mitre", mitre_limit=1.2)
     wide = wide.intersection(water)
@@ -110,7 +124,8 @@ def apply_channel_policy_to_land(
 
     info: dict[str, Any] = {"n_narrow": 0, "widened": [],
                             "closed": [], "n_wide_parts":
-                            len(wide_parts)}
+                            len(wide_parts),
+                            "n_phantom_water_dropped": n_phantom}
     add_water = []       # widening: subtract from land
     add_land = []        # closing: union into land
     eps = 0.02 * h_mesh_m / scale
@@ -132,8 +147,38 @@ def apply_channel_policy_to_land(
         through = False
         if main_i in nb:
             inter = N.buffer(eps).intersection(wide_parts[main_i])
-            through = len(_polys(inter)) >= 2
-        if through or big_nonmain:
+            pieces = sorted(_polys(inter), key=lambda g: -g.area)
+            if len(pieces) >= 2:
+                # SHORTCUT significance: a genuine through-channel
+                # saves real distance (Keihin: ~2 km through vs
+                # 8-10 km around the island group). Nearshore
+                # ribbons behind small headlands and bendy river
+                # mouths also touch main twice but save nothing
+                # (ratio ~1.2-1.6) -- 126 of them eroded the whole
+                # coastline before this gate (2026-07-12).
+                A = pieces[0].representative_point()
+                B = pieces[1].representative_point()
+                d_thru = max(A.distance(B),
+                             0.1 * h_mesh_m / scale)
+                rings = [wide_parts[main_i].exterior,
+                         *wide_parts[main_i].interiors]
+                rA = int(np.argmin([r.distance(A) for r in rings]))
+                rB = int(np.argmin([r.distance(B) for r in rings]))
+                if rA != rB:
+                    through = True   # crosses to a hole boundary
+                else:
+                    ring = rings[rA]
+                    sA = ring.project(A)
+                    sB = ring.project(B)
+                    d_arc = abs(sA - sB)
+                    d_arc = min(d_arc, ring.length - d_arc)
+                    through = d_arc > shortcut_ratio * d_thru
+        # widen ONLY if the corridor CONNECTS two water bodies:
+        # a significant shortcut through the main body, or a
+        # main <-> big-basin port channel. A corridor touching a
+        # single body -- however big -- is a river/inlet mouth and
+        # must be closed (a river mouth touches the sea once).
+        if through or (main_i in nb and big_nonmain):
             add_water.append(N.buffer(r_widen))
             rec["action"] = "widen"
             info["widened"].append(rec)
