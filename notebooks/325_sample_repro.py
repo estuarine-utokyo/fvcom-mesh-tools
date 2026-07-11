@@ -51,8 +51,39 @@ poly = np.array(
     + [[139.83, 34.973]])
 bbox = (139.60, 140.12, 34.96, 35.75)
 reg = Region(bbox, 4326)
-sh = Shoreline("outputs/tb_varres_3r/land_osm_wide.shp",
-               poly, H0 * DEG)
+
+# geometry-stage narrow-channel policy (owner 2026-07-12): decide
+# channel fates on the SHORELINE, before meshing -- deterministic
+# and minimum-mesh-size preserving. Through / big-basin channels
+# get their banks pushed into land (width -> 1.8x h_mesh) so two
+# STANDARD-size rows fit; dead-ends and small basins are closed.
+import geopandas as gpd
+from shapely.geometry import Polygon as _Poly
+from shapely.ops import unary_union as _uu
+from fvcom_mesh_tools.prep.channel_policy_geom import (
+    apply_channel_policy_to_land,
+)
+
+CH_SHP = OUT / "land_channel_adj.shp"
+_land_g = gpd.read_file("outputs/tb_varres_3r/land_osm_wide.shp")
+_dom = _Poly(poly)
+_cosw = float(np.cos(np.deg2rad(35.35)))
+_new_land, chinfo = apply_channel_policy_to_land(
+    _uu(list(_land_g.geometry)), _dom,
+    h_mesh_m=H0 * 1.2, obc_point=tuple(OBC_ARC[6]),
+    metric_scale=(111e3 * _cosw, 111e3))
+print(f"[sr] channel policy (geometry stage): "
+      f"{len(chinfo['widened'])} widened, "
+      f"{len(chinfo['closed'])} closed "
+      f"(of {chinfo['n_narrow']} narrow corridors)", flush=True)
+for r in chinfo["widened"] + chinfo["closed"]:
+    print(f"[sr]   {r['action']}: ({r['center'][0]:.3f}, "
+          f"{r['center'][1]:.3f}) area={r['area_cells']:.1f} cells "
+          f"basins={r['neighbor_cells']}", flush=True)
+_geoms = list(_new_land.geoms) if hasattr(_new_land, "geoms")     else [_new_land]
+gpd.GeoDataFrame(geometry=_geoms, crs=_land_g.crs).to_file(CH_SHP)
+
+sh = Shoreline(str(CH_SHP), poly, H0 * DEG)
 sdf = om.signed_distance_function(sh)
 dem = DEM(str(OM2D / "datasets/TokyoBay/dem/SRTM15_kanto_15s.nc"),
           bbox=reg, nc_reader="coords")
@@ -212,65 +243,6 @@ def build_mesh(g):
 
 
 p, t, b, bc = build_mesh(g)
-
-# TWO-PASS canal refinement (owner: a through-channel must carry a
-# real 2-cell cross-section; that needs local h ~ width/2 -- fans
-# get undone by C1 finishing). Pass 1 detects the widen clusters,
-# lays refinement corridors, pass 2 regenerates. Fixed two passes.
-from fvcom_mesh_tools.channel_policy import resolve_narrow_channels
-from fvcom_mesh_tools.io import Fort14Mesh
-from pyproj import Transformer as _T
-
-_tr = _T.from_crs("EPSG:4326", "EPSG:32654", always_xy=True)
-_xu, _yu = _tr.transform(p[:, 0], p[:, 1])
-_mesh1 = Fort14Mesh(
-    title="pass1", nodes=np.column_stack([_xu, _yu]),
-    depths=np.asarray(b, dtype=float), elements=np.asarray(t, int),
-    open_boundaries=[np.asarray(s2, int) for s2 in bc["open"]],
-    land_boundaries=[(20, np.asarray(bc["land"][0], int))]
-    + [(21, np.append(lp, lp[0])) for lp in bc["island"]],
-)
-_, cinfo = resolve_narrow_channels(_mesh1, min_basin_elements=6,
-                                   analyze_only=True)
-wid = [cl for cl in cinfo["clusters"] if cl["action"] == "widen"
-       and np.isfinite(cl["width_m"])]
-print(f"[sr] canal analysis: {len(cinfo['clusters'])} clusters, "
-      f"{len(wid)} widen -> refinement corridors", flush=True)
-if wid:
-    _tri = _T.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
-    pts_m2 = []
-    tgt_m2 = []
-    rad_m2 = []
-    for cl in wid:
-        c_ll = np.column_stack(
-            _tri.transform(cl["centroids"][:, 0],
-                           cl["centroids"][:, 1]))
-        w2 = max(cl["width_m"] / 2.0, 120.0)
-        for q2 in c_ll:
-            pts_m2.append([q2[0] * np.cos(np.deg2rad(q2[1]))
-                           * 111e3, q2[1] * 111e3])
-            tgt_m2.append(w2 / 1.2)          # field scale
-            rad_m2.append(2.0 * cl["width_m"])
-    pts_m2 = np.asarray(pts_m2)
-    tgt_m2 = np.asarray(tgt_m2)
-    rad_m2 = np.asarray(rad_m2)
-    lon_g3, lat_g3 = g.create_grid()
-    qm = np.column_stack([
-        lon_g3.ravel() * np.cos(np.deg2rad(lat_g3.ravel())) * 111e3,
-        lat_g3.ravel() * 111e3])
-    dq, iq = cKDTree(pts_m2).query(qm, workers=-1)
-    cap = (tgt_m2[iq] + GRADE * np.maximum(0.0, dq - rad_m2[iq]))
-    gv = np.asarray(g.values, dtype=float)
-    cap = cap.reshape(gv.shape) * DEG
-    n_dn = int((cap < gv).sum())
-    g.values = np.minimum(gv, cap)
-    g.hmin = min(float(g.hmin), float(tgt_m2.min()) * DEG * 0.9)
-    g.build_interpolant()
-    print(f"[sr] canal refinement corridors: lowered {n_dn} "
-          f"lattice cells (targets "
-          f"{tgt_m2.min()*1.2:.0f}-{tgt_m2.max()*1.2:.0f} m mesh)",
-          flush=True)
-    p, t, b, bc = build_mesh(g)   # pass 2
 
 om.write_fort14(str(OUT / "sample_repro.14"), p, t, depth=b,
                 boundaries=bc)
