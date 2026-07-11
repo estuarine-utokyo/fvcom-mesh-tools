@@ -98,27 +98,96 @@ g, dt_eff = om.finalize_sizing(
     max_edge_length=MAXEL, gradation=GRADE, courant=None)
 print(f"[sr] sizing done +{time.time()-t0:.0f}s", flush=True)
 
+# OBC ladder (default ON): a second guide line parallel to the OBC
+# arc, offset INWARD by ~0.9x the LOCAL target mesh size (field x
+# 1.2 DistMesh factor), clipped to [800, 1600] m, constrained like
+# the arc. The band between the two lines meshes as an aligned
+# ladder -- each OBC node gets a perpendicular partner -- giving
+# the orderly, noise-resistant open-boundary rows the sample has.
+# A fixed 1400 m offset mismatched the finer NW half (C1 slivers);
+# the offset must follow the sizing. Opt out: SR_OBC_LADDER=off.
+if os.environ.get("SR_OBC_LADDER", "on") == "on":
+    h_arc_m = np.asarray(g.eval(OBC_ARC)).ravel() / DEG * 1.2
+    off_m = np.clip(0.9 * h_arc_m,
+                    float(os.environ.get("SR_OBC_OFF_MIN", 800.0)),
+                    float(os.environ.get("SR_OBC_OFF_MAX", 1600.0)))
+    _c = np.cos(np.deg2rad(OBC_ARC[:, 1].mean()))
+    _xy = np.column_stack([OBC_ARC[:, 0] * _c, OBC_ARC[:, 1]])
+    _t = np.gradient(_xy, axis=0)
+    _t /= np.linalg.norm(_t, axis=1)[:, None]
+    _n = np.column_stack([-_t[:, 1], _t[:, 0]])  # left of NW->SE = inward
+    _in = _xy + _n * (off_m[:, None] / 111e3)
+    OBC_INNER = np.column_stack([_in[:, 0] / _c, _in[:, 1]])
+    # ends excluded: at the SE corner the inward normal runs almost
+    # ALONG the artificial closure (the guide point lands on the
+    # land boundary), and the NW end sits against the coast -- the
+    # ~90 deg end wedges mesh fine freely and the targeted flips
+    # in the finishing chain give the end nodes their perpendicular
+    # partners (proven: devs 4.4/9.2 deg)
+    OBC_INNER = OBC_INNER[1:-1]
+    _nin = len(OBC_INNER)
+    _iseg = np.column_stack([np.arange(_nin - 1),
+                             np.arange(1, _nin)]) + len(OBC_ARC)
+    PFIX = np.vstack([OBC_ARC, OBC_INNER])
+    SEGS = np.vstack([OBC_SEG, _iseg])
+    print(f"[sr] OBC ladder ON: offsets "
+          f"{off_m.min():.0f}-{off_m.max():.0f} m (field-scaled)",
+          flush=True)
+else:
+    PFIX, SEGS = OBC_ARC, OBC_SEG
+
 # the built-in msh.clean('default') runs with pfix nodes pinned and
 # (fork feature) egfix-carrying faces excluded from the boundary
 # deletion loop, so the constrained OBC line survives the clean
 p, t = om.generate_mesh(sdf, g, max_iter=60, seed=0,
-                        pfix=OBC_ARC, egfix=OBC_SEG)
+                        pfix=PFIX, egfix=SEGS)
 # prune 1-element-wide dead-end strips (upstream river reaches):
 # the sample meshes no 1-wide reaches (e.g. the Tama mouth) --
 # iteratively removing faces with a single face-neighbour eats each
 # chain back to the >=2-wide junction. Deletion-only operations, so
 # the constrained OBC line and all node positions are untouched.
 ne0 = len(t)
-p, t = om.delete_faces_connected_to_one_face(p, t)
+
+
+def _prune_one_wide(pp, tt, protected_pts):
+    # like delete_faces_connected_to_one_face, but faces containing
+    # a constrained (pfix) node are never pruned -- the plain
+    # version ate the ladder end cells and orphaned the arc ends
+    from collections import defaultdict as _dd
+    from oceanmesh.fix_mesh import fix_mesh as _fx
+    _, pidx = cKDTree(pp).query(protected_pts)
+    prot = np.zeros(len(pp), bool)
+    prot[pidx] = True
+    while True:
+        ee = np.vstack([tt[:, [0, 1]], tt[:, [1, 2]], tt[:, [2, 0]]])
+        ee.sort(axis=1)
+        ef = _dd(list)
+        for k2, (a2, b2) in enumerate(map(tuple, ee)):
+            ef[(a2, b2)].append(k2 % len(tt))
+        nnb = np.zeros(len(tt), int)
+        for fs in ef.values():
+            if len(fs) == 2:
+                nnb[fs[0]] += 1
+                nnb[fs[1]] += 1
+        kill = (nnb <= 1) & ~prot[tt].any(axis=1)
+        if not kill.any():
+            break
+        tt = tt[~kill]
+    pp, tt, _ = _fx(pp, tt, delete_unused=True)
+    return pp, tt
+
+
+from scipy.spatial import cKDTree
+p, t = _prune_one_wide(p, t, PFIX)
 p, t = om.make_mesh_boundaries_traversable(p, t)
-print(f"[sr] 1-wide pruning: NE {ne0:,} -> {len(t):,}", flush=True)
+print(f"[sr] 1-wide pruning (pfix-protected): NE {ne0:,} -> "
+      f"{len(t):,}", flush=True)
 print(f"[sr] mesh NP={len(p):,} NE={len(t):,} +{time.time()-t0:.0f}s",
       flush=True)
 
 # resolve the constrained arc nodes; STOP if any was lost (no
 # silent fallback: a missing arc node means the cleanup destroyed
 # the constrained boundary)
-from scipy.spatial import cKDTree
 d_arc, arc_idx = cKDTree(p).query(OBC_ARC)
 if (d_arc > 1e-8).any():
     bad = np.where(d_arc > 1e-8)[0]
