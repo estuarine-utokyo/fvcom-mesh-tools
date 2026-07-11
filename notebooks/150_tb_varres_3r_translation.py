@@ -124,9 +124,14 @@ for k, nz in enumerate(NESTS, 1):
           f"slp={nz['slp']} fl={nz['fl']} max_el={nz['max_el']:g} "
           f"dt={nz['dt']:g} g={nz['grade']}", flush=True)
     comps = [
+        # lattice anchored at the DEM-subset corner: geodata.m
+        # x0y0 = [x(1), y(1)] of the clipped DEM feeds
+        # CreateStructGrid (the Ex6 lattice_anchor lesson; the
+        # nest-1 dt argmin is phase-sensitive)
         om.feature_sizing_function(
             shore, sdf, r=nz['R'],
-            max_edge_length=nz['max_el'] * DEG),
+            max_edge_length=nz['max_el'] * DEG,
+            lattice_anchor=(dem.bbox[0], dem.bbox[2])),
         om.wavelength_sizing_function(
             dem, wl=nz['wl'], min_edgelength=nz['min_el'] * DEG,
             max_edge_length=nz['max_el'] * DEG,

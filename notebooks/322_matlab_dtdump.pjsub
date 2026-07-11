@@ -1,0 +1,28 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=16
+#PJM -L elapse=01:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mldt1
+set -euo pipefail
+module load matlab/R2024a
+export OM_DTDUMP="${HOME}/Github/fvcom-mesh-tools/outputs/tb_varres_3r/ml_nest1_dtdump.mat"
+cd "${HOME}/Github/OceanMesh2D/Tokyo_Bay/scripts"
+matlab -nodisplay -batch "\
+try; \
+  setenv('OM_DTDUMP', '${HOME}/Github/fvcom-mesh-tools/outputs/tb_varres_3r/ml_nest1_dtdump.mat'); \
+  run('${HOME}/Github/OceanMesh2D/setup_oceanmesh2d.m'); \
+  addpath('${HOME}/Github/OceanMesh2D/utilities/shapefile'); \
+  vr = '${HOME}/Github/fvcom-mesh-tools/notebooks/tb3r_golden_variant.m'; \
+  txt = fileread(vr); \
+  ix = strfind(txt, 'gdat_01 = safe_geodata'); \
+  head = txt(1:ix-1); \
+  eval(head(strfind(head, 'x_bond_01'):end)); \
+  dem_srtm = '${HOME}/Github/OceanMesh2D/datasets/TokyoBay/dem/SRTM15_pacific_4min.nc'; \
+  gdat_01 = safe_geodata('shp','GSHHS_f_L1','dem',dem_srtm,'h0',10e3,'bbox',[x_bond_01',y_bond_01']); \
+  fh_01 = edgefx('geodata',gdat_01,'fs',3,'wl',30,'slp',50,'fl',-50,'max_el',50e3,'dt',0,'g',0.3); \
+  disp(fh_01.dt); disp('DT DUMP OK'); \
+catch e; disp(getReport(e)); exit(1); \
+end"
