@@ -115,8 +115,11 @@ for k, nz in enumerate(NESTS, 1):
                   float(nz['bbox'][:, 1].max())), 4326)
     shore = Shoreline(str(nz['shp']), nz['bbox'], nz['h0'] * DEG)
     sdf = om.signed_distance_function(shore)
+    # explicit choice (no-silent-fallback policy): these self-
+    # sliced DEMs are mis-georeferenced by GDAL's netCDF driver;
+    # subset them by their own lon/lat coordinate variables
     dem = DEM(str(SRTM_PACIFIC if k == 1 else SRTM_KANTO),
-              bbox=reg)
+              bbox=reg, nc_reader="coords")
     print(f"[nest{k}] edgefx: fs={nz['R']} wl={nz['wl']} "
           f"slp={nz['slp']} fl={nz['fl']} max_el={nz['max_el']:g} "
           f"dt={nz['dt']:g} g={nz['grade']}", flush=True)
@@ -126,13 +129,15 @@ for k, nz in enumerate(NESTS, 1):
             max_edge_length=nz['max_el'] * DEG),
         om.wavelength_sizing_function(
             dem, wl=nz['wl'], min_edgelength=nz['min_el'] * DEG,
-            max_edge_length=nz['max_el'] * DEG),
+            max_edge_length=nz['max_el'] * DEG,
+            grid_dx=nz['h0'] * DEG),
         om.bathymetric_gradient_sizing_function(
             dem, slope_parameter=nz['slp'],
             filter_quotient=abs(nz['fl']),
             type_of_filter="barotropic",
             min_edge_length=nz['min_el'] * DEG,
-            max_edge_length=nz['max_el'] * DEG),
+            max_edge_length=nz['max_el'] * DEG,
+            grid_dx=nz['h0'] * DEG),
     ]
     grid, dt_used = om.finalize_sizing(
         comps, dem=dem,
