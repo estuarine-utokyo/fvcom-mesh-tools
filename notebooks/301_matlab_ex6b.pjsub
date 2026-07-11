@@ -1,0 +1,39 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=16
+#PJM -L elapse=06:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlx6b
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tests"
+matlab -nodisplay -batch "\
+try; \
+  run('../setup_oceanmesh2d.m'); \
+  min_el = 60; \
+  max_el = [1e3 -inf 0; 500 0 +inf]; \
+  grade = [0.25 -inf 0; 0.05 0 +inf]; \
+  angleOfReslope = 60; ch = 0.1; fs = 3; \
+  coastline = 'us_medium_shoreline_polygon'; \
+  demfile = 'galveston_13_mhw_2007.nc'; \
+  gdatuw = geodata('shp',coastline,'dem',demfile,'h0',min_el); \
+  load ECGC_Thalwegs.mat; \
+  fh = edgefx('geodata',gdatuw,'fs',fs,'ch',ch,'AngOfRe',angleOfReslope,'Channels',pts2,'g',grade,'max_el',max_el); \
+  mshopts = meshgen('ef',fh,'bou',gdatuw,'plot_on',0,'proj','lambert'); \
+  mshopts = mshopts.build; \
+  muw = mshopts.grd; \
+  muw = makens(muw,'auto',gdatuw); \
+  [pfix,egfix] = extractFixedConstraints(muw); \
+  puw = muw.p; tuw = muw.t; \
+  coastline2 = 'us_coastalreliefmodel_10mLMSL'; \
+  gdat = geodata('shp',coastline2,'dem',demfile,'h0',min_el); \
+  mshopts = meshgen('ef',fh,'bou',gdat,'plot_on',0,'proj','lambert','pfix',pfix,'egfix',egfix); \
+  mshopts = mshopts.build; \
+  m = mshopts.grd; \
+  pc = m.p; tc = m.t; pf = pfix; ef = egfix; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex6bfp/matlab_ex6b.mat','pc','tc','puw','tuw','pf','ef','-v7.3'); \
+  disp('EX6B GOLDEN SAVED'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

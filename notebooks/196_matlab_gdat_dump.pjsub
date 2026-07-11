@@ -1,0 +1,21 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlgdat
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  gdat = geodata('shp','PostSandyNCEI','dem','PostSandyNCEI.nc','h0',30); \
+  outer = gdat.outer; inner = gdat.inner; mainland = gdat.mainland; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex2_ny/matlab_gdat.mat', \
+       'outer','inner','mainland','-v7'); \
+  disp('gdat saved'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

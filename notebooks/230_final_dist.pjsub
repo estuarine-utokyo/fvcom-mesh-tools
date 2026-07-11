@@ -1,0 +1,15 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=32
+#PJM -L elapse=02:30:00
+#PJM -j
+#PJM -X
+set -euo pipefail
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+#PJM -N fvcm-poc230
+cd "${HOME}/Github/fvcom-mesh-tools"
+for s in 0 1 2 3; do
+  echo "===SEED $s"
+  JBAY_SEED=$s "${HOME}/mambaforge/envs/oceanmesh-bench/bin/python" notebooks/211_jbay.py 2>&1 | grep -E "outline points|\[jbay\] (NP|area|qual|PASSED|FAILED)"
+done

@@ -1,0 +1,14 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=32
+#PJM -L elapse=02:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc217
+set -euo pipefail
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+cd "${HOME}/Github/fvcom-mesh-tools"
+for s in 1 2 3; do
+  JBAY_SEED=$s "${HOME}/mambaforge/envs/oceanmesh-bench/bin/python" notebooks/211_jbay.py 2>&1 | grep -E "\[jbay\]"
+done

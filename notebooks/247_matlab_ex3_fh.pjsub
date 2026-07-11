@@ -1,0 +1,28 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=02:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlfh3
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  bbox = [-71.6 42.7; -64 30; -80 24; -85 38; -71.6 42.7]; \
+  gdat1 = geodata('shp','GSHHS_f_L1','dem','SRTM15+.nc','h0',1e3,'bbox',bbox); \
+  fh1 = edgefx('geodata',gdat1,'fs',3,'wl',30,'max_el',50e3,'dt',0,'g',0.35); \
+  xg = fh1.F.GridVectors{1}; yg = fh1.F.GridVectors{2}; vals = fh1.F.Values; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex3full/ml_fh1.mat','xg','yg','vals','-v7.3'); \
+  clearvars xg yg vals; \
+  bbox2 = [-74.25 40.5; -73.75 40.55; -73.75 41; -74 41; -74.25 40.5]; \
+  gdat2 = geodata('shp','PostSandyNCEI','dem','PostSandyNCEI.nc','h0',30,'bbox',bbox2); \
+  fh2 = edgefx('geodata',gdat2,'fs',3,'wl',30,'max_el',1e3,'max_el_ns',240,'dt',0,'g',0.35); \
+  xg = fh2.F.GridVectors{1}; yg = fh2.F.GridVectors{2}; vals = fh2.F.Values; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex3full/ml_fh2.mat','xg','yg','vals','-v7.3'); \
+  disp('fh dumped'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

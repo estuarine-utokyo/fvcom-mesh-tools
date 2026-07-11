@@ -1,0 +1,24 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:40:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mldump
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  bbox = [166 176; -48 -40]; \
+  min_el = 1e3; max_el = 100e3; max_el_ns = 5e3; grade = 0.35; R = 3; \
+  gdat = geodata('shp','GSHHS_f_L1','bbox',bbox,'h0',min_el); \
+  fh = edgefx('geodata',gdat,'fs',R,'max_el_ns',max_el_ns,'max_el',max_el,'g',grade); \
+  F = fh.F; \
+  gv = F.GridVectors; xg = gv{1}; yg = gv{2}; hh = F.Values; \
+  save('Examples/1_NZ_edgefx_dump.mat','xg','yg','hh','-v7'); \
+  disp(size(hh)); disp('dump ok'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

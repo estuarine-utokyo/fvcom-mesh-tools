@@ -1,0 +1,20 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=03:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlx5
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tests"
+matlab -nodisplay -batch "\
+try; \
+  run('../setup_oceanmesh2d.m'); \
+  run('../Examples/Example_5_JBAY.m'); \
+  pc = m.p; tc = m.t; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex5jbay/matlab_ex5.mat','pc','tc','-v7'); \
+  disp('EX5 GOLDEN SAVED'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

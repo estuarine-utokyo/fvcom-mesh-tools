@@ -1,0 +1,28 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlchd
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tests"
+matlab -nodisplay -batch "\
+try; \
+  run('../setup_oceanmesh2d.m'); \
+  bbox = [-95.40 -94.4; 29.14 30.09]; \
+  gdat = geodata('shp','us_medium_shoreline_polygon','dem','galveston_13_mhw_2007.nc','bbox',bbox,'h0',60); \
+  load ECGC_Thalwegs.mat; \
+  fh = edgefx('geodata',gdat,'fs',3,'ch',0.1,'Channels',pts2,'g',0.25,'max_el',1e3); \
+  c = fh.chd; \
+  fprintf('chd class: %s size %dx%d\n', class(c), size(c,1), size(c,2)); \
+  fin = isfinite(c); \
+  fprintf('chd finite cells: %d (%.2f%%)\n', sum(fin(:)), 100*sum(fin(:))/numel(c)); \
+  if any(fin(:)); \
+    v = c(fin); \
+    fprintf('chd p5/50/95: %.0f/%.0f/%.0f m\n', prctile(v,5), prctile(v,50), prctile(v,95)); \
+  end; \
+catch e; disp(getReport(e)); exit(1); \
+end"

@@ -1,0 +1,27 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlef10
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  bbox = [0 1; 0 1]; boubox = [0 0; 1 0; 1 1; 0 1; 0 0; NaN NaN]; \
+  bbox2 = [-1 2; -1 2]; boubox2 = [-1 -1; 2 -1; 2 2; -1 2; -1 -1; NaN NaN]; \
+  gdat1 = geodata('pslg',boubox,'bbox',bbox,'h0',1e3); \
+  gdat2 = geodata('pslg',boubox2,'bbox',bbox2,'h0',1e4); \
+  fh1 = edgefx('geodata',gdat1,'g',0.2); \
+  fh2 = edgefx('geodata',gdat2,'g',0.2); \
+  mshopts = meshgen('ef',{fh2, fh1},'bou',{gdat2,gdat1},'plot_on',0,'qual_tol',0.0025,'cleanup',0); \
+  xg = mshopts.ef{1}.F.GridVectors{1}; yg = mshopts.ef{1}.F.GridVectors{2}; \
+  vals = mshopts.ef{1}.F.Values; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex10/ml_outer_ef.mat','xg','yg','vals','-v7'); \
+  disp('ef saved'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

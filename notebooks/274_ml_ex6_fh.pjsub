@@ -1,0 +1,23 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=01:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlfh6
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tests"
+matlab -nodisplay -batch "\
+try; \
+  run('../setup_oceanmesh2d.m'); \
+  bbox = [-95.40 -94.4; 29.14 30.09]; \
+  gdat = geodata('shp','us_medium_shoreline_polygon','dem','galveston_13_mhw_2007.nc','bbox',bbox,'h0',60); \
+  load ECGC_Thalwegs.mat; \
+  fh = edgefx('geodata',gdat,'fs',3,'ch',0.1,'Channels',pts2,'g',0.25,'max_el',1e3); \
+  xg = fh.F.GridVectors{1}; yg = fh.F.GridVectors{2}; vals = fh.F.Values; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex6gbay/ml_fh6.mat','xg','yg','vals','-v7.3'); \
+  disp('FH6 DUMPED'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

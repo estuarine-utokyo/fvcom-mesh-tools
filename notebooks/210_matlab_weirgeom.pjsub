@@ -1,0 +1,27 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=1
+#PJM -L elapse=00:20:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlwg
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  addpath(genpath('@geodata')); \
+  load('datasets/weirs_struct.mat'); \
+  cd @geodata/private; \
+  out = struct(); \
+  for ii=1:2; \
+    cl = [weirs(ii).X weirs(ii).Y]; \
+    [wp,we,ib] = GenerateWeirGeometry(cl, weirs(ii).width/111e3, weirs(ii).min_ele/111e3, 0); \
+    out.(sprintf('wp%d',ii)) = wp; out.(sprintf('we%d',ii)) = we; out.(sprintf('ib%d',ii)) = ib; \
+  end; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/jbay_weirgeom.mat','-struct','out','-v7'); \
+  disp('weirgeom saved'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

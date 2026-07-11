@@ -1,0 +1,14 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=1
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-crmdl
+set -euo pipefail
+cd "${HOME}/Github/OceanMesh2D/datasets"
+curl -sL -o CoastalReliefModel_10m_LMSL.zip "https://zenodo.org/records/12784709/files/CoastalReliefModel_10m_LMSL.zip?download=1"
+ls -la CoastalReliefModel_10m_LMSL.zip
+unzip -o CoastalReliefModel_10m_LMSL.zip
+echo CRM-READY

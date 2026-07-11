@@ -1,0 +1,31 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=03:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mltraj
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+setup_oceanmesh2d; \
+cd Examples; \
+kk = 1; save('/tmp/jbay_k.mat','kk'); \
+while true; \
+  load('/tmp/jbay_k.mat'); \
+  if kk > 2; break; end; \
+  try; \
+    run('Example_5b_JBAY_w_weirs.m'); \
+    load('/tmp/jbay_k.mat'); \
+    X = m.p(:,1); Y = m.p(:,2); \
+    Re2 = 111^2; \
+    A = sum(polyarea(X(m.t)',Y(m.t)').*cosd(mean(Y(m.t)')))*Re2; \
+    bc = (m.b(m.t(:,1))+m.b(m.t(:,2))+m.b(m.t(:,3)))/3/1e3; \
+    V = sum(polyarea(X(m.t)',Y(m.t)').*cosd(mean(Y(m.t)')).*bc')*Re2; \
+    fprintf('[mlx3] run %d: NP=%d A=%.2f V=%.4f\n', kk, length(m.p), A, V); \
+  catch e; disp(getReport(e)); end; \
+  load('/tmp/jbay_k.mat'); kk = kk + 1; save('/tmp/jbay_k.mat','kk'); \
+  close all; \
+end"

@@ -1,0 +1,36 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=16
+#PJM -L elapse=01:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlfh12
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tokyo_Bay/scripts"
+matlab -nodisplay -batch "\
+try; \
+  run('${HOME}/Github/OceanMesh2D/setup_oceanmesh2d.m'); \
+  addpath('${HOME}/Github/OceanMesh2D/utilities/shapefile'); \
+  vr = fileread('${HOME}/Github/fvcom-mesh-tools/notebooks/tb3r_golden_variant.m'); \
+  ix = strfind(vr, 'gdat_01 = safe_geodata'); \
+  head = vr(1:ix-1); \
+  eval(head(strfind(head, 'x_bond_01'):end)); \
+  dem_srtm = '${HOME}/Github/OceanMesh2D/datasets/TokyoBay/dem/SRTM15_pacific_4min.nc'; \
+  dem_kanto = '${HOME}/Github/OceanMesh2D/datasets/TokyoBay/dem/SRTM15_kanto_15s.nc'; \
+  coast2 = '${HOME}/Github/fvcom-mesh-tools/outputs/tb_varres_3r/land_osm_wide'; \
+  gdat_01 = safe_geodata('shp','GSHHS_f_L1','dem',dem_srtm,'h0',10e3,'bbox',[x_bond_01',y_bond_01']); \
+  fh_01 = edgefx('geodata',gdat_01,'fs',3,'wl',30,'slp',50,'fl',-50,'max_el',50e3,'dt',0,'g',0.3); \
+  F = fh_01.F; gv = F.GridVectors; xg = gv{1}; yg = gv{2}; hh = F.Values; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/tb_varres_3r/ml_fh1.mat','xg','yg','hh','-v7.3'); \
+  disp(size(hh)); \
+  x_bond_02 = [138.196907945361,139.784782123012,141.294666567004,139.718998032166,138.285893837899,138.196907945361]; \
+  y_bond_02 = [34.6003740729489,33.5207179317026,35.2698037998702,35.9357551145740,35.2841759386230,34.6003740729489]; \
+  gdat_02 = safe_geodata('shp',coast2,'dem',dem_kanto,'h0',1e3,'bbox',[x_bond_02',y_bond_02']); \
+  fh_02 = edgefx('geodata',gdat_02,'fs',3,'wl',30,'slp',50,'fl',-50,'max_el',2e3,'dt',0,'g',0.1); \
+  F = fh_02.F; gv = F.GridVectors; xg = gv{1}; yg = gv{2}; hh = F.Values; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/tb_varres_3r/ml_fh2.mat','xg','yg','hh','-v7.3'); \
+  disp(size(hh)); disp('FH12 DUMPS OK'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

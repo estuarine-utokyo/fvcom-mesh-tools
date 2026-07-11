@@ -1,0 +1,20 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=02:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlecgs
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tests"
+matlab -nodisplay -batch "\
+try; \
+  run('../setup_oceanmesh2d.m'); \
+  run('TestECGC.m'); \
+  pc = m.p; tc = m.t; bc = m.b; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ecgc/matlab_ecgc.mat','pc','tc','bc','-v7'); \
+  disp('saved'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

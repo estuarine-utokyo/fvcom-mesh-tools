@@ -9,7 +9,7 @@ from pathlib import Path
 from scipy.interpolate import LinearNDInterpolator
 
 ASCII = os.path.expandvars(
-    "$DATA_DIR/bathymetry/M7001/ascii/M7001_関東南部_Ver.2.4")
+    "$DATA_DIR/geodata/bathymetry/M7001/ascii/M7001_関東南部_Ver.2.4")
 OUT = Path.home() / "Github/OceanMesh2D/datasets/TokyoBay/dem"
 srtm = xr.open_dataset(OUT / "SRTM15_kanto_15s.nc")
 var = [v for v in srtm.data_vars if srtm[v].ndim == 2][0]

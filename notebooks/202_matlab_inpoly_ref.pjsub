@@ -1,0 +1,25 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlinp
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  load('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex2_ny/matlab_gdat.mat'); \
+  pg = [outer; inner]; \
+  ee = Get_poly_edges(pg); \
+  pts = [-74.105 40.780; -74.100 40.777; -74.095 40.770; -74.110 40.765]; \
+  in_ = inpoly(pts, pg, ee); \
+  for i=1:4; fprintf('[mlinp] (%.3f,%.3f): %s\n', pts(i,1), pts(i,2), string(in_(i))); end; \
+  fb = outer(1:find(isnan(outer(:,1)),1,'first')-1,:); \
+  inb = inpoly(pts, fb); \
+  for i=1:4; fprintf('[mlinp] in_boubox %d: %s\n', i, string(inb(i))); end; \
+catch e; disp(getReport(e)); exit(1); \
+end"

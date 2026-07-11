@@ -1,0 +1,21 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:40:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlgd6
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tests"
+matlab -nodisplay -batch "\
+try; \
+  run('../setup_oceanmesh2d.m'); \
+  bbox = [-95.40 -94.4; 29.14 30.09]; \
+  gdat = geodata('shp','us_medium_shoreline_polygon','dem','galveston_13_mhw_2007.nc','bbox',bbox,'h0',60); \
+  ml = gdat.mainland; in = gdat.inner; ou = gdat.outer; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex6gbay/ml_gdat6.mat','ml','in','ou','-v7.3'); \
+  disp('GDAT6 SAVED'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

@@ -1,0 +1,30 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=16
+#PJM -L elapse=01:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlfhtb
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tokyo_Bay/scripts"
+matlab -nodisplay -batch "\
+try; \
+  run('${HOME}/Github/OceanMesh2D/setup_oceanmesh2d.m'); \
+  addpath('${HOME}/Github/OceanMesh2D/utilities/shapefile'); \
+  dem_kanto = '${HOME}/Github/OceanMesh2D/datasets/TokyoBay/dem/SRTM15_kanto_15s.nc'; \
+  coast2 = '${HOME}/Github/fvcom-mesh-tools/outputs/tb_varres_3r/land_osm_wide'; \
+  x3 = [139.142156 139.142156 139.144724 139.152351 139.164815 139.18178 139.202839 139.227552 139.25548 139.286203 139.31934 139.354542 139.391505 139.429958 139.469663 139.510408 139.552007 139.594291 139.637105 139.680308 139.723765 139.767348 139.810932 139.854389 139.897592 139.940406 139.98269 140.024289 140.065034 140.104739 140.143192 140.180155 140.215357 140.248493 140.279217 140.307145 140.331858 140.352917 140.369882 140.382346 140.389973 140.392541 140.392541 139.142156]; \
+  y3 = [35.859592 35.225989 35.182486 35.139579 35.097818 35.057672 35.019512 34.983607 34.95014 34.919216 34.890891 34.865177 34.842062 34.82152 34.803513 34.788004 34.774954 34.764328 34.756096 34.750234 34.746724 34.745556 34.746724 34.750234 34.756096 34.764328 34.774954 34.788004 34.803513 34.82152 34.842062 34.865177 34.890891 34.919216 34.95014 34.983607 35.019512 35.057672 35.097818 35.139579 35.182486 35.225989 35.859592 35.859592]; \
+  gdat = safe_geodata('shp',coast2,'dem',dem_kanto,'h0',1e2,'bbox',[x3',y3']); \
+  fh = edgefx('geodata',gdat,'fs',3,'wl',30,'slp',50,'fl',-50,'max_el',5e2,'dt',0,'g',0.1); \
+  F = fh.F; gv = F.GridVectors; xg = gv{1}; yg = gv{2}; hh = F.Values; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/tb_varres_3r/matlab_tb3r_fh3.mat','xg','yg','hh','-v7.3'); \
+  disp(size(hh)); \
+  fh3s = edgefx('geodata',gdat,'slp',50,'fl',-50,'max_el',5e2,'g',0.1); \
+  F = fh3s.F; gv = F.GridVectors; xg = gv{1}; yg = gv{2}; hh = F.Values; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/tb_varres_3r/matlab_tb3r_slp3.mat','xg','yg','hh','-v7.3'); \
+  disp(size(hh)); disp('TB FH DUMPS OK'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

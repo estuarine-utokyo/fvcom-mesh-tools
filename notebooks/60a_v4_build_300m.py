@@ -40,7 +40,7 @@ from fvcom_mesh_tools.io import Fort14Mesh, read_fort14
 
 REPO = Path(__file__).resolve().parents[1]
 DATA_DIR = Path(os.environ["DATA_DIR"])  # fail loudly if missing
-DEM = DATA_DIR / "bathymetry" / "tokyo_bay" / "depth_0030-11+12+13+14+15.nc"
+DEM = DATA_DIR / "geodata" / "bathymetry" / "tokyo_bay" / "depth_0030-11+12+13+14+15.nc"
 COASTLINE = REPO / "data" / "coastline" / "tokyo_bay" / "MLIT_C23" / "C23-06_TOKYOBAY.shp"
 RIVERS = REPO / "data" / "rivers" / "tokyo_bay" / "tokyo_bay_rivers.csv"
 

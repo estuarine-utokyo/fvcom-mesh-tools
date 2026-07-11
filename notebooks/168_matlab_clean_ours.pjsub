@@ -1,0 +1,24 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:40:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlclean
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  m_proj('Transverse Mercator','lon',[166 176],'lat',[-48 -40]); \
+  m = msh('fname','${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex1_nz/ours_raw.14'); \
+  tq = gettrimeshquan(m.p, m.t); \
+  fprintf('BEFORE: NP=%d NT=%d meanq=%.4f minq=%.4f\n', length(m.p), length(m.t), mean(tq.qm), min(tq.qm)); \
+  mc = clean(m,'default','djc',0.25); \
+  tq2 = gettrimeshquan(mc.p, mc.t); \
+  fprintf('AFTER : NP=%d NT=%d meanq=%.4f minq=%.4f\n', length(mc.p), length(mc.t), mean(tq2.qm), min(tq2.qm)); \
+  pc = mc.p; tc = mc.t; save('/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/outputs/om2d_examples/ex1_nz/matlab_cleaned.mat','pc','tc','-v7'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

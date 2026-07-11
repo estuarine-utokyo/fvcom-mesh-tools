@@ -1,0 +1,19 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=03:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlx2
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  cd Examples; \
+  run('Example_2_NY.m'); \
+catch e; \
+  disp(getReport(e)); exit(1); \
+end"

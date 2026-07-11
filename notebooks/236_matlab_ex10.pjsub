@@ -1,0 +1,21 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlx10
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  cd Examples; \
+  run('Example_10_Multiscale_Smoother.m'); \
+  pc = m.p; tc = m.t; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex10/matlab_ex10.mat','pc','tc','-v7'); \
+  disp(['saved NP ' num2str(size(pc,1))]); \
+catch e; disp(getReport(e)); exit(1); \
+end"

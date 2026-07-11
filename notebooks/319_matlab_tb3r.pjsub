@@ -1,0 +1,19 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=16
+#PJM -L elapse=04:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mltb3r
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tokyo_Bay/scripts"
+matlab -nodisplay -batch "\
+try; \
+  run('${HOME}/Github/fvcom-mesh-tools/notebooks/tb3r_golden_variant.m'); \
+  p = m.p; t = m.t; b = m.b; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/tb_varres_3r/matlab_tb3r.mat','p','t','b','-v7.3'); \
+  disp('TB3R GOLDEN SAVED'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

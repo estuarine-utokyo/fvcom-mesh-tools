@@ -1,0 +1,25 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlgd8
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tests"
+matlab -nodisplay -batch "\
+try; \
+  run('../setup_oceanmesh2d.m'); \
+  load('ak_outerpoly.mat'); \
+  gdat = geodata('shp','GSHHS_f_L1','bbox',bbox,'h0',5e3); \
+  ml = gdat.mainland; in = gdat.inner; \
+  f = isfinite(ml(:,1)); \
+  fprintf('mainland lon range: %.2f..%.2f  n=%d\n', min(ml(f,1)), max(ml(f,1)), sum(f)); \
+  fprintf('mainland pts east of 180: %d\n', sum(ml(f,1)>180)); \
+  if ~isempty(in); fi = isfinite(in(:,1)); \
+    fprintf('inner lon range: %.2f..%.2f n=%d east180=%d\n', min(in(fi,1)), max(in(fi,1)), sum(fi), sum(in(fi,1)>180)); \
+  end; \
+catch e; disp(getReport(e)); exit(1); \
+end"

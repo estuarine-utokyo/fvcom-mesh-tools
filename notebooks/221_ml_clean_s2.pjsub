@@ -1,0 +1,22 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=01:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlcls2
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  m = msh('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex2_ny/../jbay/raw_fresh_s2.14'); \
+  m_proj('Trans','lon',[min(m.p(:,1)) max(m.p(:,1))],'lat',[min(m.p(:,2)) max(m.p(:,2))]); \
+  m = clean(m,'default'); \
+  pc = m.p; tc = m.t; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex2_ny/../jbay/ml_clean_s2.mat','pc','tc','-v7'); \
+  disp(['cleaned NP ' num2str(size(pc,1))]); \
+catch e; disp(getReport(e)); exit(1); \
+end"

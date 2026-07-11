@@ -1,0 +1,24 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mls2d
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  m = msh('fname','${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex1_nz/ours_raw.14'); \
+  p = m.p; t = m.t; \
+  cpp = cosd(-44); p(:,1) = p(:,1)*cpp; \
+  tq = gettrimeshquan(p, t); \
+  fprintf('S2D-BEFORE: NP=%d NT=%d meanq=%.4f minq=%.4f n025=%d\n', length(p), length(t), mean(tq.qm), min(tq.qm), sum(tq.qm<0.25)); \
+  [p2,~,t2,~] = smooth2d(p,[],t); \
+  tq2 = gettrimeshquan(p2, t2); \
+  fprintf('S2D-AFTER : NP=%d NT=%d meanq=%.4f minq=%.4f n025=%d\n', length(p2), length(t2), mean(tq2.qm), min(tq2.qm), sum(tq2.qm<0.25)); \
+catch e; disp(getReport(e)); exit(1); \
+end"

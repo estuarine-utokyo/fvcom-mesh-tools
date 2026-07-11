@@ -1,0 +1,20 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L node=1
+#PJM -L elapse=03:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlx11
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D/Tests"
+matlab -nodisplay -batch "\
+try; \
+  run('../setup_oceanmesh2d.m'); \
+  run('../Examples/Example_11_Remeshing_Patches.m'); \
+  pb = m.p; tb = m.t; pn = m_new.p; tn = m_new.t; \
+  hole_ = hole; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex11rm/matlab_ex11.mat','pb','tb','pn','tn','hole_','-v7'); \
+  disp('EX11 GOLDEN SAVED'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

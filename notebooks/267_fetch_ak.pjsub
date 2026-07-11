@@ -1,0 +1,15 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=1
+#PJM -L elapse=03:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-akdl
+set -euo pipefail
+cd "/home/pj24001722/ku40000343/tmp/claude-10307/-home-pj24001722-ku40000343-Github-fvcom-mesh-tools/1cc2e562-3dce-4a75-af45-bd0ba576ea65/scratchpad"
+# resume-capable download of the OM2D dataset bundle
+curl -sL -C - -o om2d_bundle.zip "https://zenodo.org/api/records/2605388/files/drive-download-20190325T150608Z-001.zip/content"
+unzip -o om2d_bundle.zip "*ak_outerpoly*" -d akpoly/ || unzip -l om2d_bundle.zip | grep -i ak
+find akpoly -name "*ak_outerpoly*" -exec cp {} "${HOME}/Github/OceanMesh2D/datasets/" \;
+ls -la "${HOME}/Github/OceanMesh2D/datasets/ak_outerpoly.mat" && echo AK-POLY-READY

@@ -9,7 +9,7 @@ from pathlib import Path
 OUT = Path.home() / "Github/OceanMesh2D/datasets/TokyoBay/dem"
 srtm = xr.open_dataset(OUT / "SRTM15_kanto_15s.nc")
 m = xr.open_dataset(os.path.expandvars(
-    "$DATA_DIR/bathymetry/tokyo_bay/depth_0090-05+06+07.nc"))
+    "$DATA_DIR/geodata/bathymetry/tokyo_bay/depth_0090-05+06+07.nc"))
 var_s = [v for v in srtm.data_vars if srtm[v].ndim == 2][0]
 print("srtm var:", var_s, "| m7001 Band1 range:",
       float(m.Band1.min()), float(m.Band1.max()), flush=True)

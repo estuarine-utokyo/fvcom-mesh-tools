@@ -1,0 +1,23 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=01:00:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlfh2
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  gdat = geodata('shp','PostSandyNCEI','dem','PostSandyNCEI.nc','h0',30); \
+  fh = edgefx('geodata',gdat,'fs',3,'max_el_ns',240,'max_el',1000,'dt',2,'g',0.20); \
+  gv = fh.F.GridVectors; vals = fh.F.Values; \
+  xg = gv{1}; yg = gv{2}; \
+  save('${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex2_ny/matlab_ex2_fh.mat', \
+       'xg','yg','vals','-v7.3'); \
+  disp('fh saved'); \
+catch e; disp(getReport(e)); exit(1); \
+end"

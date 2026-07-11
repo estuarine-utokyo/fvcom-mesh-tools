@@ -1,0 +1,17 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=36
+#PJM -L elapse=00:20:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-poc156
+set -euo pipefail
+export OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 MKL_NUM_THREADS=8
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+: "${DATA_DIR:?DATA_DIR not set}"
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+python notebooks/156_translation_show.py

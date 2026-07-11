@@ -1,0 +1,20 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:20:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-mlq
+set -euo pipefail
+module load matlab/R2024a
+cd "${HOME}/Github/OceanMesh2D"
+matlab -nodisplay -batch "\
+try; \
+  setup_oceanmesh2d; \
+  m = msh('fname','${HOME}/Github/fvcom-mesh-tools/outputs/om2d_examples/ex1_nz/ours_for_clean.14'); \
+  tq = gettrimeshquan(m.p, m.t); \
+  fprintf('OURS(OM2D metric): NP=%d NT=%d meanq=%.4f minq=%.4f n_below_025=%d\n', \
+    length(m.p), length(m.t), mean(tq.qm), min(tq.qm), sum(tq.qm<0.25)); \
+catch e; disp(getReport(e)); exit(1); \
+end"
