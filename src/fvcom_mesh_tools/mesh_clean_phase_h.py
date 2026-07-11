@@ -3714,6 +3714,7 @@ def _finish_process_fail(
     max_valence: int,
     max_tries: int,
     perturbation_sigma: float,
+    frozen: frozenset[int] | None = None,
 ) -> tuple[bool, int]:
     """Process one fail element with up to ``max_tries`` random
     Gaussian perturbations of a randomly-chosen vertex of the
@@ -3735,6 +3736,8 @@ def _finish_process_fail(
     for try_i in range(1, max_tries + 1):
         tri = mesh.elements[int(eid)]
         v = int(rng.choice(tri))
+        if frozen is not None and v in frozen:
+            continue
         ring_eids = n2e.get(v)
         if ring_eids is None or ring_eids.size == 0:
             continue
@@ -3812,6 +3815,7 @@ def _stochastic_local_fix_round(
     perturbation_sigma: float,
     max_outer_passes: int,
     coastline_projector: CoastlineProjector | None,
+    freeze_open_boundary: bool = False,
 ) -> dict[str, Any]:
     """Run the stochastic local fixer outer-pass loop on ``mesh``
     in place.  Each outer pass identifies the current fail set,
@@ -3862,6 +3866,11 @@ def _stochastic_local_fix_round(
         n2e_map = _node_to_elements(mesh.elements, mesh.n_nodes)
         outer_fixed = 0
         outer_stuck = 0
+        # frozen set recomputed per pass: vertex_remove renumbers
+        # nodes between rounds, so a static id set would go stale
+        frozen = (frozenset(int(v) for seg in mesh.open_boundaries
+                            for v in np.asarray(seg).ravel())
+                  if freeze_open_boundary else None)
         for eid in fail_list:
             fixed, _n_tries = _finish_process_fail(
                 mesh, eid, rng,
@@ -3878,6 +3887,7 @@ def _stochastic_local_fix_round(
                 max_valence=max_valence,
                 max_tries=max_tries_per_fail,
                 perturbation_sigma=perturbation_sigma,
+                frozen=frozen,
             )
             if fixed:
                 outer_fixed += 1
@@ -3906,6 +3916,7 @@ def _try_vertex_remove_then_clean(
     max_tries_per_fail: int,
     perturbation_sigma: float,
     max_outer_passes: int,
+    freeze_open_boundary: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, int], dict[str, Any]] | None:
     """Try ``_apply_vertex_remove(force=True)`` on ``vertex_id``,
     run the stochastic cleanup on the result, and return
@@ -3939,6 +3950,7 @@ def _try_vertex_remove_then_clean(
         perturbation_sigma=perturbation_sigma,
         max_outer_passes=max_outer_passes,
         coastline_projector=coastline_projector,
+        freeze_open_boundary=freeze_open_boundary,
     )
     counts = _finish_global_counts(
         trial,
@@ -3969,6 +3981,7 @@ def _vertex_remove_chain_round(
     max_tries_per_fail: int,
     perturbation_sigma: float,
     max_outer_passes: int,
+    freeze_open_boundary: bool = False,
 ) -> tuple[Fort14Mesh, list[dict[str, Any]]]:
     """Greedy iterative vertex_remove + stochastic cleanup on the
     interior vertices of every current fail pair of kind
@@ -4048,6 +4061,7 @@ def _vertex_remove_chain_round(
                 max_tries_per_fail=max_tries_per_fail,
                 perturbation_sigma=perturbation_sigma,
                 max_outer_passes=max_outer_passes,
+                freeze_open_boundary=freeze_open_boundary,
             )
             if result is None:
                 records.append({
@@ -4090,6 +4104,7 @@ def phase_h_finish(
     perturbation_sigma: float = DEFAULT_FINISH_PERTURBATION_SIGMA,
     max_outer_passes: int = DEFAULT_FINISH_MAX_OUTER_PASSES,
     coastline_projector: CoastlineProjector | None = None,
+    freeze_open_boundary: bool = False,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Phase H finishing chain — drive any Phase H A-G residual to
     the structural floor with a stochastic local fixer + iterative
@@ -4184,6 +4199,7 @@ def phase_h_finish(
         perturbation_sigma=perturbation_sigma,
         max_outer_passes=max_outer_passes,
         coastline_projector=coastline_projector,
+        freeze_open_boundary=freeze_open_boundary,
     )
     info["stage1_stochastic"] = stage1_stats
     info["after_stage1"] = _finish_global_counts(
@@ -4197,6 +4213,7 @@ def phase_h_finish(
     # Stage 2: vertex_remove chain on C1.
     cur, c1_records = _vertex_remove_chain_round(
         cur, seed,
+        freeze_open_boundary=freeze_open_boundary,
         target_kind="C1",
         coastline_projector=coastline_projector,
         min_angle_target=min_angle_target,
@@ -4220,6 +4237,7 @@ def phase_h_finish(
     # Stage 3: vertex_remove chain on C4.
     cur, c4_records = _vertex_remove_chain_round(
         cur, seed,
+        freeze_open_boundary=freeze_open_boundary,
         target_kind="C4",
         coastline_projector=coastline_projector,
         min_angle_target=min_angle_target,

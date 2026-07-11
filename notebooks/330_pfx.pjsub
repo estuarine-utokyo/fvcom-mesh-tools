@@ -1,0 +1,21 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-pfx330
+set -euo pipefail
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+U=outputs/sample_repro/sample_repro_utm.14
+echo "=== variant A: iters 5, alpha 0.7, no smooth ==="
+fmesh-perpfix $U outputs/sample_repro/sr_pfxA.14 --iters 5 --alpha 0.7
+fmesh-mesh-qa outputs/sample_repro/sr_pfxA.14 || true
+echo "=== variant B: iters 3, alpha 0.5, smooth 2 ==="
+fmesh-perpfix $U outputs/sample_repro/sr_pfxB.14 --iters 3 --alpha 0.5 --smooth-iters 2
+fmesh-mesh-qa outputs/sample_repro/sr_pfxB.14 || true
