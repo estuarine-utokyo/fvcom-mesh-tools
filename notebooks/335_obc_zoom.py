@@ -39,13 +39,6 @@ for ax, (tag, lo, la, tt, obn) in zip(axes, [
     add_atlas_grid(ax, crs="EPSG:4326")
     ax.set_aspect(1 / np.cos(np.deg2rad(35.05)))
     ax.set_title(tag)
-# residual C4 site marker on the right panel
-c4lon, c4lat = tr.transform(379595, 3888220)
-axes[1].plot([c4lon], [c4lat], marker="s", ms=14, mfc="none",
-             mec="crimson", mew=2, zorder=7)
-axes[1].annotate("residual C4 (0.568)", (c4lon, c4lat),
-                 textcoords="offset points", xytext=(12, 8),
-                 color="crimson", fontsize=11, zorder=7)
 fig.savefig("outputs/figures/obc_ladder_zoom.png", dpi=200,
             bbox_inches="tight")
 print("saved obc zoom", flush=True)

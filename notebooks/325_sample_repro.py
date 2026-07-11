@@ -98,41 +98,76 @@ g, dt_eff = om.finalize_sizing(
     max_edge_length=MAXEL, gradation=GRADE, courant=None)
 print(f"[sr] sizing done +{time.time()-t0:.0f}s", flush=True)
 
-# OBC ladder (default ON): a second guide line parallel to the OBC
-# arc, offset INWARD by ~0.9x the LOCAL target mesh size (field x
-# 1.2 DistMesh factor), clipped to [800, 1600] m, constrained like
-# the arc. The band between the two lines meshes as an aligned
-# ladder -- each OBC node gets a perpendicular partner -- giving
-# the orderly, noise-resistant open-boundary rows the sample has.
-# A fixed 1400 m offset mismatched the finer NW half (C1 slivers);
-# the offset must follow the sizing. Opt out: SR_OBC_LADDER=off.
+# OBC boundary-band construction (default ON; owner 2026-07-11:
+# boundaries are instability-prone -- mesh LARGE near them, with a
+# SMOOTH inner line parallel to the OBC. All numbers measured from
+# the sample):
+#  - inner guide line: smooth parallel curve, offset tapering
+#    linearly along the arc from OFF_NW (coast end, sample ~1050 m)
+#    to OFF_SE (deep end, sample ~2100 m); constrained (pfix+egfix)
+#    for arc nodes 1..11 (ends free: at the SE corner the inward
+#    normal runs along the closure)
+#  - size corridor along the whole southern crossing (arc +
+#    closure): target = local band size (arc: OFF/1.2 field;
+#    closure: 1750 field at the corner -> 760 at the Boso coast,
+#    sample spacings 1901/1314/912/.../628), applied AFTER limgrad
+#    so interior gradation can never shrink the boundary band;
+#    tapers outward at GRADE.
+OFF_NW = float(os.environ.get("SR_OBC_OFF0", 1050.0))
+OFF_SE = float(os.environ.get("SR_OBC_OFF1", 2100.0))
 if os.environ.get("SR_OBC_LADDER", "on") == "on":
-    h_arc_m = np.asarray(g.eval(OBC_ARC)).ravel() / DEG * 1.2
-    off_m = np.clip(0.9 * h_arc_m,
-                    float(os.environ.get("SR_OBC_OFF_MIN", 800.0)),
-                    float(os.environ.get("SR_OBC_OFF_MAX", 1600.0)))
+    frac = np.arange(13) / 12.0
+    off_m = OFF_NW + (OFF_SE - OFF_NW) * frac      # NW -> SE
     _c = np.cos(np.deg2rad(OBC_ARC[:, 1].mean()))
     _xy = np.column_stack([OBC_ARC[:, 0] * _c, OBC_ARC[:, 1]])
     _t = np.gradient(_xy, axis=0)
     _t /= np.linalg.norm(_t, axis=1)[:, None]
     _n = np.column_stack([-_t[:, 1], _t[:, 0]])  # left of NW->SE = inward
     _in = _xy + _n * (off_m[:, None] / 111e3)
-    OBC_INNER = np.column_stack([_in[:, 0] / _c, _in[:, 1]])
-    # ends excluded: at the SE corner the inward normal runs almost
-    # ALONG the artificial closure (the guide point lands on the
-    # land boundary), and the NW end sits against the coast -- the
-    # ~90 deg end wedges mesh fine freely and the targeted flips
-    # in the finishing chain give the end nodes their perpendicular
-    # partners (proven: devs 4.4/9.2 deg)
-    OBC_INNER = OBC_INNER[1:-1]
+    OBC_INNER = np.column_stack([_in[:, 0] / _c, _in[:, 1]])[1:-1]
     _nin = len(OBC_INNER)
     _iseg = np.column_stack([np.arange(_nin - 1),
                              np.arange(1, _nin)]) + len(OBC_ARC)
     PFIX = np.vstack([OBC_ARC, OBC_INNER])
     SEGS = np.vstack([OBC_SEG, _iseg])
-    print(f"[sr] OBC ladder ON: offsets "
-          f"{off_m.min():.0f}-{off_m.max():.0f} m (field-scaled)",
-          flush=True)
+    print(f"[sr] OBC band: inner line offsets {OFF_NW:.0f}->"
+          f"{OFF_SE:.0f} m (sample-measured taper)", flush=True)
+
+    # ---- size corridor (post-limgrad override) ----
+    # densified crossing polyline with per-point target size (m,
+    # FIELD values = mesh/1.2)
+    _cross = []
+    _tval = []
+    arc_m = np.column_stack([_xy[:, 0] * 111e3, _xy[:, 1] * 111e3])
+    for i in range(12):
+        a3, b3 = arc_m[i], arc_m[i + 1]
+        L3 = np.linalg.norm(b3 - a3)
+        for f3 in np.arange(0, 1, 100.0 / L3):
+            _cross.append(a3 * (1 - f3) + b3 * f3)
+            _tval.append((off_m[i] * (1 - f3)
+                          + off_m[i + 1] * f3) / 1.2)
+    # closure: corner -> Boso coast (139.83, 34.973)
+    cA = np.array([139.7497 * _c, 34.9750]) * 111e3
+    cB = np.array([139.83 * _c, 34.973]) * 111e3
+    Lc = np.linalg.norm(cB - cA)
+    for f3 in np.arange(0, 1.0001, 100.0 / Lc):
+        _cross.append(cA * (1 - f3) + cB * f3)
+        _tval.append(1750.0 * (1 - f3) + 760.0 * f3)
+    _cross = np.asarray(_cross)
+    _tval = np.asarray(_tval)
+    from scipy.spatial import cKDTree as _KD
+    lon_g2, lat_g2 = g.create_grid()
+    q_m = np.column_stack([lon_g2.ravel() * _c * 111e3,
+                           lat_g2.ravel() * 111e3])
+    dq, iq = _KD(_cross).query(q_m, workers=-1)
+    Tq = _tval[iq]
+    corr = np.maximum(Tq - GRADE * np.maximum(0.0, dq - Tq), 0.0)
+    gv = np.asarray(g.values, dtype=float)
+    n_up = int((corr.reshape(gv.shape) * DEG > gv).sum())
+    g.values = np.maximum(gv, corr.reshape(gv.shape) * DEG)
+    g.build_interpolant()
+    print(f"[sr] boundary corridor: raised {n_up} lattice cells "
+          f"(post-limgrad, boundary-priority)", flush=True)
 else:
     PFIX, SEGS = OBC_ARC, OBC_SEG
 
