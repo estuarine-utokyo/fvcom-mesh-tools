@@ -4,12 +4,22 @@
 # phase_h -> compact -> C4 flips, OBC-line displacement verified).
 import numpy as np
 from fvcom_mesh_tools.algorithms.obc_finish import finish_obc_mesh
+from fvcom_mesh_tools.channel_policy import resolve_narrow_channels
 from fvcom_mesh_tools.io import read_fort14, write_fort14
 
 SRC = "outputs/sample_repro/sample_repro_utm.14"
 DST = "outputs/sample_repro/sample_repro_final.14"
 
 mesh = read_fort14(SRC)
+# narrow-channel policy (owner): through/big-port -> widen,
+# dead-end/small-port -> delete basin and all
+mesh, cinfo = resolve_narrow_channels(mesh, min_basin_elements=6)
+print(f"[fin] channel policy: flagged={cinfo['n_flagged']} "
+      f"widened={cinfo['n_widened']} "
+      f"deleted={cinfo['n_deleted_elements']}", flush=True)
+for cl in cinfo.get("clusters", []):
+    print(f"[fin]   cluster n={cl['n_members']} -> {cl['action']} "
+          f"(neighbor basins {cl['neighbor_sizes']})", flush=True)
 mesh, info = finish_obc_mesh(mesh, seed=42)
 for k, v in info.items():
     print(f"[fin] {k}: {v}", flush=True)

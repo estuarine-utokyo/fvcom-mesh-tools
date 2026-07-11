@@ -123,3 +123,23 @@ class TestCorridor:
         # far cells untouched
         far = lon_g > 139.79
         assert np.allclose(out[far], 300.0 / 111e3)
+
+
+class TestChannelPolicyHelpers:
+    def test_dual_adjacency_and_components(self):
+        from fvcom_mesh_tools.channel_policy import (
+            _components, _dual_adjacency)
+        # two triangles sharing an edge + one detached
+        els = np.array([[0, 1, 2], [1, 3, 2], [4, 5, 6]])
+        pairs = _dual_adjacency(els, 7)
+        assert len(pairs) == 1
+        lab, n = _components(pairs, 3, np.ones(3, bool))
+        assert n == 2
+        assert lab[0] == lab[1] != lab[2]
+
+    def test_boundary_loops_square(self):
+        from fvcom_mesh_tools.channel_policy import _boundary_loops
+        els = np.array([[0, 1, 2], [0, 2, 3]])
+        loops = _boundary_loops(els, 4)
+        assert len(loops) == 1
+        assert sorted(loops[0].tolist()) == [0, 1, 2, 3]
