@@ -259,6 +259,7 @@ def apply_waterway_policy(
     min_gap_m: float = 150.0,
     h_grade_per_m: float = 0.0,
     arc_retry: str = "largest-piece",
+    close_blocked: bool = True,
 ) -> tuple[Any, dict[str, Any]]:
     """Execute the detected actions: KEEP -> carve the corridor to
     two LOCAL rows along the arc, barrier-safe; CLOSE -> fill the
@@ -274,8 +275,12 @@ def apply_waterway_policy(
     its LARGEST single corridor piece (``arc_retry`` =
     "largest-piece"; diameter paths over BRANCHED networks cut
     corners); the retry is recorded on the record. Still refused
-    -> BLOCKED (reported, land untouched); pass ``arc_retry=None``
-    to disable the retry."""
+    -> BLOCKED, and with ``close_blocked=True`` (owner rule
+    2026-07-12: a channel that cannot be made two rows wide must
+    not be meshed at all) the network is FILLED like a close --
+    never left as sub-cell water that meshes one cell wide. The
+    record keeps action "blocked" plus ``closed=True`` so the
+    decision stays visible."""
     new_land = land_union
     info = {"kept": 0, "closed": 0, "ignored": 0, "blocked": [],
             "retried": 0, "land_removed_m2": 0.0}
@@ -288,11 +293,30 @@ def apply_waterway_policy(
         target = 0.875 * widen_rows * (
             h_mesh_m + h_grade_per_m * w_nat / 2.0)
         w = np.maximum(w_nat, target)
-        return carve_channel_corridor(
+        cand, ci = carve_channel_corridor(
             base, arc, w, min_gap_m=min_gap_m,
             metric_scale=metric_scale, domain_poly=domain_poly,
             arc_on_land_tol_m=0.3 * h_mesh_m,
             carve_crossings=False)
+        # ACHIEVED-width check (owner 2026-07-12: a channel that
+        # cannot actually be made ~two rows wide must NOT be
+        # meshed): barrier protection can legally trim the
+        # corridor back to the natural width, in which case the
+        # carve "succeeds" but the channel would mesh one cell
+        # wide. Measure the result; too narrow -> refuse.
+        ach = snap_arc_to_channel(
+            cand, np.asarray(arc, float),
+            metric_scale=metric_scale, step_m=0.5 * h_mesh_m,
+            max_halfwidth_m=2.5 * h_mesh_m)
+        wa = ach["width_m"]
+        narrow_frac = float(np.mean(wa < 1.5 * h_mesh_m))
+        if narrow_frac > 0.35:
+            raise RuntimeError(
+                f"achieved width < 1.5 h over "
+                f"{narrow_frac:.0%} of the arc (min "
+                f"{np.min(wa):.0f} m): two rows are not "
+                "attainable under the barrier constraints")
+        return cand, ci
 
     for rec in records:
         if rec["action"] == "ignore":
@@ -343,6 +367,24 @@ def apply_waterway_policy(
                 if not retried:
                     rec["action"] = "blocked"
                     rec["reason"] = str(e)
+                    # close-blocked policy: GENUINELY unwidenable
+                    # channels (two rows not attainable under
+                    # barrier constraints) are always filled --
+                    # never left to mesh one cell wide. An ARC
+                    # EXTRACTION failure on a big branched system
+                    # (e.g. the Keihin canal network) is our
+                    # limitation, not the channel's: filling a
+                    # major waterway over it would contradict the
+                    # standing keep directive, so big systems stay
+                    # open and are reported as needing a manual
+                    # arc / branch decomposition.
+                    unwiden = "two rows are not attainable" in \
+                        rec["reason"]
+                    if close_blocked and (
+                            unwiden
+                            or rec["extent_cells"] < 15.0):
+                        fills.append(rec["geometry"])
+                        rec["closed"] = True
         if rec["action"] == "blocked":
             info["blocked"].append(rec)
     if fills:

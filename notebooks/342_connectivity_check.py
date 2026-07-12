@@ -186,25 +186,32 @@ print(f"[conn] CRITICAL severed passages: {len(severed)}",
 print(f"[conn] CRITICAL land breaches:    {len(breaches)}",
       flush=True)
 
-# map figure
-fig, ax = plt.subplots(figsize=(9, 12))
+# map figure -- markers must NOT hide the mesh (owner
+# 2026-07-12): hollow, translucent markers; legend outside the
+# axes so no text overlaps mesh or grid labels
+fig, ax = plt.subplots(figsize=(10.5, 12))
 _add_coast(ax, (139.0, 34.5, 141.3, 36.2), "EPSG:4326")
-ax.triplot(lon_o, lat_o, T_o, lw=0.25, color="steelblue")
+ax.triplot(lon_o, lat_o, T_o, lw=0.3, color="steelblue",
+           zorder=3)
 if len(missing):
-    ax.scatter(cent_s[missing, 0], cent_s[missing, 1], s=12,
-               color="orange", zorder=5,
+    ax.scatter(cent_s[missing, 0], cent_s[missing, 1], s=42,
+               facecolors="none", edgecolors="darkorange",
+               linewidths=1.0, alpha=0.75, zorder=4,
                label=f"sample water we closed ({len(missing)})")
 for nrec, x, y, crit in severed:
     ax.plot([x], [y], marker="x", ms=16, mew=3, color="red",
-            zorder=6)
+            alpha=0.9, zorder=6)
 if len(breach_idx):
-    ax.scatter(cent_o[breach_idx, 0], cent_o[breach_idx, 1], s=20,
-               marker="s", color="purple", zorder=5,
+    ax.scatter(cent_o[breach_idx, 0], cent_o[breach_idx, 1],
+               s=55, marker="s", facecolors="none",
+               edgecolors="purple", linewidths=1.2, alpha=0.75,
+               zorder=4,
                label=f"our mesh on land ({len(breach_idx)})")
 ax.set_xlim(139.57, 140.15); ax.set_ylim(34.93, 35.78)
 add_atlas_grid(ax, crs="EPSG:4326")
 ax.set_aspect(1 / np.cos(np.deg2rad(35.35)))
-ax.legend(loc="lower right")
+ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0),
+          borderaxespad=0.0, frameon=True)
 ax.set_title("connectivity comparison vs sample + original land\n"
              "red X = severed sample passage (critical)")
 fig.savefig("outputs/figures/connectivity_check.png", dpi=190,

@@ -116,18 +116,26 @@ class TestNetworksAndSafety:
         # widened to ~2 rows mid-chain
         assert w.contains(Point(11000, 4750))
 
-    def test_widening_respects_parallel_basin_barrier(self):
+    def test_unwidenable_channel_is_closed_not_left_narrow(self):
         # a protected basin runs parallel 200 m south of the slot:
-        # widening must keep >= min_gap of land, not merge them
+        # widening is capped by the barrier at ~1.3 rows. Owner
+        # rule: a channel that cannot reach ~two rows is NOT
+        # meshed at all -- the slot is filled, the basin and the
+        # barrier survive untouched.
         land = unary_union([
             box(8000, 2000, 12000, 4850),
             box(8000, 5150, 12000, 8000),
         ]).difference(box(8500, 4450, 11500, 4650))
         recs, new_land, info = _run(land)
+        assert len(info["blocked"]) == 1
+        assert info["blocked"][0].get("closed") is True
+        assert "two rows are not attainable" in \
+            info["blocked"][0]["reason"]
         w = _water(new_land)
-        # slot widened northwards at least
-        assert w.contains(Point(10000, 5280))
-        # the land sliver between slot and basin survives
+        # slot filled, not left one cell wide
+        assert not w.contains(Point(10000, 5000))
+        # basin and the protecting barrier survive
+        assert w.contains(Point(10000, 4550))
         assert new_land.intersection(
             box(8600, 4650, 11400, 4850)).area > 0
 
