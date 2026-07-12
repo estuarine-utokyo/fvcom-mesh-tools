@@ -137,6 +137,43 @@ for _ef in sorted(Path("recipes/edits/sample_repro").glob("*.json")):
           f"land_removed={_einfo['land_removed_m2']/1e4:.2f} ha "
           f"banks={'yes' if _ed.get('bank_pfix') else 'no'}",
           flush=True)
+
+# MATHEMATICAL waterway policy (owner 2026-07-12): detect
+# sub-two-row waterways from the OSM geometry ITSELF (no
+# reference mesh), then keep/close by the operational rules --
+# through & big-port: widen to two standard rows along the arc
+# (banks pushed into land, barrier-safe); dead ends & small
+# basins: fill. Runs AFTER manual edits (data corrections).
+if os.environ.get("SR_WATERWAYS", "on") == "on":
+    from fvcom_mesh_tools.waterways import (
+        apply_waterway_policy,
+        detect_waterways,
+    )
+    _recs = detect_waterways(
+        _new_land, _dom, h_mesh_m=1.2 * H0,
+        obc_point=tuple(OBC_ARC[6]),
+        metric_scale=(111e3 * _cosw, 111e3))
+    _new_land, _winfo = apply_waterway_policy(
+        _new_land, _dom, _recs, h_mesh_m=1.2 * H0,
+        metric_scale=(111e3 * _cosw, 111e3))
+    print(f"[sr] waterways (OSM-native): kept {_winfo['kept']}, "
+          f"closed {_winfo['closed']}, "
+          f"ignored {_winfo['ignored']}, "
+          f"blocked {len(_winfo['blocked'])}, land_removed "
+          f"{_winfo['land_removed_m2']/1e4:.1f} ha", flush=True)
+    for _r in _recs:
+        if _r["action"] == "ignore":
+            continue
+        _c = _r["geometry"].representative_point()
+        print(f"[sr]   {_r['action']:7s} {_r['kind']:8s} "
+              f"ext={_r['extent_cells']:6.1f} "
+              f"basin={_r['basin_cells']:6.1f} "
+              f"at ({_c.x:.4f}, {_c.y:.4f})"
+              + (f"  REASON: {_r.get('reason', '')[:90]}"
+                 if _r["action"] == "blocked" else ""),
+              flush=True)
+else:
+    print("[sr] waterways (OSM-native): OFF", flush=True)
 _geoms = list(_new_land.geoms) if hasattr(_new_land, "geoms")     else [_new_land]
 gpd.GeoDataFrame(geometry=_geoms, crs=_land_g.crs).to_file(CH_SHP)
 
