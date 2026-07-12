@@ -78,8 +78,9 @@ print(f"[sr] channel policy (geometry stage): "
       f"(of {chinfo['n_narrow']} narrow corridors)", flush=True)
 for r in chinfo["widened"] + chinfo["closed"]:
     print(f"[sr]   {r['action']}: ({r['center'][0]:.3f}, "
-          f"{r['center'][1]:.3f}) area={r['area_cells']:.1f} cells "
-          f"basins={r['neighbor_cells']}", flush=True)
+          f"{r['center'][1]:.3f}) area={r['area_cells']:.1f} "
+          f"extent={r['extent_cells']:.1f} cells "
+          f"members={r['n_members']}", flush=True)
 _geoms = list(_new_land.geoms) if hasattr(_new_land, "geoms")     else [_new_land]
 gpd.GeoDataFrame(geometry=_geoms, crs=_land_g.crs).to_file(CH_SHP)
 

@@ -129,65 +129,92 @@ def apply_channel_policy_to_land(
     add_water = []       # widening: subtract from land
     add_land = []        # closing: union into land
     eps = 0.02 * h_mesh_m / scale
-    for N in _polys(narrow):
-        if N.area < 0.05 * a_cell:
-            continue     # slivers of the opening operator
-        info["n_narrow"] += 1
-        nb = [k for k, g in enumerate(wide_parts)
-              if N.distance(g) < eps]
-        c = N.representative_point()
+    min_extent = 2.0 * h_mesh_m / scale   # widen-worthiness gate
+
+    narrow_parts = [N for N in _polys(narrow)
+                    if N.area >= 0.05 * a_cell]
+    info["n_narrow"] = len(narrow_parts)
+    big_idx = set(k for k in range(len(wide_parts))
+                  if k == main_i or areas[k] >= a_basin)
+    small_parts = [k for k in range(len(wide_parts))
+                   if k not in big_idx]
+
+    # NETWORK analysis (2026-07-12, Haneda severance fix): chained
+    # corridors and the small pockets between them form ONE
+    # waterway. Classifying pieces independently closed every link
+    # of the Tama-mouth passage around Haneda because each link
+    # touches wide water only once. Build the adjacency graph over
+    # {narrow corridors} + {small wide pockets} and decide per
+    # connected NETWORK.
+    import scipy.sparse as _sp
+    from scipy.sparse.csgraph import connected_components as _cc
+
+    items = ([("n", N) for N in narrow_parts]
+             + [("s", wide_parts[k]) for k in small_parts])
+    n_items = len(items)
+    rows, cols = [], []
+    for i2 in range(n_items):
+        for j2 in range(i2 + 1, n_items):
+            if items[i2][1].distance(items[j2][1]) < eps:
+                rows.append(i2)
+                cols.append(j2)
+    if n_items:
+        g2 = _sp.coo_matrix(
+            (np.ones(len(rows)), (rows, cols)),
+            shape=(n_items, n_items))
+        _, netlab = _cc(g2 + g2.T, directed=False)
+    else:
+        netlab = np.zeros(0, dtype=int)
+
+    main_poly = wide_parts[main_i]
+    big_others = [k for k in big_idx if k != main_i]
+    for net in range(netlab.max() + 1 if n_items else 0):
+        members = [items[i2] for i2 in np.where(netlab == net)[0]]
+        geoms = [g for _, g in members]
+        union = unary_union(geoms)
+        hull_len = float(
+            union.minimum_rotated_rectangle.length) / 2.0
+        c = union.representative_point()
         rec = {"center": (float(c.x), float(c.y)),
-               "area_cells": float(N.area / a_cell),
-               "touches_main": main_i in nb,
-               "neighbor_cells": sorted(
-                   round(float(areas[k] / a_cell), 1)
-                   for k in nb if k != main_i)}
-        big_nonmain = [k for k in nb if k != main_i
-                       and areas[k] >= a_basin]
+               "area_cells": float(union.area / a_cell),
+               "extent_cells": float(hull_len
+                                     / (h_mesh_m / scale)),
+               "n_members": len(members)}
+        # anchors
+        touches_big = [k for k in big_others
+                       if union.distance(wide_parts[k]) < eps]
+        inter = union.buffer(eps).intersection(main_poly)
+        pieces = sorted(_polys(inter), key=lambda g: -g.area)
         through = False
-        if main_i in nb:
-            inter = N.buffer(eps).intersection(wide_parts[main_i])
-            pieces = sorted(_polys(inter), key=lambda g: -g.area)
-            if len(pieces) >= 2:
-                # SHORTCUT significance: a genuine through-channel
-                # saves real distance (Keihin: ~2 km through vs
-                # 8-10 km around the island group). Nearshore
-                # ribbons behind small headlands and bendy river
-                # mouths also touch main twice but save nothing
-                # (ratio ~1.2-1.6) -- 126 of them eroded the whole
-                # coastline before this gate (2026-07-12).
-                A = pieces[0].representative_point()
-                B = pieces[1].representative_point()
-                d_thru = max(A.distance(B),
-                             0.1 * h_mesh_m / scale)
-                rings = [wide_parts[main_i].exterior,
-                         *wide_parts[main_i].interiors]
-                rA = int(np.argmin([r.distance(A) for r in rings]))
-                rB = int(np.argmin([r.distance(B) for r in rings]))
-                if rA != rB:
-                    through = True   # crosses to a hole boundary
-                else:
-                    ring = rings[rA]
-                    sA = ring.project(A)
-                    sB = ring.project(B)
-                    d_arc = abs(sA - sB)
-                    d_arc = min(d_arc, ring.length - d_arc)
-                    through = d_arc > shortcut_ratio * d_thru
-        # widen ONLY if the corridor CONNECTS two water bodies:
-        # a significant shortcut through the main body, or a
-        # main <-> big-basin port channel. A corridor touching a
-        # single body -- however big -- is a river/inlet mouth and
-        # must be closed (a river mouth touches the sea once).
-        if through or (main_i in nb and big_nonmain):
-            add_water.append(N.buffer(r_widen))
+        if len(pieces) >= 2:
+            A = pieces[0].representative_point()
+            B = pieces[1].representative_point()
+            d_thru = max(A.distance(B), 0.1 * h_mesh_m / scale)
+            rings = [main_poly.exterior, *main_poly.interiors]
+            rA = int(np.argmin([r.distance(A) for r in rings]))
+            rB = int(np.argmin([r.distance(B) for r in rings]))
+            if rA != rB:
+                through = True
+            else:
+                ring = rings[rA]
+                sA, sB = ring.project(A), ring.project(B)
+                d_arc = abs(sA - sB)
+                d_arc = min(d_arc, ring.length - d_arc)
+                through = d_arc > shortcut_ratio * d_thru
+        touches_main = len(pieces) >= 1
+        connector = (through
+                     or (touches_main and touches_big))
+        worthy = hull_len >= min_extent
+        if connector and worthy:
             rec["action"] = "widen"
+            for kind, g in members:
+                if kind == "n":
+                    add_water.append(g.buffer(r_widen))
             info["widened"].append(rec)
         else:
-            add_land.append(N)
-            for k in nb:
-                if k != main_i and areas[k] < a_basin:
-                    add_land.append(wide_parts[k])
             rec["action"] = "close"
+            for _, g in members:
+                add_land.append(g)
             info["closed"].append(rec)
 
     new_land = land_union

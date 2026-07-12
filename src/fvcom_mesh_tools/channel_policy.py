@@ -119,6 +119,53 @@ def _boundary_loops(els: np.ndarray, n_nodes: int) -> list[np.ndarray]:
     return loops
 
 
+def _fix_pinch_nodes(els: np.ndarray) -> tuple[np.ndarray, int]:
+    """Boundary-manifold repair: a manifold boundary node has
+    exactly 2 boundary edges. Cap deletions can leave two fans
+    touching at a single node (pinch); delete every fan except the
+    largest until the boundary is manifold again."""
+    from collections import defaultdict
+
+    n_del = 0
+    while True:
+        ee = np.vstack([els[:, [0, 1]], els[:, [1, 2]],
+                        els[:, [2, 0]]])
+        ee.sort(axis=1)
+        uq, ct = np.unique(ee, axis=0, return_counts=True)
+        bdeg = defaultdict(int)
+        for a, b in uq[ct == 1]:
+            bdeg[int(a)] += 1
+            bdeg[int(b)] += 1
+        pinch = [v for v, d in bdeg.items() if d > 2]
+        if not pinch:
+            return els, n_del
+        v = pinch[0]
+        inc = np.where((els == v).any(axis=1))[0]
+        # split the incident elements into fans edge-connected
+        # through v
+        parent = {int(e): int(e) for e in inc}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for i2 in range(len(inc)):
+            for j2 in range(i2 + 1, len(inc)):
+                sh = set(els[inc[i2]]) & set(els[inc[j2]])
+                if len(sh) == 2 and v in sh:
+                    parent[find(int(inc[i2]))] = find(int(inc[j2]))
+        fans = defaultdict(list)
+        for e in inc:
+            fans[find(int(e))].append(int(e))
+        keep_fan = max(fans.values(), key=len)
+        kill = [e for fan in fans.values() if fan is not keep_fan
+                for e in fan]
+        els = np.delete(els, kill, axis=0)
+        n_del += len(kill)
+
+
 def resolve_narrow_channels(
     mesh: Fort14Mesh,
     *,
@@ -127,6 +174,7 @@ def resolve_narrow_channels(
     coords: str = "metric",
     analyze_only: bool = False,
     apply_widen: bool = True,
+    small_cluster_delete: int = 0,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Apply the owner's narrow-channel policy. Returns
     ``(new_mesh, info)``; raises if the open boundary cannot be
@@ -138,7 +186,13 @@ def resolve_narrow_channels(
     canal needs local h ~ width/2 (centroid fans violate C1 there
     and get undone by quality finishing). For the same reason pass
     ``apply_widen=False`` in a FINISHING context (after the two-pass
-    refinement): widen clusters are then only reported."""
+    refinement): widen clusters are then only reported.
+    ``small_cluster_delete``: flagged clusters with at most this
+    many members are DELETED regardless of classification -- after
+    the geometry-stage policy every real channel is >= 2 cells
+    wide, so tiny leftovers are junction corner caps (the bridging
+    triangle DistMesh drops where a widened passage opens into
+    wide water); nibbling them off is the sample's own look."""
     flag, chinfo = under_resolved_channels_flag(
         mesh, min_w_h=min_w_h, coords=coords)
     ob_nodes = set(
@@ -183,7 +237,17 @@ def resolve_narrow_channels(
         nonmain = [l for l in nbr if l != main]
         big = [l for l in nonmain if sizes[l] >= min_basin_elements]
         small = [l for l in nonmain if sizes[l] < min_basin_elements]
-        if (main in nbr and not nonmain) or big:
+        if (0 < small_cluster_delete
+                and len(members) <= small_cluster_delete):
+            # junction corner caps: after the geometry-stage
+            # policy every real channel is >= 2 cells wide, so
+            # tiny leftovers are bridging triangles at passage
+            # mouths -- nibble them off (sample look)
+            action = "delete"
+            delete[members] = True
+            for l in small:
+                delete[lab == l] = True
+        elif (main in nbr and not nonmain) or big:
             action = "widen"
             widen[members] = True
         else:
@@ -227,6 +291,18 @@ def resolve_narrow_channels(
         widen = widen[keep]
         mesh = remove_elements(mesh, keep)
         mesh, _ = compact_nodes(mesh)
+        # cap deletions can pinch the boundary (two fans touching
+        # at one node -- FVCOM-fatal); repair before rebuilding
+        els_fixed, n_pinch_del = _fix_pinch_nodes(mesh.elements)
+        if n_pinch_del:
+            import dataclasses
+            keep2 = np.ones(len(mesh.elements), dtype=bool)
+            # _fix_pinch_nodes returns the surviving element array;
+            # rebuild the widen mask by matching rows
+            mesh = dataclasses.replace(mesh, elements=els_fixed)
+            mesh, _ = compact_nodes(mesh)
+            info["n_pinch_elements_deleted"] = int(n_pinch_del)
+            widen = np.zeros(len(mesh.elements), dtype=bool)
         # drop any fragments disconnected from the main body
         pairs2 = _dual_adjacency(mesh.elements, mesh.n_nodes)
         lab2, n2 = _components(

@@ -98,6 +98,45 @@ class TestRiverMouth:
             info["widened"] + info["closed"])
 
 
+class TestNetworkCases:
+    def test_chained_corridor_stays_open(self):
+        # Haneda case: slot-pocket-slot chain through an island
+        # group; each link alone touches wide water once, but the
+        # NETWORK connects main to main -> widen the whole chain
+        land = unary_union([
+            box(8000, 2000, 12000, 8000),
+        ]).difference(unary_union([
+            box(8000, 4850, 9500, 5150),
+            box(9500, 4750, 10000, 5250),   # pocket ~4.7 cells (<6)
+            box(10000, 4850, 12000, 5150),
+        ]))
+        new_land, info = apply_channel_policy_to_land(
+            land, DOMAIN, h_mesh_m=H, obc_point=OBC)
+        # ONE network spanning slot-pocket-slot, widened as a whole
+        assert len(info["widened"]) == 1
+        assert info["widened"][0]["n_members"] >= 2
+        assert len(info["closed"]) == 0
+        w = _water(new_land)
+        assert w.contains(Point(8700, 5000))
+        assert w.contains(Point(9750, 5000))   # pocket kept
+        assert w.contains(Point(11000, 5000))
+
+    def test_breakwater_gap_not_widened(self):
+        # detached breakwater off a straight beach: the gap behind
+        # it is 'through' topologically but saves no distance and
+        # must NOT erode the beach
+        land = unary_union([
+            box(0, 8000, 20000, 10000),          # straight coast
+            box(9000, 7700, 9800, 7900),         # breakwater
+        ])
+        new_land, info = apply_channel_policy_to_land(
+            land, DOMAIN, h_mesh_m=H, obc_point=OBC)
+        assert len(info["widened"]) == 0
+        # gap filled, beach untouched
+        assert not _water(new_land).contains(Point(9400, 7950))
+        assert new_land.contains(Point(9400, 8100))
+
+
 class TestValidation:
     def test_anisotropic_scale_raises(self):
         with pytest.raises(ValueError, match="anisotropic"):
