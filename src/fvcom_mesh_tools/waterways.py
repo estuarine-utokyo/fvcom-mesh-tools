@@ -347,10 +347,15 @@ def apply_waterway_policy(
     new_land = land_union
     info = {"kept": 0, "closed": 0, "ignored": 0, "blocked": [],
             "retried": 0, "bridges_opened": 0, "stub_fills": 0,
+            "line_branches": 0, "skel_branches": 0,
             "land_removed_m2": 0.0}
     fills = []
     sx, sy = metric_scale
     scale = 0.5 * (sx + sy)
+    wlist = ([g for g in waterway_lines]
+             if waterway_lines is not None else [])
+    from shapely.strtree import STRtree
+    wtree_g = STRtree(wlist) if wlist else None
 
     def _carve(base, arc, widths, tol_extra_m=0.0):
         w_nat = np.asarray(widths, float)
@@ -400,15 +405,54 @@ def apply_waterway_policy(
                        rec.get("bridges") or []) * scale
             done = []
             fails = []
+            # ARC SOURCE 1 -- OSM waterway centrelines (owner
+            # 2026-07-13, RiverMapper-style): real centreline
+            # data beats a Voronoi skeleton wherever it exists.
+            # Clip lines to the network, merge, keep pieces
+            # longer than 0.7 h as branches.
+            brs = []
+            n_line_br = 0
+            geom_b = rec["geometry"].buffer(0.3 * h_mesh_m / scale)
+            if wtree_g is not None:
+                from shapely.ops import linemerge
+                segs = []
+                for k in wtree_g.query(geom_b):
+                    cut = wlist[int(k)].intersection(geom_b)
+                    for ls in getattr(cut, "geoms", [cut]):
+                        if (not ls.is_empty
+                                and ls.geom_type == "LineString"
+                                and ls.length > 0):
+                            segs.append(ls)
+                if segs:
+                    u_segs = unary_union(segs)
+                    merged = (linemerge(u_segs)
+                              if u_segs.geom_type
+                              == "MultiLineString" else u_segs)
+                    for ls in getattr(merged, "geoms", [merged]):
+                        if (ls.geom_type == "LineString"
+                                and ls.length * scale
+                                >= 0.7 * h_mesh_m):
+                            brs.append(np.asarray(ls.coords,
+                                                  dtype=float))
+                    n_line_br = len(brs)
+            # ARC SOURCE 2 -- Voronoi medial-axis skeleton over
+            # the FULL network geometry, always. Pre-subtracting
+            # the centreline tubes left a hole whenever a line
+            # branch failed to carve (Chiba severance, run
+            # 6188791); a skeleton branch over an already-widened
+            # channel is a harmless near-no-op, so overlap is the
+            # safe choice.
             try:
-                brs = skeleton_branches(
+                brs += skeleton_branches(
                     rec["geometry"].buffer(0),
                     metric_scale=metric_scale,
                     density_m=0.15 * h_mesh_m,
                     prune_m=0.7 * h_mesh_m)
             except (RuntimeError, ValueError) as e2:
-                brs = []
                 fails.append(str(e2)[:90])
+            info["line_branches"] += n_line_br
+            info["skel_branches"] += len(brs) - n_line_br
+            rec["n_line_branches"] = n_line_br
             snaps = []
             for br in brs:
                 try:
@@ -447,7 +491,8 @@ def apply_waterway_policy(
             for i in range(len(brs)):
                 if i in wide_ix or snaps[i] is None:
                     continue
-                if shapely.LineString(brs[i]).length * scale                         > 4.0 * h_mesh_m:
+                if (shapely.LineString(brs[i]).length
+                        * scale > 4.0 * h_mesh_m):
                     continue
                 touches = set()
                 for pnt in _endpts(i):
@@ -509,13 +554,7 @@ def apply_waterway_policy(
                 shapely.LineString(np.asarray(a2, float)).buffer(
                     0.6 * float(np.max(w2)) / scale)
                 for a2, w2 in rec.get("arcs_done") or []])
-            wtree = None
-            wlist = None
-            if open_bridges == "auto":
-                wlist = ([g for g in waterway_lines]
-                         if waterway_lines is not None else [])
-                from shapely.strtree import STRtree
-                wtree = STRtree(wlist) if wlist else None
+            wtree = wtree_g if open_bridges == "auto" else None
 
             def _authorized(ln, gi, gj):
                 """A waterway centreline must run through BOTH

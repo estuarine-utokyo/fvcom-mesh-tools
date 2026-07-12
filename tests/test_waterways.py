@@ -207,6 +207,28 @@ class TestNetworksAndSafety:
         assert info2["bridges_opened"] >= 1
         assert _water(new_land2).contains(Point(9960, 5000))
 
+    def test_centreline_used_as_arc_when_available(self):
+        # a through slot WITH an OSM centreline: the line becomes
+        # the branch arc (RiverMapper-style) instead of a Voronoi
+        # skeleton, and the channel still widens to two rows
+        from shapely.geometry import LineString
+        land = unary_union([
+            box(8000, 2000, 12000, 4850),
+            box(8000, 5150, 12000, 8000),
+        ])
+        wline = LineString([(7500, 5000), (12500, 5000)])
+        recs = detect_waterways(land, DOMAIN, h_mesh_m=H,
+                                obc_point=OBC, metric_scale=SCALE)
+        new_land, info = apply_waterway_policy(
+            land, DOMAIN, recs, h_mesh_m=H, metric_scale=SCALE,
+            waterway_lines=[wline])
+        keeps = [r for r in recs if r["action"] == "keep"]
+        assert keeps and keeps[0]["n_line_branches"] >= 1
+        assert info["line_branches"] >= 1
+        w = _water(new_land)
+        assert w.contains(Point(10000, 4720))
+        assert w.contains(Point(10000, 5280))
+
     def test_bridge_opens_with_waterway_line_evidence(self):
         # same strip geometry, but an OSM waterway CENTRELINE
         # passes through it -> flow continuity is attested by
