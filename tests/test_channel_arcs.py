@@ -79,6 +79,54 @@ def test_carve_refuses_arc_across_solid_barrier():
             domain_poly=DOM)
 
 
+def test_detected_arc_corner_clip_is_preserved_not_pierced():
+    # arc clips the band/bank corner within tolerance: with
+    # carve_crossings=False the corner must stay LAND (no
+    # fabricated passage), while the slot still widens and the
+    # ends stay connected through the real channel
+    land = _land_band_with_slot()
+    arc = np.array([[5_150.0, 3_800.0], [5_000.0, 5_000.0],
+                    [5_000.0, 6_200.0]])
+    new_land, info = carve_channel_corridor(
+        land, arc, 700.0, min_gap_m=150.0, metric_scale=SCALE,
+        domain_poly=DOM, arc_on_land_tol_m=400.0,
+        carve_crossings=False)
+    assert info["arc_on_land_m"] > 20.0
+    # the clipped corner region is preserved as land
+    assert new_land.covers(shapely.Point(5_115.0, 4_120.0))
+    # the slot is still widened elsewhere
+    assert not new_land.covers(shapely.Point(4_750.0, 5_500.0))
+
+
+def test_manual_edit_still_carves_crossing():
+    # explicit opt-in (pier drawn as land): the same corner clip
+    # IS carved with carve_crossings=True
+    land = _land_band_with_slot()
+    arc = np.array([[5_150.0, 3_800.0], [5_000.0, 5_000.0],
+                    [5_000.0, 6_200.0]])
+    new_land, _ = carve_channel_corridor(
+        land, arc, 700.0, min_gap_m=150.0, metric_scale=SCALE,
+        domain_poly=DOM, arc_on_land_tol_m=400.0,
+        carve_crossings=True)
+    assert not new_land.covers(shapely.Point(5_115.0, 4_120.0))
+
+
+def test_thin_barrier_inside_corridor_width_is_protected():
+    # a ditch runs parallel 50 m beyond the slot bank, WITHIN the
+    # corridor half-width: the wall between slot and ditch must
+    # survive (fabricated-passage regression, breach at
+    # 139.8991/35.3703)
+    land = _land_band_with_slot().difference(
+        box(5_150.0, 4_200.0, 5_250.0, 5_800.0))
+    new_land, _ = carve_channel_corridor(
+        land, ARC, 700.0, min_gap_m=150.0, metric_scale=SCALE,
+        domain_poly=DOM, carve_crossings=False)
+    # the 50 m wall stays land
+    assert new_land.covers(shapely.Point(5_125.0, 5_000.0))
+    # west side still widened
+    assert not new_land.covers(shapely.Point(4_750.0, 5_000.0))
+
+
 def test_carve_refuses_anisotropic_scale():
     with pytest.raises(ValueError, match="anisotropic"):
         carve_channel_corridor(

@@ -153,8 +153,15 @@ opts = shapely.points(cent_o[:, 0], cent_o[:, 1])
 land_shrunk = land.buffer(-100.0 / 111e3)
 onland = np.array([land_shrunk.covers(p) for p in opts])
 breach_idx = np.where(onland)[0]
-print(f"[conn] our elements on ORIGINAL land: {len(breach_idx)}",
-      flush=True)
+# split INTENDED (the pipeline itself carved water there --
+# waterway widening / manual edits; runner saves its adjusted
+# land as land_channel_adj.shp) from UNINTENDED erosion
+_pipe = unary_union(list(gpd.read_file(
+    "outputs/sample_repro/land_channel_adj.shp").geometry))
+unint = np.array([_pipe.covers(opts[i]) for i in breach_idx])
+print(f"[conn] our elements on ORIGINAL land: {len(breach_idx)} "
+      f"(intended widening: {int((~unint).sum())}, UNINTENDED: "
+      f"{int(unint.sum())})", flush=True)
 pairs_o = dual_pairs(T_o, m.n_nodes)
 m0, _ = components_without(pairs_o, len(T_o), [])
 breaches = []

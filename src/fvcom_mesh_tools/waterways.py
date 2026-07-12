@@ -85,6 +85,9 @@ def detect_waterways(
     min_basin_cells: int = 6,
     shortcut_ratio: float = 2.2,
     min_extent_cells: float = 2.0,
+    big_deadend_cells: float = 6.0,
+    max_canal_extent_cells: float = 15.0,
+    min_canal_width_frac: float = 0.5,
 ) -> list[dict[str, Any]]:
     """Find sub-``detect_factor*h`` waterways and decide their
     fate. Returns one record per waterway network:
@@ -177,7 +180,18 @@ def detect_waterways(
         connector = through or (len(pieces) >= 1
                                 and bool(touches_big))
         worthy = extent_cells >= min_extent_cells
-        keep = connector and worthy
+        # PORT-CANAL rule (goto2023 design, resolution-relative):
+        # a dead-end waterway of substantial-but-BOUNDED extent
+        # and canal-like width (mean >= min_canal_width_frac * h)
+        # is kept -- port canal systems carry tidal prism. Rivers
+        # fail it on one of the two axes: below-resolution ones
+        # (Hanami-gawa) are too narrow, large ones are far longer
+        # than any port canal.
+        mean_w_cells = (union.area / max(hull_len, 1e-9)) / h
+        big_canal = (big_deadend_cells <= extent_cells
+                     <= max_canal_extent_cells
+                     and mean_w_cells >= min_canal_width_frac)
+        keep = (connector or big_canal) and worthy
 
         # a narrow piece that barely touches LAND is not a
         # waterway at all -- it is an opening artifact against the
@@ -191,10 +205,12 @@ def detect_waterways(
         rec: dict[str, Any] = {
             "kind": ("through" if through else
                      "port" if touches_big else
+                     "canal" if big_canal else
                      "dead-end"),
             "action": ("keep" if keep else
                        "close" if land_frac >= 0.5 else "ignore"),
             "land_frac": round(land_frac, 2),
+            "mean_width_cells": round(float(mean_w_cells), 2),
             "extent_cells": round(float(extent_cells), 1),
             "basin_cells": round(float(basin_cells), 1),
             "geometry": union,
@@ -254,11 +270,19 @@ def apply_waterway_policy(
             w = np.maximum(np.asarray(rec["width_m"], float),
                            target)
             try:
+                # DETECTED arcs must follow existing water: allow
+                # only ~0.3 h of land crossing (station-snap seam
+                # noise). The default tolerance (max width) let a
+                # diameter-path arc shortcut across a bend and
+                # pierce a barrier (5 fabricated passages,
+                # comparator run 6184563).
                 new_land, ci = carve_channel_corridor(
                     new_land, rec["arc"], w,
                     min_gap_m=min_gap_m,
                     metric_scale=metric_scale,
-                    domain_poly=domain_poly)
+                    domain_poly=domain_poly,
+                    arc_on_land_tol_m=0.3 * h_mesh_m,
+                    carve_crossings=False)
                 info["kept"] += 1
                 info["land_removed_m2"] += ci["land_removed_m2"]
             except RuntimeError as e:

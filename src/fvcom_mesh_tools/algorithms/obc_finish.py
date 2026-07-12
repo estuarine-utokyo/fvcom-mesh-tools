@@ -436,6 +436,23 @@ def finish_obc_mesh(
             max_outer_passes=5, coastline_projector=None,
             freeze_open_boundary=True)
     info["c4_flips"] = flip_c4_edges(mesh)
+    # FINAL single-pass stochastic polish (seeded, OBC frozen):
+    # widened-corridor geometry can leave a 1-2 element C1/C4 tail
+    # that the earlier passes miss (element 3894, run 6184675).
+    # One pass, not a convergence loop.
+    info["polish_final"] = _stochastic_local_fix_round(
+        mesh, np.random.default_rng(seed * 211),
+        min_angle_target=30.0, max_angle_target=130.0,
+        area_ratio_target=0.5, max_valence=8,
+        max_tries_per_fail=500, perturbation_sigma=0.3,
+        max_outer_passes=5, coastline_projector=None,
+        freeze_open_boundary=True)
+    # FINAL perp pass: phase_h moves can re-tilt an OBC node's
+    # best edge after the first alignment (node 1319, run 6184643:
+    # perp_local had fixed it, phase_h re-broke it, flips could
+    # not help). perp_local moves only INTERIOR neighbours, so the
+    # constrained line stays fixed.
+    mesh, info["perp_local_final"] = align_open_boundary_local(mesh)
     arc1 = mesh.nodes[np.asarray(mesh.open_boundaries[0], int)]
     mv = float(np.hypot(*(arc1 - arc0).T).max())
     info["obc_displacement_m"] = mv

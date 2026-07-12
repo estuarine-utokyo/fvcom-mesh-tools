@@ -264,6 +264,7 @@ def carve_channel_corridor(
     metric_scale: tuple[float, float],
     domain_poly=None,
     arc_on_land_tol_m: float | None = None,
+    carve_crossings: bool = True,
 ) -> tuple[Any, dict[str, Any]]:
     """Cut a channel corridor of ``width_m`` along ``arc_ll`` out
     of ``land_union``, barrier-safely.
@@ -275,8 +276,14 @@ def carve_channel_corridor(
        more than ``arc_on_land_tol_m`` (default ``width_m``)
        raises: a wrong arc would pierce a transversal barrier;
     2. every OTHER water surface is kept behind ``min_gap_m`` of
-       land (arc-end openings exempted); if that protection stops
-       the corridor from carrying the arc end to end, raise.
+       land (arc-end openings exempted);
+    3. with ``carve_crossings=False`` (DETECTED waterways) land
+       around within-tolerance arc/land crossings is preserved --
+       an arc clipping a bank corner must not carve the corner
+       into a passage. ``True`` (explicit manual edits, e.g. a
+       pier drawn as land) carves through;
+    4. after carving, the two arc ENDS must lie in the same
+       connected component of the resulting water, else raise.
 
     Returns ``(new_land_union, info)``.
     """
@@ -321,37 +328,79 @@ def carve_channel_corridor(
             LineString(pts[i:i + 2]).buffer(
                 0.5 * float(min(w[i], w[i + 1])) / scale)
             for i in range(len(pts) - 1)])
+        # trim the round END overshoot with flat cuts: at a
+        # dead-end head the w/2 bulb beyond the last station would
+        # be carved but never meshed, leaving one flat bank-to-
+        # bank wedge cell (C1/C4 tail, element 3894 run 6184675)
+        big = 2.0 * w_max / scale
+        for i_end, i_prev in ((0, 1), (len(pts) - 1,
+                                       len(pts) - 2)):
+            t = pts[i_end] - pts[i_prev]
+            t = t / (np.hypot(*t) + 1e-15)
+            nvec = np.array([-t[1], t[0]])
+            p0 = pts[i_end]
+            half = shapely.Polygon([
+                p0 - nvec * big, p0 + nvec * big,
+                p0 + nvec * big + t * big,
+                p0 - nvec * big + t * big])
+            corridor = corridor.difference(half)
 
     if domain_poly is not None:
         water = domain_poly.difference(land_union)
-        other = water.difference(corridor.buffer(1e-9))
-        protect = unary_union(_polys(other)).buffer(
-            min_gap_m / scale)
+        # protect every LOCAL water component the arc does NOT run
+        # through. Protecting only water OUTSIDE the corridor was
+        # blind to a thin barrier lying INSIDE the corridor width:
+        # the water beyond it fell inside the corridor too, lost
+        # its protection, and the barrier was carved into a
+        # fabricated passage (breach at 139.8991/35.3703, run
+        # 6184643).
+        local = water.intersection(
+            corridor.buffer(2.0 * min_gap_m / scale))
+        arcb = arc.buffer(1e-9)
+        other_parts = [g for g in _polys(local)
+                       if not g.intersects(arcb)]
+        protect = (unary_union(other_parts).buffer(
+            min_gap_m / scale) if other_parts
+            else shapely.Polygon())
         # the arc ENDS are where the channel must open into water:
         # exempt a disk around each end from protection, otherwise
-        # the receiving water body's own buffer seals the corridor
+        # a receiving body just missed by the arc seals the mouth
         w2e = 0.5 * w_max / scale
         end_zones = unary_union(
             [shapely.Point(pts[0]).buffer(w2e + min_gap_m / scale),
              shapely.Point(pts[-1]).buffer(w2e + min_gap_m / scale)])
         protect = protect.difference(end_zones)
         carved = corridor.difference(protect)
-        # the guard: after carving, the RESULTING water must carry
-        # the arc end to end. Where the corridor already lies in
-        # existing water the carve is a no-op and this passes; it
-        # fails exactly when min_gap protection had to keep a land
-        # barrier standing across the requested channel.
-        blocked = arc.difference(
-            water.union(carved).buffer(1e-9))
-        blocked_m = float(blocked.length) * scale
-        if blocked_m > max(2.0, 0.005 * arc.length * scale):
+        if not carve_crossings and on_land_m > 1.0:
+            # DETECTED arcs: a within-tolerance land crossing is
+            # bank-corner clipping noise, NOT a licence to carve
+            # the corner into a passage (the corridor covers both
+            # sides there, so min_gap protection is blind to it --
+            # 5 fabricated passages in comparator run 6184563).
+            cross = [g for g in getattr(on_land, "geoms",
+                                        [on_land])
+                     if g.length * scale > 20.0]
+            if cross:
+                carved = carved.difference(unary_union(
+                    [g.buffer(min_gap_m / scale) for g in cross]))
+        # the guard: after carving, the two arc ENDS must lie in
+        # the SAME connected component of the resulting water --
+        # fails exactly when a land barrier still separates them.
+        merged = water.union(carved)
+        pA = shapely.Point(pts[0]).buffer(2.0 / scale)
+        pB = shapely.Point(pts[-1]).buffer(2.0 / scale)
+        connected = any(
+            gpart.intersects(pA) and gpart.intersects(pB)
+            for gpart in _polys(merged))
+        if not connected:
             raise RuntimeError(
                 "channel cannot be carved without piercing a land "
-                f"barrier protecting other water ({blocked_m:.0f} m "
-                f"of the arc stays blocked at min_gap "
+                "barrier protecting other water (the arc ends stay "
+                f"in separate water bodies at min_gap "
                 f"{min_gap_m:.0f} m). Options: reduce width_m, "
                 "adjust the arc, or explicitly accept the "
-                "connection by carving with domain_poly=None.")
+                "connection with carve_crossings=True and an "
+                "explicit arc_on_land_tol_m.")
     else:
         carved = corridor
     new_land = land_union.difference(carved)

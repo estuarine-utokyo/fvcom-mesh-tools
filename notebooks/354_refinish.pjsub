@@ -1,0 +1,24 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+set -euo pipefail
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+echo "=== finish (with final perp pass) ==="
+python notebooks/331_finish2.py
+echo "=== QA final ==="
+fmesh-mesh-qa outputs/sample_repro/sample_repro_final.14
+echo "=== comparator (gate) ==="
+python notebooks/342_connectivity_check.py
+echo "=== registry + verify + one-wide + sample cmp ==="
+python notebooks/343_issue_registry.py
+python notebooks/344_haneda_verify.py
+python notebooks/346_one_wide_flags.py
+python notebooks/351_ow_sample_cmp.py
