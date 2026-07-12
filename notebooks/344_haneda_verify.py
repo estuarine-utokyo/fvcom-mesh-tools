@@ -89,11 +89,14 @@ for title, path in [
 fig, axes = plt.subplots(1, 3, figsize=(17, 6.4))
 for k, (ax, (title, _, lo, la, T, col)) in enumerate(
         zip(axes, panels)):
-    gser.plot(ax=ax, color="0.9", edgecolor="0.6", lw=0.5)
+    gser.plot(ax=ax, color="0.9", edgecolor="0.6", lw=0.5,
+              zorder=1)
     if k == 2 and not opened.is_empty:
-        gopen.plot(ax=ax, color="#c9e8ff", edgecolor="tab:blue",
-                   lw=0.8, hatch="///", zorder=1.5)
-    ax.triplot(lo, la, T, lw=0.6, color=col)
+        # light, sparse hatch UNDER the mesh so the cells meshed
+        # inside the opened area stay visible (owner 2026-07-12)
+        gopen.plot(ax=ax, color="#e4f2ff", edgecolor="#7fb2e0",
+                   lw=0.4, hatch="/", alpha=0.9, zorder=1.4)
+    ax.triplot(lo, la, T, lw=0.7, color=col, zorder=3)
     ax.set_xlim(CX - HALF / COSW, CX + HALF / COSW)
     ax.set_ylim(CY - HALF, CY + HALF)
     ax.set_aspect(1 / COSW)
@@ -104,8 +107,8 @@ for k, (ax, (title, _, lo, la, T, col)) in enumerate(
     add_atlas_grid(ax, crs="EPSG:4326")
 from matplotlib.patches import Patch
 
-axes[2].legend(handles=[Patch(facecolor="#c9e8ff",
-                              edgecolor="tab:blue", hatch="///",
+axes[2].legend(handles=[Patch(facecolor="#e4f2ff",
+                              edgecolor="#7fb2e0", hatch="/",
                               label="pier area drawn as land in "
                                     "OSM,\nopened by edit_001 "
                                     "(sample footprint)")],

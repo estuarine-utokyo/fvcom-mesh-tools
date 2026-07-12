@@ -61,9 +61,25 @@ for ob in m.open_boundaries:
 
 allb = bnode[T].all(axis=1)
 touches_obc = obc[T].any(axis=1)
-flag = np.where(allb & ~touches_obc)[0]
-print(f"[1wide] bank-to-bank cells (all 3 nodes on land "
-      f"boundary, no OBC): {len(flag)}", flush=True)
+
+# boundary-EDGE count per cell: a true bank-to-bank cell has all
+# 3 nodes on the shoreline but AT MOST ONE boundary edge (its two
+# cross-channel edges are shared with neighbours). Cove-corner
+# cells (3 nodes on the SAME bank) have 2-3 boundary edges and are
+# NOT one-wide (owner 2026-07-12: only cell 3290 is truly 1-wide
+# at the Haneda NW channel; the earlier looser flags overcounted).
+bset = set(bkeys.tolist())
+nbedge = np.zeros(len(T), int)
+for a, b in ((0, 1), (1, 2), (2, 0)):
+    lo = np.minimum(T[:, a], T[:, b]).astype(np.int64)
+    hi = np.maximum(T[:, a], T[:, b]).astype(np.int64)
+    k = lo * m.n_nodes + hi
+    nbedge += np.fromiter((kk in bset for kk in k), bool,
+                          len(T)).astype(int)
+flag = np.where(allb & (nbedge <= 1) & ~touches_obc)[0]
+print(f"[1wide] CONFIRMED bank-to-bank cells (all 3 nodes on "
+      f"shoreline, <=1 boundary edge, no OBC): {len(flag)}",
+      flush=True)
 
 # arc cross-section detector (owner 2026-07-12: the boundary-node
 # criterion MISSED the 1-wide cells of the constrained Haneda
@@ -115,12 +131,12 @@ for ef in sorted(Path("recipes/edits/sample_repro")
             sub = [j for j, ln in fr if ln / tot > 0.35]
             if len(sub) == 1 and not touches_obc[sub[0]]:
                 xflag.add(sub[0])
-print(f"[1wide] arc cross-section 1-cell stations flag "
-      f"{len(xflag)} cells", flush=True)
-if xflag:
-    flag = np.unique(np.concatenate(
-        [flag, np.fromiter(xflag, dtype=int)]))
-print(f"[1wide] TOTAL flagged cells: {len(flag)}", flush=True)
+# cross-section dominance alone is ADVISORY (tier 2): a dominant
+# cell with an interior node is one of TWO rows, not a bank-to-
+# bank cell (owner correction: 725/3291 etc. are not one-wide)
+xonly = np.array(sorted(xflag - set(flag.tolist())), int)
+print(f"[1wide] confirmed one-wide: {len(flag)}; advisory "
+      f"narrow (section-dominant only): {len(xonly)}", flush=True)
 
 # cluster flagged cells by node-sharing so nearby cells report as
 # one site
@@ -153,13 +169,24 @@ for c in sorted(set(lab[flag])) if len(flag) else []:
         "gridref": TOKYO_BAY_GRID.point_to_subcell(
             float(cc[0]), float(cc[1])),
     })
-(OUT / "one_wide_cells.json").write_text(json.dumps(sites,
-                                                    indent=1))
+advisory = [{
+    "cell_id_fort14": int(e + 1),
+    "center_lonlat": [round(float(cent[e][0]), 4),
+                      round(float(cent[e][1]), 4)],
+    "gridref": TOKYO_BAY_GRID.point_to_subcell(
+        float(cent[e][0]), float(cent[e][1])),
+} for e in xonly]
+(OUT / "one_wide_cells.json").write_text(json.dumps(
+    {"confirmed_sites": sites, "advisory_narrow": advisory},
+    indent=1))
 for s in sites:
     print(f"[1wide] {s['site']} [{s['gridref']}]: cells "
           f"{s['cell_ids_fort14']} at "
           f"({s['center_lonlat'][0]}, {s['center_lonlat'][1]})",
           flush=True)
+for a2 in advisory:
+    print(f"[1wide]   advisory narrow: cell "
+          f"{a2['cell_id_fort14']} [{a2['gridref']}]", flush=True)
 
 land = unary_union(list(gpd.read_file(
     "outputs/tb_varres_3r/land_osm_wide.shp").geometry))
@@ -175,18 +202,31 @@ if show:
     for ax, s in zip(axes, show):
         cx, cy = s["center_lonlat"]
         half = 0.012
-        gser.plot(ax=ax, color="0.9", edgecolor="0.6", lw=0.5)
-        ax.triplot(lon, lat, T, lw=0.5, color="steelblue")
+        gser.plot(ax=ax, color="0.9", edgecolor="0.6", lw=0.5,
+                  zorder=1)
         els = np.asarray(s["cell_ids_fort14"]) - 1
-        ax.tripcolor(lon, lat, T,
-                     facecolors=np.isin(np.arange(len(T)), els)
-                     .astype(float), cmap="Reds", alpha=0.55,
-                     vmin=0.0, vmax=1.3)
+        # light fill + strong OUTLINE so the mesh lines stay
+        # visible through the highlight (owner 2026-07-12)
+        for e in els:
+            ring = P[np.append(T[e], T[e][0])]
+            ax.fill(ring[:, 0], ring[:, 1], color="crimson",
+                    alpha=0.18, zorder=2)
+            ax.plot(ring[:, 0], ring[:, 1], color="crimson",
+                    lw=1.6, zorder=4)
+        for e in xonly:
+            ring = P[np.append(T[e], T[e][0])]
+            ax.plot(ring[:, 0], ring[:, 1], color="darkorange",
+                    lw=1.2, ls="--", zorder=3.5)
+            ax.annotate(str(e + 1), cent[e], ha="center",
+                        va="center", fontsize=10,
+                        color="darkorange")
+        ax.triplot(lon, lat, T, lw=0.6, color="steelblue",
+                   zorder=3)
         for e in els:
             ax.annotate(str(e + 1), cent[e],
                         ha="center", va="center",
                         fontsize=12, fontweight="bold",
-                        color="darkred")
+                        color="darkred", zorder=5)
         ax.set_xlim(cx - half / COSW, cx + half / COSW)
         ax.set_ylim(cy - half, cy + half)
         ax.set_aspect(1 / COSW)
@@ -197,8 +237,10 @@ if show:
                      f"{len(els)} cell(s)  ({cx:.3f}, {cy:.3f})")
     for ax in axes[len(show):]:
         ax.axis("off")
-    fig.suptitle("one-wide channel cells (red + fort.14 cell "
-                 "number): candidates for the next manual edit")
+    fig.suptitle("one-wide channel cells: red outline = CONFIRMED "
+                 "bank-to-bank (all 3 nodes on shoreline);\n"
+                 "orange dashed = advisory narrow (one cell "
+                 "dominates the cross-section but 2 rows exist)")
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig("outputs/figures/one_wide_cells.png", dpi=170,
                 bbox_inches="tight")
