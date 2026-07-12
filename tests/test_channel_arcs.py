@@ -200,3 +200,38 @@ def test_carve_variable_width_removes_only_pinch():
     assert new_land.covers(shapely.Point(5_370.0, 5_600.0))
     # land actually removed is small (just the bridge notch)
     assert info["land_removed_m2"] < 50_000.0
+
+
+def test_split_choke_edges_doubles_the_section():
+    from fvcom_mesh_tools.algorithms.obc_finish import (
+        split_choke_edges,
+    )
+    from fvcom_mesh_tools.io import Fort14Mesh
+
+    # 4x2-node channel strip: interior edge A2-B1 has both ends on
+    # opposite banks with a long boundary detour -> choke
+    A = [(0.0, 0.0), (600.0, 0.0), (1200.0, 0.0), (1800.0, 0.0)]
+    B = [(0.0, 500.0), (600.0, 500.0), (1200.0, 500.0),
+         (1800.0, 500.0)]
+    nodes = np.asarray(A + B)
+    els = np.asarray([
+        [0, 1, 4], [1, 5, 4], [1, 2, 5],
+        [2, 6, 5], [2, 3, 6], [3, 7, 6]])
+    mesh = Fort14Mesh(
+        title="t", nodes=nodes, depths=np.full(8, 5.0),
+        elements=els, open_boundaries=[], land_boundaries=[])
+    out, info = split_choke_edges(mesh)
+    assert info["split"] == 1
+    assert info["edges"] == [(2, 5)]
+    assert out.n_nodes == 9
+    assert out.n_elements == 8
+    # midpoint inserted on the choke edge
+    assert np.allclose(out.nodes[8], [900.0, 250.0])
+    # all elements keep positive (CCW) area
+    p = out.nodes
+    t = out.elements
+    ar = 0.5 * ((p[t[:, 1], 0] - p[t[:, 0], 0])
+                * (p[t[:, 2], 1] - p[t[:, 0], 1])
+                - (p[t[:, 2], 0] - p[t[:, 0], 0])
+                * (p[t[:, 1], 1] - p[t[:, 0], 1]))
+    assert (ar > 0).all()

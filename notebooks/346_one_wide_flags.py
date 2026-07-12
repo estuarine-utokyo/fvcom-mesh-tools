@@ -57,7 +57,7 @@ bnode[(bkeys % m.n_nodes)] = True
 
 obc = np.zeros(m.n_nodes, bool)
 for ob in m.open_boundaries:
-    obc[np.asarray(ob) - 1] = True
+    obc[np.asarray(ob)] = True      # already 0-based (io/fort14)
 
 allb = bnode[T].all(axis=1)
 touches_obc = obc[T].any(axis=1)
@@ -81,6 +81,50 @@ print(f"[1wide] CONFIRMED bank-to-bank cells (all 3 nodes on "
       f"shoreline, <=1 boundary edge, no OBC): {len(flag)}",
       flush=True)
 
+# CHOKE-EDGE detector (owner 2026-07-12: cells at Haneda
+# I8-a2/I8-b2 have an interior EDGE spanning the whole channel --
+# the third node is interior, so the all-3-boundary criterion
+# misses them). An interior edge whose two endpoints are both
+# shoreline nodes that are NOT near-neighbours ALONG the boundary
+# is a bank-to-bank choke; both sharing cells are flagged.
+from collections import defaultdict
+badj = defaultdict(set)
+for k in bkeys:
+    a, b = int(k // m.n_nodes), int(k % m.n_nodes)
+    badj[a].add(b)
+    badj[b].add(a)
+
+
+def _boundary_hops(a, b, max_hops=3):
+    seen = {a}
+    front = {a}
+    for hop in range(1, max_hops + 1):
+        front = set().union(*(badj[v] for v in front)) - seen
+        if b in front:
+            return hop
+        seen |= front
+    return None
+
+
+ikeys = np.unique(ks[same])
+choke = set()
+edge_cells = defaultdict(list)
+for kk, ee in zip(ks, eids[o]):
+    edge_cells[int(kk)].append(int(ee))
+for k in ikeys:
+    a, b = int(k // m.n_nodes), int(k % m.n_nodes)
+    if not (bnode[a] and bnode[b]) or obc[a] or obc[b]:
+        continue
+    if _boundary_hops(a, b) is None:      # opposite banks
+        for e in edge_cells[int(k)]:
+            choke.add(e)
+choke -= set(np.where(touches_obc)[0].tolist())
+print(f"[1wide] choke-edge cells (interior bank-to-bank edge): "
+      f"{len(choke)}", flush=True)
+if choke:
+    flag = np.unique(np.concatenate(
+        [flag, np.fromiter(choke, dtype=int)]))
+
 # arc cross-section detector (owner 2026-07-12: the boundary-node
 # criterion MISSED the 1-wide cells of the constrained Haneda
 # band). Along each edit's medial arc, a station where a single
@@ -90,16 +134,25 @@ polys = [shapely.Polygon(P[t]) for t in T]
 tree = STRtree(polys)
 scale = 0.5 * (111e3 * COSW + 111e3)
 xflag: set[int] = set()
+arc_sources = []
 for ef in sorted(Path("recipes/edits/sample_repro")
                  .glob("*.json")):
     ed = json.loads(ef.read_text())
     if "check_arcs" in ed:
-        pairs = list(zip(ed["check_arcs"],
-                         ed["check_widths_m"]))
+        arc_sources += list(zip(ed["check_arcs"],
+                                ed["check_widths_m"]))
     elif "arc" in ed and "widths_m" in ed:
-        pairs = [(ed["arc"], ed["widths_m"])]
-    else:
-        continue
+        arc_sources.append((ed["arc"], ed["widths_m"]))
+# sweep EVERY kept detected waterway too (owner 2026-07-12: the
+# Haneda NW channel had no checker arc after edit rev 5)
+wpath = OUT / "waterways.json"
+if wpath.exists():
+    for wrec in json.loads(wpath.read_text()):
+        if wrec["action"] == "keep" and wrec["arc"]:
+            arc_sources.append((wrec["arc"], wrec["widths_m"]))
+print(f"[1wide] cross-section sweep over {len(arc_sources)} "
+      f"arcs", flush=True)
+for pairs in [arc_sources]:
     for a_raw, w_raw in pairs:
         a = np.asarray(a_raw, float)
         wprof = np.asarray(w_raw, float)

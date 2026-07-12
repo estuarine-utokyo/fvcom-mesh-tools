@@ -202,6 +202,12 @@ def detect_waterways(
             land_union.buffer(eps)).length) / blen
             if blen > 0 else 0.0)
 
+        narrow_members = [g for kind_, g in
+                          zip([items[i][0] for i in
+                               np.where(lab == net)[0]], geoms)
+                          if kind_ == "n"]
+        main_piece = (max(narrow_members, key=lambda g: g.area)
+                      if narrow_members else None)
         rec: dict[str, Any] = {
             "kind": ("through" if through else
                      "port" if touches_big else
@@ -211,6 +217,7 @@ def detect_waterways(
                        "close" if land_frac >= 0.5 else "ignore"),
             "land_frac": round(land_frac, 2),
             "mean_width_cells": round(float(mean_w_cells), 2),
+            "main_piece": main_piece,
             "extent_cells": round(float(extent_cells), 1),
             "basin_cells": round(float(basin_cells), 1),
             "geometry": union,
@@ -250,16 +257,43 @@ def apply_waterway_policy(
     metric_scale: tuple[float, float],
     widen_rows: float = 2.0,
     min_gap_m: float = 150.0,
+    h_grade_per_m: float = 0.0,
+    arc_retry: str = "largest-piece",
 ) -> tuple[Any, dict[str, Any]]:
     """Execute the detected actions: KEEP -> carve the corridor to
-    ``0.875 * widen_rows * h`` (two standard rows) along the arc,
-    barrier-safe; CLOSE -> fill the network as land. A keep whose
-    carve is refused becomes BLOCKED (reported, land untouched)."""
-    target = 0.875 * widen_rows * h_mesh_m
+    two LOCAL rows along the arc, barrier-safe; CLOSE -> fill the
+    network as land.
+
+    The per-station widen target accounts for distance-to-coast
+    size growth: ``0.875 * rows * (h + h_grade_per_m * w_i / 2)``
+    -- at a 350 m natural channel the mid-channel mesh edge is
+    already ~h + grade*175, and a target based on bare ``h``
+    realises only ~1.6 rows.
+
+    A keep whose carve is refused is retried once with an arc from
+    its LARGEST single corridor piece (``arc_retry`` =
+    "largest-piece"; diameter paths over BRANCHED networks cut
+    corners); the retry is recorded on the record. Still refused
+    -> BLOCKED (reported, land untouched); pass ``arc_retry=None``
+    to disable the retry."""
     new_land = land_union
     info = {"kept": 0, "closed": 0, "ignored": 0, "blocked": [],
-            "land_removed_m2": 0.0}
+            "retried": 0, "land_removed_m2": 0.0}
     fills = []
+    sx, sy = metric_scale
+    scale = 0.5 * (sx + sy)
+
+    def _carve(base, arc, widths):
+        w_nat = np.asarray(widths, float)
+        target = 0.875 * widen_rows * (
+            h_mesh_m + h_grade_per_m * w_nat / 2.0)
+        w = np.maximum(w_nat, target)
+        return carve_channel_corridor(
+            base, arc, w, min_gap_m=min_gap_m,
+            metric_scale=metric_scale, domain_poly=domain_poly,
+            arc_on_land_tol_m=0.3 * h_mesh_m,
+            carve_crossings=False)
+
     for rec in records:
         if rec["action"] == "ignore":
             info["ignored"] += 1
@@ -267,27 +301,48 @@ def apply_waterway_policy(
             fills.append(rec["geometry"])
             info["closed"] += 1
         elif rec["action"] == "keep":
-            w = np.maximum(np.asarray(rec["width_m"], float),
-                           target)
             try:
-                # DETECTED arcs must follow existing water: allow
-                # only ~0.3 h of land crossing (station-snap seam
-                # noise). The default tolerance (max width) let a
-                # diameter-path arc shortcut across a bend and
-                # pierce a barrier (5 fabricated passages,
-                # comparator run 6184563).
-                new_land, ci = carve_channel_corridor(
-                    new_land, rec["arc"], w,
-                    min_gap_m=min_gap_m,
-                    metric_scale=metric_scale,
-                    domain_poly=domain_poly,
-                    arc_on_land_tol_m=0.3 * h_mesh_m,
-                    carve_crossings=False)
+                new_land, ci = _carve(new_land, rec["arc"],
+                                      rec["width_m"])
                 info["kept"] += 1
                 info["land_removed_m2"] += ci["land_removed_m2"]
             except RuntimeError as e:
-                rec["action"] = "blocked"
-                rec["reason"] = str(e)
+                retried = False
+                if (arc_retry == "largest-piece"
+                        and rec.get("main_piece") is not None):
+                    try:
+                        pts = _interior_points(
+                            rec["main_piece"],
+                            0.35 * h_mesh_m / scale)
+                        guide = arc_from_points(
+                            np.column_stack(
+                                [pts[:, 0] * sx / scale,
+                                 pts[:, 1] * sy / scale]),
+                            smooth_passes=2)
+                        guide = np.column_stack(
+                            [guide[:, 0] * scale / sx,
+                             guide[:, 1] * scale / sy])
+                        snap = snap_arc_to_channel(
+                            land_union, guide,
+                            metric_scale=metric_scale,
+                            step_m=0.35 * h_mesh_m,
+                            max_halfwidth_m=2.5 * h_mesh_m)
+                        new_land, ci = _carve(
+                            new_land, snap["arc"],
+                            snap["width_carve_m"])
+                        rec["arc"] = snap["arc"]
+                        rec["width_m"] = snap["width_carve_m"]
+                        rec["retry"] = "largest-piece"
+                        info["kept"] += 1
+                        info["retried"] += 1
+                        info["land_removed_m2"] += (
+                            ci["land_removed_m2"])
+                        retried = True
+                    except RuntimeError as e2:
+                        e = e2
+                if not retried:
+                    rec["action"] = "blocked"
+                    rec["reason"] = str(e)
         if rec["action"] == "blocked":
             info["blocked"].append(rec)
     if fills:

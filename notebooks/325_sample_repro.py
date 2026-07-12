@@ -155,12 +155,38 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
         metric_scale=(111e3 * _cosw, 111e3))
     _new_land, _winfo = apply_waterway_policy(
         _new_land, _dom, _recs, h_mesh_m=1.2 * H0,
-        metric_scale=(111e3 * _cosw, 111e3))
+        metric_scale=(111e3 * _cosw, 111e3),
+        h_grade_per_m=1.2 * GRADE)
     print(f"[sr] waterways (OSM-native): kept {_winfo['kept']}, "
           f"closed {_winfo['closed']}, "
           f"ignored {_winfo['ignored']}, "
-          f"blocked {len(_winfo['blocked'])}, land_removed "
+          f"blocked {len(_winfo['blocked'])} "
+          f"(retried ok {_winfo['retried']}), land_removed "
           f"{_winfo['land_removed_m2']/1e4:.1f} ha", flush=True)
+    # persist the records so the one-wide checker sweeps EVERY
+    # kept waterway's arc (not just manual edits) and blocked
+    # ones stay visible in the ledger
+    _wjson = []
+    for _r in _recs:
+        _c = _r["geometry"].representative_point()
+        _wjson.append({
+            "action": _r["action"], "kind": _r["kind"],
+            "extent_cells": _r["extent_cells"],
+            "basin_cells": _r["basin_cells"],
+            "center": [round(float(_c.x), 5),
+                       round(float(_c.y), 5)],
+            "retry": _r.get("retry"),
+            "reason": _r.get("reason"),
+            "arc": (np.asarray(_r["arc"], float).round(6).tolist()
+                    if _r.get("arc") is not None else None),
+            "widths_m": (np.asarray(_r["width_m"], float)
+                         .round(1).tolist()
+                         if _r.get("width_m") is not None
+                         else None),
+        })
+    (OUT / "waterways.json").write_text(_json.dumps(_wjson))
+    print(f"[sr] waterways records -> {OUT / 'waterways.json'}",
+          flush=True)
     for _r in _recs:
         if _r["action"] == "ignore":
             continue

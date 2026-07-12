@@ -389,6 +389,131 @@ def split_r4_end_cells(
     return mesh, {"split": done, "failed": failed}
 
 
+def split_choke_edges(
+    mesh: Fort14Mesh,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Split bank-to-bank CHOKE edges: an interior edge whose two
+    endpoints both lie on the LAND boundary without being
+    near-neighbours along it throttles a channel to a single edge
+    (owner 2026-07-12, Haneda I8-a2: "the mesh must be increased
+    to keep the waterway"). Insert the midpoint and split both
+    adjacent cells, so the cross-section carries two cells.
+    Deterministic; run before the final polish."""
+    import dataclasses
+    from collections import defaultdict
+
+    nodes, els, dep = mesh.nodes, mesh.elements, mesh.depths
+    n_nodes = len(nodes)
+    ee = np.vstack([els[:, [0, 1]], els[:, [1, 2]],
+                    els[:, [2, 0]]])
+    ee.sort(axis=1)
+    uq, ct = np.unique(ee, axis=0, return_counts=True)
+    bnode = np.zeros(n_nodes, bool)
+    badj = defaultdict(set)
+    for a, b in uq[ct == 1]:
+        bnode[a] = bnode[b] = True
+        badj[int(a)].add(int(b))
+        badj[int(b)].add(int(a))
+    obc = set()
+    for ob in mesh.open_boundaries:
+        obc.update(int(v) for v in np.asarray(ob))
+
+    def _hops(a, b, max_hops=3):
+        seen = {a}
+        front = {a}
+        for hop in range(1, max_hops + 1):
+            front = set().union(*(badj[v] for v in front)) - seen
+            if b in front:
+                return hop
+            seen |= front
+        return None
+
+    edge_cells = defaultdict(list)
+    for irow, (a, b) in enumerate(ee):
+        edge_cells[(int(a), int(b))].append(irow % len(els))
+    new_nodes, new_dep = [nodes], [dep]
+    replaced: dict[int, list[list[int]]] = {}
+    used_cells: set[int] = set()
+    split_edges = []
+    for a, b in uq[ct == 2]:
+        a, b = int(a), int(b)
+        if not (bnode[a] and bnode[b]) or a in obc or b in obc:
+            continue
+        if _hops(a, b) is not None:
+            continue
+        cells = edge_cells[(a, b)]
+        if len(cells) != 2 or used_cells & set(cells):
+            continue
+
+        # QUALITY GATE (run 6185030: blind midpoint splits made 16
+        # C1 violations): search the split fraction that maximises
+        # the worst angle over the 4 sub-triangles; skip the split
+        # if even the best is a sliver. Skipped chokes stay in the
+        # one-wide ledger.
+        def _min_angle(tris, pos):
+            worst = 180.0
+            for t3 in tris:
+                q = np.array([pos[v] for v in t3])
+                for k3 in range(3):
+                    u = q[(k3 + 1) % 3] - q[k3]
+                    v3 = q[(k3 + 2) % 3] - q[k3]
+                    c3 = np.dot(u, v3) / (
+                        np.linalg.norm(u) * np.linalg.norm(v3)
+                        + 1e-300)
+                    worst = min(worst, np.degrees(
+                        np.arccos(np.clip(c3, -1, 1))))
+            return worst
+
+        best = (None, -1.0)
+        for frac in (0.5, 0.4, 0.6, 0.35, 0.65):
+            mpos = (1 - frac) * nodes[a] + frac * nodes[b]
+            pos = {a: nodes[a], b: nodes[b], -1: mpos}
+            tris4 = []
+            for ci in cells:
+                tri = [int(x) for x in els[ci]]
+                w3 = [v for v in tri if v not in (a, b)][0]
+                pos[w3] = nodes[w3]
+                tris4.append([(-1 if v == b else v)
+                              for v in tri])
+                tris4.append([(-1 if v == a else v)
+                              for v in tri])
+            ma = _min_angle(tris4, pos)
+            if ma > best[1]:
+                best = (frac, ma)
+        if best[1] < 28.0:
+            continue
+        frac = best[0]
+        mid = n_nodes + sum(len(x) for x in new_nodes[1:])
+        new_nodes.append(
+            ((1 - frac) * nodes[a] + frac * nodes[b])[None, :])
+        new_dep.append(np.array(
+            [(1 - frac) * dep[a] + frac * dep[b]]))
+        for ci in cells:
+            tri = [int(x) for x in els[ci]]
+            # preserve orientation: replace a->mid and b->mid
+            t1 = [mid if v == b else v for v in tri]
+            t2 = [mid if v == a else v for v in tri]
+            replaced[ci] = [t1, t2]
+            used_cells.add(ci)
+        split_edges.append((a, b))
+    if not split_edges:
+        return mesh, {"split": 0}
+    out_els = []
+    for ci in range(len(els)):
+        if ci in replaced:
+            out_els.extend(replaced[ci])
+        else:
+            out_els.append([int(x) for x in els[ci]])
+    mesh2 = dataclasses.replace(
+        mesh,
+        nodes=np.vstack(new_nodes),
+        depths=np.concatenate(new_dep),
+        elements=np.asarray(out_els, dtype=els.dtype))
+    return mesh2, {"split": len(split_edges),
+                   "edges": [(int(a), int(b))
+                             for a, b in split_edges]}
+
+
 def finish_obc_mesh(
     mesh: Fort14Mesh,
     *,
@@ -436,6 +561,10 @@ def finish_obc_mesh(
             max_outer_passes=5, coastline_projector=None,
             freeze_open_boundary=True)
     info["c4_flips"] = flip_c4_edges(mesh)
+    # CHOKE-EDGE split (owner 2026-07-12): a widened channel can
+    # still be throttled to one bank-to-bank edge; insert the
+    # midpoint so the section carries two cells, then polish.
+    mesh, info["choke_split"] = split_choke_edges(mesh)
     # FINAL single-pass stochastic polish (seeded, OBC frozen):
     # widened-corridor geometry can leave a 1-2 element C1/C4 tail
     # that the earlier passes miss (element 3894, run 6184675).
