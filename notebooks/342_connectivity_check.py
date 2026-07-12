@@ -131,6 +131,12 @@ _cosw = float(np.cos(np.deg2rad(35.35)))
 for _ef in sorted(
         _Path("recipes/edits/sample_repro").glob("*.json")):
     _ed = _json.loads(_ef.read_text())
+    if _ed.get("type") == "water_patch":
+        import shapely.geometry as _sg
+        land = land.difference(_sg.shape(_ed["geometry"]))
+        print(f"[conn] breach reference: applied water_patch "
+              f"{_ed.get('id', _ef.stem)}", flush=True)
+        continue
     _tol = _ed.get("arc_on_land_tol_m")
     _w = (np.asarray(_ed["widths_m"], float)
           if "widths_m" in _ed else float(_ed["width_m"]))

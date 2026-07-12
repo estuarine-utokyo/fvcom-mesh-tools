@@ -25,7 +25,10 @@ from shapely.strtree import STRtree
 
 from fvcom_mesh_tools.channel_arcs import arc_from_points
 from fvcom_mesh_tools.io import read_fort14
-from fvcom_mesh_tools.plotting import use_readable_style
+from fvcom_mesh_tools.plotting import (
+    add_atlas_grid,
+    use_readable_style,
+)
 
 use_readable_style()
 
@@ -234,6 +237,7 @@ for ax, rec in zip(axes, show):
     ax.set_ylim(cy - half, cy + half)
     ax.set_aspect(1 / COSW)
     ax.set_xticks([]); ax.set_yticks([])
+    add_atlas_grid(ax, crs="EPSG:4326")
     ax.set_title(f"{rec['id']}  n={rec['n_sample_elements']}  "
                  f"({cx:.3f}, {cy:.3f})\n"
                  f"severs={rec['severs_sample']}  "

@@ -47,25 +47,32 @@ from fvcom_mesh_tools.channel_arcs import carve_channel_corridor
 _ed = _json.loads(Path(
     "recipes/edits/sample_repro/"
     "edit_001_haneda_d_runway.json").read_text())
-_OBC = [[139.6713, 35.1396], [139.6737, 35.1288],
-        [139.6772, 35.1168], [139.6816, 35.1031],
-        [139.6871, 35.0877], [139.6946, 35.0705],
-        [139.7000, 35.0576], [139.7069, 35.0445],
-        [139.7134, 35.0327], [139.7216, 35.0184],
-        [139.7289, 35.0047], [139.7373, 34.9916],
-        [139.7497, 34.9750]]
-_dom = _Poly([[139.83, 34.973], [140.12, 34.973],
-              [140.12, 35.75], [139.60, 35.75], [139.60, 35.20],
-              [139.6642, 35.1546]] + _OBC + [[139.83, 34.973]])
-_w = (np.asarray(_ed["widths_m"], float)
-      if "widths_m" in _ed else float(_ed["width_m"]))
-_tol = _ed.get("arc_on_land_tol_m")
-_nl, _ = carve_channel_corridor(
-    land, np.asarray(_ed["arc"], float), _w,
-    min_gap_m=float(_ed.get("min_gap_m", 150.0)),
-    metric_scale=(111e3 * COSW, 111e3), domain_poly=_dom,
-    arc_on_land_tol_m=None if _tol is None else float(_tol))
-opened = land.difference(_nl)
+if _ed.get("type") == "water_patch":
+    import shapely.geometry as _sg
+    _patch = _sg.shape(_ed["geometry"])
+    opened = _patch.intersection(land)
+else:
+    _OBC = [[139.6713, 35.1396], [139.6737, 35.1288],
+            [139.6772, 35.1168], [139.6816, 35.1031],
+            [139.6871, 35.0877], [139.6946, 35.0705],
+            [139.7000, 35.0576], [139.7069, 35.0445],
+            [139.7134, 35.0327], [139.7216, 35.0184],
+            [139.7289, 35.0047], [139.7373, 34.9916],
+            [139.7497, 34.9750]]
+    _dom = _Poly([[139.83, 34.973], [140.12, 34.973],
+                  [140.12, 35.75], [139.60, 35.75],
+                  [139.60, 35.20],
+                  [139.6642, 35.1546]] + _OBC
+                 + [[139.83, 34.973]])
+    _w = (np.asarray(_ed["widths_m"], float)
+          if "widths_m" in _ed else float(_ed["width_m"]))
+    _tol = _ed.get("arc_on_land_tol_m")
+    _nl, _ = carve_channel_corridor(
+        land, np.asarray(_ed["arc"], float), _w,
+        min_gap_m=float(_ed.get("min_gap_m", 150.0)),
+        metric_scale=(111e3 * COSW, 111e3), domain_poly=_dom,
+        arc_on_land_tol_m=None if _tol is None else float(_tol))
+    opened = land.difference(_nl)
 gopen = gpd.GeoSeries([opened], crs="EPSG:4326")
 
 panels = [("goto2023 sample", None, lon_s, lat_s, Ts, "0.35")]
@@ -93,12 +100,15 @@ for k, (ax, (title, _, lo, la, T, col)) in enumerate(
     ax.plot([CX], [CY], marker="+", ms=16, mew=2.5, color="red")
     ax.tick_params(labelsize=10)
     ax.set_title(title)
+    from fvcom_mesh_tools.plotting import add_atlas_grid
+    add_atlas_grid(ax, crs="EPSG:4326")
 from matplotlib.patches import Patch
 
 axes[2].legend(handles=[Patch(facecolor="#c9e8ff",
                               edgecolor="tab:blue", hatch="///",
-                              label="pier drawn as land in OSM,\n"
-                                    "opened by edit_001")],
+                              label="pier area drawn as land in "
+                                    "OSM,\nopened by edit_001 "
+                                    "(sample footprint)")],
                loc="lower right")
 fig.suptitle("W10 Haneda D-runway channel: site-exact "
              f"verification at ({CX}, {CY})")
@@ -126,9 +136,14 @@ ed = json.loads(Path(
     "edit_001_haneda_d_runway.json").read_text())
 arc = np.asarray(ed["arc"], float)
 scale = 0.5 * (111e3 * COSW + 111e3)
-wmax = (max(ed["widths_m"]) if "widths_m" in ed
-        else ed["width_m"])
-tube = LineString(arc).buffer(wmax / scale)
+# subgraph tube: tight around the design water (patch + medial
+# arc) so a detour through open bay water cannot fake a PASS
+wmed = (float(np.median(ed["widths_m"])) if "widths_m" in ed
+        else float(ed["width_m"]))
+tube = LineString(arc).buffer(0.6 * wmed / scale)
+if ed.get("type") == "water_patch":
+    import shapely.geometry as _sg2
+    tube = tube.union(_sg2.shape(ed["geometry"]))
 
 m = read_fort14(str(OUT / "sample_repro_final.14"))
 lo, la = tr.transform(m.nodes[:, 0], m.nodes[:, 1])

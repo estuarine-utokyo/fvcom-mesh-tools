@@ -13,13 +13,19 @@ import numpy as np
 os.environ.setdefault("MPLBACKEND", "Agg")
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import shapely
 from pyproj import Transformer
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
+from shapely.geometry import LineString
 from shapely.ops import unary_union
+from shapely.strtree import STRtree
 
 from fvcom_mesh_tools.io import read_fort14
-from fvcom_mesh_tools.plotting import use_readable_style
+from fvcom_mesh_tools.plotting import (
+    add_atlas_grid,
+    use_readable_style,
+)
 
 use_readable_style()
 OUT = Path("outputs/sample_repro")
@@ -57,6 +63,63 @@ touches_obc = obc[T].any(axis=1)
 flag = np.where(allb & ~touches_obc)[0]
 print(f"[1wide] bank-to-bank cells (all 3 nodes on land "
       f"boundary, no OBC): {len(flag)}", flush=True)
+
+# arc cross-section detector (owner 2026-07-12: the boundary-node
+# criterion MISSED the 1-wide cells of the constrained Haneda
+# band). Along each edit's medial arc, a station where a single
+# cell carries >35 % of the water crossing = channel is one cell
+# wide there. This measures width in the user's sense directly.
+polys = [shapely.Polygon(P[t]) for t in T]
+tree = STRtree(polys)
+scale = 0.5 * (111e3 * COSW + 111e3)
+xflag: set[int] = set()
+for ef in sorted(Path("recipes/edits/sample_repro")
+                 .glob("*.json")):
+    ed = json.loads(ef.read_text())
+    if "check_arcs" in ed:
+        pairs = list(zip(ed["check_arcs"],
+                         ed["check_widths_m"]))
+    elif "arc" in ed and "widths_m" in ed:
+        pairs = [(ed["arc"], ed["widths_m"])]
+    else:
+        continue
+    for a_raw, w_raw in pairs:
+        a = np.asarray(a_raw, float)
+        wprof = np.asarray(w_raw, float)
+        line = LineString(a)
+        n_st = max(int(line.length * scale / 100.0) + 1, 5)
+        for s in np.linspace(0.0, 1.0, n_st):
+            p = line.interpolate(s, normalized=True)
+            pa = line.interpolate(max(s - 0.02, 0.0),
+                                  normalized=True)
+            pb = line.interpolate(min(s + 0.02, 1.0),
+                                  normalized=True)
+            tv = np.array([pb.x - pa.x, pb.y - pa.y])
+            tv /= np.hypot(*tv) + 1e-15
+            nv = np.array([-tv[1], tv[0]])
+            wi = float(np.interp(s, np.linspace(0, 1, len(wprof)),
+                                 wprof)) * 0.6 / scale
+            sec = LineString([(p.x - nv[0] * wi,
+                               p.y - nv[1] * wi),
+                              (p.x + nv[0] * wi,
+                               p.y + nv[1] * wi)])
+            fr, tot = [], 0.0
+            for j in tree.query(sec):
+                seg = polys[j].intersection(sec)
+                if not seg.is_empty and seg.length > 0:
+                    fr.append((int(j), seg.length))
+                    tot += seg.length
+            if tot <= 0:
+                continue
+            sub = [j for j, ln in fr if ln / tot > 0.35]
+            if len(sub) == 1 and not touches_obc[sub[0]]:
+                xflag.add(sub[0])
+print(f"[1wide] arc cross-section 1-cell stations flag "
+      f"{len(xflag)} cells", flush=True)
+if xflag:
+    flag = np.unique(np.concatenate(
+        [flag, np.fromiter(xflag, dtype=int)]))
+print(f"[1wide] TOTAL flagged cells: {len(flag)}", flush=True)
 
 # cluster flagged cells by node-sharing so nearby cells report as
 # one site
@@ -125,6 +188,7 @@ if show:
         ax.set_aspect(1 / COSW)
         ax.set_xticks([])
         ax.set_yticks([])
+        add_atlas_grid(ax, crs="EPSG:4326")
         ax.set_title(f"{s['site']}  {len(els)} cell(s)  "
                      f"({cx:.3f}, {cy:.3f})")
     for ax in axes[len(show):]:

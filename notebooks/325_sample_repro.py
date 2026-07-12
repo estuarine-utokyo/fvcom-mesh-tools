@@ -106,6 +106,18 @@ from fvcom_mesh_tools.channel_arcs import carve_channel_corridor
 CH_PF, CH_EG = [], []      # bank pfix/egfix accumulated per edit
 for _ef in sorted(Path("recipes/edits/sample_repro").glob("*.json")):
     _ed = _json.loads(_ef.read_text())
+    if _ed.get("type") == "water_patch":
+        # owner-approved water footprint (e.g. the sample's own
+        # meshed water): land inside the polygon becomes water
+        import shapely.geometry as _sg
+        _patch = _sg.shape(_ed["geometry"])
+        _opened = _patch.intersection(_new_land)
+        _new_land = _new_land.difference(_patch)
+        print(f"[sr] channel edit {_ed.get('id', _ef.stem)} "
+              f"(water_patch rev {_ed.get('rev')}): opened "
+              f"{_opened.area * (111e3 * _cosw) * 111e3 / 1e4:.1f}"
+              f" ha of land", flush=True)
+        continue
     _tol = _ed.get("arc_on_land_tol_m")   # explicit opt-in only
     _w = (np.asarray(_ed["widths_m"], float)
           if "widths_m" in _ed else float(_ed["width_m"]))
