@@ -29,7 +29,8 @@ from shapely.geometry import LineString, MultiPolygon, Polygon
 from shapely.ops import unary_union
 
 __all__ = ["arc_from_points", "carve_channel_corridor",
-           "snap_arc_to_channel", "bank_chains"]
+           "snap_arc_to_channel", "bank_chains",
+           "skeleton_branches"]
 
 
 def _polys(geom) -> list[Polygon]:
@@ -83,6 +84,125 @@ def arc_from_points(
         if len(arc) > 2:
             arc[1:-1] = (arc[:-2] + arc[1:-1] + arc[2:]) / 3.0
     return arc
+
+
+def skeleton_branches(
+    poly,
+    *,
+    metric_scale: tuple[float, float],
+    density_m: float = 60.0,
+    prune_m: float = 200.0,
+) -> list[np.ndarray]:
+    """Medial-axis BRANCH decomposition of a waterway polygon
+    (owner 2026-07-12: a diameter-path arc over a large branched
+    canal network cuts corners at every junction and the carve is
+    refused -- the Keihin system stayed unwidened and got cut).
+
+    Voronoi diagram of the densified boundary -> keep edges inside
+    the polygon -> prune leaf spurs shorter than ``prune_m`` ->
+    concatenate degree-2 chains into one polyline per BRANCH.
+    Each branch is a simple centreline the corridor carve can
+    follow without shortcutting.
+    """
+    from collections import defaultdict
+
+    sx, sy = metric_scale
+    if abs(sx - sy) / max(sx, sy) > 0.35:
+        raise ValueError("metric_scale too anisotropic; project first")
+    scale = 0.5 * (sx + sy)
+    dens = density_m / scale
+    boundary = poly.boundary
+    n_pts = max(int(boundary.length / dens), 8)
+    samples = [boundary.interpolate(t, normalized=True)
+               for t in np.linspace(0.0, 1.0, n_pts,
+                                    endpoint=False)]
+    from shapely.ops import voronoi_diagram as _voronoi
+    vor = _voronoi(shapely.MultiPoint(samples), edges=True)
+    inner = poly.buffer(-0.02 * dens)
+    segs = []
+    for g in getattr(vor, "geoms", [vor]):
+        for ls in getattr(g, "geoms", [g]):
+            c = np.asarray(ls.coords)
+            for k in range(len(c) - 1):
+                seg = shapely.LineString(c[k:k + 2])
+                if inner.covers(seg):
+                    segs.append((tuple(np.round(c[k], 8)),
+                                 tuple(np.round(c[k + 1], 8))))
+    if not segs:
+        return []
+    adj = defaultdict(set)
+    for u, v in segs:
+        if u != v:
+            adj[u].add(v)
+            adj[v].add(u)
+
+    def _dist(u, v):
+        return float(np.hypot((u[0] - v[0]) * sx,
+                              (u[1] - v[1]) * sy))
+
+    # prune short leaf spurs (Voronoi noise toward the banks)
+    changed = True
+    while changed:
+        changed = False
+        for u in [u for u in list(adj) if len(adj[u]) == 1]:
+            path = [u]
+            v = next(iter(adj[u]))
+            plen = _dist(u, v)
+            while len(adj[v]) == 2 and plen < prune_m / scale * 1.0:
+                nxt = [w for w in adj[v] if w != path[-1]]
+                if not nxt:
+                    break
+                path.append(v)
+                plen += _dist(v, nxt[0])
+                v = nxt[0]
+            if plen < prune_m / scale:
+                for k in range(len(path)):
+                    a = path[k]
+                    for w in list(adj[a]):
+                        adj[w].discard(a)
+                    adj.pop(a, None)
+                changed = True
+
+    # branches = simple chains between nodes of degree != 2
+    ends = [u for u in adj if len(adj[u]) != 2]
+    seen_edges = set()
+    branches = []
+
+    def _walk(u, v):
+        path = [u, v]
+        while len(adj[v]) == 2:
+            nxt = [w for w in adj[v] if w != path[-2]]
+            if not nxt or nxt[0] == path[-1]:
+                break
+            v = nxt[0]
+            path.append(v)
+            if len(adj[v]) != 2:
+                break
+        return path
+
+    for u in ends:
+        for v in adj[u]:
+            key = (u, v)
+            if key in seen_edges:
+                continue
+            path = _walk(u, v)
+            for k in range(len(path) - 1):
+                seen_edges.add((path[k], path[k + 1]))
+                seen_edges.add((path[k + 1], path[k]))
+            branches.append(np.asarray(path, dtype=float))
+    # isolated loops (all degree 2): walk them once
+    for u in list(adj):
+        if len(adj[u]) == 2:
+            v = next(iter(adj[u]))
+            if (u, v) not in seen_edges:
+                path = _walk(u, v)
+                for k in range(len(path) - 1):
+                    seen_edges.add((path[k], path[k + 1]))
+                    seen_edges.add((path[k + 1], path[k]))
+                branches.append(np.asarray(path, dtype=float))
+    return [b for b in branches
+            if len(b) >= 2
+            and shapely.LineString(b).length * scale >= prune_m]
 
 
 def snap_arc_to_channel(

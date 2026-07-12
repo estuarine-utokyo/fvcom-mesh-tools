@@ -418,10 +418,18 @@ def split_choke_edges(
     for ob in mesh.open_boundaries:
         obc.update(int(v) for v in np.asarray(ob))
 
-    def _hops(a, b, max_hops=3):
+    def _hops(a, b, max_hops=3, skip_direct=False):
+        """Boundary-graph hop distance a->b; ``skip_direct``
+        ignores the immediate a-b edge itself (needed when the
+        candidate IS a boundary edge, e.g. the terminal wedge of
+        a carved corridor)."""
         seen = {a}
-        front = {a}
-        for hop in range(1, max_hops + 1):
+        first = badj[a] - ({b} if skip_direct else set())
+        front = set(first) - seen
+        if b in front:
+            return 1
+        seen |= front
+        for hop in range(2, max_hops + 1):
             front = set().union(*(badj[v] for v in front)) - seen
             if b in front:
                 return hop
@@ -435,15 +443,30 @@ def split_choke_edges(
     replaced: dict[int, list[list[int]]] = {}
     used_cells: set[int] = set()
     split_edges = []
-    for a, b in uq[ct == 2]:
+    for (a, b), nshare in zip(uq, ct):
         a, b = int(a), int(b)
         if not (bnode[a] and bnode[b]) or a in obc or b in obc:
             continue
-        if _hops(a, b) is not None:
-            continue
         cells = edge_cells[(a, b)]
-        if len(cells) != 2 or used_cells & set(cells):
+        if len(cells) != int(nshare) or used_cells & set(cells):
             continue
+        if nshare == 1:
+            # BOUNDARY edges: excluding the edge itself from the
+            # hop test qualifies nearly every coastline edge (the
+            # only alternative boundary path is the whole loop --
+            # 346 bogus splits, run 6186463). Restrict to the
+            # TERMINAL-WEDGE signature: single all-boundary cell
+            # whose spanning edge is clearly its longest side.
+            tri = [int(x) for x in els[cells[0]]]
+            w0 = [v for v in tri if v not in (a, b)][0]
+            e_ab = float(np.hypot(*(nodes[a] - nodes[b])))
+            e_aw = float(np.hypot(*(nodes[a] - nodes[w0])))
+            e_bw = float(np.hypot(*(nodes[b] - nodes[w0])))
+            if e_ab < 1.3 * 0.5 * (e_aw + e_bw):
+                continue
+        else:
+            if _hops(a, b) is not None:
+                continue
 
         # QUALITY GATE (run 6185030: blind midpoint splits made 16
         # C1 violations): search the split fraction that maximises

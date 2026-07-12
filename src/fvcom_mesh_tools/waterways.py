@@ -38,6 +38,7 @@ from shapely.ops import unary_union
 from fvcom_mesh_tools.channel_arcs import (
     arc_from_points,
     carve_channel_corridor,
+    skeleton_branches,
     snap_arc_to_channel,
 )
 
@@ -307,7 +308,7 @@ def apply_waterway_policy(
     widen_rows: float = 2.0,
     min_gap_m: float = 150.0,
     h_grade_per_m: float = 0.0,
-    arc_retry: str = "largest-piece",
+    arc_retry: str = "skeleton",
     close_blocked: bool = True,
 ) -> tuple[Any, dict[str, Any]]:
     """Execute the detected actions: KEEP -> carve the corridor to
@@ -320,10 +321,10 @@ def apply_waterway_policy(
     already ~h + grade*175, and a target based on bare ``h``
     realises only ~1.6 rows.
 
-    A keep whose carve is refused is retried once with an arc from
-    its LARGEST single corridor piece (``arc_retry`` =
-    "largest-piece"; diameter paths over BRANCHED networks cut
-    corners); the retry is recorded on the record. Still refused
+    A keep whose carve is refused is retried with a MEDIAL-AXIS
+    branch decomposition (``arc_retry`` = "skeleton"): each simple
+    branch is snapped and carved on its own, so junction
+    shortcuts cannot occur; the retry is recorded. Still refused
     -> BLOCKED, and with ``close_blocked=True`` (owner rule
     2026-07-12: a channel that cannot be made two rows wide must
     not be meshed at all) the network is FILLED like a close --
@@ -387,41 +388,62 @@ def apply_waterway_policy(
                 info["kept"] += 1
                 info["land_removed_m2"] += ci["land_removed_m2"]
                 rec["w_used"] = w_used
-            except RuntimeError:
+            except RuntimeError as e:
+                # SKELETON retry (owner 2026-07-12, Keihin cut):
+                # one diameter-path arc over a BRANCHED network
+                # shortcuts at every junction and the carve is
+                # refused. Decompose the network into medial-axis
+                # branches and carve each simple branch alone.
                 retried = False
-                if (arc_retry == "largest-piece"
-                        and rec.get("main_piece") is not None):
+                unwidenable = ("two rows are not attainable"
+                               in str(e))
+                if arc_retry == "skeleton" and not unwidenable:
+                    done = []
+                    fails = []
                     try:
-                        pts = _interior_points(
-                            rec["main_piece"],
-                            0.35 * h_mesh_m / scale)
-                        guide = arc_from_points(
-                            np.column_stack(
-                                [pts[:, 0] * sx / scale,
-                                 pts[:, 1] * sy / scale]),
-                            smooth_passes=2)
-                        guide = np.column_stack(
-                            [guide[:, 0] * scale / sx,
-                             guide[:, 1] * scale / sy])
-                        snap = snap_arc_to_channel(
-                            land_union, guide,
+                        brs = skeleton_branches(
+                            rec["geometry"].buffer(0),
                             metric_scale=metric_scale,
-                            step_m=0.35 * h_mesh_m,
-                            max_halfwidth_m=2.5 * h_mesh_m)
-                        new_land, ci, w_used = _carve(
-                            new_land, snap["arc"],
-                            snap["width_carve_m"])
-                        rec["arc"] = snap["arc"]
-                        rec["width_m"] = snap["width_carve_m"]
-                        rec["w_used"] = w_used
-                        rec["retry"] = "largest-piece"
+                            density_m=0.15 * h_mesh_m,
+                            prune_m=0.7 * h_mesh_m)
+                    except (RuntimeError, ValueError) as e2:
+                        brs = []
+                        fails.append(str(e2)[:90])
+                    for br in brs:
+                        try:
+                            snap = snap_arc_to_channel(
+                                land_union, br,
+                                metric_scale=metric_scale,
+                                step_m=0.35 * h_mesh_m,
+                                max_halfwidth_m=2.5 * h_mesh_m)
+                            new_land, ci, w_used = _carve(
+                                new_land, snap["arc"],
+                                snap["width_carve_m"],
+                                tol_extra_m=br_m + 30.0)
+                            done.append((snap["arc"], w_used))
+                            info["land_removed_m2"] += (
+                                ci["land_removed_m2"])
+                        except (RuntimeError, ValueError) as e2:
+                            fails.append(str(e2)[:90])
+                    if done:
+                        li = int(np.argmax(
+                            [shapely.LineString(a2).length
+                             for a2, _ in done]))
+                        rec["arc"] = done[li][0]
+                        rec["width_m"] = done[li][1]
+                        rec["w_used"] = done[li][1]
+                        rec["arcs_done"] = done
+                        rec["retry"] = (f"skeleton {len(done)}/"
+                                        f"{len(brs)} branches")
+                        if fails:
+                            rec["branch_failures"] = fails
                         info["kept"] += 1
                         info["retried"] += 1
-                        info["land_removed_m2"] += (
-                            ci["land_removed_m2"])
                         retried = True
-                    except (RuntimeError, ValueError) as e2:
-                        e = e2
+                    elif fails:
+                        e = RuntimeError(
+                            "skeleton retry failed: "
+                            + "; ".join(fails[:3]))
                 if not retried:
                     rec["action"] = "blocked"
                     rec["reason"] = str(e)
@@ -484,10 +506,12 @@ def apply_waterway_policy(
             # widened (the arc does not reach it) and would mesh
             # one cell wide or terminate the mesh in a jagged
             # wedge (element 4797, run 6185775). Fill it.
-            import shapely as _sh
-            tube = _sh.LineString(
-                np.asarray(rec["arc"], float)).buffer(
-                0.55 * float(np.max(rec["w_used"])) / scale)
+            pairs_aw = rec.get("arcs_done") or [
+                (rec["arc"], rec["w_used"])]
+            tube = unary_union([
+                shapely.LineString(np.asarray(a2, float)).buffer(
+                    0.55 * float(np.max(w2)) / scale)
+                for a2, w2 in pairs_aw])
             n_stub = 0
             for pz in _polys(rec["geometry"].difference(tube)):
                 wz = 2.0 * pz.area / max(pz.boundary.length,

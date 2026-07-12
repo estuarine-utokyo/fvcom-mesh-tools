@@ -235,3 +235,24 @@ def test_split_choke_edges_doubles_the_section():
                 - (p[t[:, 2], 0] - p[t[:, 0], 0])
                 * (p[t[:, 1], 1] - p[t[:, 0], 1]))
     assert (ar > 0).all()
+
+
+def test_skeleton_branches_decomposes_L_network():
+    from fvcom_mesh_tools.channel_arcs import skeleton_branches
+
+    # L-shaped canal, 300 m wide: horizontal 6 km + vertical 3 km.
+    # A diameter-path arc would cut the inner corner; the skeleton
+    # must return simple branches that stay INSIDE the water.
+    L = box(8_000.0, 4_850.0, 14_000.0, 5_150.0).union(
+        box(13_700.0, 5_150.0, 14_000.0, 8_000.0)).buffer(0)
+    branches = skeleton_branches(L, metric_scale=SCALE,
+                                 density_m=60.0, prune_m=250.0)
+    assert len(branches) >= 1
+    total = 0.0
+    for br in branches:
+        ls = shapely.LineString(br)
+        total += ls.length
+        # every branch centreline stays inside the water polygon
+        assert L.buffer(5.0).covers(ls)
+    # combined length ~ (6000 - 150) + (2850) within 25 %
+    assert 0.75 * 8_700.0 < total < 1.25 * 8_700.0
