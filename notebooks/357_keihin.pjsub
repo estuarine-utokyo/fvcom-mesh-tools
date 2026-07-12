@@ -1,0 +1,12 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=00:15:00
+#PJM -j
+#PJM -X
+set -euo pipefail
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+cd "${HOME}/Github/fvcom-mesh-tools"
+"${HOME}/mambaforge/envs/oceanmesh-bench/bin/python" notebooks/357_keihin_zoom.py

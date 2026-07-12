@@ -95,13 +95,48 @@ if len(missing):
                     (prs[:, 0], prs[:, 1])),
                    shape=(len(Ts), len(Ts)))
     _, lab = connected_components(g + g.T, directed=False)
+    # adjacency lists of the sample graph for the DETOUR test
+    from collections import defaultdict, deque
+    adj = defaultdict(list)
+    for a, b in pairs_s:
+        adj[int(a)].append(int(b))
+        adj[int(b)].append(int(a))
+    mset = set(int(i) for i in missing)
+
+    def detour_cut(cl):
+        """A cluster on a THROUGH waterway does not disconnect
+        the sample graph when removed (the loop closes around),
+        so the component test is blind to it. Instead: if the
+        cluster's covered neighbours end up farther apart than
+        max(20, 8 x cluster size) hops in the graph WITHOUT the
+        cluster, the waterway is functionally cut."""
+        clset = set(cl)
+        nbrs = sorted({j for i in cl for j in adj[i]
+                       if j not in mset})
+        if len(nbrs) < 2:
+            return False
+        limit = max(20, 8 * len(cl))
+        src = nbrs[0]
+        dist = {src: 0}
+        q = deque([src])
+        while q:
+            v = q.popleft()
+            if dist[v] >= limit:
+                continue
+            for w2 in adj[v]:
+                if w2 in clset or w2 in dist:
+                    continue
+                dist[w2] = dist[v] + 1
+                q.append(w2)
+        return any(n2 not in dist for n2 in nbrs[1:])
+
     for c in set(int(lab[i]) for i in missing):
         cl = [i for i in missing if lab[i] == c]
         nafter, _ = components_without(pairs_s, len(Ts), cl)
         cc = cent_s[cl].mean(axis=0)
-        rec = (len(cl), float(cc[0]), float(cc[1]),
-               nafter > n0)
-        if nafter > n0:
+        cut = nafter > n0 or detour_cut(cl)
+        rec = (len(cl), float(cc[0]), float(cc[1]), cut)
+        if cut:
             severed.append(rec)
         print(f"[conn]   missing x{rec[0]} at ({rec[1]:.4f}, "
               f"{rec[2]:.4f}) severs_sample={rec[3]}", flush=True)

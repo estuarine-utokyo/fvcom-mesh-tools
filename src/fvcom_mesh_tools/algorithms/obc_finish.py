@@ -464,8 +464,62 @@ def split_choke_edges(
                         np.arccos(np.clip(c3, -1, 1))))
             return worst
 
-        best = (None, -1.0)
+        def _tri_area(t3, pos):
+            q = np.array([pos[v] for v in t3])
+            return 0.5 * abs(
+                (q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1])
+                - (q[2, 0] - q[0, 0]) * (q[1, 1] - q[0, 1]))
+
+        def _c4_pred(frac):
+            """Worst predicted area-change ratio of the 4 sub-
+            triangles against their EXTERNAL neighbours and the
+            internal split seams (QA C4 definition)."""
+            worst = 0.0
+            for ci in cells:
+                tri = [int(x) for x in els[ci]]
+                w3 = [v for v in tri if v not in (a, b)][0]
+                q = nodes[[tri[0], tri[1], tri[2]]]
+                A = 0.5 * abs(
+                    (q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1])
+                    - (q[2, 0] - q[0, 0]) * (q[1, 1] - q[0, 1]))
+                subs = {(a, w3): frac * A,
+                        (b, w3): (1 - frac) * A}
+                worst = max(worst, abs(2 * frac - 1)
+                            / max(frac, 1 - frac))
+                for (v1, v2), As in subs.items():
+                    lo3, hi3 = sorted((v1, v2))
+                    for cj in edge_cells[(lo3, hi3)]:
+                        if cj == ci:
+                            continue
+                        tj = [int(x) for x in els[cj]]
+                        qj = nodes[[tj[0], tj[1], tj[2]]]
+                        Aj = 0.5 * abs(
+                            (qj[1, 0] - qj[0, 0])
+                            * (qj[2, 1] - qj[0, 1])
+                            - (qj[2, 0] - qj[0, 0])
+                            * (qj[1, 1] - qj[0, 1]))
+                        worst = max(worst, abs(As - Aj)
+                                    / max(As, Aj, 1e-300))
+            return worst
+
+        # CURRENT quality of the un-split pair (a split that
+        # strictly improves an already-violating site is accepted
+        # even when the absolute targets stay out of reach --
+        # element 4797, run 6185775: the end-wedge cell violates
+        # C4 at 0.71 and the absolute-only gate refused to touch
+        # it)
+        cur_pos = {}
+        cur_tris = []
+        for ci in cells:
+            tri = [int(x) for x in els[ci]]
+            for v in tri:
+                cur_pos[v] = nodes[v]
+            cur_tris.append(tri)
+        cur_ma = _min_angle(cur_tris, cur_pos)
+        cur_c4 = _c4_pred(1.0 - 1e-9)   # frac->1: subs ~ originals
+        best = (None, -1.0, np.inf)
         for frac in (0.5, 0.4, 0.6, 0.35, 0.65):
+            c4p = _c4_pred(frac)
             mpos = (1 - frac) * nodes[a] + frac * nodes[b]
             pos = {a: nodes[a], b: nodes[b], -1: mpos}
             tris4 = []
@@ -479,8 +533,12 @@ def split_choke_edges(
                               for v in tri])
             ma = _min_angle(tris4, pos)
             if ma > best[1]:
-                best = (frac, ma)
-        if best[1] < 28.0:
+                best = (frac, ma, c4p)
+        ok_abs = best[1] >= 30.0 and best[2] <= 0.55
+        ok_impr = (max(cur_c4, 0.0) > 0.5
+                   and best[2] < cur_c4 - 0.02
+                   and best[1] >= min(30.0, cur_ma - 1.0))
+        if best[0] is None or not (ok_abs or ok_impr):
             continue
         frac = best[0]
         mid = n_nodes + sum(len(x) for x in new_nodes[1:])

@@ -128,19 +128,44 @@ def detect_waterways(
     narrow_parts = [N for N in _polys(water.difference(wide))
                     if N.area >= 0.05 * a_cell]
 
-    # NETWORKS: corridors + small pockets that touch each other
+    # NETWORKS: corridors + small pockets that touch each other,
+    # PLUS bridge-gap chaining (owner 2026-07-12, Daishi canal
+    # severance): OSM draws bridges/roads as land strips that chop
+    # a canal into disjoint pieces, each of which then classifies
+    # as a dead-end stub. Pieces whose gap is a SHORT land neck
+    # (<= 0.7 h) with end-to-end facing (small shared frontage --
+    # two PARALLEL canals across a land strip share a long
+    # frontage and must NOT chain) belong to one waterway; the
+    # gap is recorded and carved open for kept networks.
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
     eps = 0.02 * h
+    bridge_gap = 0.7 * h
     items = ([("n", N) for N in narrow_parts]
              + [("s", wide_parts[k]) for k in small])
     n_it = len(items)
     rows, cols = [], []
+    bridge_lines: dict[tuple[int, int], Any] = {}
     for i in range(n_it):
         for j in range(i + 1, n_it):
-            if items[i][1].distance(items[j][1]) < eps:
+            d = items[i][1].distance(items[j][1])
+            if d < eps:
                 rows.append(i)
                 cols.append(j)
+            elif (d < bridge_gap
+                  and items[i][0] == "n" and items[j][0] == "n"):
+                gi, gj = items[i][1], items[j][1]
+                front = gi.boundary.intersection(
+                    gj.buffer(d + 0.1 * h)).length
+                w_i = 2.0 * gi.area / max(gi.boundary.length,
+                                          1e-9)
+                w_j = 2.0 * gj.area / max(gj.boundary.length,
+                                          1e-9)
+                if front <= 3.0 * max(w_i, w_j, 0.3 * h):
+                    rows.append(i)
+                    cols.append(j)
+                    bridge_lines[(i, j)] = shapely.shortest_line(
+                        gi, gj)
     if n_it:
         g2 = coo_matrix((np.ones(len(rows)), (rows, cols)),
                         shape=(n_it, n_it))
@@ -150,8 +175,12 @@ def detect_waterways(
 
     records: list[dict[str, Any]] = []
     for net in range(lab.max() + 1 if n_it else 0):
-        geoms = [items[i][1] for i in np.where(lab == net)[0]]
+        members = np.where(lab == net)[0]
+        geoms = [items[i][1] for i in members]
         union = unary_union(geoms)
+        mset = set(int(v) for v in members)
+        net_bridges = [ln for (i, j), ln in bridge_lines.items()
+                       if i in mset and j in mset]
         hull_len = float(union.minimum_rotated_rectangle.length) / 2
         extent_cells = hull_len / h
         # anchors on WIDE water
@@ -177,8 +206,15 @@ def detect_waterways(
                 d_arc = abs(sA - sB)
                 d_arc = min(d_arc, ring.length - d_arc)
                 through = d_arc > shortcut_ratio * d_thru
-        connector = through or (len(pieces) >= 1
-                                and bool(touches_big))
+        # ANCHOR rule (owner 2026-07-12, Keihin canal severance):
+        # canal systems are chains main - corridor - big pocket -
+        # corridor - big pocket ...; a link between two big
+        # anchors never touches the main body directly, yet
+        # closing it cuts the chain. Any network touching >= 2
+        # anchors (main and/or big pockets) is a CONNECTOR.
+        n_anchors = (1 if len(pieces) >= 1 else 0) \
+            + len(touches_big)
+        connector = through or n_anchors >= 2
         worthy = extent_cells >= min_extent_cells
         # PORT-CANAL rule (goto2023 design, resolution-relative):
         # a dead-end waterway of substantial-but-BOUNDED extent
@@ -218,6 +254,7 @@ def detect_waterways(
             "land_frac": round(land_frac, 2),
             "mean_width_cells": round(float(mean_w_cells), 2),
             "main_piece": main_piece,
+            "bridges": net_bridges,
             "extent_cells": round(float(extent_cells), 1),
             "basin_cells": round(float(basin_cells), 1),
             "geometry": union,
@@ -283,12 +320,13 @@ def apply_waterway_policy(
     decision stays visible."""
     new_land = land_union
     info = {"kept": 0, "closed": 0, "ignored": 0, "blocked": [],
-            "retried": 0, "land_removed_m2": 0.0}
+            "retried": 0, "bridges_opened": 0, "stub_fills": 0,
+            "land_removed_m2": 0.0}
     fills = []
     sx, sy = metric_scale
     scale = 0.5 * (sx + sy)
 
-    def _carve(base, arc, widths):
+    def _carve(base, arc, widths, tol_extra_m=0.0):
         w_nat = np.asarray(widths, float)
         target = 0.875 * widen_rows * (
             h_mesh_m + h_grade_per_m * w_nat / 2.0)
@@ -296,7 +334,7 @@ def apply_waterway_policy(
         cand, ci = carve_channel_corridor(
             base, arc, w, min_gap_m=min_gap_m,
             metric_scale=metric_scale, domain_poly=domain_poly,
-            arc_on_land_tol_m=0.3 * h_mesh_m,
+            arc_on_land_tol_m=0.3 * h_mesh_m + tol_extra_m,
             carve_crossings=False)
         # ACHIEVED-width check (owner 2026-07-12: a channel that
         # cannot actually be made ~two rows wide must NOT be
@@ -316,7 +354,7 @@ def apply_waterway_policy(
                 f"{narrow_frac:.0%} of the arc (min "
                 f"{np.min(wa):.0f} m): two rows are not "
                 "attainable under the barrier constraints")
-        return cand, ci
+        return cand, ci, w
 
     for rec in records:
         if rec["action"] == "ignore":
@@ -325,12 +363,19 @@ def apply_waterway_policy(
             fills.append(rec["geometry"])
             info["closed"] += 1
         elif rec["action"] == "keep":
+            # a bridge-chained network's arc legitimately crosses
+            # the bridge strips: widen the crossing tolerance by
+            # their total length (they are opened separately)
+            br_m = sum(float(ln.length) for ln in
+                       rec.get("bridges") or []) * scale
             try:
-                new_land, ci = _carve(new_land, rec["arc"],
-                                      rec["width_m"])
+                new_land, ci, w_used = _carve(
+                    new_land, rec["arc"], rec["width_m"],
+                    tol_extra_m=br_m + 30.0)
                 info["kept"] += 1
                 info["land_removed_m2"] += ci["land_removed_m2"]
-            except RuntimeError as e:
+                rec["w_used"] = w_used
+            except RuntimeError:
                 retried = False
                 if (arc_retry == "largest-piece"
                         and rec.get("main_piece") is not None):
@@ -351,18 +396,19 @@ def apply_waterway_policy(
                             metric_scale=metric_scale,
                             step_m=0.35 * h_mesh_m,
                             max_halfwidth_m=2.5 * h_mesh_m)
-                        new_land, ci = _carve(
+                        new_land, ci, w_used = _carve(
                             new_land, snap["arc"],
                             snap["width_carve_m"])
                         rec["arc"] = snap["arc"]
                         rec["width_m"] = snap["width_carve_m"]
+                        rec["w_used"] = w_used
                         rec["retry"] = "largest-piece"
                         info["kept"] += 1
                         info["retried"] += 1
                         info["land_removed_m2"] += (
                             ci["land_removed_m2"])
                         retried = True
-                    except RuntimeError as e2:
+                    except (RuntimeError, ValueError) as e2:
                         e = e2
                 if not retried:
                     rec["action"] = "blocked"
@@ -385,6 +431,61 @@ def apply_waterway_policy(
                             or rec["extent_cells"] < 15.0):
                         fills.append(rec["geometry"])
                         rec["closed"] = True
+        if rec["action"] == "keep" and rec.get("bridges"):
+            # open the OSM bridge strips (roads drawn as land
+            # across the canal, Daishi-canal severance): a short
+            # TRANSVERSAL carve with crossings allowed. Both
+            # flanks carry the mini-arc, so lateral local-
+            # component protection still guards everything else.
+            opened = 0
+            for ln in rec["bridges"]:
+                pts_b = np.asarray(ln.coords, float)
+                d = pts_b[-1] - pts_b[0]
+                if np.hypot(*d) < 1e-12:
+                    continue
+                u = d / np.hypot(*d)
+                ext = 0.4 * h_mesh_m / scale
+                arc_b = np.vstack([pts_b[0] - u * ext,
+                                   pts_b[-1] + u * ext])
+                try:
+                    new_land, cb = carve_channel_corridor(
+                        new_land, arc_b,
+                        0.875 * widen_rows * h_mesh_m,
+                        min_gap_m=min_gap_m,
+                        metric_scale=metric_scale,
+                        domain_poly=domain_poly,
+                        arc_on_land_tol_m=float(ln.length)
+                        * scale + h_mesh_m,
+                        carve_crossings=True)
+                    opened += 1
+                    info["land_removed_m2"] += \
+                        cb["land_removed_m2"]
+                except RuntimeError as e3:
+                    rec.setdefault("bridge_failures",
+                                   []).append(str(e3))
+            rec["bridges_opened"] = opened
+            info["bridges_opened"] += opened
+        if rec["action"] == "keep" and rec.get("w_used") is not None:
+            # STUB HEADS (owner do-not-mesh rule applied to kept
+            # networks): residual network water OUTSIDE the arc
+            # corridor that stays narrower than 0.5 h cannot be
+            # widened (the arc does not reach it) and would mesh
+            # one cell wide or terminate the mesh in a jagged
+            # wedge (element 4797, run 6185775). Fill it.
+            import shapely as _sh
+            tube = _sh.LineString(
+                np.asarray(rec["arc"], float)).buffer(
+                0.55 * float(np.max(rec["w_used"])) / scale)
+            n_stub = 0
+            for pz in _polys(rec["geometry"].difference(tube)):
+                wz = 2.0 * pz.area / max(pz.boundary.length,
+                                         1e-9) * scale
+                if wz < 0.5 * h_mesh_m:
+                    fills.append(pz)
+                    n_stub += 1
+            if n_stub:
+                rec["stub_fills"] = n_stub
+                info["stub_fills"] += n_stub
         if rec["action"] == "blocked":
             info["blocked"].append(rec)
     if fills:

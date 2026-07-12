@@ -139,6 +139,63 @@ class TestNetworksAndSafety:
         assert new_land.intersection(
             box(8600, 4650, 11400, 4850)).area > 0
 
+    def test_big_pocket_chain_links_are_kept(self):
+        # Keihin-canal pattern: main - slot - BIG pocket - slot -
+        # BIG pocket. The second slot touches no main water, only
+        # two big anchors -- it must be KEPT (its closure severed
+        # the real Keihin canal, run 6185186).
+        land = box(8000, 2000, 20000, 8000).difference(unary_union([
+            box(8000, 4850, 10000, 5150),      # slot from main
+            box(10000, 4300, 11200, 5700),     # big pocket A
+            box(11200, 4850, 13000, 5150),     # link slot
+            box(13000, 4300, 14200, 5700),     # big pocket B
+        ]))
+        recs, new_land, info = _run(land)
+        w = _water(new_land)
+        # the whole chain stays open end to end
+        for x in (9000, 10600, 12000, 13600):
+            assert w.contains(Point(x, 5000)), x
+        # link slots widened, not closed
+        closed_centers = [r["geometry"].representative_point()
+                          for r in recs if r["action"] == "close"]
+        assert not any(11200 < c.x < 13000 and 4700 < c.y < 5300
+                       for c in closed_centers)
+
+    def test_bridge_chained_canal_kept_and_opened(self):
+        # Daishi-canal pattern: a through canal chopped by a
+        # 120 m road strip drawn as land. The two halves must
+        # chain into ONE through network and the bridge strip
+        # must be carved open.
+        land = unary_union([
+            box(8000, 2000, 12000, 4850),
+            box(8000, 5150, 12000, 8000),
+        ]).union(box(9900, 4850, 10020, 5150))   # bridge strip
+        recs, new_land, info = _run(land)
+        assert info["kept"] == 1 and info["closed"] == 0
+        assert info["bridges_opened"] >= 1
+        w = _water(new_land)
+        # continuous end to end THROUGH the ex-bridge
+        for x in (8700, 9960, 11000):
+            assert w.contains(Point(x, 5000)), x
+
+    def test_parallel_canals_do_not_chain_across_land(self):
+        # two PARALLEL dead-end slots 200 m apart share a long
+        # frontage: they must NOT chain into one fake through
+        # network (frontage gate), and no bridge may be opened
+        # between them
+        land = box(8000, 2000, 20000, 8000).difference(unary_union([
+            box(8000, 4850, 11000, 5150),      # slot A (dead end)
+            box(8000, 5350, 11000, 5650),      # slot B parallel
+        ]))
+        recs, new_land, info = _run(land)
+        assert info["bridges_opened"] == 0
+        # A and B stay separate records, never one network
+        boxA, boxB = box(8500, 4850, 10500, 5150), \
+            box(8500, 5350, 10500, 5650)
+        for r in recs:
+            g = r["geometry"]
+            assert not (g.intersects(boxA) and g.intersects(boxB))
+
     def test_phantom_water_ignored(self):
         land = box(8000, 0, 20000, 10000).difference(
             box(15000, 2000, 18000, 4000))

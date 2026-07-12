@@ -12,7 +12,7 @@ from fvcom_mesh_tools.plotting import add_atlas_grid, use_readable_style
 
 use_readable_style()
 tr = Transformer.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
-CX, CY = tr.transform(420050.0, 3936150.0)
+CX, CY = tr.transform(420040.0, 3936550.0)
 m = read_fort14("outputs/sample_repro/sample_repro_final.14")
 lon, lat = tr.transform(m.nodes[:, 0], m.nodes[:, 1])
 T = m.elements
@@ -27,7 +27,7 @@ for ax, (ttl, ld) in zip(axes, [("original OSM land", land0),
     gpd.GeoSeries([ld], crs="EPSG:4326").plot(
         ax=ax, color="0.9", edgecolor="0.5", lw=0.6, zorder=1)
     ax.triplot(lon, lat, T, lw=0.6, color="steelblue", zorder=3)
-    for e in (3894 - 1, 3893 - 1, 5913 - 1):
+    for e in (4791 - 1, 4796 - 1, 4797 - 1):
         ring = np.column_stack([lon, lat])[np.append(T[e], T[e][0])]
         ax.plot(ring[:, 0], ring[:, 1], color="crimson", lw=1.6,
                 zorder=4)

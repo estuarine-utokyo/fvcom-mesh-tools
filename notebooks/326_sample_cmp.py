@@ -6,7 +6,13 @@ import numpy as np
 os.environ.setdefault("MPLBACKEND", "Agg")
 import matplotlib.pyplot as plt
 from pyproj import Transformer
-from fvcom_mesh_tools.plotting import _add_coast, add_atlas_grid
+from fvcom_mesh_tools.plotting import (
+    _add_coast,
+    add_atlas_grid,
+    use_readable_style,
+)
+
+use_readable_style()
 
 DEG = 1.0 / 111e3
 OUT = "outputs/figures"
@@ -26,13 +32,19 @@ obc_s = [int(l.split()[1]) - 1 for l in open(os.path.expanduser(
 tr = Transformer.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
 lon_s, lat_s = tr.transform(Ps[:, 0], Ps[:, 1])
 
-# --- ours (lonlat) ---
-P = np.load("outputs/sample_repro/p.npy")
-T = np.load("outputs/sample_repro/t.npy")
-# open-boundary node strings from the fort.14
-obc_o = []
-with open("outputs/sample_repro/sample_repro.14") as f:
+# --- ours: the FINISHED mesh (UTM54N fort.14 -> lonlat) ---
+with open("outputs/sample_repro/sample_repro_final.14") as f:
     lines = f.read().split("\n")
+ne_o, nn_o = map(int, lines[1].split()[:2])
+dat = np.array([l.split()[1:4] for l in lines[2:2 + nn_o]], float)
+Pm_o = dat[:, :2]
+T = np.array([[int(w) for w in lines[2 + nn_o + i].split()[2:5]]
+              for i in range(ne_o)]) - 1
+tr_o = Transformer.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
+_lon_o, _lat_o = tr_o.transform(Pm_o[:, 0], Pm_o[:, 1])
+P = np.column_stack([_lon_o, _lat_o])
+# open-boundary node strings
+obc_o = []
 i = 2 + int(lines[1].split()[0]) + int(lines[1].split()[1])
 nope = int(lines[i].split()[0]); i += 2
 for _ in range(nope):
@@ -63,7 +75,8 @@ for name, (x0, y0, x1, y1, lw) in views.items():
         ax.set_xlim(x0, x1); ax.set_ylim(y0, y1)
         add_atlas_grid(ax, crs="EPSG:4326")
         ax.set_aspect(1 / np.cos(np.deg2rad(0.5 * (y0 + y1))))
-        ax.legend(loc="lower right")
+        ax.legend(loc="lower right",
+                  bbox_to_anchor=(0.985, 0.045))
         ax.set_title(f"NP={np_:,} NE={ne_:,}")
     axes[0].set_title("goto2023 SAMPLE  " + axes[0].get_title())
     axes[1].set_title("repro (faithful stack)  " + axes[1].get_title())
@@ -153,8 +166,7 @@ from oceanmesh import calc_cfl
 dep_s = np.loadtxt(os.path.expanduser(
     '~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep.dat'),
     skiprows=1)[:, 2]
-dep_o = np.array([float(l.split()[3])
-                  for l in lines[2:2 + int(lines[1].split()[1])]])
+dep_o = dat[:, 2]
 DT = 18.0
 for tag, pts, tri, dep in [
         ("sample", np.column_stack([lon_s, lat_s]), Ts, dep_s),
@@ -164,4 +176,12 @@ for tag, pts, tri, dep in [
           f"{np.percentile(cr, [50, 90, 99]).round(3)} "
           f"max = {cr.max():.3f}  (n>0.5: {(cr > 0.5).sum()}, "
           f"n>0.6: {(cr > 0.6).sum()})", flush=True)
+# --- element quality (mean-ratio, metric coords) ---
+import sys as _s
+_s.path.insert(0, os.path.expanduser("~/Github/oceanmesh"))
+from oceanmesh.fix_mesh import simp_qual
+q1 = simp_qual(Ps, Ts)
+q2 = simp_qual(Pm_o, T)
+print(f"qual sample: min={q1.min():.3f} mean={q1.mean():.3f} | "
+      f"repro: min={q2.min():.3f} mean={q2.mean():.3f}", flush=True)
 print("[cmp] done", flush=True)
