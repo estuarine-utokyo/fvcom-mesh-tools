@@ -166,6 +166,12 @@ _cosw = float(np.cos(np.deg2rad(35.35)))
 for _ef in sorted(
         _Path("recipes/edits/sample_repro").glob("*.json")):
     _ed = _json.loads(_ef.read_text())
+    if _ed.get("type") == "land_patch":
+        import shapely.geometry as _sg
+        land = unary_union([land, _sg.shape(_ed["geometry"])])
+        print(f"[conn] breach reference: applied land_patch "
+              f"{_ed.get('id', _ef.stem)}", flush=True)
+        continue
     if _ed.get("type") == "water_patch":
         import shapely.geometry as _sg
         land = land.difference(_sg.shape(_ed["geometry"]))

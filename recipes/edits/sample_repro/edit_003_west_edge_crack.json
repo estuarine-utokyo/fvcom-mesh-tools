@@ -1,0 +1,9 @@
+{
+ "id": "edit003-west-crack",
+ "type": "land_patch",
+ "note": "Data-crack correction at the artificial WEST domain edge (139.60): the TAMA RIVER crosses the edge around lat 35.58-35.66; its upstream in-domain band is below the resolve width (policy-filled), and the leftover slivers pinned between the fill and the artificial edge meshed as 2.6-17 deg sliver cells (runs 6186561/6186667). Force the whole edge band to land; the sample-meshed lower Tama (downstream of ~139.68) is unaffected.",
+ "geometry": {"type": "Polygon", "coordinates": [[
+   [139.5985, 35.5780], [139.6175, 35.5780],
+   [139.6175, 35.6620], [139.5985, 35.6620],
+   [139.5985, 35.5780]]]}
+}

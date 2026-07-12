@@ -145,6 +145,8 @@ def skeleton_branches(
     while changed:
         changed = False
         for u in [u for u in list(adj) if len(adj[u]) == 1]:
+            if len(adj.get(u, ())) != 1:   # removed this sweep
+                continue
             path = [u]
             v = next(iter(adj[u]))
             plen = _dist(u, v)

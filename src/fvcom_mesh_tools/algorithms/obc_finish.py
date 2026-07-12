@@ -595,6 +595,125 @@ def split_choke_edges(
                              for a, b in split_edges]}
 
 
+def split_c4_edges(
+    mesh: Fort14Mesh,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Residual C4 fixer: for a neighbour pair whose area change
+    exceeds 0.5 after flips/polish, split the LARGER cell along
+    its longest non-shared edge (halving it fixes the ratio;
+    splitting the shared edge would preserve it). Quality-gated
+    like the choke splitter; one deterministic pass."""
+    import dataclasses
+    from collections import defaultdict
+
+    nodes, els, dep = mesh.nodes, mesh.elements, mesh.depths
+    ee = np.vstack([els[:, [0, 1]], els[:, [1, 2]],
+                    els[:, [2, 0]]])
+    ee.sort(axis=1)
+    edge_cells = defaultdict(list)
+    for irow, (a, b) in enumerate(ee):
+        edge_cells[(int(a), int(b))].append(irow % len(els))
+
+    def _area(ci):
+        q = nodes[els[ci]]
+        return 0.5 * abs(
+            (q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1])
+            - (q[2, 0] - q[0, 0]) * (q[1, 1] - q[0, 1]))
+
+    def _min_angle_tris(tris, pos):
+        worst = 180.0
+        for t3 in tris:
+            q = np.array([pos[v] for v in t3])
+            for k3 in range(3):
+                u = q[(k3 + 1) % 3] - q[k3]
+                v3 = q[(k3 + 2) % 3] - q[k3]
+                c3 = np.dot(u, v3) / (
+                    np.linalg.norm(u) * np.linalg.norm(v3)
+                    + 1e-300)
+                worst = min(worst, np.degrees(
+                    np.arccos(np.clip(c3, -1, 1))))
+        return worst
+
+    obc = set()
+    for ob in mesh.open_boundaries:
+        obc.update(int(v) for v in np.asarray(ob))
+    new_nodes, new_dep = [nodes], [dep]
+    replaced: dict[int, list[list[int]]] = {}
+    used: set[int] = set()
+    n_nodes = len(nodes)
+    n_split = 0
+    for (a, b), cells in list(edge_cells.items()):
+        if len(cells) != 2:
+            continue
+        A0, A1 = _area(cells[0]), _area(cells[1])
+        big, small = ((cells[0], cells[1]) if A0 >= A1
+                      else (cells[1], cells[0]))
+        Ab, As = max(A0, A1), min(A0, A1)
+        if abs(Ab - As) / max(Ab, 1e-300) <= 0.5:
+            continue
+        if used & {big, small}:
+            continue
+        tri = [int(x) for x in els[big]]
+        # longest edge of BIG that is not the shared edge
+        cand = []
+        for k in range(3):
+            u2, v2 = tri[k], tri[(k + 1) % 3]
+            if {u2, v2} == {a, b}:
+                continue
+            cand.append(((u2, v2),
+                         float(np.hypot(*(nodes[u2]
+                                          - nodes[v2])))))
+        (u2, v2), _len = max(cand, key=lambda t: t[1])
+        if u2 in obc or v2 in obc:
+            continue
+        w3 = [v for v in tri if v not in (u2, v2)][0]
+        mid = 0.5 * (nodes[u2] + nodes[v2])
+        pos = {u2: nodes[u2], v2: nodes[v2], w3: nodes[w3],
+               -1: mid}
+        t1 = [-1 if v == v2 else v for v in tri]
+        t2 = [-1 if v == u2 else v for v in tri]
+        if _min_angle_tris([t1, t2], pos) < 28.0:
+            continue
+        # the split must also help the OTHER side of (u2, v2)
+        others = [c for c in edge_cells[tuple(sorted((u2, v2)))]
+                  if c != big]
+        ok = True
+        for c2 in others:
+            Ao = _area(c2)
+            if abs(Ab / 2 - Ao) / max(Ab / 2, Ao, 1e-300) > 0.55:
+                ok = False
+        if not ok:
+            continue
+        midx = n_nodes + sum(len(x) for x in new_nodes[1:])
+        new_nodes.append(mid[None, :])
+        new_dep.append(np.array([0.5 * (dep[u2] + dep[v2])]))
+        t1 = [midx if v == v2 else v for v in tri]
+        t2 = [midx if v == u2 else v for v in tri]
+        replaced[big] = [t1, t2]
+        used.add(big)
+        # subdivide the neighbour across (u2,v2) too, so the new
+        # node stays conforming
+        for c2 in others:
+            tj = [int(x) for x in els[c2]]
+            replaced[c2] = [[midx if v == v2 else v for v in tj],
+                            [midx if v == u2 else v for v in tj]]
+            used.add(c2)
+        n_split += 1
+    if not n_split:
+        return mesh, {"split": 0}
+    out_els = []
+    for ci in range(len(els)):
+        if ci in replaced:
+            out_els.extend(replaced[ci])
+        else:
+            out_els.append([int(x) for x in els[ci]])
+    mesh2 = dataclasses.replace(
+        mesh, nodes=np.vstack(new_nodes),
+        depths=np.concatenate(new_dep),
+        elements=np.asarray(out_els, dtype=els.dtype))
+    return mesh2, {"split": n_split}
+
+
 def finish_obc_mesh(
     mesh: Fort14Mesh,
     *,
@@ -646,6 +765,7 @@ def finish_obc_mesh(
     # still be throttled to one bank-to-bank edge; insert the
     # midpoint so the section carries two cells, then polish.
     mesh, info["choke_split"] = split_choke_edges(mesh)
+    mesh, info["c4_split"] = split_c4_edges(mesh)
     # FINAL single-pass stochastic polish (seeded, OBC frozen):
     # widened-corridor geometry can leave a 1-2 element C1/C4 tail
     # that the earlier passes miss (element 3894, run 6184675).

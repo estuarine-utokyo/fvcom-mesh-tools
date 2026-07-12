@@ -89,7 +89,7 @@ def detect_waterways(
     big_deadend_cells: float = 6.0,
     max_canal_extent_cells: float = 15.0,
     min_canal_width_frac: float = 0.5,
-    min_resolve_width_frac: float = 0.45,
+    min_resolve_width_frac: float = 0.2,
 ) -> list[dict[str, Any]]:
     """Find sub-``detect_factor*h`` waterways and decide their
     fate. Returns one record per waterway network:
@@ -252,6 +252,11 @@ def detect_waterways(
         # waterway at all -- it is an opening artifact against the
         # domain boundary or a sliver of the main body. Filling it
         # would turn open water into land: IGNORE instead.
+        # EXCEPTION: a strip pinned between the ARTIFICIAL domain
+        # edge and land (land_frac >= 0.25, touching the domain
+        # exterior) is a data CRACK, not water -- left open it
+        # meshes as huge sliver cells at the edge (16.8 deg C1,
+        # run 6186561): close it.
         blen = float(union.boundary.length)
         land_frac = (float(union.boundary.intersection(
             land_union.buffer(eps)).length) / blen
@@ -263,7 +268,12 @@ def detect_waterways(
                      "canal" if big_canal else
                      "dead-end"),
             "action": ("keep" if keep else
-                       "close" if land_frac >= 0.5 else "ignore"),
+                       "close" if (land_frac >= 0.5
+                                   or (land_frac >= 0.25
+                                       and union.distance(
+                                           domain_poly.exterior)
+                                       < eps))
+                       else "ignore"),
             "land_frac": round(land_frac, 2),
             "mean_width_cells": round(float(mean_w_cells), 2),
             "main_piece": main_piece,
@@ -308,8 +318,9 @@ def apply_waterway_policy(
     widen_rows: float = 2.0,
     min_gap_m: float = 150.0,
     h_grade_per_m: float = 0.0,
-    arc_retry: str = "skeleton",
+    branch_floor_frac: float = 0.45,
     close_blocked: bool = True,
+    open_bridges: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
     """Execute the detected actions: KEEP -> carve the corridor to
     two LOCAL rows along the arc, barrier-safe; CLOSE -> fill the
@@ -376,103 +387,133 @@ def apply_waterway_policy(
             fills.append(rec["geometry"])
             info["closed"] += 1
         elif rec["action"] == "keep":
-            # a bridge-chained network's arc legitimately crosses
-            # the bridge strips: widen the crossing tolerance by
-            # their total length (they are opened separately)
+            # PER-BRANCH keep/close (owner 2026-07-12, G8-d4/e4
+            # fabrication + H8-c5 closure): a chained network
+            # mixes wide canal reaches with sub-resolution
+            # ditches, and any network-level scalar misjudges
+            # both. Skeletonise ALWAYS, measure EACH branch, carve
+            # the resolvable ones, leave the rest to the stub
+            # fill.
             br_m = sum(float(ln.length) for ln in
                        rec.get("bridges") or []) * scale
+            done = []
+            fails = []
             try:
-                new_land, ci, w_used = _carve(
-                    new_land, rec["arc"], rec["width_m"],
-                    tol_extra_m=br_m + 30.0)
+                brs = skeleton_branches(
+                    rec["geometry"].buffer(0),
+                    metric_scale=metric_scale,
+                    density_m=0.15 * h_mesh_m,
+                    prune_m=0.7 * h_mesh_m)
+            except (RuntimeError, ValueError) as e2:
+                brs = []
+                fails.append(str(e2)[:90])
+            snaps = []
+            for br in brs:
+                try:
+                    snaps.append(snap_arc_to_channel(
+                        land_union, br,
+                        metric_scale=metric_scale,
+                        step_m=0.35 * h_mesh_m,
+                        max_halfwidth_m=2.5 * h_mesh_m))
+                except (RuntimeError, ValueError) as e2:
+                    snaps.append(None)
+                    fails.append(str(e2)[:90])
+            wmeds = []
+            for sp in snaps:
+                if sp is None:
+                    wmeds.append(-1.0)
+                    continue
+                wm = sp["width_m"]
+                sat = wm >= 0.95 * 2.0 * 2.5 * h_mesh_m
+                wn = wm[~sat] if bool((~sat).any()) else wm
+                wmeds.append(float(np.median(wn)))
+            floor_w = branch_floor_frac * h_mesh_m
+            wide_ix = {i for i, wv in enumerate(wmeds)
+                       if wv >= floor_w}
+
+            # a SHORT sub-floor branch joining two wide branches
+            # is a pinch OF the wide waterway: widening it is
+            # mandated (a wide channel must never be split)
+            def _endpts(i):
+                return (tuple(np.round(brs[i][0], 6)),
+                        tuple(np.round(brs[i][-1], 6)))
+
+            jmap: dict[Any, set] = {}
+            for i in range(len(brs)):
+                for pnt in _endpts(i):
+                    jmap.setdefault(pnt, set()).add(i)
+            for i in range(len(brs)):
+                if i in wide_ix or snaps[i] is None:
+                    continue
+                if shapely.LineString(brs[i]).length * scale                         > 4.0 * h_mesh_m:
+                    continue
+                touches = set()
+                for pnt in _endpts(i):
+                    touches |= jmap.get(pnt, set()) & wide_ix
+                if len(touches - {i}) >= 2:
+                    wide_ix.add(i)
+            for i in sorted(wide_ix):
+                if snaps[i] is None:
+                    continue
+                try:
+                    new_land, ci, w_used = _carve(
+                        new_land, snaps[i]["arc"],
+                        snaps[i]["width_carve_m"],
+                        tol_extra_m=br_m + 30.0)
+                    done.append((snaps[i]["arc"], w_used))
+                    info["land_removed_m2"] += (
+                        ci["land_removed_m2"])
+                except (RuntimeError, ValueError) as e2:
+                    fails.append(str(e2)[:110])
+            if done:
+                li = int(np.argmax(
+                    [shapely.LineString(a2).length
+                     for a2, _ in done]))
+                rec["arc"] = done[li][0]
+                rec["width_m"] = done[li][1]
+                rec["w_used"] = done[li][1]
+                rec["arcs_done"] = done
+                rec["branches"] = (
+                    f"{len(done)}/{len(brs)} carved, "
+                    f"{len(brs) - len(wide_ix)} below floor")
+                if fails:
+                    rec["branch_failures"] = fails
                 info["kept"] += 1
-                info["land_removed_m2"] += ci["land_removed_m2"]
-                rec["w_used"] = w_used
-            except RuntimeError as e:
-                # SKELETON retry (owner 2026-07-12, Keihin cut):
-                # one diameter-path arc over a BRANCHED network
-                # shortcuts at every junction and the carve is
-                # refused. Decompose the network into medial-axis
-                # branches and carve each simple branch alone.
-                retried = False
-                unwidenable = ("two rows are not attainable"
-                               in str(e))
-                if arc_retry == "skeleton" and not unwidenable:
-                    done = []
-                    fails = []
-                    try:
-                        brs = skeleton_branches(
-                            rec["geometry"].buffer(0),
-                            metric_scale=metric_scale,
-                            density_m=0.15 * h_mesh_m,
-                            prune_m=0.7 * h_mesh_m)
-                    except (RuntimeError, ValueError) as e2:
-                        brs = []
-                        fails.append(str(e2)[:90])
-                    for br in brs:
-                        try:
-                            snap = snap_arc_to_channel(
-                                land_union, br,
-                                metric_scale=metric_scale,
-                                step_m=0.35 * h_mesh_m,
-                                max_halfwidth_m=2.5 * h_mesh_m)
-                            new_land, ci, w_used = _carve(
-                                new_land, snap["arc"],
-                                snap["width_carve_m"],
-                                tol_extra_m=br_m + 30.0)
-                            done.append((snap["arc"], w_used))
-                            info["land_removed_m2"] += (
-                                ci["land_removed_m2"])
-                        except (RuntimeError, ValueError) as e2:
-                            fails.append(str(e2)[:90])
-                    if done:
-                        li = int(np.argmax(
-                            [shapely.LineString(a2).length
-                             for a2, _ in done]))
-                        rec["arc"] = done[li][0]
-                        rec["width_m"] = done[li][1]
-                        rec["w_used"] = done[li][1]
-                        rec["arcs_done"] = done
-                        rec["retry"] = (f"skeleton {len(done)}/"
-                                        f"{len(brs)} branches")
-                        if fails:
-                            rec["branch_failures"] = fails
-                        info["kept"] += 1
-                        info["retried"] += 1
-                        retried = True
-                    elif fails:
-                        e = RuntimeError(
-                            "skeleton retry failed: "
-                            + "; ".join(fails[:3]))
-                if not retried:
-                    rec["action"] = "blocked"
-                    rec["reason"] = str(e)
-                    # close-blocked policy: GENUINELY unwidenable
-                    # channels (two rows not attainable under
-                    # barrier constraints) are always filled --
-                    # never left to mesh one cell wide. An ARC
-                    # EXTRACTION failure on a big branched system
-                    # (e.g. the Keihin canal network) is our
-                    # limitation, not the channel's: filling a
-                    # major waterway over it would contradict the
-                    # standing keep directive, so big systems stay
-                    # open and are reported as needing a manual
-                    # arc / branch decomposition.
-                    unwiden = "two rows are not attainable" in \
-                        rec["reason"]
-                    if close_blocked and (
-                            unwiden
-                            or rec["extent_cells"] < 15.0):
-                        fills.append(rec["geometry"])
-                        rec["closed"] = True
-        if rec["action"] == "keep" and rec.get("bridges"):
+            else:
+                rec["action"] = "blocked"
+                rec["reason"] = (
+                    "no branch above the resolve floor could be "
+                    "carved: " + "; ".join(fails[:2]))
+                if close_blocked:
+                    fills.append(rec["geometry"])
+                    rec["closed"] = True
+        if (open_bridges and rec["action"] == "keep"
+                and rec.get("bridges")):
+            # DISABLED BY DEFAULT (owner 2026-07-12, G8-d4/e4):
+            # geometry alone cannot tell a road bridge over one
+            # canal from a levee between two SEPARATE dead-end
+            # waters -- auto-opening fabricated a connection the
+            # sample correctly does not have. Pier/bridge data
+            # corrections are MANUAL edits (recipes/edits).
             # open the OSM bridge strips (roads drawn as land
             # across the canal, Daishi-canal severance): a short
-            # TRANSVERSAL carve with crossings allowed. Both
-            # flanks carry the mini-arc, so lateral local-
-            # component protection still guards everything else.
+            # TRANSVERSAL carve with crossings allowed. Only
+            # bridges BETWEEN CARVED branch corridors are opened
+            # -- a bridge toward an unresolved ditch would
+            # fabricate a connection (G8-d4/e4).
+            tub = unary_union([
+                shapely.LineString(np.asarray(a2, float)).buffer(
+                    0.6 * float(np.max(w2)) / scale)
+                for a2, w2 in rec.get("arcs_done") or []])
             opened = 0
             for ln in rec["bridges"]:
+                if not (tub.intersects(shapely.Point(
+                            ln.coords[0]).buffer(
+                            0.3 * h_mesh_m / scale))
+                        and tub.intersects(shapely.Point(
+                            ln.coords[-1]).buffer(
+                            0.3 * h_mesh_m / scale))):
+                    continue
                 pts_b = np.asarray(ln.coords, float)
                 d = pts_b[-1] - pts_b[0]
                 if np.hypot(*d) < 1e-12:
@@ -525,5 +566,11 @@ def apply_waterway_policy(
         if rec["action"] == "blocked":
             info["blocked"].append(rec)
     if fills:
+        # NOTE: do NOT smooth/dilate the fills. A closing pass
+        # (buffer +0.15h/-0.1h) interacted catastrophically with
+        # the Shoreline stage (623 cells meshed over Tokyo city,
+        # one real severance -- run 6186580). Raw fills leave a
+        # 1-2 cell realization-sensitive quality tail at the
+        # artificial west edge instead, tracked in the ledger.
         new_land = unary_union([new_land, *fills])
     return new_land, info

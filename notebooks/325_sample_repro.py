@@ -106,6 +106,17 @@ from fvcom_mesh_tools.channel_arcs import carve_channel_corridor
 CH_PF, CH_EG = [], []      # bank pfix/egfix accumulated per edit
 for _ef in sorted(Path("recipes/edits/sample_repro").glob("*.json")):
     _ed = _json.loads(_ef.read_text())
+    if _ed.get("type") == "land_patch":
+        # data-crack correction: force a region to LAND (e.g. the
+        # sliver between the artificial west domain edge and the
+        # OSM land data that meshed as 16-deg sliver cells)
+        import shapely.geometry as _sg
+        _patch = _sg.shape(_ed["geometry"])
+        _new_land = _uu([_new_land, _patch])
+        print(f"[sr] channel edit {_ed.get('id', _ef.stem)} "
+              f"(land_patch): +{_patch.area * (111e3 * _cosw) * 111e3 / 1e4:.1f} ha",
+              flush=True)
+        continue
     if _ed.get("type") == "water_patch":
         # owner-approved water footprint (e.g. the sample's own
         # meshed water): land inside the polygon becomes water
