@@ -24,6 +24,7 @@ from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
 from fvcom_mesh_tools.channel_arcs import arc_from_points
+from fvcom_mesh_tools.gridref import TOKYO_BAY_GRID
 from fvcom_mesh_tools.io import read_fort14
 from fvcom_mesh_tools.plotting import (
     add_atlas_grid,
@@ -179,6 +180,8 @@ for rank, (cl, severs) in enumerate(clusters, start=1):
         "n_sample_elements": int(len(cl)),
         "center_lonlat": [round(float(cc[0]), 4),
                           round(float(cc[1]), 4)],
+        "gridref": TOKYO_BAY_GRID.point_to_subcell(
+            float(cc[0]), float(cc[1])),
         "extent_m": [round(float(ext_m[0])), round(float(ext_m[1]))],
         "sample_local_edge_m": round(float(el_edge[cl].mean())),
         "severs_sample": severs,
@@ -238,7 +241,8 @@ for ax, rec in zip(axes, show):
     ax.set_aspect(1 / COSW)
     ax.set_xticks([]); ax.set_yticks([])
     add_atlas_grid(ax, crs="EPSG:4326")
-    ax.set_title(f"{rec['id']}  n={rec['n_sample_elements']}  "
+    ax.set_title(f"{rec['id']} [{rec['gridref']}]  "
+                 f"n={rec['n_sample_elements']}  "
                  f"({cx:.3f}, {cy:.3f})\n"
                  f"severs={rec['severs_sample']}  "
                  f"edge~{rec['sample_local_edge_m']} m")

@@ -228,7 +228,12 @@ def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
     """Overlay the atlas reference grid (user-AI location pointing:
     column letters west->east, row numbers north->south, quadrant
     a/b/c/d). Default grid = gridref.TOKYO_BAY_GRID. Draws only
-    within the current axis limits; call AFTER setting xlim/ylim."""
+    within the current axis limits; call AFTER setting xlim/ylim.
+
+    Zoomed views (window smaller than ~2.5 cells) automatically get
+    the SUB-CELL lattice with fully-qualified labels ("H8-c3",
+    ~1 km squares anchored to the global cells), so locations can
+    be pointed at INSIDE a zoom panel (owner 2026-07-12)."""
     import numpy as np
     from pyproj import Transformer
 
@@ -261,6 +266,46 @@ def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
                         np.full(50, gy))
             ax.plot(xs, ys, color=color, lw=0.5, alpha=0.5,
                     zorder=4)
+    # zoomed view -> sub-cell lattice + fully-qualified labels
+    zoomed = ((lo1 - lo0) < 2.5 * g.dlon
+              and (la1 - la0) < 2.5 * g.dlat)
+    if zoomed:
+        sub = g.SUB_N
+        sdx, sdy = g.dlon / sub, g.dlat / sub
+        i0 = int(np.floor((lo0 - g.lon0) / sdx))
+        i1 = int(np.ceil((lo1 - g.lon0) / sdx))
+        j0 = int(np.floor((g.lat1 - la1) / sdy))
+        j1 = int(np.ceil((g.lat1 - la0) / sdy))
+        for i in range(max(i0, 0), min(i1, g.ncol * sub) + 1):
+            gx = g.lon0 + i * sdx
+            xs, ys = tf(np.full(20, gx), np.linspace(la0, la1, 20))
+            ax.plot(xs, ys, color=color, lw=0.4,
+                    alpha=0.25 if i % sub else 0.5,
+                    ls=":" if i % sub else "-", zorder=4)
+        for j in range(max(j0, 0), min(j1, g.nrow * sub) + 1):
+            gy = g.lat1 - j * sdy
+            xs, ys = tf(np.linspace(lo0, lo1, 20), np.full(20, gy))
+            ax.plot(xs, ys, color=color, lw=0.4,
+                    alpha=0.25 if j % sub else 0.5,
+                    ls=":" if j % sub else "-", zorder=4)
+        if labels:
+            import string as _string
+            for i in range(max(i0, 0), min(i1, g.ncol * sub - 1)):
+                for j in range(max(j0, 0),
+                               min(j1, g.nrow * sub - 1)):
+                    cx = g.lon0 + (i + 0.5) * sdx
+                    cy = g.lat1 - (j + 0.5) * sdy
+                    if not (lo0 < cx < lo1 and la0 < cy < la1):
+                        continue
+                    ref = (f"{g.col_letter(i // sub)}"
+                           f"{j // sub + 1}-"
+                           f"{_string.ascii_lowercase[i % sub]}"
+                           f"{j % sub + 1}")
+                    px, py = tf(cx, cy)
+                    ax.text(px, py, ref, color=color, alpha=0.65,
+                            ha="center", va="center", fontsize=9,
+                            zorder=5)
+        return
     if not labels:
         return
     for i in range(g.ncol):

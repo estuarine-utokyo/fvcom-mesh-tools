@@ -21,6 +21,7 @@ from shapely.geometry import LineString
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
+from fvcom_mesh_tools.gridref import TOKYO_BAY_GRID
 from fvcom_mesh_tools.io import read_fort14
 from fvcom_mesh_tools.plotting import (
     add_atlas_grid,
@@ -149,11 +150,14 @@ for c in sorted(set(lab[flag])) if len(flag) else []:
         "cell_ids_fort14": (els + 1).tolist(),
         "center_lonlat": [round(float(cc[0]), 4),
                           round(float(cc[1]), 4)],
+        "gridref": TOKYO_BAY_GRID.point_to_subcell(
+            float(cc[0]), float(cc[1])),
     })
 (OUT / "one_wide_cells.json").write_text(json.dumps(sites,
                                                     indent=1))
 for s in sites:
-    print(f"[1wide] {s['site']}: cells {s['cell_ids_fort14']} at "
+    print(f"[1wide] {s['site']} [{s['gridref']}]: cells "
+          f"{s['cell_ids_fort14']} at "
           f"({s['center_lonlat'][0]}, {s['center_lonlat'][1]})",
           flush=True)
 
@@ -189,8 +193,8 @@ if show:
         ax.set_xticks([])
         ax.set_yticks([])
         add_atlas_grid(ax, crs="EPSG:4326")
-        ax.set_title(f"{s['site']}  {len(els)} cell(s)  "
-                     f"({cx:.3f}, {cy:.3f})")
+        ax.set_title(f"{s['site']} [{s['gridref']}]  "
+                     f"{len(els)} cell(s)  ({cx:.3f}, {cy:.3f})")
     for ax in axes[len(show):]:
         ax.axis("off")
     fig.suptitle("one-wide channel cells (red + fort.14 cell "
