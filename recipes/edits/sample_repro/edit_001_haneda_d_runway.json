@@ -1,0 +1,13 @@
+{
+ "id": "W10-edit001",
+ "note": "Haneda D-runway channel (owner-flagged severance). The runway is a pier-supported platform: OSM draws ~750 m of the real flow passage as LAND, which is why the auto mesh severed it while the goto2023 sample meshes it. arc_on_land_tol_m raised EXPLICITLY to accept crossing that pier-as-land stretch; lateral min_gap still protects the far-side bay water.",
+ "arc": [
+  [139.79566, 35.52345],
+  [139.80061, 35.52521],
+  [139.80649, 35.52615],
+  [139.8133, 35.52628]
+ ],
+ "width_m": 609,
+ "min_gap_m": 150.0,
+ "arc_on_land_tol_m": 900.0
+}

@@ -13,7 +13,8 @@ source "${HOME}/mambaforge/etc/profile.d/conda.sh"
 conda activate oceanmesh-bench
 cd "${HOME}/Github/fvcom-mesh-tools"
 echo "=== unit tests ==="
-python -m pytest tests/test_obc_band.py tests/test_channel_policy_geom.py -q
+python -m pytest tests/test_obc_band.py tests/test_channel_policy_geom.py \
+    tests/test_channel_arcs.py -q
 export SR_OBC_H1=1680   # deep-end boundary size (mesh m)
 echo "=== TB regression: generate ==="
 python notebooks/325_sample_repro.py
@@ -23,4 +24,6 @@ echo "=== QA final ==="
 fmesh-mesh-qa outputs/sample_repro/sample_repro_final.14
 echo "=== connectivity comparator (gate) ==="
 python notebooks/342_connectivity_check.py
+echo "=== issue registry refresh ==="
+python notebooks/343_issue_registry.py
 python notebooks/335_obc_zoom.py

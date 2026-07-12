@@ -93,6 +93,29 @@ for r in chinfo["widened"] + chinfo["closed"]:
           f"{r['center'][1]:.3f}) area={r['area_cells']:.1f} "
           f"extent={r['extent_cells']:.1f} cells "
           f"members={r['n_members']}", flush=True)
+
+# ARC-BASED CHANNEL EDITS (owner-approved 2026-07-12): each JSON in
+# recipes/edits/sample_repro/ is ONE waterway, given as its along-
+# channel arc + width: {"id", "note", "arc": [[lon,lat],...],
+# "width_m", "min_gap_m"}. Applied in filename order — a
+# VERSION-CONTROLLED, deterministic manual-edit log.
+# carve_channel_corridor is barrier-safe: it raises instead of
+# piercing land that separates other water.
+import json as _json
+from fvcom_mesh_tools.channel_arcs import carve_channel_corridor
+for _ef in sorted(Path("recipes/edits/sample_repro").glob("*.json")):
+    _ed = _json.loads(_ef.read_text())
+    _tol = _ed.get("arc_on_land_tol_m")   # explicit opt-in only
+    _new_land, _einfo = carve_channel_corridor(
+        _new_land, np.asarray(_ed["arc"], float),
+        float(_ed["width_m"]),
+        min_gap_m=float(_ed.get("min_gap_m", 150.0)),
+        metric_scale=(111e3 * _cosw, 111e3), domain_poly=_dom,
+        arc_on_land_tol_m=None if _tol is None else float(_tol))
+    print(f"[sr] channel edit {_ed.get('id', _ef.stem)}: "
+          f"len={_einfo['arc_length_m']:.0f} m "
+          f"width={_einfo['width_m']:.0f} m "
+          f"arc_on_land={_einfo['arc_on_land_m']:.0f} m", flush=True)
 _geoms = list(_new_land.geoms) if hasattr(_new_land, "geoms")     else [_new_land]
 gpd.GeoDataFrame(geometry=_geoms, crs=_land_g.crs).to_file(CH_SHP)
 

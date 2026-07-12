@@ -1,0 +1,12 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=00:20:00
+#PJM -j
+#PJM -X
+set -euo pipefail
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+cd "${HOME}/Github/fvcom-mesh-tools"
+"${HOME}/mambaforge/envs/oceanmesh-bench/bin/python" \
+    notebooks/343_issue_registry.py

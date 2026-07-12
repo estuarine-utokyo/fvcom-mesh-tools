@@ -1,0 +1,18 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=00:20:00
+#PJM -j
+#PJM -X
+set -euo pipefail
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+cd "${HOME}/Github/fvcom-mesh-tools"
+PY="${HOME}/mambaforge/envs/oceanmesh-bench/bin/python"
+echo "=== comparator (edit-aware breach reference) ==="
+"$PY" notebooks/342_connectivity_check.py
+echo "=== registry refresh (stable IDs) ==="
+"$PY" notebooks/343_issue_registry.py
+echo "=== Haneda site-exact verify (figure + measured passage) ==="
+"$PY" notebooks/344_haneda_verify.py

@@ -103,6 +103,36 @@ if len(missing):
 # ---------- BREACH: our elements on ORIGINAL land ----------------
 land = unary_union(list(gpd.read_file(
     "outputs/tb_varres_3r/land_osm_wide.shp").geometry))
+# Applied channel-arc edits are owner-approved design geometry
+# (e.g. the pier-supported D-runway drawn as land by OSM): re-carve
+# them out of the ORIGINAL land before the breach test, with the
+# exact same guarded operation the runner used.
+import json as _json
+from pathlib import Path as _Path
+from shapely.geometry import Polygon as _Poly
+from fvcom_mesh_tools.channel_arcs import carve_channel_corridor
+_OBC = [[139.6713, 35.1396], [139.6737, 35.1288],
+        [139.6772, 35.1168], [139.6816, 35.1031],
+        [139.6871, 35.0877], [139.6946, 35.0705],
+        [139.7000, 35.0576], [139.7069, 35.0445],
+        [139.7134, 35.0327], [139.7216, 35.0184],
+        [139.7289, 35.0047], [139.7373, 34.9916],
+        [139.7497, 34.9750]]
+_dom = _Poly([[139.83, 34.973], [140.12, 34.973], [140.12, 35.75],
+              [139.60, 35.75], [139.60, 35.20],
+              [139.6642, 35.1546]] + _OBC + [[139.83, 34.973]])
+_cosw = float(np.cos(np.deg2rad(35.35)))
+for _ef in sorted(
+        _Path("recipes/edits/sample_repro").glob("*.json")):
+    _ed = _json.loads(_ef.read_text())
+    _tol = _ed.get("arc_on_land_tol_m")
+    land, _ei = carve_channel_corridor(
+        land, np.asarray(_ed["arc"], float), float(_ed["width_m"]),
+        min_gap_m=float(_ed.get("min_gap_m", 150.0)),
+        metric_scale=(111e3 * _cosw, 111e3), domain_poly=_dom,
+        arc_on_land_tol_m=None if _tol is None else float(_tol))
+    print(f"[conn] breach reference: carved applied edit "
+          f"{_ed.get('id', _ef.stem)}", flush=True)
 cent_o = Pll_o[T_o].mean(axis=1)
 opts = shapely.points(cent_o[:, 0], cent_o[:, 1])
 # tolerance: centroid deeper than ~100 m into original land
