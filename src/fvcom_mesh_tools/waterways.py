@@ -88,6 +88,7 @@ def detect_waterways(
     big_deadend_cells: float = 6.0,
     max_canal_extent_cells: float = 15.0,
     min_canal_width_frac: float = 0.5,
+    min_resolve_width_frac: float = 0.45,
 ) -> list[dict[str, Any]]:
     """Find sub-``detect_factor*h`` waterways and decide their
     fate. Returns one record per waterway network:
@@ -223,11 +224,28 @@ def detect_waterways(
         # fail it on one of the two axes: below-resolution ones
         # (Hanami-gawa) are too narrow, large ones are far longer
         # than any port canal.
-        mean_w_cells = (union.area / max(hull_len, 1e-9)) / h
+        # width of the DOMINANT corridor piece (2A/P): micro
+        # opening-artifacts chained into the union dilute a
+        # union-level estimate below the resolve floor
+        narrow_members = [items[i][1] for i in members
+                          if items[i][0] == "n"]
+        main_piece = (max(narrow_members, key=lambda g: g.area)
+                      if narrow_members else None)
+        wsrc = main_piece if main_piece is not None else union
+        mean_w_cells = (2.0 * wsrc.area
+                        / max(wsrc.boundary.length, 1e-9)) / h
         big_canal = (big_deadend_cells <= extent_cells
                      <= max_canal_extent_cells
                      and mean_w_cells >= min_canal_width_frac)
-        keep = (connector or big_canal) and worthy
+        # RESOLVE-WIDTH floor (owner 2026-07-12): a channel whose
+        # NATURAL width is far below the minimum mesh size is not
+        # a resolve target AT ALL -- the sample leaves such
+        # ditches untouched, and keeping them forced 609 m
+        # corridors across land with one-wide remnants. Applies
+        # to EVERY keep path (through/anchor rules had no width
+        # condition).
+        resolvable = mean_w_cells >= min_resolve_width_frac
+        keep = (connector or big_canal) and worthy and resolvable
 
         # a narrow piece that barely touches LAND is not a
         # waterway at all -- it is an opening artifact against the
@@ -238,12 +256,6 @@ def detect_waterways(
             land_union.buffer(eps)).length) / blen
             if blen > 0 else 0.0)
 
-        narrow_members = [g for kind_, g in
-                          zip([items[i][0] for i in
-                               np.where(lab == net)[0]], geoms)
-                          if kind_ == "n"]
-        main_piece = (max(narrow_members, key=lambda g: g.area)
-                      if narrow_members else None)
         rec: dict[str, Any] = {
             "kind": ("through" if through else
                      "port" if touches_big else

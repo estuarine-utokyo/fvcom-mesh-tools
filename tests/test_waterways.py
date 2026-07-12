@@ -161,6 +161,22 @@ class TestNetworksAndSafety:
         assert not any(11200 < c.x < 13000 and 4700 < c.y < 5300
                        for c in closed_centers)
 
+    def test_too_thin_through_channel_not_resolved(self):
+        # a 120 m ditch (0.34 h) connects main to main: the sample
+        # never resolves such channels -- keeping it forced a
+        # 600 m corridor across land with one-wide remnants
+        # (owner 2026-07-12). It must be closed, not widened.
+        land = unary_union([
+            box(8000, 2000, 12000, 4940),
+            box(8000, 5060, 12000, 8000),
+        ])
+        recs, new_land, info = _run(land)
+        assert info["kept"] == 0
+        # ditch filled, banks untouched at width scale
+        assert not _water(new_land).contains(Point(10000, 5000))
+        assert new_land.contains(Point(10000, 4700))
+        assert new_land.contains(Point(10000, 5300))
+
     def test_bridge_chained_canal_kept_and_opened(self):
         # Daishi-canal pattern: a through canal chopped by a
         # 120 m road strip drawn as land. The two halves must
