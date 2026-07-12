@@ -64,18 +64,30 @@ from fvcom_mesh_tools.prep.channel_policy_geom import (
     apply_channel_policy_to_land,
 )
 
+# ROLLED BACK to default OFF (owner 2026-07-12): the connectivity
+# comparator (342) measured 214 sample-water closures + 342
+# on-land elements from this stage -- worse than the ~19 one-wide
+# cells it was meant to fix. Re-enable only per-site with the
+# comparator as gate (SR_CH_POLICY=on).
 CH_SHP = OUT / "land_channel_adj.shp"
 _land_g = gpd.read_file("outputs/tb_varres_3r/land_osm_wide.shp")
 _dom = _Poly(poly)
 _cosw = float(np.cos(np.deg2rad(35.35)))
-_new_land, chinfo = apply_channel_policy_to_land(
-    _uu(list(_land_g.geometry)), _dom,
-    h_mesh_m=H0 * 1.2, obc_point=tuple(OBC_ARC[6]),
-    metric_scale=(111e3 * _cosw, 111e3))
-print(f"[sr] channel policy (geometry stage): "
-      f"{len(chinfo['widened'])} widened, "
-      f"{len(chinfo['closed'])} closed "
-      f"(of {chinfo['n_narrow']} narrow corridors)", flush=True)
+if os.environ.get("SR_CH_POLICY", "off") != "on":
+    chinfo = {"widened": [], "closed": [], "n_narrow": 0}
+    _new_land = _uu(list(_land_g.geometry))
+    print("[sr] channel policy (geometry stage): OFF (rollback)",
+          flush=True)
+else:
+    _new_land, chinfo = apply_channel_policy_to_land(
+        _uu(list(_land_g.geometry)), _dom,
+        h_mesh_m=H0 * 1.2, obc_point=tuple(OBC_ARC[6]),
+        metric_scale=(111e3 * _cosw, 111e3))
+if os.environ.get("SR_CH_POLICY", "off") == "on":
+    print(f"[sr] channel policy (geometry stage): "
+          f"{len(chinfo['widened'])} widened, "
+          f"{len(chinfo['closed'])} closed "
+          f"(of {chinfo['n_narrow']} narrow corridors)", flush=True)
 for r in chinfo["widened"] + chinfo["closed"]:
     print(f"[sr]   {r['action']}: ({r['center'][0]:.3f}, "
           f"{r['center'][1]:.3f}) area={r['area_cells']:.1f} "

@@ -18,7 +18,7 @@ mesh = read_fort14(SRC)
 # canals and get undone by phase_h -- churn)
 mesh, cinfo = resolve_narrow_channels(mesh, min_basin_elements=6,
                                       apply_widen=False,
-                                      small_cluster_delete=3)
+                                      small_cluster_delete=0)
 print(f"[fin] channel policy: flagged={cinfo['n_flagged']} "
       f"widened={cinfo['n_widened']} "
       f"deleted={cinfo['n_deleted_elements']}", flush=True)

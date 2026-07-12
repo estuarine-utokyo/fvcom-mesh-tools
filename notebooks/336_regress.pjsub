@@ -21,4 +21,6 @@ echo "=== TB regression: finish ==="
 python notebooks/331_finish2.py
 echo "=== QA final ==="
 fmesh-mesh-qa outputs/sample_repro/sample_repro_final.14
+echo "=== connectivity comparator (gate) ==="
+python notebooks/342_connectivity_check.py
 python notebooks/335_obc_zoom.py
