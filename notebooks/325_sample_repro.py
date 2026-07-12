@@ -103,19 +103,28 @@ for r in chinfo["widened"] + chinfo["closed"]:
 # piercing land that separates other water.
 import json as _json
 from fvcom_mesh_tools.channel_arcs import carve_channel_corridor
+CH_PF, CH_EG = [], []      # bank pfix/egfix accumulated per edit
 for _ef in sorted(Path("recipes/edits/sample_repro").glob("*.json")):
     _ed = _json.loads(_ef.read_text())
     _tol = _ed.get("arc_on_land_tol_m")   # explicit opt-in only
+    _w = (np.asarray(_ed["widths_m"], float)
+          if "widths_m" in _ed else float(_ed["width_m"]))
     _new_land, _einfo = carve_channel_corridor(
-        _new_land, np.asarray(_ed["arc"], float),
-        float(_ed["width_m"]),
+        _new_land, np.asarray(_ed["arc"], float), _w,
         min_gap_m=float(_ed.get("min_gap_m", 150.0)),
         metric_scale=(111e3 * _cosw, 111e3), domain_poly=_dom,
         arc_on_land_tol_m=None if _tol is None else float(_tol))
+    if _ed.get("bank_pfix"):
+        _off = sum(len(a) for a in CH_PF)
+        CH_PF.append(np.asarray(_ed["bank_pfix"], float))
+        CH_EG.append(np.asarray(_ed["bank_egfix"], int) + _off)
     print(f"[sr] channel edit {_ed.get('id', _ef.stem)}: "
           f"len={_einfo['arc_length_m']:.0f} m "
-          f"width={_einfo['width_m']:.0f} m "
-          f"arc_on_land={_einfo['arc_on_land_m']:.0f} m", flush=True)
+          f"width_max={_einfo['width_max_m']:.0f} m "
+          f"arc_on_land={_einfo['arc_on_land_m']:.0f} m "
+          f"land_removed={_einfo['land_removed_m2']/1e4:.2f} ha "
+          f"banks={'yes' if _ed.get('bank_pfix') else 'no'}",
+          flush=True)
 _geoms = list(_new_land.geoms) if hasattr(_new_land, "geoms")     else [_new_land]
 gpd.GeoDataFrame(geometry=_geoms, crs=_land_g.crs).to_file(CH_SHP)
 
@@ -207,6 +216,17 @@ if os.environ.get("SR_OBC_LADDER", "on") == "on":
           f"(post-limgrad, boundary-priority)", flush=True)
 else:
     PFIX, SEGS = OBC_ARC, OBC_SEG
+
+# channel-bank constraints from the applied edits: the same
+# pfix+egfix primitive as the OBC ladder, holding both banks of a
+# sub-cell-width channel so the 1-row band is meshed, not bridged
+if CH_PF:
+    _chp = np.vstack(CH_PF)
+    _che = np.vstack(CH_EG) + len(PFIX)
+    PFIX = np.vstack([np.asarray(PFIX, dtype=float), _chp])
+    SEGS = np.vstack([np.asarray(SEGS, dtype=int), _che])
+    print(f"[sr] channel bank constraints: +{len(_chp)} pfix, "
+          f"+{len(_che)} egfix", flush=True)
 
 # the built-in msh.clean('default') runs with pfix nodes pinned and
 # (fork feature) egfix-carrying faces excluded from the boundary

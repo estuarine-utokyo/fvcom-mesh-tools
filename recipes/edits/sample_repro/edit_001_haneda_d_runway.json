@@ -1,13 +1,150 @@
 {
  "id": "W10-edit001",
- "note": "Haneda D-runway channel (owner-flagged severance). The runway is a pier-supported platform: OSM draws ~750 m of the real flow passage as LAND, which is why the auto mesh severed it while the goto2023 sample meshes it. arc_on_land_tol_m raised EXPLICITLY to accept crossing that pier-as-land stretch; lateral min_gap still protects the far-side bay water.",
+ "rev": 2,
+ "note": "Haneda D-runway channel, FAITHFUL rebuild: arc snapped to the real OSM water gap; carve width = measured per-station width, so land is removed only at the pier stretch OSM draws as land (~2 % of v1's erosion); both banks pfix+egfix-constrained so the sub-cell-width stretch meshes as an explicit 1-row band. 1-wide cells there are EXPECTED and flagged by the one-wide reporter for the next manual-edit round.",
  "arc": [
-  [139.79566, 35.52345],
-  [139.80061, 35.52521],
-  [139.80649, 35.52615],
-  [139.8133, 35.52628]
+  [
+   139.794735,
+   35.526051
+  ],
+  [
+   139.796484,
+   35.524719
+  ],
+  [
+   139.797924,
+   35.524255
+  ],
+  [
+   139.798806,
+   35.525359
+  ],
+  [
+   139.799721,
+   35.526727
+  ],
+  [
+   139.800667,
+   35.528359
+  ],
+  [
+   139.802099,
+   35.527857
+  ],
+  [
+   139.803734,
+   35.525656
+  ],
+  [
+   139.805336,
+   35.523246
+  ],
+  [
+   139.806545,
+   35.522277
+  ],
+  [
+   139.807537,
+   35.522787
+  ],
+  [
+   139.808551,
+   35.523286
+  ],
+  [
+   139.809743,
+   35.523779
+  ],
+  [
+   139.810936,
+   35.524242
+  ],
+  [
+   139.812129,
+   35.524705
+  ],
+  [
+   139.81332,
+   35.525212
+  ]
  ],
- "width_m": 609,
+ "widths_m": [
+  643.7,
+  1006.9,
+  1006.9,
+  1006.9,
+  749.9,
+  563.1,
+  376.2,
+  365.5,
+  354.8,
+  432.1,
+  511.4,
+  614.9,
+  718.5,
+  795.5,
+  881.1,
+  984.7
+ ],
  "min_gap_m": 150.0,
- "arc_on_land_tol_m": 900.0
+ "bank_pfix": [
+  [
+   139.801407,
+   35.525792
+  ],
+  [
+   139.804009,
+   35.523936
+  ],
+  [
+   139.805831,
+   35.520147
+  ],
+  [
+   139.807413,
+   35.520315
+  ],
+  [
+   139.799927,
+   35.530927
+  ],
+  [
+   139.803459,
+   35.527375
+  ],
+  [
+   139.805298,
+   35.523485
+  ],
+  [
+   139.80732,
+   35.525186
+  ]
+ ],
+ "bank_egfix": [
+  [
+   0,
+   1
+  ],
+  [
+   1,
+   2
+  ],
+  [
+   2,
+   3
+  ],
+  [
+   4,
+   5
+  ],
+  [
+   5,
+   6
+  ],
+  [
+   6,
+   7
+  ]
+ ]
 }

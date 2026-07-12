@@ -20,7 +20,13 @@ from scipy.sparse.csgraph import connected_components
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from fvcom_mesh_tools.io import read_fort14
-from fvcom_mesh_tools.plotting import _add_coast, add_atlas_grid
+from fvcom_mesh_tools.plotting import (
+    _add_coast,
+    add_atlas_grid,
+    use_readable_style,
+)
+
+use_readable_style()
 
 tr = Transformer.from_crs("EPSG:32654", "EPSG:4326", always_xy=True)
 G = os.path.expanduser('~/Github/TB-FVCOM/input/goto2023/grid/')
@@ -126,8 +132,10 @@ for _ef in sorted(
         _Path("recipes/edits/sample_repro").glob("*.json")):
     _ed = _json.loads(_ef.read_text())
     _tol = _ed.get("arc_on_land_tol_m")
+    _w = (np.asarray(_ed["widths_m"], float)
+          if "widths_m" in _ed else float(_ed["width_m"]))
     land, _ei = carve_channel_corridor(
-        land, np.asarray(_ed["arc"], float), float(_ed["width_m"]),
+        land, np.asarray(_ed["arc"], float), _w,
         min_gap_m=float(_ed.get("min_gap_m", 150.0)),
         metric_scale=(111e3 * _cosw, 111e3), domain_poly=_dom,
         arc_on_land_tol_m=None if _tol is None else float(_tol))

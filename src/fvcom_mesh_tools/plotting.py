@@ -44,6 +44,26 @@ the call site and consistent across notebooks and scripts.
 _REF_RE = re.compile(r"^([A-Z]+)([1-9][0-9]*)$")
 
 
+def use_readable_style() -> None:
+    """Project-wide figure style: text must stay READABLE in the
+    saved PNG (owner 2026-07-12: default matplotlib sizes were
+    illegible in report figures). Call this once at the top of
+    every figure script, BEFORE creating figures, and do not pass
+    smaller explicit ``fontsize=`` values at call sites.
+    """
+    import matplotlib as mpl
+
+    mpl.rcParams.update({
+        "font.size": 14,
+        "axes.titlesize": 15,
+        "axes.labelsize": 13,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 12,
+        "figure.titlesize": 18,
+    })
+
+
 def _col_label(i: int) -> str:
     """0 -> A, 25 -> Z, 26 -> AA (spreadsheet style)."""
     if i < 0:

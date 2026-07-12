@@ -25,6 +25,9 @@ from shapely.strtree import STRtree
 
 from fvcom_mesh_tools.channel_arcs import arc_from_points
 from fvcom_mesh_tools.io import read_fort14
+from fvcom_mesh_tools.plotting import use_readable_style
+
+use_readable_style()
 
 OUT = Path("outputs/sample_repro")
 PROP = OUT / "edits_proposed"
@@ -207,7 +210,7 @@ show = registry[:12]
 ncol = 3
 nrow = int(np.ceil(len(show) / ncol))
 fig, axes = plt.subplots(nrow, ncol,
-                         figsize=(4.6 * ncol, 4.6 * nrow))
+                         figsize=(5.6 * ncol, 5.6 * nrow))
 axes = np.atleast_1d(axes).ravel()
 gxy = gpd.GeoSeries([land], crs="EPSG:4326")
 for ax, rec in zip(axes, show):
@@ -234,13 +237,12 @@ for ax, rec in zip(axes, show):
     ax.set_title(f"{rec['id']}  n={rec['n_sample_elements']}  "
                  f"({cx:.3f}, {cy:.3f})\n"
                  f"severs={rec['severs_sample']}  "
-                 f"edge~{rec['sample_local_edge_m']} m",
-                 fontsize=9)
+                 f"edge~{rec['sample_local_edge_m']} m")
 for ax in axes[len(show):]:
     ax.axis("off")
-fig.suptitle("issue registry: sample waterways our mesh misses "
+fig.suptitle("issue registry: sample waterways our mesh misses\n"
              "(gray=sample, blue=ours, orange=uncovered, "
-             "red=proposed arc)", fontsize=11)
+             "red=proposed arc)")
 fig.tight_layout(rect=(0, 0, 1, 0.97))
 Path("outputs/figures").mkdir(parents=True, exist_ok=True)
 fig.savefig("outputs/figures/issue_registry_atlas.png", dpi=170,

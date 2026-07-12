@@ -16,3 +16,5 @@ echo "=== registry refresh (stable IDs) ==="
 "$PY" notebooks/343_issue_registry.py
 echo "=== Haneda site-exact verify (figure + measured passage) ==="
 "$PY" notebooks/344_haneda_verify.py
+echo "=== one-wide channel cell report ==="
+"$PY" notebooks/346_one_wide_flags.py
