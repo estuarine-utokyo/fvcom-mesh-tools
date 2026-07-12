@@ -25,7 +25,12 @@ from fvcom_mesh_tools.channel_arcs import (
 
 COSW = float(np.cos(np.deg2rad(35.35)))
 SCALE = (111e3 * COSW, 111e3)
-WIN = box(139.788, 35.516, 139.820, 35.538)
+# rev 4 (owner 2026-07-12): the rev-3 window's northern edge
+# (35.538) clipped the sample footprint right at cell 3290's
+# station, so the NW channel's NE half kept its narrow OSM banks
+# and meshed 1-wide. Extend the window over the WHOLE runway and
+# the channel's NE exit -- the sample has 2 rows there.
+WIN = box(139.788, 35.516, 139.832, 35.552)
 
 tr = Transformer.from_crs("EPSG:32654", "EPSG:4326",
                           always_xy=True)
@@ -41,8 +46,8 @@ P = np.column_stack([lon_s, lat_s])
 cent = P[Ts].mean(axis=1)
 
 sel = np.where(
-    (cent[:, 0] > 139.788) & (cent[:, 0] < 139.820)
-    & (cent[:, 1] > 35.516) & (cent[:, 1] < 35.538))[0]
+    (cent[:, 0] > 139.788) & (cent[:, 0] < 139.832)
+    & (cent[:, 1] > 35.516) & (cent[:, 1] < 35.552))[0]
 tris = [shapely.Polygon(P[Ts[i]]) for i in sel]
 patch = unary_union(tris).buffer(0).intersection(WIN)
 land = unary_union(list(gpd.read_file(
@@ -75,7 +80,8 @@ print("checker arc stations:", len(snap["arc"]),
 # through this branch, so it needs its own cross-section arc
 guide_nw = np.array([
     [139.7947, 35.5260], [139.7997, 35.5290],
-    [139.8055, 35.5318], [139.8135, 35.5365]])
+    [139.8055, 35.5318], [139.8135, 35.5365],
+    [139.8205, 35.5420]])
 snap_nw = snap_arc_to_channel(land_v3, guide_nw,
                               metric_scale=SCALE, step_m=120.0)
 print("NW-branch checker stations:", len(snap_nw["arc"]),
@@ -85,13 +91,16 @@ print("NW-branch checker stations:", len(snap_nw["arc"]),
 
 ed = {
     "id": "W10-edit001",
-    "rev": 3,
+    "rev": 4,
     "type": "water_patch",
-    "note": "Haneda D-runway area, rev 3: adopt the goto2023 "
+    "note": "Haneda D-runway area, rev 4: adopt the goto2023 "
             "sample's water footprint verbatim (owner: the sample "
             "is right -- the pier region must be meshed). The "
             "patch is the union of sample triangles in the window "
-            "(139.788-139.820, 35.516-35.538); OSM land inside it "
+            "(139.788-139.832, 35.516-35.552; rev 4 extends over "
+            "the whole runway + NE channel exit -- rev 3 clipped "
+            "the footprint at cell 3290 and left it 1-wide); OSM "
+            "land inside it "
             "(pier wedge + channel banks) becomes water. The "
             "stored arc/widths drive the one-wide cross-section "
             "checker, not a carve.",
