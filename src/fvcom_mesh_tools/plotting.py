@@ -257,16 +257,22 @@ def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
         if lo0 - g.dlon < gx < lo1 + g.dlon:
             xs, ys = tf(np.full(50, gx),
                         np.linspace(la0, la1, 50))
-            ax.plot(xs, ys, color=color, lw=0.5, alpha=0.5,
-                    zorder=4)
+            ax.plot(xs, ys, color=color, lw=0.8, alpha=0.65,
+                    zorder=6)
     for j in range(g.nrow + 1):
         gy = g.lat1 - j * g.dlat
         if la0 - g.dlat < gy < la1 + g.dlat:
             xs, ys = tf(np.linspace(lo0, lo1, 50),
                         np.full(50, gy))
-            ax.plot(xs, ys, color=color, lw=0.5, alpha=0.5,
-                    zorder=4)
-    # zoomed view -> sub-cell lattice + fully-qualified labels
+            ax.plot(xs, ys, color=color, lw=0.8, alpha=0.65,
+                    zorder=6)
+    # zoomed view -> sub-cell lattice + fully-qualified labels.
+    # The lattice must stay VISIBLE over mesh + land (owner
+    # 2026-07-12: an invisible grid means locations cannot be
+    # pointed at) -- solid cell borders, dashed sub-lines, and
+    # white-haloed labels.
+    import matplotlib.patheffects as _pe
+    halo = [_pe.withStroke(linewidth=2.5, foreground="white")]
     zoomed = ((lo1 - lo0) < 2.5 * g.dlon
               and (la1 - la0) < 2.5 * g.dlat)
     if zoomed:
@@ -279,15 +285,17 @@ def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
         for i in range(max(i0, 0), min(i1, g.ncol * sub) + 1):
             gx = g.lon0 + i * sdx
             xs, ys = tf(np.full(20, gx), np.linspace(la0, la1, 20))
-            ax.plot(xs, ys, color=color, lw=0.4,
-                    alpha=0.25 if i % sub else 0.5,
-                    ls=":" if i % sub else "-", zorder=4)
+            ax.plot(xs, ys, color=color,
+                    lw=0.7 if i % sub else 1.3,
+                    alpha=0.5 if i % sub else 0.85,
+                    ls="--" if i % sub else "-", zorder=6)
         for j in range(max(j0, 0), min(j1, g.nrow * sub) + 1):
             gy = g.lat1 - j * sdy
             xs, ys = tf(np.linspace(lo0, lo1, 20), np.full(20, gy))
-            ax.plot(xs, ys, color=color, lw=0.4,
-                    alpha=0.25 if j % sub else 0.5,
-                    ls=":" if j % sub else "-", zorder=4)
+            ax.plot(xs, ys, color=color,
+                    lw=0.7 if j % sub else 1.3,
+                    alpha=0.5 if j % sub else 0.85,
+                    ls="--" if j % sub else "-", zorder=6)
         if labels:
             import string as _string
             for i in range(max(i0, 0), min(i1, g.ncol * sub - 1)):
@@ -302,9 +310,9 @@ def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
                            f"{_string.ascii_lowercase[i % sub]}"
                            f"{j % sub + 1}")
                     px, py = tf(cx, cy)
-                    ax.text(px, py, ref, color=color, alpha=0.65,
-                            ha="center", va="center", fontsize=9,
-                            zorder=5)
+                    ax.text(px, py, ref, color=color,
+                            ha="center", va="center", fontsize=10,
+                            zorder=7, path_effects=halo)
         return
     if not labels:
         return
@@ -315,8 +323,9 @@ def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
                        la1 - 0.02 * (la1 - la0)):
                 px, py = tf(gx, la)
                 ax.text(px, py, g.col_letter(i), color=color,
-                        ha="center", fontsize=11,
-                        fontweight="bold", zorder=5)
+                        ha="center", fontsize=12,
+                        fontweight="bold", zorder=7,
+                        path_effects=halo)
     for j in range(1, g.nrow + 1):
         gy = g.lat1 - (j - 0.5) * g.dlat
         if la0 < gy < la1:
@@ -324,7 +333,8 @@ def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
                        lo1 - 0.02 * (lo1 - lo0)):
                 px, py = tf(lo, gy)
                 ax.text(px, py, str(j), color=color, va="center",
-                        fontsize=11, fontweight="bold", zorder=5)
+                        fontsize=12, fontweight="bold", zorder=7,
+                        path_effects=halo)
 
 
 def plot_mesh_overview(
