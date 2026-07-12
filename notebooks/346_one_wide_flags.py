@@ -210,18 +210,63 @@ if len(flag):
     lab[flag] = cl
 
 cent = P[T].mean(axis=1)
+
+# TERMINAL vs CHOKE (owner 2026-07-13): the last cell of a CLOSED
+# channel mouth inevitably touches both banks -- that is the
+# design, not a defect (and wedge splits double-counted them).
+# A site is a real flow CHOKE only if removing its cells cuts the
+# local dual graph; otherwise it is a terminal mouth (grey tier).
+_eq = ks[1:] == ks[:-1]
+pairs_all = np.column_stack([es[:-1][_eq], es[1:][_eq]])
+from collections import defaultdict as _dd, deque as _dq
+adj_c = _dd(list)
+for a2, b2 in pairs_all:
+    adj_c[int(a2)].append(int(b2))
+    adj_c[int(b2)].append(int(a2))
+
+
+def _is_choke(els):
+    drop = set(int(e) for e in els)
+    nbrs = sorted({j for e in drop for j in adj_c[e]
+                   if j not in drop})
+    if len(nbrs) < 2:
+        return False
+    src = nbrs[0]
+    seen = {src}
+    q = _dq([src])
+    hops = 0
+    limit = max(30, 10 * len(drop))
+    while q and hops < 200000:
+        v = q.popleft()
+        for w2 in adj_c[v]:
+            if w2 in drop or w2 in seen:
+                continue
+            seen.add(w2)
+            q.append(w2)
+        hops += 1
+        if len(seen) > limit + len(nbrs):
+            break
+    return any(n2 not in seen for n2 in nbrs[1:])
+
+
 sites = []
+terminals = []
 for c in sorted(set(lab[flag])) if len(flag) else []:
     els = flag[lab[flag] == c]
     cc = cent[els].mean(axis=0)
-    sites.append({
-        "site": f"OW{len(sites) + 1:02d}",
+    rec = {
         "cell_ids_fort14": (els + 1).tolist(),
         "center_lonlat": [round(float(cc[0]), 4),
                           round(float(cc[1]), 4)],
         "gridref": TOKYO_BAY_GRID.point_to_subcell(
             float(cc[0]), float(cc[1])),
-    })
+    }
+    if _is_choke(els):
+        rec["site"] = f"OW{len(sites) + 1:02d}"
+        sites.append(rec)
+    else:
+        rec["site"] = f"TM{len(terminals) + 1:02d}"
+        terminals.append(rec)
 advisory = [{
     "cell_id_fort14": int(e + 1),
     "center_lonlat": [round(float(cent[e][0]), 4),
@@ -230,8 +275,11 @@ advisory = [{
         float(cent[e][0]), float(cent[e][1])),
 } for e in xonly]
 (OUT / "one_wide_cells.json").write_text(json.dumps(
-    {"confirmed_sites": sites, "advisory_narrow": advisory},
-    indent=1))
+    {"confirmed_sites": sites, "terminal_mouths": terminals,
+     "advisory_narrow": advisory}, indent=1))
+print(f"[1wide] real chokes: {len(sites)} sites; terminal "
+      f"mouths (closed-channel ends, by design): "
+      f"{len(terminals)} sites", flush=True)
 for s in sites:
     print(f"[1wide] {s['site']} [{s['gridref']}]: cells "
           f"{s['cell_ids_fort14']} at "
