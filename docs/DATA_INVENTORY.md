@@ -37,7 +37,7 @@ anywhere M7001 has no soundings**.
 
 ---
 
-## Bathymetry — `$DATA_DIR/bathymetry/`
+## Bathymetry — `$DATA_DIR/geodata/bathymetry/`
 
 ### 1. Futtsu_JFA_2023 — precedence #1 (15 GB, 43 tiles)
 
@@ -105,7 +105,7 @@ anywhere M7001 has no soundings**.
 
 ---
 
-## Coastline — `$DATA_DIR/coastline/`
+## Coastline — `$DATA_DIR/geodata/coastline/`
 
 ### 1. tokyo_bay (MLIT C23) — precedence #1 (68 MB)
 
@@ -124,6 +124,7 @@ anywhere M7001 has no soundings**.
 |---|---|
 | CRS | EPSG:4326 |
 | Content | `land-polygons-split-4326/` — osmdata.openstreetmap.de land polygons (862,652 features, global, data date **2026-03-21**): the canonical OSM coastline-as-polygons product. `geofabrik_kanto/` — 18-layer Geofabrik Kanto extract (data date 2026-03-19): `water_a`, `waterways`, `natural` are the layers relevant to river-bank/water geometry |
+| In use | `geofabrik_kanto/gis_osm_waterways_free_1.shp` (waterway CENTRELINES, fclass river/canal/stream) is a live pipeline input since 2026-07-13: `notebooks/325_sample_repro.py` loads it via `${DATA_DIR}/geodata/OSM/geofabrik_kanto/` to authorize bridge-gap opening in `fvcom_mesh_tools.waterways` (a land strip across a channel is opened only when a centreline passes through it — bridge vs levee is undecidable from the land polygon alone) |
 | License | ODbL 1.0 (READMEs on disk) |
 | Known issues | Shapefile only (no PBF/GeoJSON); river banks come from `water_a`/`waterways`, not the land polygons |
 

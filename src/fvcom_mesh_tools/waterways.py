@@ -166,8 +166,8 @@ def detect_waterways(
                 if front <= 3.0 * max(w_i, w_j, 0.3 * h):
                     rows.append(i)
                     cols.append(j)
-                    bridge_lines[(i, j)] = shapely.shortest_line(
-                        gi, gj)
+                    bridge_lines[(i, j)] = (
+                        shapely.shortest_line(gi, gj), gi, gj)
     if n_it:
         g2 = coo_matrix((np.ones(len(rows)), (rows, cols)),
                         shape=(n_it, n_it))
@@ -181,7 +181,8 @@ def detect_waterways(
         geoms = [items[i][1] for i in members]
         union = unary_union(geoms)
         mset = set(int(v) for v in members)
-        net_bridges = [ln for (i, j), ln in bridge_lines.items()
+        net_bridges = [tup for (i, j), tup in
+                       bridge_lines.items()
                        if i in mset and j in mset]
         hull_len = float(union.minimum_rotated_rectangle.length) / 2
         extent_cells = hull_len / h
@@ -320,7 +321,8 @@ def apply_waterway_policy(
     h_grade_per_m: float = 0.0,
     branch_floor_frac: float = 0.45,
     close_blocked: bool = True,
-    open_bridges: bool = False,
+    open_bridges: bool | str = "auto",
+    waterway_lines=None,
 ) -> tuple[Any, dict[str, Any]]:
     """Execute the detected actions: KEEP -> carve the corridor to
     two LOCAL rows along the arc, barrier-safe; CLOSE -> fill the
@@ -394,7 +396,7 @@ def apply_waterway_policy(
             # both. Skeletonise ALWAYS, measure EACH branch, carve
             # the resolvable ones, leave the rest to the stub
             # fill.
-            br_m = sum(float(ln.length) for ln in
+            br_m = sum(float(tup[0].length) for tup in
                        rec.get("bridges") or []) * scale
             done = []
             fails = []
@@ -489,12 +491,14 @@ def apply_waterway_policy(
                     rec["closed"] = True
         if (open_bridges and rec["action"] == "keep"
                 and rec.get("bridges")):
-            # DISABLED BY DEFAULT (owner 2026-07-12, G8-d4/e4):
-            # geometry alone cannot tell a road bridge over one
-            # canal from a levee between two SEPARATE dead-end
-            # waters -- auto-opening fabricated a connection the
-            # sample correctly does not have. Pier/bridge data
-            # corrections are MANUAL edits (recipes/edits).
+            # BRIDGE vs LEVEE (owner 2026-07-13): geometry alone
+            # cannot tell a road bridge over one canal from a
+            # levee between two SEPARATE waters (G8-d4/e4
+            # fabrication). "auto" opens a gap ONLY when an OSM
+            # WATERWAY CENTRELINE (river/canal/stream line data)
+            # passes THROUGH the strip -- flow continuity is then
+            # attested by data, not guessed from shape. True
+            # forces all open (tests); False disables.
             # open the OSM bridge strips (roads drawn as land
             # across the canal, Daishi-canal severance): a short
             # TRANSVERSAL carve with crossings allowed. Only
@@ -505,8 +509,36 @@ def apply_waterway_policy(
                 shapely.LineString(np.asarray(a2, float)).buffer(
                     0.6 * float(np.max(w2)) / scale)
                 for a2, w2 in rec.get("arcs_done") or []])
+            wtree = None
+            wlist = None
+            if open_bridges == "auto":
+                wlist = ([g for g in waterway_lines]
+                         if waterway_lines is not None else [])
+                from shapely.strtree import STRtree
+                wtree = STRtree(wlist) if wlist else None
+
+            def _authorized(ln, gi, gj):
+                """A waterway centreline must run through BOTH
+                flanking water pieces AND pass near this gap --
+                data-attested flow continuity."""
+                if open_bridges is True:
+                    return True
+                if wtree is None:
+                    return False
+                mid = ln.interpolate(0.5, normalized=True)
+                near = mid.buffer(2.0 * h_mesh_m / scale)
+                for k in wtree.query(near):
+                    L = wlist[int(k)]
+                    if (L.intersects(near)
+                            and L.intersects(gi)
+                            and L.intersects(gj)):
+                        return True
+                return False
+
             opened = 0
-            for ln in rec["bridges"]:
+            for ln, gi_b, gj_b in rec["bridges"]:
+                if not _authorized(ln, gi_b, gj_b):
+                    continue
                 if not (tub.intersects(shapely.Point(
                             ln.coords[0]).buffer(
                             0.3 * h_mesh_m / scale))

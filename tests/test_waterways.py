@@ -207,6 +207,35 @@ class TestNetworksAndSafety:
         assert info2["bridges_opened"] >= 1
         assert _water(new_land2).contains(Point(9960, 5000))
 
+    def test_bridge_opens_with_waterway_line_evidence(self):
+        # same strip geometry, but an OSM waterway CENTRELINE
+        # passes through it -> flow continuity is attested by
+        # data and "auto" opens the bridge; without the line
+        # (levee) it stays closed
+        from shapely.geometry import LineString
+        land = unary_union([
+            box(8000, 2000, 12000, 4850),
+            box(8000, 5150, 12000, 8000),
+        ]).union(box(9900, 4850, 10020, 5150))
+        wline = LineString([(9000, 5000), (11000, 5000)])
+        recs = detect_waterways(land, DOMAIN, h_mesh_m=H,
+                                obc_point=OBC, metric_scale=SCALE)
+        new_land, info = apply_waterway_policy(
+            land, DOMAIN, recs, h_mesh_m=H, metric_scale=SCALE,
+            open_bridges="auto", waterway_lines=[wline])
+        assert info["bridges_opened"] >= 1
+        assert _water(new_land).contains(Point(9960, 5000))
+        # a line that does NOT pass through (ends before) fails
+        recs3 = detect_waterways(land, DOMAIN, h_mesh_m=H,
+                                 obc_point=OBC,
+                                 metric_scale=SCALE)
+        short = LineString([(9000, 5000), (9700, 5000)])
+        new_land3, info3 = apply_waterway_policy(
+            land, DOMAIN, recs3, h_mesh_m=H, metric_scale=SCALE,
+            open_bridges="auto", waterway_lines=[short])
+        assert info3["bridges_opened"] == 0
+        assert new_land3.covers(Point(9960, 5000))
+
     def test_parallel_canals_do_not_chain_across_land(self):
         # two PARALLEL dead-end slots 200 m apart share a long
         # frontage: they must NOT chain into one fake through

@@ -164,10 +164,28 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
         _new_land, _dom, h_mesh_m=1.2 * H0,
         obc_point=tuple(OBC_ARC[6]),
         metric_scale=(111e3 * _cosw, 111e3))
+    # OSM waterway CENTRELINES authorize bridge-gap opening
+    # (bridge vs levee is undecidable from the land polygon
+    # alone). Source: the archived Geofabrik Kanto dump.
+    _dd = os.environ.get("DATA_DIR")
+    if not _dd:
+        raise RuntimeError(
+            "DATA_DIR is not set -- required for the OSM "
+            "waterway-centreline layer (geodata/OSM/"
+            "geofabrik_kanto/gis_osm_waterways_free_1.shp)")
+    _wl = gpd.read_file(
+        f"{_dd}/geodata/OSM/geofabrik_kanto/"
+        "gis_osm_waterways_free_1.shp",
+        bbox=(139.60, 34.96, 140.12, 35.75))
+    _wl = _wl[_wl["fclass"].isin(["river", "canal", "stream"])]
+    print(f"[sr] OSM waterway centrelines: {len(_wl)} "
+          f"(river/canal/stream)", flush=True)
     _new_land, _winfo = apply_waterway_policy(
         _new_land, _dom, _recs, h_mesh_m=1.2 * H0,
         metric_scale=(111e3 * _cosw, 111e3),
-        h_grade_per_m=1.2 * GRADE)
+        h_grade_per_m=1.2 * GRADE,
+        open_bridges="auto",
+        waterway_lines=list(_wl.geometry))
     print(f"[sr] waterways (OSM-native): kept {_winfo['kept']}, "
           f"closed {_winfo['closed']}, "
           f"ignored {_winfo['ignored']}, "
