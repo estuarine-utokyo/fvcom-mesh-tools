@@ -124,3 +124,49 @@ def test_directive_refine_and_obc_protection():
         mesh, [{"polygon": to_lonlat(over), "target_h_m": 500.0}],
         utm_epsg=32654)
     assert "skipped" in led2[0]["outcome"]
+
+
+def test_collapse_short_boundary_edge():
+    # A 137 m boundary step between ~400 m neighbours (G8-c5,
+    # run 6191386): the triangle spanning it is a sliver no node
+    # move can fix. The collapse merges the lower-valence
+    # endpoint into the other and the local worst angle improves.
+    from fvcom_mesh_tools.algorithms.obc_finish import (
+        collapse_short_boundary_edges,
+    )
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    nodes = np.array([
+        [0.0, 0.0],        # A
+        [400.0, 0.0],      # B  (short edge B-C = 137 m)
+        [537.0, 0.0],      # C
+        [900.0, 0.0],      # D
+        [300.0, 380.0],    # E  (far apex -> sliver B,C,E)
+        [750.0, 380.0],    # F
+    ])
+    els = np.array([[0, 1, 4], [1, 2, 4], [2, 3, 5], [2, 5, 4]])
+    mesh = Fort14Mesh(
+        title="t", nodes=nodes, depths=np.full(6, 5.0),
+        elements=els, open_boundaries=[],
+        land_boundaries=[(0, np.array([0, 1, 2, 3]))])
+    m2, info = collapse_short_boundary_edges(mesh)
+    assert info["collapsed"] == 1
+    assert len(m2.elements) == 3
+    assert len(m2.nodes) == 5
+
+    def worst(nds, e3):
+        w = 180.0
+        for t in e3:
+            q = nds[t]
+            for k in range(3):
+                u = q[(k + 1) % 3] - q[k]
+                v = q[(k + 2) % 3] - q[k]
+                c = np.dot(u, v) / (np.linalg.norm(u)
+                                    * np.linalg.norm(v))
+                w = min(w, np.degrees(np.arccos(
+                    np.clip(c, -1, 1))))
+        return w
+
+    assert worst(m2.nodes, m2.elements) > worst(nodes, els)
+    # land-boundary chain keeps only surviving nodes, in order
+    assert all(len(ids) >= 2 for _, ids in m2.land_boundaries)

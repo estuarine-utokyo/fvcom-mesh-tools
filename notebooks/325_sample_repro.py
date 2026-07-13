@@ -309,6 +309,117 @@ g, dt_eff = om.finalize_sizing(
     max_edge_length=MAXEL, gradation=GRADE, courant=None)
 print(f"[sr] sizing done +{time.time()-t0:.0f}s", flush=True)
 
+# CHANNEL REFINEMENT corridors, v2 (owner 2026-07-13: finer cells
+# are allowed wherever they do NOT tighten the CFL condition --
+# more nodes at unchanged dt are nearly free). Along every carved
+# branch, lower the size field so an INTEGER number of rows fits
+# the ACHIEVED width: n = ceil(W/(1.2*H0) - 0.15) rows (min 2,
+# max 4), field target W/(1.2*n). v1 lessons (run 6190761):
+# (a) a flat H<=30 m CFL cap was violated by deep dredged
+# channels (implied dt 12.0 -> 10.1 s) -- the floor now uses the
+# REAL DEM depth per station, dt >= 15 s with realization margin;
+# (b) the two-row-only trigger (W < 2.2 h) missed the awkward
+# 2.5-3 h band where DistMesh oscillates between 2 and 3 rows
+# (N7 12-cell cluster) -- the row-aware target covers up to 3.2 h.
+# Applied BEFORE the OBC corridor (boundary-priority), with a
+# re-gradation pass so transitions honour GRADE.
+if (os.environ.get("SR_CH_REFINE", "on") == "on"
+        and "_winfo" in dir() and _winfo.get("refine_arcs")):
+    _vals = np.asarray(np.ma.filled(np.ma.asarray(g.values),
+                                    MAXEL * DEG), dtype=float)
+    _vpre = _vals.copy()    # pre-refinement field: the CFL guard
+    #                         must never COARSEN the baseline
+    _lon_gr, _lat_gr = g.create_grid()
+    _DT_FLOOR = 15.0        # global implied dt is 12.0 s; the
+    #                         margin absorbs sub-target edges
+    _n_low = 0
+    for _ra, _rw in _winfo["refine_arcs"]:
+        _ra = np.asarray(_ra, float)
+        _rw = np.asarray(_rw, float)
+        _nrow = np.clip(np.ceil(_rw / (1.2 * H0) - 0.15), 2, 4)
+        _tf = np.clip(_rw / (1.2 * _nrow), 0.5 * H0, H0)
+        _do = (_tf < H0 - 1.0) & (_rw < 3.2 * 1.2 * H0)
+        if not bool(_do.any()):
+            continue
+        # branch-window subgrid, then per-station corridor discs
+        _rmax = 0.75 * float(_rw[_do].max()) / 111e3
+        _bb = ((_lon_gr >= _ra[:, 0].min() - 1.5 * _rmax)
+               & (_lon_gr <= _ra[:, 0].max() + 1.5 * _rmax)
+               & (_lat_gr >= _ra[:, 1].min() - 1.5 * _rmax)
+               & (_lat_gr <= _ra[:, 1].max() + 1.5 * _rmax))
+        _bi = np.nonzero(_bb)
+        if len(_bi[0]) == 0:
+            continue
+        _blon, _blat = _lon_gr[_bi], _lat_gr[_bi]
+        _bval = _vals[_bi]
+        # CFL floor from the MAX DEM depth around each disc: a
+        # station on a shallow shelf must not refine cells whose
+        # triangles will straddle a steep slope into deep water
+        # (Uraga west side, dt 8.03 s run 6191155 -- even
+        # per-lattice-point depth missed the slope the CELL
+        # spans). Conservative by design: a disc that touches
+        # deep water simply does not refine.
+        _bz = np.asarray(dem.eval(
+            np.column_stack([_blon, _blat]))).ravel()
+        _bH = np.clip(-_bz, 2.0, None)
+        for _k in np.nonzero(_do)[0]:
+            _px, _py = _ra[_k]
+            _r = 0.75 * _rw[_k] / 111e3
+            _dd = np.hypot((_blon - _px) * _cosw, _blat - _py)
+            _m = _dd < _r
+            _near = _dd < _r + 400.0 / 111e3
+            if not bool(_near.any()):
+                continue
+            _Hd = float(_bH[_near].max())
+            _flo = max(0.5 * H0,
+                       _DT_FLOOR * np.sqrt(9.81 * _Hd) / 1.2)
+            _tv = max(_tf[_k], _flo) * DEG
+            _sel = _m & (_bval > _tv)
+            _n_low += int(_sel.sum())
+            _bval[_sel] = _tv
+        _vals[_bi] = _bval
+    _n_guard = 0
+    if _n_low:
+        g.values = _vals
+        g = om.enforce_mesh_gradation(g, gradation=GRADE)
+        # GLOBAL depth-aware CFL guard (run 6191278: the
+        # gradation pass spreads refined values ~1 km outward,
+        # and the halo crossed the Uraga slope -- dt 11.48 s at
+        # 635 m from the disc). Every lattice cell is floored at
+        # its DILATED-depth CFL bound, but never above the
+        # PRE-refinement field: the baseline mesh (dt 12.0 s) is
+        # left exactly as it was.
+        from scipy.ndimage import maximum_filter
+        _vg = np.asarray(np.ma.filled(np.ma.asarray(g.values),
+                                      MAXEL * DEG), dtype=float)
+        _zf = np.asarray(dem.eval(np.column_stack(
+            [_lon_gr.ravel(), _lat_gr.ravel()])))
+        _Hf = np.clip(-_zf.reshape(_lon_gr.shape), 2.0, None)
+        _sp_m = min(
+            float(np.abs(np.diff(_lon_gr, axis=0)).max()
+                  + np.abs(np.diff(_lon_gr, axis=1)).max())
+            * _cosw * 111e3,
+            float(np.abs(np.diff(_lat_gr, axis=0)).max()
+                  + np.abs(np.diff(_lat_gr, axis=1)).max())
+            * 111e3)
+        _npx = max(1, int(np.ceil(450.0 / max(_sp_m, 1.0))))
+        _Hd = maximum_filter(_Hf, size=2 * _npx + 1)
+        _guard = np.minimum(
+            np.maximum(0.5 * H0,
+                       _DT_FLOOR * np.sqrt(9.81 * _Hd) / 1.2)
+            * DEG,
+            _vpre)
+        _low2 = _vg < _guard
+        _n_guard = int(_low2.sum())
+        _vg[_low2] = _guard[_low2]
+        g.values = _vg
+        g.build_interpolant()
+    print(f"[sr] channel refinement v2: lowered {_n_low} lattice "
+          f"cells over {len(_winfo['refine_arcs'])} branch arcs "
+          f"(row-aware n=2-4, DEM-depth CFL floor dt>="
+          f"{_DT_FLOOR:.0f} s; depth guard re-raised {_n_guard} "
+          f"cells)", flush=True)
+
 # OBC boundary-band (fvcom_mesh_tools.obc_band, default ON):
 # smooth inner guide line at k*local-target-size offsets + a
 # boundary-priority size corridor along the whole southern

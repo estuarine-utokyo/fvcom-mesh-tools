@@ -26,6 +26,7 @@ __all__ = [
     "fix_r4",
     "split_r4_end_cells",
     "flip_c4_edges",
+    "collapse_short_boundary_edges",
     "finish_obc_mesh",
 ]
 
@@ -595,6 +596,157 @@ def split_choke_edges(
                              for a, b in split_edges]}
 
 
+def collapse_short_boundary_edges(
+    mesh: Fort14Mesh,
+    ratio: float = 0.5,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Collapse a boundary edge much shorter than its flanking
+    boundary edges (run 6191386, G8-c5: a 137 m carve-bank step
+    between 360/398 m neighbours forces a 20 deg sliver on the
+    triangle spanning it -- no node move can fix it because both
+    endpoints are shoreline nodes). The lower-valence endpoint is
+    merged into the other; quality-gated: every affected element
+    must stay CCW, the local worst angle must improve (or reach
+    30 deg), and the survivor valence stays <= 8. OBC nodes are
+    never victims."""
+    import dataclasses
+    from collections import defaultdict
+
+    nodes = mesh.nodes.copy()
+    els = mesh.elements.copy()
+    dep = mesh.depths.copy()
+    ee = np.vstack([els[:, [0, 1]], els[:, [1, 2]],
+                    els[:, [2, 0]]])
+    ee.sort(axis=1)
+    uq, ct = np.unique(ee, axis=0, return_counts=True)
+    badj = defaultdict(set)
+    for a, b in uq[ct == 1]:
+        badj[int(a)].add(int(b))
+        badj[int(b)].add(int(a))
+    obc = set()
+    for ob in mesh.open_boundaries:
+        obc.update(int(v) for v in np.asarray(ob))
+    node_els = defaultdict(list)
+    for j, t3 in enumerate(els):
+        for v in t3:
+            node_els[int(v)].append(j)
+
+    def _elen(a, b):
+        return float(np.hypot(*(nodes[a] - nodes[b])))
+
+    def _worst_angle(rows, pos):
+        worst = 180.0
+        for j in rows:
+            q = pos[els[j]]
+            if abs((q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1])
+                   - (q[2, 0] - q[0, 0])
+                   * (q[1, 1] - q[0, 1])) < 1e-9:
+                continue
+            for k3 in range(3):
+                u = q[(k3 + 1) % 3] - q[k3]
+                v3 = q[(k3 + 2) % 3] - q[k3]
+                c3 = np.dot(u, v3) / (
+                    np.linalg.norm(u) * np.linalg.norm(v3)
+                    + 1e-300)
+                worst = min(worst, float(np.degrees(
+                    np.arccos(np.clip(c3, -1, 1)))))
+        return worst
+
+    cand = []
+    for a, b in uq[ct == 1]:
+        a, b = int(a), int(b)
+        ln = _elen(a, b)
+        flank = [_elen(a, x) for x in badj[a] if x != b] \
+            + [_elen(b, x) for x in badj[b] if x != a]
+        if flank and ln < ratio * min(flank):
+            cand.append((ln, a, b))
+    cand.sort()
+    touched: set[int] = set()
+    collapsed = []
+    dead_els: set[int] = set()
+    for ln, a, b in cand:
+        if a in touched or b in touched:
+            continue
+        pick = [(len(node_els[a]), a, b), (len(node_els[b]),
+                                           b, a)]
+        pick.sort()
+        victim, survivor = None, None
+        for _, v0, s0 in pick:
+            if v0 not in obc:
+                victim, survivor = v0, s0
+                break
+        if victim is None:
+            continue
+        rows = sorted(set(node_els[victim])
+                      | set(node_els[survivor]) - dead_els)
+        rows = [j for j in rows if j not in dead_els]
+        old_worst = _worst_angle(rows, nodes)
+        trial = els.copy()
+        deg = []
+        for j in rows:
+            t3 = trial[j]
+            t3[t3 == victim] = survivor
+            if len(set(int(x) for x in t3)) < 3:
+                deg.append(j)
+        keep_rows = [j for j in rows if j not in deg]
+        # CCW check on kept affected elements
+        ok = True
+        for j in keep_rows:
+            q = nodes[trial[j]]
+            ar = ((q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1])
+                  - (q[2, 0] - q[0, 0]) * (q[1, 1] - q[0, 1]))
+            if ar <= 1e-6:
+                ok = False
+                break
+        if not ok or not deg:
+            continue
+        # quality gate: local worst angle must improve or pass
+        saved = els[rows].copy()
+        els[rows] = trial[rows]
+        new_worst = _worst_angle(keep_rows, nodes)
+        if not (new_worst > old_worst or new_worst >= 30.0):
+            els[rows] = saved
+            continue
+        # valence gate on the survivor
+        n_srv = sum(1 for j in keep_rows
+                    if survivor in els[j]) \
+            + sum(1 for j in node_els[survivor]
+                  if j not in rows and j not in dead_els)
+        if n_srv > 8:
+            els[rows] = saved
+            continue
+        dead_els.update(deg)
+        for j in keep_rows:
+            if j not in node_els[survivor]:
+                node_els[survivor].append(j)
+        touched.update((victim, survivor))
+        collapsed.append((victim, survivor, round(ln, 1)))
+    if not collapsed:
+        return mesh, {"collapsed": 0, "edges": []}
+    keep = np.array([j for j in range(len(els))
+                     if j not in dead_els])
+    els = els[keep]
+    used = np.zeros(len(nodes), bool)
+    used[els.ravel()] = True
+    for ob in mesh.open_boundaries:
+        used[np.asarray(ob, int)] = True
+    remap = -np.ones(len(nodes), int)
+    remap[used] = np.arange(int(used.sum()))
+    els = remap[els]
+    obs = [remap[np.asarray(ob, int)]
+           for ob in mesh.open_boundaries]
+    lbs = []
+    for ibt, ids in mesh.land_boundaries:
+        ids2 = remap[np.asarray(ids, int)]
+        lbs.append((ibt, ids2[ids2 >= 0]))
+    mesh2 = dataclasses.replace(
+        mesh, nodes=nodes[used], depths=dep[used],
+        elements=els, open_boundaries=obs,
+        land_boundaries=lbs)
+    return mesh2, {"collapsed": len(collapsed),
+                   "edges": collapsed}
+
+
 def split_c4_edges(
     mesh: Fort14Mesh,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
@@ -766,6 +918,12 @@ def finish_obc_mesh(
     # midpoint so the section carries two cells, then polish.
     mesh, info["choke_split"] = split_choke_edges(mesh)
     mesh, info["c4_split"] = split_c4_edges(mesh)
+    # SHORT BOUNDARY EDGES (run 6191386): carve-bank steps left
+    # sub-half-cell boundary edges whose spanning triangles are
+    # unfixable slivers -- collapse them before the final polish
+    # smooths the merged region.
+    mesh, info["bnd_collapse"] = collapse_short_boundary_edges(
+        mesh)
     # FINAL single-pass stochastic polish (seeded, OBC frozen):
     # widened-corridor geometry can leave a 1-2 element C1/C4 tail
     # that the earlier passes miss (element 3894, run 6184675).

@@ -458,6 +458,7 @@ def apply_waterway_policy(
             "retried": 0, "bridges_opened": 0, "stub_fills": 0,
             "marginal_kept": 0, "dup_skipped": 0,
             "line_branches": 0, "skel_branches": 0,
+            "refine_arcs": [],
             "band_pfix": [], "band_egfix": [], "band_n": 0,
             "band_size_pts": [], "band_size_tgt": [],
             "land_removed_m2": 0.0}
@@ -673,6 +674,12 @@ def apply_waterway_policy(
                     done.append((snaps[i]["arc"], w_used))
                     info["land_removed_m2"] += (
                         ci["land_removed_m2"])
+                    # achieved-width profile feeds the channel
+                    # REFINEMENT corridors (owner 2026-07-13:
+                    # finer cells allowed where CFL is untouched)
+                    info["refine_arcs"].append(
+                        (np.asarray(ach["arc"], float),
+                         np.asarray(ach["width_m"], float)))
                     # FORCED two-row ladder (owner 2026-07-13):
                     # EXPERIMENTAL, default OFF. Bare rows made
                     # 27 C1 violations (run 6188830); coupling
@@ -725,6 +732,11 @@ def apply_waterway_policy(
                                              w_used))
                                 info["land_removed_m2"] += (
                                     ci["land_removed_m2"])
+                                info["refine_arcs"].append((
+                                    np.asarray(ach["arc"],
+                                               float),
+                                    np.asarray(ach["width_m"],
+                                               float)))
                                 info["marginal_kept"] += 1
                                 rec.setdefault(
                                     "marginal_branches",
