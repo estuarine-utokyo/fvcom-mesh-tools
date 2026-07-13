@@ -175,6 +175,8 @@ def resolve_narrow_channels(
     analyze_only: bool = False,
     apply_widen: bool = True,
     small_cluster_delete: int = 0,
+    strict_boundary_flag: bool = False,
+    max_rounds: int = 1,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Apply the owner's narrow-channel policy. Returns
     ``(new_mesh, info)``; raises if the open boundary cannot be
@@ -192,7 +194,20 @@ def resolve_narrow_channels(
     the geometry-stage policy every real channel is >= 2 cells
     wide, so tiny leftovers are junction corner caps (the bridging
     triangle DistMesh drops where a widened passage opens into
-    wide water); nibbling them off is the sample's own look."""
+    wide water); nibbling them off is the sample's own look.
+
+    ``strict_boundary_flag`` (owner 2026-07-13, "do not create
+    one-mesh-wide channels"): ALSO flag every element whose three
+    nodes all sit on the LAND boundary with at most one boundary
+    edge -- the one-wide ledger's CONFIRMED criterion -- so the
+    w/h metric cannot miss a strict bank-to-bank cell. Deletion
+    stays severance-safe by construction: clusters whose far side
+    reaches the main body or a big basin are never deleted (loop
+    chokes = detour class), only throats into sub-threshold
+    appendixes go, together with the appendix (the goto2023
+    sample meshes none of those). ``max_rounds`` repeats the pass
+    until no deletion happens (pruning a throat exposes the next
+    one-wide section of a collapsing tail)."""
     flag, chinfo = under_resolved_channels_flag(
         mesh, min_w_h=min_w_h, coords=coords)
     ob_nodes = set(
@@ -201,7 +216,35 @@ def resolve_narrow_channels(
     touches_ob = np.isin(mesh.elements,
                          np.asarray(sorted(ob_nodes))).any(axis=1)
     flag = flag & ~touches_ob
+    if strict_boundary_flag:
+        els0 = mesh.elements
+        ee0 = np.vstack([els0[:, [0, 1]], els0[:, [1, 2]],
+                         els0[:, [2, 0]]])
+        ee0.sort(axis=1)
+        uq0, ct0 = np.unique(ee0, axis=0, return_counts=True)
+        bnd = np.zeros(mesh.n_nodes, dtype=bool)
+        bnd[uq0[ct0 == 1].ravel()] = True
+        obn = np.zeros(mesh.n_nodes, dtype=bool)
+        if ob_nodes:
+            obn[np.asarray(sorted(ob_nodes))] = True
+        land_bnd = bnd & ~obn
+        all3 = land_bnd[els0].all(axis=1)
+        bkeys = np.sort(_edge_key(uq0[ct0 == 1][:, 0],
+                                  uq0[ct0 == 1][:, 1],
+                                  mesh.n_nodes))
+        nbedge = np.zeros(len(els0), dtype=np.int64)
+        for a2, b2 in ((0, 1), (1, 2), (2, 0)):
+            k2 = _edge_key(els0[:, a2], els0[:, b2],
+                           mesh.n_nodes)
+            j2 = np.searchsorted(bkeys, k2)
+            j2 = np.clip(j2, 0, len(bkeys) - 1)
+            nbedge += (bkeys[j2] == k2).astype(np.int64)
+        strict = all3 & (nbedge <= 1) & ~touches_ob
+        info_strict = int((strict & ~flag).sum())
+        flag = flag | strict
     info: dict[str, Any] = {"n_flagged": int(flag.sum())}
+    if strict_boundary_flag:
+        info["n_strict_extra"] = info_strict
     if not flag.any():
         info.update(n_widened=0, n_deleted_elements=0, clusters=[])
         return mesh, info
@@ -364,4 +407,18 @@ def resolve_narrow_channels(
     else:
         info["n_widened"] = 0
         info["n_widen_skipped"] = int(widen.sum())
+    if (max_rounds > 1 and not analyze_only
+            and info["n_deleted_elements"] > 0):
+        mesh, nxt = resolve_narrow_channels(
+            mesh, min_basin_elements=min_basin_elements,
+            min_w_h=min_w_h, coords=coords,
+            apply_widen=apply_widen,
+            small_cluster_delete=small_cluster_delete,
+            strict_boundary_flag=strict_boundary_flag,
+            max_rounds=max_rounds - 1)
+        info["n_deleted_elements"] += nxt["n_deleted_elements"]
+        info["n_widened"] += nxt.get("n_widened", 0)
+        info["clusters"] = (info.get("clusters", [])
+                            + nxt.get("clusters", []))
+        info["rounds"] = 1 + nxt.get("rounds", 1)
     return mesh, info

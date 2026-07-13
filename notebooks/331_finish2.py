@@ -11,14 +11,22 @@ SRC = "outputs/sample_repro/sample_repro_utm.14"
 DST = "outputs/sample_repro/sample_repro_final.14"
 
 mesh = read_fort14(SRC)
-# narrow-channel policy (owner): through/big-port -> widen,
-# dead-end/small-port -> delete basin and all
-# delete-only here: through-canal widening is done properly by the
-# two-pass refinement in the generator (fans violate C1 in narrow
-# canals and get undone by phase_h -- churn)
-mesh, cinfo = resolve_narrow_channels(mesh, min_basin_elements=6,
+# narrow-channel policy (owner 2026-07-13: "do not create
+# one-mesh-wide channels"): STRICT mode -- the ledger's confirmed
+# one-wide criterion joins the w/h flag, throats into small
+# appendixes are pruned WITH the appendix (measured census run
+# 6195614: 8/14 chokes guarded pockets of 1-23 elements; the
+# sample meshes none of them), iterated until no tail is left.
+# Loop/through chokes are NEVER deleted (severance/detour class,
+# Keihin precedent) -- they stay in the one-wide ledger.
+# min_basin_elements=25 deliberately outranks the pre-mesh keep
+# bar (min_basin_cells=6 ~ 12 elements): a pocket only reachable
+# through a one-wide neck is not usable water at this h.
+mesh, cinfo = resolve_narrow_channels(mesh, min_basin_elements=25,
                                       apply_widen=False,
-                                      small_cluster_delete=0)
+                                      small_cluster_delete=0,
+                                      strict_boundary_flag=True,
+                                      max_rounds=8)
 print(f"[fin] channel policy: flagged={cinfo['n_flagged']} "
       f"widened={cinfo['n_widened']} "
       f"deleted={cinfo['n_deleted_elements']}", flush=True)
