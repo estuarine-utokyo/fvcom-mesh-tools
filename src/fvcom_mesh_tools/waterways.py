@@ -428,6 +428,7 @@ def apply_waterway_policy(
     waterway_lines=None,
     force_two_rows: bool = False,
     widen_factor: float = 1.0,
+    attain_bar_h: float = 1.7,
 ) -> tuple[Any, dict[str, Any]]:
     """Execute the detected actions: KEEP -> carve the corridor to
     two LOCAL rows along the arc, barrier-safe; CLOSE -> fill the
@@ -471,7 +472,7 @@ def apply_waterway_policy(
     wtree_g = STRtree(wlist) if wlist else None
 
     def _carve(base, arc, widths, tol_extra_m=0.0,
-               attain_bar_h=1.7):
+               attain_bar_h=attain_bar_h):
         w_nat = np.asarray(widths, float)
         target = widen_factor * widen_rows * (
             h_mesh_m + h_grade_per_m * w_nat / 2.0)

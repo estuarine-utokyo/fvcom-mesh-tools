@@ -180,12 +180,22 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
     _wl = _wl[_wl["fclass"].isin(["river", "canal", "stream"])]
     print(f"[sr] OSM waterway centrelines: {len(_wl)} "
           f"(river/canal/stream)", flush=True)
+    # SAMPLE-CONSERVATIVE widths (owner verdict 2026-07-13: the
+    # v2 escalation -- widen_factor 1.0 + 1.7 h bar -- meshed
+    # narrow water the sample rightly leaves out; the sample is
+    # the quality bar). The artifact FIXES stay on regardless:
+    # verified dup-skip, crumb cleanup, severance override,
+    # boundary short-edge collapse.
     _new_land, _winfo = apply_waterway_policy(
         _new_land, _dom, _recs, h_mesh_m=1.2 * H0,
         metric_scale=(111e3 * _cosw, 111e3),
         h_grade_per_m=1.2 * GRADE,
         open_bridges="auto",
         waterway_lines=list(_wl.geometry),
+        widen_factor=float(os.environ.get(
+            "SR_WIDEN_FACTOR", "0.875")),
+        attain_bar_h=float(os.environ.get(
+            "SR_ATTAIN_BAR", "1.5")),
         force_two_rows=(os.environ.get(
             "SR_FORCE2ROWS", "off") == "on"))
     # forced two-row ladder constraints from marginal kept
@@ -323,7 +333,15 @@ print(f"[sr] sizing done +{time.time()-t0:.0f}s", flush=True)
 # (N7 12-cell cluster) -- the row-aware target covers up to 3.2 h.
 # Applied BEFORE the OBC corridor (boundary-priority), with a
 # re-gradation pass so transitions honour GRADE.
-if (os.environ.get("SR_CH_REFINE", "on") == "on"
+# OWNER VERDICT 2026-07-13: default OFF. The refined field cannot
+# be confined to the kept corridors -- the gradation halo lowers
+# neighbouring water too, so sub-cell creeks the policy left
+# unresolved suddenly mesh (590 beyond-sample elements in narrow
+# original water, run 6191458), and a signed-distance field can
+# never represent a land wall thinner than the LOCAL cell, so
+# finer cells punch through thin levees. The sample stays better;
+# keep the machinery only as a measured negative result.
+if (os.environ.get("SR_CH_REFINE", "off") == "on"
         and "_winfo" in dir() and _winfo.get("refine_arcs")):
     _vals = np.asarray(np.ma.filled(np.ma.asarray(g.values),
                                     MAXEL * DEG), dtype=float)

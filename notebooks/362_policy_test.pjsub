@@ -18,6 +18,10 @@ cd "${HOME}/Github/fvcom-mesh-tools"
 echo "=== unit tests ==="
 python -m pytest tests/test_waterways.py tests/test_channel_arcs.py -q
 export SR_OBC_H1=1680
+echo "=== 364 on PREVIOUS mesh (detector validation) ==="
+python notebooks/364_over_resolution.py || true
+cp outputs/figures/over_resolution.png \
+   outputs/figures/over_resolution_prev_mesh.png || true
 echo "=== generate ==="
 python notebooks/325_sample_repro.py
 echo "=== finish ==="
@@ -28,3 +32,5 @@ echo "=== connectivity comparator ==="
 python notebooks/342_connectivity_check.py || true
 echo "=== one-wide ledger ==="
 python notebooks/346_one_wide_flags.py || true
+echo "=== over-resolution / wall integrity ==="
+python notebooks/364_over_resolution.py || true
