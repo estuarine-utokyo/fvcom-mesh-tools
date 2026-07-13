@@ -75,6 +75,74 @@ def _interior_points(geom, spacing):
     return out
 
 
+def _ladder_constraints(
+    snapd: dict,
+    h_mesh_m: float,
+    metric_scale: tuple[float, float],
+    inset: float = 0.47,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Two-row LADDER constraints for a marginal channel band
+    (owner 2026-07-13): fix three node rows -- both banks (on the
+    carved shoreline, pulled ``inset`` inward) and a staggered
+    centreline row -- with egfix chains along each row. The CDT
+    then forms an orderly two-row band, the same primitive that
+    keeps the OBC ladder tidy.
+
+    Station spacing ~= the local two-row edge length; the first
+    and last stations are trimmed so junctions and open mouths
+    stay unconstrained."""
+    arc = np.asarray(snapd["arc"], float)
+    bl = np.asarray(snapd["bank_left"], float)
+    br = np.asarray(snapd["bank_right"], float)
+    wm = np.asarray(snapd["width_m"], float)
+    sx, sy = metric_scale
+    scale = 0.5 * (sx + sy)
+    seg = np.hypot(*(np.diff(arc, axis=0).T)) * scale
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    L = float(cum[-1])
+    sat = wm >= 0.95 * 2.0 * 2.5 * h_mesh_m
+    wn = wm[~sat] if bool((~sat).any()) else wm
+    w_med = float(np.median(wn))
+    a = max(0.8 * h_mesh_m, w_med / 1.8)
+    if L < 3.0 * a:
+        return np.zeros((0, 2)), np.zeros((0, 2), dtype=int)
+
+    def _interp(rowpts, s_at):
+        out = np.empty((len(s_at), 2))
+        for c2 in (0, 1):
+            out[:, c2] = np.interp(s_at, cum, rowpts[:, c2])
+        return out
+
+    s_nodes = np.arange(a, L - 0.5 * a, a)
+    if len(s_nodes) < 2:
+        return np.zeros((0, 2)), np.zeros((0, 2), dtype=int)
+    cL = _interp(arc, s_nodes)
+    pL = cL + (_interp(bl, s_nodes) - cL) * 2.0 * inset
+    pR = cL + (_interp(br, s_nodes) - cL) * 2.0 * inset
+    s_mid = s_nodes[:-1] + 0.5 * a
+    pC = _interp(arc, s_mid)
+    pf = np.vstack([pL, pR, pC])
+    nL = len(s_nodes)
+    eg = []
+    for k in range(nL - 1):
+        eg.append([k, k + 1])                    # bank L chain
+        eg.append([nL + k, nL + k + 1])          # bank R chain
+    for k in range(len(s_mid) - 1):
+        eg.append([2 * nL + k, 2 * nL + k + 1])  # centre chain
+    return pf, np.asarray(eg, dtype=int)
+
+
+def _ladder_size_targets(snapd, a_m):
+    """Size-field override points for a ladder band: the fixed
+    rows only work when the ambient sizing matches their spacing
+    (the OBC-band lesson) -- return (points_ll, field_targets_m
+    = a/1.2) sampled along the band arc."""
+    arc = np.asarray(snapd["arc"], float)
+    pts = arc[::1]
+    tgt = np.full(len(pts), a_m / 1.2)
+    return pts, tgt
+
+
 def detect_waterways(
     land_union,
     domain_poly,
@@ -323,6 +391,7 @@ def apply_waterway_policy(
     close_blocked: bool = True,
     open_bridges: bool | str = "auto",
     waterway_lines=None,
+    force_two_rows: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
     """Execute the detected actions: KEEP -> carve the corridor to
     two LOCAL rows along the arc, barrier-safe; CLOSE -> fill the
@@ -348,6 +417,8 @@ def apply_waterway_policy(
     info = {"kept": 0, "closed": 0, "ignored": 0, "blocked": [],
             "retried": 0, "bridges_opened": 0, "stub_fills": 0,
             "line_branches": 0, "skel_branches": 0,
+            "band_pfix": [], "band_egfix": [], "band_n": 0,
+            "band_size_pts": [], "band_size_tgt": [],
             "land_removed_m2": 0.0}
     fills = []
     sx, sy = metric_scale
@@ -385,7 +456,7 @@ def apply_waterway_policy(
                 f"{narrow_frac:.0%} of the arc (min "
                 f"{np.min(wa):.0f} m): two rows are not "
                 "attainable under the barrier constraints")
-        return cand, ci, w
+        return cand, ci, w, ach
 
     for rec in records:
         if rec["action"] == "ignore":
@@ -503,13 +574,42 @@ def apply_waterway_policy(
                 if snaps[i] is None:
                     continue
                 try:
-                    new_land, ci, w_used = _carve(
+                    new_land, ci, w_used, ach = _carve(
                         new_land, snaps[i]["arc"],
                         snaps[i]["width_carve_m"],
                         tol_extra_m=br_m + 30.0)
                     done.append((snaps[i]["arc"], w_used))
                     info["land_removed_m2"] += (
                         ci["land_removed_m2"])
+                    # FORCED two-row ladder (owner 2026-07-13):
+                    # EXPERIMENTAL, default OFF. Bare rows made
+                    # 27 C1 violations (run 6188830); coupling
+                    # the size field helped but 17 remained
+                    # (6188855) -- curved bands need end tapering
+                    # and junction-aware trimming before this can
+                    # meet the quality gates. The machinery is
+                    # kept for that follow-up.
+                    if force_two_rows:
+                        wa2 = ach["width_m"]
+                        sat2 = wa2 >= 0.95 * 2.0 * 2.5 * h_mesh_m
+                        wn2 = wa2[~sat2] if bool(
+                            (~sat2).any()) else wa2
+                        wmed2 = float(np.median(wn2))
+                        if 1.4 * h_mesh_m <= wmed2 \
+                                <= 2.3 * h_mesh_m:
+                            pf2, eg2 = _ladder_constraints(
+                                ach, h_mesh_m, metric_scale)
+                            if len(pf2):
+                                info["band_pfix"].append(pf2)
+                                info["band_egfix"].append(
+                                    eg2 + info["band_n"])
+                                info["band_n"] += len(pf2)
+                                a2m = max(0.8 * h_mesh_m,
+                                          wmed2 / 1.8)
+                                bp2, bt2 = _ladder_size_targets(
+                                    ach, a2m)
+                                info["band_size_pts"].append(bp2)
+                                info["band_size_tgt"].append(bt2)
                 except (RuntimeError, ValueError) as e2:
                     fails.append(str(e2)[:110])
             if done:

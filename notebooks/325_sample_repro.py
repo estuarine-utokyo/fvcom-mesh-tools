@@ -186,6 +186,17 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
         h_grade_per_m=1.2 * GRADE,
         open_bridges="auto",
         waterway_lines=list(_wl.geometry))
+    # forced two-row ladder constraints from marginal kept
+    # branches join the constrained-node set (same plumbing as
+    # the manual-edit bank chains)
+    if _winfo.get("band_n"):
+        _off = sum(len(a) for a in CH_PF)
+        CH_PF.extend(np.asarray(x, float)
+                     for x in _winfo["band_pfix"])
+        CH_EG.extend(np.asarray(x, int) + _off
+                     for x in _winfo["band_egfix"])
+        print(f"[sr] two-row ladder constraints: "
+              f"+{_winfo['band_n']} pfix nodes", flush=True)
     print(f"[sr] waterways (OSM-native): kept {_winfo['kept']}, "
           f"closed {_winfo['closed']}, "
           f"ignored {_winfo['ignored']}, "
@@ -318,6 +329,21 @@ if os.environ.get("SR_OBC_LADDER", "on") == "on":
     g.build_interpolant()
     print(f"[sr] boundary corridor: raised {n_up} lattice cells "
           f"(post-limgrad, boundary-priority)", flush=True)
+    # ladder-band size override: the forced two-row rows only
+    # stay clean when the ambient sizing matches their spacing
+    # (96 bare pfix nodes -> 27 C1 violations, run 6188830)
+    if "_winfo" in dir() and _winfo.get("band_n"):
+        _bp = np.vstack(_winfo["band_size_pts"])
+        _bt = np.concatenate(_winfo["band_size_tgt"])
+        _bpm = np.column_stack([
+            _bp[:, 0] * np.cos(np.deg2rad(35.35)) * 111e3,
+            _bp[:, 1] * 111e3])
+        g.values, _n3 = apply_corridor(
+            lon_g2, lat_g2, np.asarray(g.values, dtype=float),
+            _bpm, _bt, grade=GRADE, arc_mean_lat=35.35)
+        g.build_interpolant()
+        print(f"[sr] ladder-band corridor: raised {_n3} lattice "
+              f"cells", flush=True)
 else:
     PFIX, SEGS = OBC_ARC, OBC_SEG
 

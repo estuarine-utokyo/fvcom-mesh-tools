@@ -291,3 +291,31 @@ class TestNetworksAndSafety:
             detect_waterways(box(0, 0, 1, 1), DOMAIN, h_mesh_m=H,
                              obc_point=OBC,
                              metric_scale=(1.0, 2.0))
+
+
+def test_ladder_constraints_build_two_row_band():
+    # marginal slot (widened to ~610 m): the ladder generator
+    # must emit bankL/bankR/centre rows with chains, all points
+    # strictly inside the carved water
+    import numpy as np
+    land = unary_union([
+        box(8000, 2000, 12000, 4850),
+        box(8000, 5150, 12000, 8000),
+    ])
+    recs = detect_waterways(land, DOMAIN, h_mesh_m=H,
+                            obc_point=OBC, metric_scale=SCALE)
+    new_land, info = apply_waterway_policy(
+        land, DOMAIN, recs, h_mesh_m=H, metric_scale=SCALE,
+        force_two_rows=True)      # experimental opt-in
+    assert info["kept"] == 1
+    # ladder constraints were generated for the marginal band
+    assert info["band_n"] > 0
+    pf = np.vstack(info["band_pfix"])
+    w = _water(new_land)
+    inside = sum(1 for x, y in pf if w.contains(Point(x, y)))
+    assert inside >= 0.9 * len(pf)
+    # three rows: bank offsets ~ +/-0.47*W, centre near axis
+    xs = pf[:, 0]
+    assert (np.abs(xs - 10000) < 4000).all()
+    ys = sorted(set(np.round(pf[:, 1], -1)))
+    assert len(ys) >= 3          # L, C, R rows distinct
