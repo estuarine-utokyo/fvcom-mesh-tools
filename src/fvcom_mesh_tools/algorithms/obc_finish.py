@@ -777,6 +777,11 @@ def finish_obc_mesh(
         max_tries_per_fail=500, perturbation_sigma=0.3,
         max_outer_passes=5, coastline_projector=None,
         freeze_open_boundary=True)
+    # NOTE (run 6190672): re-running split_choke_edges HERE, after
+    # polish, was tried and REVERTED -- 17 late splits fixed no C1
+    # (a midpoint split cannot open an acute angle AT an endpoint
+    # of the split edge) and added 15 C4 violations because no
+    # smoothing follows. Late chokes stay in the one-wide ledger.
     # FINAL perp pass: phase_h moves can re-tilt an OBC node's
     # best edge after the first alignment (node 1319, run 6184643:
     # perp_local had fixed it, phase_h re-broke it, flips could

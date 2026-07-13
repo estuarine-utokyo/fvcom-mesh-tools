@@ -118,7 +118,7 @@ class TestNetworksAndSafety:
 
     def test_unwidenable_channel_is_closed_not_left_narrow(self):
         # a protected basin runs parallel 200 m south of the slot:
-        # widening is capped by the barrier at ~1.3 rows. Owner
+        # widening is capped by the barrier at ~1.6 rows. Owner
         # rule: a channel that cannot reach ~two rows is NOT
         # meshed at all -- the slot is filled, the basin and the
         # barrier survive untouched.
@@ -138,6 +138,31 @@ class TestNetworksAndSafety:
         assert w.contains(Point(10000, 4550))
         assert new_land.intersection(
             box(8600, 4650, 11400, 4850)).area > 0
+
+    def test_connectivity_critical_marginal_branch_kept(self):
+        # N7 Chiba-canal pattern (run 6190466): a slot capped by
+        # a protected parallel basin CANNOT reach the 1.7 h
+        # attainability bar -- but it is the ONLY connection to a
+        # big pocket. Refusing it severed a real 24-element
+        # sample passage. Connectivity is sacred: the branch must
+        # be kept at whatever width the barriers allow, and its
+        # narrow cells go to the one-wide ledger instead.
+        land = box(8000, 2000, 16000, 8000).difference(unary_union([
+            box(8000, 4600, 11000, 5400),     # wide approach
+            box(11000, 4850, 14000, 5150),    # capped slot
+            box(11300, 4450, 13500, 4650),    # protected basin
+            box(14000, 4000, 15500, 6000),    # big pocket B
+        ]))
+        recs, new_land, info = _run(land)
+        w = _water(new_land)
+        # the slot stays open end to end despite the failed bar
+        assert w.contains(Point(12500, 5000))
+        assert w.contains(Point(14700, 5000))   # pocket reached
+        assert info["marginal_kept"] >= 1
+        assert any(r.get("marginal_branches") for r in recs)
+        # the protecting barrier itself survives
+        assert new_land.intersection(
+            box(11400, 4650, 13400, 4850)).area > 0
 
     def test_big_pocket_chain_links_are_kept(self):
         # Keihin-canal pattern: main - slot - BIG pocket - slot -

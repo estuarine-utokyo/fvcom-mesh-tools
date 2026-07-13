@@ -185,7 +185,9 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
         metric_scale=(111e3 * _cosw, 111e3),
         h_grade_per_m=1.2 * GRADE,
         open_bridges="auto",
-        waterway_lines=list(_wl.geometry))
+        waterway_lines=list(_wl.geometry),
+        force_two_rows=(os.environ.get(
+            "SR_FORCE2ROWS", "off") == "on"))
     # forced two-row ladder constraints from marginal kept
     # branches join the constrained-node set (same plumbing as
     # the manual-edit bank chains)
@@ -197,11 +199,20 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
                      for x in _winfo["band_egfix"])
         print(f"[sr] two-row ladder constraints: "
               f"+{_winfo['band_n']} pfix nodes", flush=True)
+        # persist band geometry: QA violations get correlated
+        # against ladder extents when judging the forced rows
+        (OUT / "ladder_bands.json").write_text(_json.dumps(
+            [np.asarray(x, float).round(6).tolist()
+             for x in _winfo["band_pfix"]]))
     print(f"[sr] waterways (OSM-native): kept {_winfo['kept']}, "
           f"closed {_winfo['closed']}, "
           f"ignored {_winfo['ignored']}, "
           f"blocked {len(_winfo['blocked'])} "
-          f"(retried ok {_winfo['retried']}), land_removed "
+          f"(retried ok {_winfo['retried']}, "
+          f"marginal-connectivity {_winfo['marginal_kept']}, "
+          f"dup-skipped {_winfo['dup_skipped']}, "
+          f"crumbs {_winfo.get('crumbs_dropped', 0)}), "
+          f"land_removed "
           f"{_winfo['land_removed_m2']/1e4:.1f} ha", flush=True)
     # persist the records so the one-wide checker sweeps EVERY
     # kept waterway's arc (not just manual edits) and blocked
@@ -223,6 +234,15 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
                          .round(1).tolist()
                          if _r.get("width_m") is not None
                          else None),
+            "marginal_branches": _r.get("marginal_branches"),
+            # EVERY carved branch arc (not just the longest):
+            # side branches carry their own widths, and the
+            # one-wide sweep + choke diagnosis must see them
+            "arcs_done": ([
+                [np.asarray(_a2, float).round(6).tolist(),
+                 np.asarray(_w2, float).round(1).tolist()]
+                for _a2, _w2 in _r["arcs_done"]]
+                if _r.get("arcs_done") else None),
         })
     (OUT / "waterways.json").write_text(_json.dumps(_wjson))
     print(f"[sr] waterways records -> {OUT / 'waterways.json'}",

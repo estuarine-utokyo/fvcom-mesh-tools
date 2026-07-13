@@ -1,0 +1,29 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=4
+#PJM -L elapse=00:30:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-rf363
+# Refinish + FULL measurement battery (non-fatal gates): restores
+# the deterministic final mesh from the on-disk raw mesh and
+# reports QA/connectivity/one-wide even when a gate fails.
+set -euo pipefail
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+echo "=== finish ==="
+python notebooks/331_finish2.py
+echo "=== QA final (non-fatal) ==="
+fmesh-mesh-qa outputs/sample_repro/sample_repro_final.14 || true
+echo "=== comparator ==="
+python notebooks/342_connectivity_check.py || true
+echo "=== issue registry ==="
+python notebooks/343_issue_registry.py || true
+echo "=== one-wide ledger ==="
+python notebooks/346_one_wide_flags.py || true
+echo "=== sample comparison ==="
+python notebooks/351_ow_sample_cmp.py || true

@@ -1,0 +1,30 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=00:40:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-lad361
+set -euo pipefail
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+echo "=== unit tests (waterways/arcs) ==="
+python -m pytest tests/test_waterways.py tests/test_channel_arcs.py -q
+export SR_OBC_H1=1680
+export SR_FORCE2ROWS=on
+echo "=== ladder experiment: generate (force_two_rows=ON) ==="
+python notebooks/325_sample_repro.py
+echo "=== finish ==="
+python notebooks/331_finish2.py
+echo "=== QA final (non-fatal: need the violation dump) ==="
+fmesh-mesh-qa outputs/sample_repro/sample_repro_final.14 || true
+echo "=== ladder diag: violations vs bands ==="
+python notebooks/361_ladder_diag.py
+echo "=== connectivity comparator ==="
+python notebooks/342_connectivity_check.py || true
+echo "=== one-wide ledger ==="
+python notebooks/346_one_wide_flags.py || true

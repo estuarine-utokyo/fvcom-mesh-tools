@@ -148,7 +148,13 @@ for ef in sorted(Path("recipes/edits/sample_repro")
 wpath = OUT / "waterways.json"
 if wpath.exists():
     for wrec in json.loads(wpath.read_text()):
-        if wrec["action"] == "keep" and wrec["arc"]:
+        if wrec["action"] != "keep":
+            continue
+        if wrec.get("arcs_done"):
+            # every carved branch arc, side branches included
+            for a2, w2 in wrec["arcs_done"]:
+                arc_sources.append((a2, w2))
+        elif wrec["arc"]:
             arc_sources.append((wrec["arc"], wrec["widths_m"]))
 print(f"[1wide] cross-section sweep over {len(arc_sources)} "
       f"arcs", flush=True)
@@ -262,11 +268,45 @@ for c in sorted(set(lab[flag])) if len(flag) else []:
             float(cc[0]), float(cc[1])),
     }
     if _is_choke(els):
-        rec["site"] = f"OW{len(sites) + 1:02d}"
         sites.append(rec)
     else:
-        rec["site"] = f"TM{len(terminals) + 1:02d}"
         terminals.append(rec)
+
+# STABLE site IDs across runs: a persistent registry maps each
+# site number to a canonical location; a detected site within
+# 500 m of a registered one inherits that number, new sites get
+# the next free number, and numbers are never reused (a fixed
+# site simply stops appearing in the ledger).
+REG = OUT / "ow_registry.json"
+reg = (json.loads(REG.read_text()) if REG.exists()
+       else {"OW": [], "TM": []})
+
+
+def _assign_ids(recs, kind):
+    entries = reg.setdefault(kind, [])
+    used = set()
+    for rec in recs:
+        cx, cy = rec["center_lonlat"]
+        best, bd = None, 500.0
+        for ent in entries:
+            if ent["id"] in used:
+                continue
+            d = float(np.hypot(
+                (ent["lonlat"][0] - cx) * 111e3 * 0.816,
+                (ent["lonlat"][1] - cy) * 111e3))
+            if d < bd:
+                best, bd = ent, d
+        if best is None:
+            best = {"id": len(entries) + 1, "lonlat": [cx, cy]}
+            entries.append(best)
+        used.add(best["id"])
+        rec["site"] = f"{kind}{best['id']:02d}"
+    recs.sort(key=lambda r: r["site"])
+
+
+_assign_ids(sites, "OW")
+_assign_ids(terminals, "TM")
+REG.write_text(json.dumps(reg, indent=1))
 advisory = [{
     "cell_id_fort14": int(e + 1),
     "center_lonlat": [round(float(cent[e][0]), 4),
@@ -292,7 +332,7 @@ for a2 in advisory:
 land = unary_union(list(gpd.read_file(
     "outputs/tb_varres_3r/land_osm_wide.shp").geometry))
 gser = gpd.GeoSeries([land], crs="EPSG:4326")
-show = sites[:12]
+show = sites          # every confirmed site gets a panel
 if show:
     ncol = min(3, len(show))
     nrow = int(np.ceil(len(show) / ncol))
