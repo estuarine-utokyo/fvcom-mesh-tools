@@ -101,6 +101,18 @@ for ed in sorted((ROOT / "recipes/edits/sample_repro").glob("*.json")):
             if np.ndim(d.get("width_m", 600.0)) else \
             float(d.get("width_m", 600.0))
         tubes.append(shapely.LineString(a2).buffer(0.8 * w2 / 111e3))
+# choke widen-ops (finish stage): pushed banks are intended
+wops_f = OUT / "widen_ops.json"
+if wops_f.exists():
+    from pyproj import Transformer as _Tr
+    _tr2 = _Tr.from_crs(32654, 4326, always_xy=True)
+    for op in json.loads(wops_f.read_text()):
+        for o, n in zip(op["old"], op["new"]):
+            ox, oy = _tr2.transform(*o)
+            nx, ny = _tr2.transform(*n)
+            tubes.append(shapely.LineString(
+                [(ox, oy), (nx, ny)]).buffer(
+                0.7 * op["h_loc"] / 111e3))
 tube_u = unary_union(tubes) if tubes else shapely.Polygon()
 
 # ---- STRAY over-resolution -------------------------------------

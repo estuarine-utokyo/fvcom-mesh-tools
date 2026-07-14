@@ -200,6 +200,26 @@ breach_idx = np.where(onland)[0]
 _pipe = unary_union(list(gpd.read_file(
     "outputs/sample_repro/land_channel_adj.shp").geometry))
 unint = np.array([_pipe.covers(opts[i]) for i in breach_idx])
+# choke widen-ops (finish stage, AFTER land_channel_adj): pushed
+# banks are INTENDED widening, ledgered in widen_ops.json
+_wops_f = _Path("outputs/sample_repro/widen_ops.json")
+if _wops_f.exists() and len(breach_idx):
+    _wops = _json.loads(_wops_f.read_text())
+    if _wops:
+        from pyproj import Transformer as _Tr
+        _tr2 = _Tr.from_crs(32654, 4326, always_xy=True)
+        _wc = []
+        for _op in _wops:
+            for _o, _n in zip(_op["old"], _op["new"]):
+                _ox, _oy = _tr2.transform(*_o)
+                _nx, _ny = _tr2.transform(*_n)
+                _wc.append(shapely.LineString(
+                    [(_ox, _oy), (_nx, _ny)]).buffer(
+                    0.7 * _op["h_loc"] / 111e3))
+        _wz = unary_union(_wc)
+        for _k, _i in enumerate(breach_idx):
+            if unint[_k] and _wz.covers(opts[_i]):
+                unint[_k] = False
 print(f"[conn] our elements on ORIGINAL land: {len(breach_idx)} "
       f"(intended widening: {int((~unint).sum())}, UNINTENDED: "
       f"{int(unint.sum())})", flush=True)

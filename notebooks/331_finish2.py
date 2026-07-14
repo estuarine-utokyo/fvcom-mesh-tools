@@ -33,7 +33,19 @@ print(f"[fin] channel policy: flagged={cinfo['n_flagged']} "
 for cl in cinfo.get("clusters", []):
     print(f"[fin]   cluster n={cl['n_members']} -> {cl['action']} "
           f"(neighbor basins {cl['neighbor_sizes']})", flush=True)
-mesh, info = finish_obc_mesh(mesh, seed=42)
+# meshing land in mesh CRS: the widen-then-split choke operator
+# needs it for the wall-thickness guard
+import geopandas as _gpd
+import json as _json
+from shapely.ops import unary_union as _uu
+
+_land_utm = _uu(list(_gpd.read_file(
+    "outputs/sample_repro/land_channel_adj.shp")
+    .to_crs(32654).geometry))
+mesh, info = finish_obc_mesh(mesh, seed=42, land_union=_land_utm)
+_wops = (info.get("choke_widen") or {}).get("ops", [])
+with open("outputs/sample_repro/widen_ops.json", "w") as _f:
+    _json.dump(_wops, _f)
 for k, v in info.items():
     print(f"[fin] {k}: {v}", flush=True)
 write_fort14(mesh, DST)

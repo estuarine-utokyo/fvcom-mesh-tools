@@ -72,3 +72,20 @@ def test_default_mode_unchanged_keeps_tail_reported():
     m2, info = resolve_narrow_channels(
         mesh, min_basin_elements=6, apply_widen=False)
     assert len(m2.elements) >= n_main
+
+
+def test_widen_choke_sections_noop_on_clean_lattice():
+    # smoke: a healthy two-wide strip has no bank-to-bank choke
+    # edge -- the operator must return the mesh untouched
+    import shapely
+    from fvcom_mesh_tools.algorithms.obc_finish import (
+        widen_choke_sections,
+    )
+
+    mesh, _ = _strip_with_one_wide_tail()
+    land = shapely.box(-5000, -5000, 5000, 7000).difference(
+        shapely.box(-100, -100, 900, 2100))
+    m2, info = widen_choke_sections(mesh, land)
+    assert info["widened"] == 0
+    assert len(m2.elements) == len(mesh.elements)
+    assert np.allclose(m2.nodes, mesh.nodes)

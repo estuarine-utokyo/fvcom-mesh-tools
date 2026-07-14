@@ -27,6 +27,7 @@ __all__ = [
     "split_r4_end_cells",
     "flip_c4_edges",
     "collapse_short_boundary_edges",
+    "widen_choke_sections",
     "finish_obc_mesh",
 ]
 
@@ -596,6 +597,318 @@ def split_choke_edges(
                              for a, b in split_edges]}
 
 
+def widen_choke_sections(
+    mesh: Fort14Mesh,
+    land_union,
+    *,
+    target_rows_h: float = 1.85,
+    max_push_frac: float = 0.6,
+    margin_frac: float = 0.4,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Owner 2026-07-14: when a one-wide section is detected,
+    WIDEN the channel locally so it carries two cells. For every
+    bank-to-bank choke edge (both endpoints on the land boundary,
+    no boundary path within 3 hops -- the split_choke_edges
+    eligibility) the two shoreline endpoints are pushed APART
+    along the edge direction, into land, until the spanning edge
+    reaches ``target_rows_h`` x the local ambient edge; then the
+    standard quality-gated midpoint split makes the section two
+    cells across.
+
+    Safety, per push side:
+    - WALL-THICKNESS GUARD: the segment from the old position to
+      the pushed position PLUS a ``margin_frac``*h margin must
+      stay inside ``land_union`` (mesh CRS). A thin levee or a
+      protected parallel basin blocks the push -- the site then
+      stays in the one-wide ledger, never punched through.
+    - per-side push capped at ``max_push_frac``*h;
+    - OBC nodes are never moved;
+    - all-or-nothing per edge: the split must pass the same gates
+      as split_choke_edges (local min angle >= 30 deg or strictly
+      improving, all affected elements CCW), else positions are
+      restored.
+
+    Every applied push is returned in ``info["ops"]`` (old/new
+    node coordinates and the swept quadrilateral) so the
+    connectivity comparator and the over-resolution gate classify
+    the moved banks as INTENDED widening."""
+    import dataclasses
+    from collections import defaultdict
+
+    import shapely
+
+    nodes = mesh.nodes.copy()
+    els = mesh.elements
+    dep = mesh.depths
+    n_nodes = len(nodes)
+    ee = np.vstack([els[:, [0, 1]], els[:, [1, 2]],
+                    els[:, [2, 0]]])
+    ee.sort(axis=1)
+    uq, ct = np.unique(ee, axis=0, return_counts=True)
+    bnode = np.zeros(n_nodes, bool)
+    badj = defaultdict(set)
+    for a, b in uq[ct == 1]:
+        bnode[a] = bnode[b] = True
+        badj[int(a)].add(int(b))
+        badj[int(b)].add(int(a))
+    obc = set()
+    for ob in mesh.open_boundaries:
+        obc.update(int(v) for v in np.asarray(ob))
+
+    def _hops(a, b, max_hops=3):
+        seen = {a}
+        front = set(badj[a]) - seen
+        if b in front:
+            return 1
+        seen |= front
+        for hop in range(2, max_hops + 1):
+            front = set().union(*(badj[v] for v in front)) - seen
+            if b in front:
+                return hop
+            seen |= front
+        return None
+
+    edge_cells = defaultdict(list)
+    for irow, (a, b) in enumerate(ee):
+        edge_cells[(int(a), int(b))].append(irow % len(els))
+    node_els = defaultdict(list)
+    for j, t3 in enumerate(els):
+        for v in t3:
+            node_els[int(v)].append(j)
+
+    def _worst_angle(rows, pos):
+        worst = 180.0
+        for j in rows:
+            q = pos[els[j]]
+            for k3 in range(3):
+                u = q[(k3 + 1) % 3] - q[k3]
+                v3 = q[(k3 + 2) % 3] - q[k3]
+                c3 = np.dot(u, v3) / (
+                    np.linalg.norm(u) * np.linalg.norm(v3)
+                    + 1e-300)
+                worst = min(worst, float(np.degrees(
+                    np.arccos(np.clip(c3, -1, 1)))))
+        return worst
+
+    def _all_ccw(rows, pos):
+        for j in rows:
+            q = pos[els[j]]
+            if ((q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1])
+                    - (q[2, 0] - q[0, 0])
+                    * (q[1, 1] - q[0, 1])) <= 1e-6:
+                return False
+        return True
+
+    ops = []
+    new_pts: list = []
+    new_dep: list = []
+    repl_rows: list = []
+    touched: set[int] = set()
+    for a, b in uq[ct == 2]:
+        a, b = int(a), int(b)
+        if not (bnode[a] and bnode[b]) or a in obc or b in obc:
+            continue
+        if a in touched or b in touched:
+            continue
+        if _hops(a, b) is not None:
+            continue
+        # local ambient edge scale from the two adjacent cells
+        cells2 = edge_cells[(min(a, b), max(a, b))]
+        h_loc = float(np.median([
+            np.hypot(*(nodes[t3[(k + 1) % 3]] - nodes[t3[k]]))
+            for ci in cells2 for t3 in [els[ci]]
+            for k in range(3)]))
+        L = float(np.hypot(*(nodes[a] - nodes[b])))
+        need = target_rows_h * h_loc - L
+        if need <= 0.05 * h_loc:
+            continue                # long enough; split refused
+            #                         for other reasons -- skip
+        u = (nodes[a] - nodes[b]) / max(L, 1e-9)
+        margin = margin_frac * h_loc
+        cap = max_push_frac * h_loc
+
+        def _avail(v, sgn):
+            """Feasible push distance along the outward ray.
+            Mesh boundary nodes float 0-110 m off the land
+            polygon (run 6195753: a whole-segment covers() test
+            therefore never passed), so scan the ray in 20 m
+            steps: use only the FIRST contiguous land run
+            starting within 170 m (an oblique edge with no bank
+            in reach gets 0; a second run beyond a water gap is
+            NEVER entered -- no spit-hopping / fabricated
+            connections), and keep ``margin`` of wall beyond the
+            new bank."""
+            step = 20.0
+            ts = np.arange(step, cap + margin + 190.0, step)
+            pts = shapely.points(
+                nodes[v][0] + sgn * u[0] * ts,
+                nodes[v][1] + sgn * u[1] * ts)
+            inl = shapely.covers(land_union, pts)
+            if not bool(inl.any()):
+                return 0.0
+            i0 = int(np.argmax(inl))
+            if ts[i0] > 170.0:
+                return 0.0
+            i1 = i0
+            while i1 + 1 < len(ts) and inl[i1 + 1]:
+                i1 += 1
+            return float(max(0.0, min(cap, ts[i1] - margin)))
+
+        d_a = _avail(a, +1.0)
+        d_b = _avail(b, -1.0)
+        if d_a + d_b < min(need, 0.4 * h_loc):
+            continue             # not enough room to matter
+        frac = min(1.0, need / max(d_a + d_b, 1e-9))
+        # PUSH + SPLIT evaluated TOGETHER (run 6195753: a push
+        # alone flattens the two adjacent cells and fails any
+        # honest angle gate -- only the midpoint split restores
+        # the proportions, so the pair is one transaction). The
+        # push amount is searched downward (full need, then 70%,
+        # then 45%): a full push can over-stretch the ring's
+        # boundary cells, while a partial widening that still
+        # passes the gates beats no widening at all.
+        rows = sorted(set(node_els[a]) | set(node_els[b]))
+        old_worst = _worst_angle(rows, nodes)
+        saved = {v: nodes[v].copy() for v in (a, b)}
+        w12 = []
+        for ci in cells2:
+            w12.append(int([x for x in els[ci]
+                            if int(x) not in (a, b)][0]))
+        # a midpoint split adds +1 valence to both off-edge
+        # nodes (run 6195779: C5=9)
+        if any(len(node_els[w0]) >= 8 for w0 in w12):
+            continue
+        best = None
+        accept = False
+        for pscale in (1.0, 0.7, 0.45):
+            for v, sgn2, dv in ((a, +1.0, d_a), (b, -1.0, d_b)):
+                nodes[v] = saved[v] + sgn2 * u * (
+                    dv * frac * pscale)
+            best = None
+            for f in (0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65):
+                pm = nodes[a] * (1 - f) + nodes[b] * f
+                worst_f = 180.0
+                ok_f = True
+                for ci, w0 in zip(cells2, w12):
+                    for t3 in ([a, -1, w0], [-1, b, w0]):
+                        q = np.array([pm if v == -1 else nodes[v]
+                                      for v in t3])
+                        ar = ((q[1, 0] - q[0, 0])
+                              * (q[2, 1] - q[0, 1])
+                              - (q[2, 0] - q[0, 0])
+                              * (q[1, 1] - q[0, 1]))
+                        if abs(ar) < 1e-6:
+                            ok_f = False
+                            break
+                        for k3 in range(3):
+                            u3 = q[(k3 + 1) % 3] - q[k3]
+                            v3 = q[(k3 + 2) % 3] - q[k3]
+                            c3 = np.dot(u3, v3) / (
+                                np.linalg.norm(u3)
+                                * np.linalg.norm(v3) + 1e-300)
+                            worst_f = min(worst_f, float(
+                                np.degrees(np.arccos(
+                                    np.clip(c3, -1, 1)))))
+                    if not ok_f:
+                        break
+                if not ok_f:
+                    continue
+                # REAL C4 against external neighbours (run
+                # 6195779: 0.520 slipped through the seam-only
+                # proxy): each sub-triangle area f*A or (1-f)*A
+                # vs the unchanged neighbour across the outer
+                # edge must keep the QA ratio <= 0.5.
+                c4_ok = True
+                for ci, w0 in zip(cells2, w12):
+                    q0 = np.array([nodes[a], nodes[b],
+                                   nodes[w0]])
+                    A = 0.5 * abs(
+                        (q0[1, 0] - q0[0, 0])
+                        * (q0[2, 1] - q0[0, 1])
+                        - (q0[2, 0] - q0[0, 0])
+                        * (q0[1, 1] - q0[0, 1]))
+                    for v0, As in ((a, f * A),
+                                   (b, (1 - f) * A)):
+                        lo3, hi3 = sorted((v0, w0))
+                        for cj in edge_cells[(lo3, hi3)]:
+                            if cj in cells2:
+                                continue
+                            qj = nodes[els[cj]]
+                            Aj = 0.5 * abs(
+                                (qj[1, 0] - qj[0, 0])
+                                * (qj[2, 1] - qj[0, 1])
+                                - (qj[2, 0] - qj[0, 0])
+                                * (qj[1, 1] - qj[0, 1]))
+                            if (abs(As - Aj)
+                                    / max(As, Aj, 1e-9)) > 0.5:
+                                c4_ok = False
+                    if not c4_ok:
+                        break
+                if not c4_ok:
+                    continue
+                worst_ring = _worst_angle(
+                    [j for j in rows if j not in cells2], nodes)
+                worst_f = min(worst_f, worst_ring)
+                if best is None or worst_f > best[1]:
+                    best = (f, worst_f)
+            accept = (best is not None
+                      and _all_ccw([j for j in rows
+                                    if j not in cells2], nodes)
+                      and (best[1] >= 30.0
+                           or best[1] > old_worst)
+                      and abs(2 * best[0] - 1)
+                      / max(best[0], 1 - best[0]) <= 0.5)
+            if accept:
+                break
+        if not accept:
+            for v, p in saved.items():
+                nodes[v] = p
+            continue
+        f = best[0]
+        pm = nodes[a] * (1 - f) + nodes[b] * f
+        mid = n_nodes + len(new_pts)
+        new_pts.append(pm)
+        new_dep.append(0.5 * float(dep[a] + dep[b]))
+        for ci, w0 in zip(cells2, w12):
+            repl_rows.append((ci, [[a, mid, w0], [mid, b, w0]]))
+        touched.update((a, b))
+        ops.append({
+            "nodes": [int(a), int(b)],
+            "old": [saved[a].tolist(), saved[b].tolist()],
+            "new": [nodes[a].tolist(), nodes[b].tolist()],
+            "h_loc": round(h_loc, 1),
+            "split_frac": round(f, 2),
+            "local_worst_deg": round(best[1], 2),
+        })
+    info: dict[str, Any] = {"widened": len(ops), "ops": ops,
+                            "split": len(repl_rows)}
+    if not ops:
+        return mesh, info
+    out_els = []
+    repl = {ci: subs for ci, subs in repl_rows}
+    for j in range(len(els)):
+        if j in repl:
+            for t3 in repl[j]:
+                # enforce CCW
+                q = np.array([nodes[v] if v < n_nodes
+                              else new_pts[v - n_nodes]
+                              for v in t3])
+                ar = ((q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1])
+                      - (q[2, 0] - q[0, 0])
+                      * (q[1, 1] - q[0, 1]))
+                out_els.append(t3 if ar > 0
+                               else [t3[0], t3[2], t3[1]])
+        else:
+            out_els.append([int(x) for x in els[j]])
+    mesh2 = dataclasses.replace(
+        mesh,
+        nodes=np.vstack([nodes] + [np.asarray(p2)[None, :]
+                                   for p2 in new_pts]),
+        depths=np.concatenate([dep, np.asarray(new_dep)]),
+        elements=np.asarray(out_els, dtype=els.dtype))
+    return mesh2, info
+
+
 def collapse_short_boundary_edges(
     mesh: Fort14Mesh,
     ratio: float = 0.5,
@@ -871,6 +1184,7 @@ def finish_obc_mesh(
     *,
     seed: int = 42,
     verify_tol_m: float = 1e-3,
+    land_union=None,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Standard finishing chain for a mesh built with a constrained
     OBC line: perp-local moves -> phase_h (OBC frozen) -> compact ->
@@ -940,6 +1254,14 @@ def finish_obc_mesh(
     # (a midpoint split cannot open an acute angle AT an endpoint
     # of the split edge) and added 15 C4 violations because no
     # smoothing follows. Late chokes stay in the one-wide ledger.
+    # WIDEN-then-split (owner 2026-07-14) runs HERE instead: the
+    # ledger chokes only exist in the post-polish configuration
+    # (mid-chain placement saw none, run 6195749), and unlike the
+    # bare late split the bank push gives the section real room,
+    # so the gated split makes two well-proportioned cells.
+    if land_union is not None:
+        mesh, info["choke_widen"] = widen_choke_sections(
+            mesh, land_union)
     # FINAL perp pass: phase_h moves can re-tilt an OBC node's
     # best edge after the first alignment (node 1319, run 6184643:
     # perp_local had fixed it, phase_h re-broke it, flips could
