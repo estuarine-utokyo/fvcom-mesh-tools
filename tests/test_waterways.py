@@ -164,6 +164,42 @@ class TestNetworksAndSafety:
         assert new_land.intersection(
             box(11400, 4650, 13400, 4850)).area > 0
 
+    def test_thin_short_redundant_stub_closed(self):
+        # OW16 G8-e4 (owner 2026-07-14): a 0.50h x 1.7h stub
+        # slipped past the resolve floor and meshed one-wide.
+        # When a SECOND (wide) connection exists, the thin short
+        # branch is do-not-mesh; when it is the ONLY connection
+        # the pinch rule keeps it (connectivity sacred).
+        base = box(8000, 2000, 16000, 8000)
+        pocket = box(11000, 5900, 14000, 7500)   # big anchor
+        wide = box(9000, 4850, 11500, 5900)      # wide feeder
+        stub = box(12500, 5450, 12680, 5900)     # 180m x 450m
+        south = box(9000, 4850, 16000, 5200)     # main-ish canal
+        land = base.difference(unary_union(
+            [pocket, wide, stub, south]))
+        recs, new_land, info = _run(land)
+        w = _water(new_land)
+        # OUTCOME contract: the redundant thin stub is closed
+        # (via the thin-stub rule when it reaches the carve
+        # stage, or the stub-head fill when it does not) while
+        # the pocket stays reachable via the wide feeder
+        assert not w.contains(Point(12590, 5620))
+        assert w.contains(Point(12000, 6500))
+        assert w.contains(Point(10000, 5400))
+
+    def test_thin_short_only_connection_kept(self):
+        base = box(8000, 2000, 16000, 8000)
+        pocket = box(11000, 5900, 14000, 7500)
+        stub = box(12500, 5450, 12680, 5900)     # ONLY link
+        south = box(9000, 4850, 16000, 5200)
+        land = base.difference(unary_union(
+            [pocket, stub, south]))
+        recs, new_land, info = _run(land)
+        w = _water(new_land)
+        # the only connection survives (carved, not filled)
+        assert w.contains(Point(12590, 5620))
+        assert w.contains(Point(12000, 6500))
+
     def test_big_pocket_chain_links_are_kept(self):
         # Keihin-canal pattern: main - slot - BIG pocket - slot -
         # BIG pocket. The second slot touches no main water, only

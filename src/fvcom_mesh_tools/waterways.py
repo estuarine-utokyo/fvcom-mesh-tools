@@ -429,6 +429,8 @@ def apply_waterway_policy(
     force_two_rows: bool = False,
     widen_factor: float = 1.0,
     attain_bar_h: float = 1.7,
+    thin_close_w_h: float = 1.0,
+    thin_close_len_h: float = 2.5,
 ) -> tuple[Any, dict[str, Any]]:
     """Execute the detected actions: KEEP -> carve the corridor to
     two LOCAL rows along the arc, barrier-safe; CLOSE -> fill the
@@ -458,6 +460,7 @@ def apply_waterway_policy(
     info = {"kept": 0, "closed": 0, "ignored": 0, "blocked": [],
             "retried": 0, "bridges_opened": 0, "stub_fills": 0,
             "marginal_kept": 0, "dup_skipped": 0,
+            "thin_stubs_closed": 0,
             "line_branches": 0, "skel_branches": 0,
             "refine_arcs": [],
             "band_pfix": [], "band_egfix": [], "band_n": 0,
@@ -773,6 +776,40 @@ def apply_waterway_policy(
             deferred_dup = []
             for i in sorted(wide_ix):
                 if snaps[i] is None:
+                    continue
+                # THIN SHORT STUB (owner 2026-07-14, OW16 G8-e4:
+                # a 0.50h x 1.7h stub slipped past the 0.45h
+                # resolve floor and meshed as an unnatural
+                # one-wide fragment -- the sample leaves it out).
+                # A branch shorter than ~2.5h yields only 1-2
+                # cells along; with sub-cell natural width the
+                # result is guaranteed marginal. Do-not-mesh
+                # UNLESS it is the only local connection (the
+                # pinch rule / connectivity stays sacred via
+                # _closure_severs).
+                _wn = np.asarray(snaps[i]["width_m"], float)
+                _sat = _wn >= 0.95 * 2.0 * 2.5 * h_mesh_m
+                _wmed = float(np.median(
+                    _wn[~_sat] if bool((~_sat).any()) else _wn))
+                _arc_i = np.asarray(snaps[i]["arc"], float)
+                _len_i = float(np.hypot(
+                    np.diff(_arc_i[:, 0]) * sx,
+                    np.diff(_arc_i[:, 1]) * sy).sum())
+                rec.setdefault("branch_metrics", []).append(
+                    [round(_wmed, 1), round(_len_i, 1)])
+                if (_wmed < thin_close_w_h * h_mesh_m
+                        and _len_i < thin_close_len_h * h_mesh_m
+                        and not _closure_severs(
+                            new_land, snaps[i]["arc"],
+                            snaps[i]["width_carve_m"])):
+                    fills.append(shapely.LineString(
+                        _arc_i).buffer(
+                        max(0.75 * _wmed, 0.5 * h_mesh_m)
+                        / scale))
+                    info["thin_stubs_closed"] += 1
+                    rec.setdefault("thin_stubs", []).append(
+                        f"closed {_len_i:.0f}m x {_wmed:.0f}m "
+                        f"({_wmed/h_mesh_m:.2f}h)")
                     continue
                 if done:
                     ln_i = shapely.LineString(
