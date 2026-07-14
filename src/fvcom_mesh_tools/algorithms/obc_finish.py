@@ -20,6 +20,12 @@ import numpy as np
 from fvcom_mesh_tools.algorithms.perpendicularity import boundary_tangents
 from fvcom_mesh_tools.io import Fort14Mesh
 
+# CFL floor for finishing operators that CREATE edges (owner
+# 2026-07-15): no new edge may imply an external-mode dt below
+# this at its local depth -- two-cell sections in deep dredged
+# channels are not worth the timestep (sample: 15.99 s).
+DT_FLOOR_S = 16.0
+
 __all__ = [
     "prune_one_wide_protected",
     "flip_for_obc_perp",
@@ -547,15 +553,37 @@ def split_choke_edges(
             c4p = _c4_pred(frac)
             mpos = (1 - frac) * nodes[a] + frac * nodes[b]
             pos = {a: nodes[a], b: nodes[b], -1: mpos}
+            # CFL GATE (owner 2026-07-15: splits in ~20 m
+            # dredged channels made ~208 m edges, implied dt
+            # 16.7 -> 14.9 s): every SUB-TRIANGLE must keep
+            # dt = min-edge / sqrt(g * max-node-depth) >=
+            # DT_FLOOR_S -- the QA formula (edge-endpoint
+            # depths alone let a 207 m edge through when the
+            # third node was the deep one, run 6202081).
+            # Refused chokes stay in the ledger.
+            dmid = (1 - frac) * dep[a] + frac * dep[b]
+            cfl_ok = True
             tris4 = []
             for ci in cells:
                 tri = [int(x) for x in els[ci]]
                 w3 = [v for v in tri if v not in (a, b)][0]
                 pos[w3] = nodes[w3]
+                for vv in ((a, w3), (b, w3)):
+                    pts3 = [nodes[vv[0]], nodes[vv[1]], mpos]
+                    dps3 = [dep[vv[0]], dep[vv[1]], dmid]
+                    Lmin = min(
+                        float(np.hypot(*(pts3[0] - pts3[1]))),
+                        float(np.hypot(*(pts3[1] - pts3[2]))),
+                        float(np.hypot(*(pts3[2] - pts3[0]))))
+                    He = max(float(max(dps3)), 2.0)
+                    if Lmin / np.sqrt(9.81 * He) < DT_FLOOR_S:
+                        cfl_ok = False
                 tris4.append([(-1 if v == b else v)
                               for v in tri])
                 tris4.append([(-1 if v == a else v)
                               for v in tri])
+            if not cfl_ok:
+                continue
             ma = _min_angle(tris4, pos)
             if ma > best[1]:
                 best = (frac, ma, c4p)
@@ -864,6 +892,25 @@ def widen_choke_sections(
                     continue
                 pm = (nodes[a] * (1 - f) + nodes[b] * f
                       + _nrm * (toff * h_loc))
+                # CFL gate (owner 2026-07-15): every new
+                # SUB-TRIANGLE must keep dt = min-edge /
+                # sqrt(g * max-node-depth) >= DT_FLOOR_S
+                dmid = (1 - f) * dep[a] + f * dep[b]
+                cfl_ok = True
+                for va, w0 in ((a, w12[0]), (b, w12[0]),
+                               (a, w12[1]), (b, w12[1])):
+                    pts3 = [nodes[va], nodes[w0], pm]
+                    dps3 = [dep[va], dep[w0], dmid]
+                    Lmin = min(
+                        float(np.hypot(*(pts3[0] - pts3[1]))),
+                        float(np.hypot(*(pts3[1] - pts3[2]))),
+                        float(np.hypot(*(pts3[2] - pts3[0]))))
+                    He = max(float(max(dps3)), 2.0)
+                    if Lmin / np.sqrt(9.81 * He) < DT_FLOOR_S:
+                        cfl_ok = False
+                        break
+                if not cfl_ok:
+                    continue
                 worst_f = 180.0
                 ok_f = True
                 sub_c4 = 0.0
@@ -1222,6 +1269,23 @@ def split_c4_edges(
         t1 = [-1 if v == v2 else v for v in tri]
         t2 = [-1 if v == u2 else v for v in tri]
         if _min_angle_tris([t1, t2], pos) < 28.0:
+            continue
+        # CFL gate: halving an edge over deep water must not
+        # sink the external-mode dt (owner 2026-07-15);
+        # SUB-TRIANGLE semantics = the QA formula
+        dmid = 0.5 * (dep[u2] + dep[v2])
+        cfl_ok = True
+        for vv in ((u2, w3), (v2, w3)):
+            pts3 = [nodes[vv[0]], nodes[vv[1]], mid]
+            dps3 = [dep[vv[0]], dep[vv[1]], dmid]
+            Lmin = min(
+                float(np.hypot(*(pts3[0] - pts3[1]))),
+                float(np.hypot(*(pts3[1] - pts3[2]))),
+                float(np.hypot(*(pts3[2] - pts3[0]))))
+            He = max(float(max(dps3)), 2.0)
+            if Lmin / np.sqrt(9.81 * He) < DT_FLOOR_S:
+                cfl_ok = False
+        if not cfl_ok:
             continue
         # the split must also help the OTHER side of (u2, v2)
         others = [c for c in edge_cells[tuple(sorted((u2, v2)))]

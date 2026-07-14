@@ -336,6 +336,12 @@ _cfl_dt = os.environ.get("SR_CFL_DT", "18")
 if _cfl_dt != "off":
     from scipy.ndimage import maximum_filter
     _dtt = float(_cfl_dt)
+    # Cr 0.75 was tried for realization-undershoot margin and
+    # REVERTED (run 6202126: the stronger global coarsening
+    # perturbed transitions -- dt 15.26, C1x2, two new chokes).
+    # 0.9 + the finish-operator CFL gates is the measured
+    # optimum; the residual -0.4 s vs the sample is ONE cell's
+    # DistMesh undershoot on a correctly-floored broad area.
     _crm = float(os.environ.get("SR_CFL_CRMAX", "0.9"))
     _lon_gr, _lat_gr = g.create_grid()
     _vals_m = np.asarray(np.ma.filled(np.ma.asarray(g.values),
@@ -358,7 +364,13 @@ if _cfl_dt != "off":
     # are excluded from the floor -- their Courant tail stays and
     # is accepted; only BROAD deep water coarsens.
     from scipy.ndimage import minimum_filter
-    _kop = max(1, int(np.ceil(400.0 / max(min(_sp0, _sp1), 1.0))))
+    # 400 -> 250 m (owner 2026-07-15: the 400 m opening also
+    # dropped the BROAD Yokohama approach strip -- 284 m cells
+    # over 33 m water put the RAW-mesh floor at 15.60 s, below
+    # the sample. Only the narrow Chiba strip (the L9-d3 C1/C4
+    # ridge, twice) needs excluding; strips wider than ~500 m
+    # keep the floor.)
+    _kop = max(1, int(np.ceil(250.0 / max(min(_sp0, _sp1), 1.0))))
     _Hop = maximum_filter(
         minimum_filter(_Hf, size=2 * _kop + 1),
         size=2 * _kop + 1)
