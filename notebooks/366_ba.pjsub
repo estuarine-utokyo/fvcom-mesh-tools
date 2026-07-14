@@ -1,0 +1,15 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=2
+#PJM -L elapse=00:10:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-ba366
+set -euo pipefail
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+python notebooks/366_before_after.py

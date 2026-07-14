@@ -633,6 +633,7 @@ def widen_choke_sections(
     target_rows_h: float = 1.85,
     max_push_frac: float = 0.6,
     margin_frac: float = 0.4,
+    only_edges=None,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Owner 2026-07-14: when a one-wide section is detected,
     WIDEN the channel locally so it carries two cells. For every
@@ -735,6 +736,8 @@ def widen_choke_sections(
     touched: set[int] = set()
     for a, b in uq[ct == 2]:
         a, b = int(a), int(b)
+        if only_edges is not None and (a, b) not in only_edges:
+            continue
         if not (bnode[a] and bnode[b]) or a in obc or b in obc:
             continue
         if a in touched or b in touched:

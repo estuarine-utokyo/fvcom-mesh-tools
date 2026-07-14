@@ -44,6 +44,35 @@ _land_utm = _uu(list(_gpd.read_file(
     .to_crs(32654).geometry))
 mesh, info = finish_obc_mesh(mesh, seed=42, land_union=_land_utm)
 _wops = (info.get("choke_widen") or {}).get("ops", [])
+_wops += (info.get("choke_widen_2") or {}).get("ops", [])
+# HUMAN-JUDGMENT mesh edits (owner 2026-07-15): coordinate-
+# addressed, gated, loud-fail ledger applied after the automatic
+# chain -- see algorithms/mesh_edits.py
+from pathlib import Path as _P
+
+from pyproj import Transformer as _Tr
+
+from fvcom_mesh_tools.algorithms.mesh_edits import apply_mesh_edits
+
+_tr43 = _Tr.from_crs(4326, 32654, always_xy=True)
+_eds = []
+for _mf in sorted(_P("recipes/mesh_edits/sample_repro").glob("*.json")):
+    _md = _json.loads(_mf.read_text())
+    for _o in _md.get("ops", []):
+        _o.setdefault("id", _md.get("id", _mf.stem))
+        _eds.append(_o)
+if _eds:
+    mesh, _minfo = apply_mesh_edits(
+        mesh, _eds, _land_utm,
+        lambda lo, la: _tr43.transform(lo, la))
+    _wops += _minfo.get("widen_ops", [])
+    print(f"[fin] mesh_edits: applied {_minfo['applied']}, "
+          f"FAILED {_minfo['failed']}", flush=True)
+    for _r in _minfo["results"]:
+        print(f"[fin]   {_r.get('id')}: {_r.get('op')} "
+              f"nodes {_r.get('nodes_f14')} -> "
+              f"{'OK ' + str({k: v for k, v in _r.items() if k in ('new_edge', 'min_angle', 'split_frac', 'local_worst_deg')}) if _r.get('ok') else 'FAILED: ' + str(_r.get('reason'))}",
+              flush=True)
 with open("outputs/sample_repro/widen_ops.json", "w") as _f:
     _json.dump(_wops, _f)
 for k, v in info.items():
