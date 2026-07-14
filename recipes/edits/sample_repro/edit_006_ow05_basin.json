@@ -1,0 +1,13 @@
+{
+  "id": "edit006-ow05-basin",
+  "type": "land_patch",
+  "note": "Fill the ENCLOSED Urayasu harbour basin and its ~100-160 m wall (owner 2026-07-15: the mesh had pierced the wall and turned the closed basin into open sea -- an error). The basin is fully ring-fenced in the ORIGINAL OSM data and both the wall and the basin are below mesh resolution at h=348 m; the goto2023 sample leaves the whole feature unmeshed. Applied AFTER edit_005, so it restores whatever the carve corridor clipped north of the wall face.",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [[
+      [139.8238, 35.6326], [139.8348, 35.6326],
+      [139.8348, 35.6395], [139.8238, 35.6395],
+      [139.8238, 35.6326]
+    ]]
+  }
+}

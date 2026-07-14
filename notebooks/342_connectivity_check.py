@@ -163,6 +163,36 @@ _dom = _Poly([[139.83, 34.973], [140.12, 34.973], [140.12, 35.75],
               [139.60, 35.75], [139.60, 35.20],
               [139.6642, 35.1546]] + _OBC + [[139.83, 34.973]])
 _cosw = float(np.cos(np.deg2rad(35.35)))
+# EDIT COMPONENT-CONNECTION GATE (owner 2026-07-15: edit_005
+# rev 2 punched through the Urayasu harbour wall and merged the
+# ENCLOSED basin with the sea, and no gate saw it -- the breach
+# reference trusts applied edits by construction). Rule: an edit
+# corridor/water_patch that touches TWO OR MORE distinct
+# connected components of the ORIGINAL water is CRITICAL unless
+# it declares "allow_connect": true with its evidence.
+_ow_parts = [g for g in getattr(
+    _dom.difference(land), "geoms",
+    [_dom.difference(land)]) if not g.is_empty]
+from shapely.strtree import STRtree as _ST3
+_ow_tree = _ST3(_ow_parts)
+_conn_gate_fail = 0
+
+
+def _edit_component_check(_geom, _eid, _allow):
+    global _conn_gate_fail
+    _hit = set()
+    for _k in _ow_tree.query(_geom, predicate="intersects"):
+        _pp = _ow_parts[int(_k)]
+        _ix = _geom.intersection(_pp)
+        if _ix.area * (111e3 * _cosw) * 111e3 > 110.0 * 110.0:
+            _hit.add(int(_k))
+    if len(_hit) >= 2 and not _allow:
+        _conn_gate_fail += 1
+        print(f"[conn] CRITICAL edit-connect: {_eid} touches "
+              f"{len(_hit)} separate ORIGINAL water components "
+              f"without allow_connect", flush=True)
+
+
 for _ef in sorted(
         _Path("recipes/edits/sample_repro").glob("*.json")):
     _ed = _json.loads(_ef.read_text())
@@ -174,13 +204,23 @@ for _ef in sorted(
         continue
     if _ed.get("type") == "water_patch":
         import shapely.geometry as _sg
-        land = land.difference(_sg.shape(_ed["geometry"]))
+        _wp = _sg.shape(_ed["geometry"])
+        _edit_component_check(_wp, _ed.get("id", _ef.stem),
+                              _ed.get("allow_connect", False))
+        land = land.difference(_wp)
         print(f"[conn] breach reference: applied water_patch "
               f"{_ed.get('id', _ef.stem)}", flush=True)
         continue
     _tol = _ed.get("arc_on_land_tol_m")
     _w = (np.asarray(_ed["widths_m"], float)
           if "widths_m" in _ed else float(_ed["width_m"]))
+    import shapely as _shp
+    _wmax = float(np.max(_w))
+    _corr = _shp.LineString(
+        np.asarray(_ed["arc"], float)).buffer(
+        0.5 * _wmax / 111e3)
+    _edit_component_check(_corr, _ed.get("id", _ef.stem),
+                          _ed.get("allow_connect", False))
     land, _ei = carve_channel_corridor(
         land, np.asarray(_ed["arc"], float), _w,
         min_gap_m=float(_ed.get("min_gap_m", 150.0)),
@@ -242,6 +282,8 @@ if len(breach_idx):
         print(f"[conn]   on-land x{rec[0]} at ({rec[1]:.4f}, "
               f"{rec[2]:.4f}) bridges={rec[3]}", flush=True)
 
+print(f"[conn] CRITICAL edit-connects:    {_conn_gate_fail}",
+      flush=True)
 print(f"[conn] CRITICAL severed passages: {len(severed)}",
       flush=True)
 print(f"[conn] CRITICAL land breaches:    {len(breaches)}",

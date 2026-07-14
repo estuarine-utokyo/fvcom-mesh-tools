@@ -1,13 +1,76 @@
 {
-  "id": "edit005-ow05-urayasu",
-  "note": "OW05 Urayasu strait two-mesh-ization at the DATA level (owner 2026-07-15: 'stay faithful to the coastline but convert some land to water and widen'). Mesh surgery was measured out (true strait 430 m = 1.2h; node moves collapse the coastal ring). rev 2: the first arc (901 m, mouth only) moved the flag to its western taper seam against the policy's own 637 m corridor -- the W10 lesson holds, an edit must span the WHOLE reach. This arc follows the policy branch arc across the full ~2 km reach plus the mouth, 700 m throughout; the policy then sees a wide-enough natural channel and leaves it alone.",
-  "rev": 2,
-  "arc": [[139.82452, 35.63041], [139.82542, 35.63094], [139.8264, 35.63137],
-          [139.82746, 35.63168], [139.8286, 35.63179], [139.82973, 35.6319],
-          [139.83086, 35.632], [139.832, 35.63211], [139.83313, 35.63222],
-          [139.83427, 35.63232], [139.8352, 35.6320], [139.8395, 35.6314],
-          [139.8440, 35.6303]],
-  "width_m": 700.0,
-  "min_gap_m": 150.0,
-  "arc_on_land_tol_m": 400.0
+ "id": "edit005-ow05-urayasu",
+ "note": "OW05 Urayasu strait widening. rev 4 (rev 3 put the arc itself on land and the arc-on-land guard correctly refused, 1404 m > 400): the arc stays on the channel axis (rev 2 positions, arc_on_land 101 m) and the SOUTH bank is set by per-vertex widths that all reach lat 35.6266 -- effective channel after the edit_006 basin/wall refill = wall face 35.6326 down to 35.6266 ~ 665 m ~ 1.9h. Mouth vertices stay at 700 m so the upper block is only nibbled ~100 m.",
+ "rev": 4,
+ "arc": [
+  [
+   139.82452,
+   35.63041
+  ],
+  [
+   139.82542,
+   35.63094
+  ],
+  [
+   139.8264,
+   35.63137
+  ],
+  [
+   139.82746,
+   35.63168
+  ],
+  [
+   139.8286,
+   35.63179
+  ],
+  [
+   139.82973,
+   35.6319
+  ],
+  [
+   139.83086,
+   35.632
+  ],
+  [
+   139.832,
+   35.63211
+  ],
+  [
+   139.83313,
+   35.63222
+  ],
+  [
+   139.83427,
+   35.63232
+  ],
+  [
+   139.8352,
+   35.632
+  ],
+  [
+   139.8395,
+   35.6314
+  ],
+  [
+   139.844,
+   35.6303
+  ]
+ ],
+ "widths_m": [
+  846.0,
+  963.0,
+  1059.0,
+  1128.0,
+  1152.0,
+  1177.0,
+  1199.0,
+  1223.0,
+  1248.0,
+  1270.0,
+  700.0,
+  700.0,
+  700.0
+ ],
+ "min_gap_m": 150.0,
+ "arc_on_land_tol_m": 400.0
 }
