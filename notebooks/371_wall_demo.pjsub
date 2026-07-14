@@ -1,0 +1,44 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=00:55:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-wd371
+set -euo pipefail
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+export SR_OBC_H1=1680
+# always restore the committed (rev4 + basin fill) edits on exit
+trap 'git checkout -- recipes/edits/sample_repro/' EXIT
+echo "=== reproduce the ERRONEOUS rev2 state (demo only) ==="
+rm recipes/edits/sample_repro/edit_006_ow05_basin.json
+cat > recipes/edits/sample_repro/edit_005_ow05_urayasu.json <<'EOJ'
+{
+  "id": "edit005-ow05-urayasu",
+  "note": "DEMO reproduction of the erroneous rev 2 for the owner's before/after figure",
+  "rev": 2,
+  "arc": [[139.82452, 35.63041], [139.82542, 35.63094], [139.8264, 35.63137],
+          [139.82746, 35.63168], [139.8286, 35.63179], [139.82973, 35.6319],
+          [139.83086, 35.632], [139.832, 35.63211], [139.83313, 35.63222],
+          [139.83427, 35.63232], [139.8352, 35.6320], [139.8395, 35.6314],
+          [139.8440, 35.6303]],
+  "width_m": 700.0,
+  "min_gap_m": 150.0,
+  "arc_on_land_tol_m": 400.0
+}
+EOJ
+python notebooks/325_sample_repro.py
+python notebooks/331_finish2.py
+cp outputs/sample_repro/sample_repro_final.14 \
+   outputs/sample_repro/wall_before_demo.14
+echo "=== restore the committed rev4 + basin fill ==="
+git checkout -- recipes/edits/sample_repro/
+python notebooks/325_sample_repro.py
+python notebooks/331_finish2.py
+echo "=== 3-way figure ==="
+python notebooks/370_wall_3way.py
