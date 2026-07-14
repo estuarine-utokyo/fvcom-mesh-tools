@@ -319,6 +319,101 @@ g, dt_eff = om.finalize_sizing(
     max_edge_length=MAXEL, gradation=GRADE, courant=None)
 print(f"[sr] sizing done +{time.time()-t0:.0f}s", flush=True)
 
+# GRADED, DEPTH-DILATED CFL FLOOR (owner 2026-07-14: the CFL
+# condition had become stricter than the sample -- implied dt
+# 13.06 vs 15.99 s, tail over DEEP water far from any channel).
+# The plain OM2D `dt` limiter (post-limgrad raise) FAILED twice
+# in one run (6197174): cells straddling the Uraga slope carry
+# deep nodes their lattice-point floor never saw (dt 12.68 s at
+# 36->117 m node depths), and the un-graded plateau edge made
+# C1x3/C4x2. Fix: floor = dt*sqrt(g*(H_dilated+1))/Cr_max with
+# H_dilated = max depth within ~500 m (one cell), then a GRADED
+# EXPANSION (outward slope GRADE) before taking the pointwise
+# max with the limgrad-feasible field -- the result is
+# gradation-feasible by construction, so no re-limgrad and no
+# steps. No-op for H <= ~21 m: channels stay untouched.
+_cfl_dt = os.environ.get("SR_CFL_DT", "18")
+if _cfl_dt != "off":
+    from scipy.ndimage import maximum_filter
+    _dtt = float(_cfl_dt)
+    _crm = float(os.environ.get("SR_CFL_CRMAX", "0.9"))
+    _lon_gr, _lat_gr = g.create_grid()
+    _vals_m = np.asarray(np.ma.filled(np.ma.asarray(g.values),
+                                      MAXEL * DEG), float) / DEG
+    _zf = np.asarray(dem.eval(np.column_stack(
+        [_lon_gr.ravel(), _lat_gr.ravel()])))
+    _Hf = np.clip(-_zf.reshape(_lon_gr.shape), 0.0, None)
+    # lattice spacings in metres (axis 0 / axis 1)
+    _sp0 = float(np.hypot(
+        np.diff(_lon_gr, axis=0).mean() * _cosw * 111e3,
+        np.diff(_lat_gr, axis=0).mean() * 111e3))
+    _sp1 = float(np.hypot(
+        np.diff(_lon_gr, axis=1).mean() * _cosw * 111e3,
+        np.diff(_lat_gr, axis=1).mean() * 111e3))
+    _npx = max(1, int(np.ceil(500.0 / max(min(_sp0, _sp1), 1.0))))
+    # OPENING first (run 6197233: the narrow dredged Chiba
+    # approach, a few hundred m of 30-60 m water crossing shallow
+    # surroundings, raised a thin coarse ridge that left C1/C4
+    # slivers at L9-d3 twice): deep STRIPS narrower than ~800 m
+    # are excluded from the floor -- their Courant tail stays and
+    # is accepted; only BROAD deep water coarsens.
+    from scipy.ndimage import minimum_filter
+    _kop = max(1, int(np.ceil(400.0 / max(min(_sp0, _sp1), 1.0))))
+    _Hop = maximum_filter(
+        minimum_filter(_Hf, size=2 * _kop + 1),
+        size=2 * _kop + 1)
+    _Hd_raw = maximum_filter(_Hf, size=2 * _npx + 1)
+    _Hd = maximum_filter(_Hop, size=2 * _npx + 1)
+    # SHORE-ADJACENT deep water keeps the full floor (run
+    # 6197284: the opening also dropped the Yokosuka naval
+    # basins, 41-73 m AGAINST the shore, dt back to 11.5 s).
+    # Those are safe to coarsen -- one flank is land, so no thin
+    # coarse ridge inside fine water can form (6197233 had zero
+    # violations there); only OFFSHORE narrow strips (Chiba
+    # approach, shallow on both sides) stay excluded.
+    _dsp = (_Hd_raw > 21.0) & (_Hd < _Hd_raw - 1.0)
+    if bool(_dsp.any()):
+        import shapely
+        from shapely.strtree import STRtree as _ST2
+        _lnd2 = list(gpd.read_file(CH_SHP).geometry)
+        _st2 = _ST2(_lnd2)
+        _pi = np.nonzero(_dsp)
+        _pp = shapely.points(_lon_gr[_pi], _lat_gr[_pi])
+        _ni = _st2.nearest(_pp)
+        _dl2 = shapely.distance(
+            _pp, np.array(_lnd2, dtype=object)[_ni]) * 111e3
+        _nsh = _dl2 < 800.0
+        _Hd[_pi[0][_nsh], _pi[1][_nsh]] = \
+            _Hd_raw[_pi[0][_nsh], _pi[1][_nsh]]
+        print(f"[sr] CFL floor: {int(_nsh.sum())} shore-adjacent "
+              f"deep cells kept, {int((~_nsh).sum())} offshore "
+              f"strip cells excluded", flush=True)
+    _F = np.minimum(_dtt * np.sqrt(9.81 * (_Hd + 1.0)) / _crm,
+                    MAXEL)
+    # graded expansion: F(x) >= F(y) - GRADE*dist(x,y)
+    for _it in range(300):
+        _Fn = _F
+        _Fn = np.maximum(_Fn, np.pad(
+            _F[1:, :], ((0, 1), (0, 0))) - GRADE * _sp0)
+        _Fn = np.maximum(_Fn, np.pad(
+            _F[:-1, :], ((1, 0), (0, 0))) - GRADE * _sp0)
+        _Fn = np.maximum(_Fn, np.pad(
+            _F[:, 1:], ((0, 0), (0, 1))) - GRADE * _sp1)
+        _Fn = np.maximum(_Fn, np.pad(
+            _F[:, :-1], ((0, 0), (1, 0))) - GRADE * _sp1)
+        if float(np.max(_Fn - _F)) < 0.5:
+            _F = _Fn
+            break
+        _F = _Fn
+    _sel = _F > _vals_m + 0.5
+    _nup = int(_sel.sum())
+    _vals_m[_sel] = _F[_sel]
+    g.values = _vals_m * DEG
+    g.build_interpolant()
+    print(f"[sr] graded CFL floor: dt={_dtt}s Cr<={_crm}, "
+          f"H dilation {_npx} px, raised {_nup} lattice cells "
+          f"({_it + 1} sweeps)", flush=True)
+
 # CHANNEL REFINEMENT corridors, v2 (owner 2026-07-13: finer cells
 # are allowed wherever they do NOT tighten the CFL condition --
 # more nodes at unchanged dt are nearly free). Along every carved
