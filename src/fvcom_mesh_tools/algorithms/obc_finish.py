@@ -33,6 +33,7 @@ __all__ = [
     "split_r4_end_cells",
     "flip_c4_edges",
     "collapse_short_boundary_edges",
+    "cfl_polish",
     "widen_choke_sections",
     "finish_obc_mesh",
 ]
@@ -1040,6 +1041,168 @@ def widen_choke_sections(
     return mesh2, info
 
 
+def cfl_polish(
+    mesh: Fort14Mesh,
+    dt_floor_s: float = DT_FLOOR_S,
+) -> tuple[Fort14Mesh, dict[str, Any]]:
+    """Stage-2 per-site CFL repair (owner 2026-07-15): an element
+    whose implied dt = min-edge / sqrt(g * max-node-depth) falls
+    below ``dt_floor_s`` gets its short edge LENGTHENED by moving
+    the two endpoints apart along the edge -- pure interior
+    surgery for DistMesh undershoot cells on a correctly-floored
+    size field (elem 321, F10-e5: 284 m rendered on a 371 m
+    floor over 34 m water; the global-field alternative was
+    measured and rejected, run 6202126).
+
+    Gates, all-or-nothing per site: endpoints interior and
+    non-OBC; ring stays CCW; ring worst angle >= 30 deg or
+    improving; ring-vs-outside C4 <= 0.5 or not worse; NO ring
+    element may end below its own pre-move implied dt when that
+    was already under the floor (no whack-a-mole)."""
+    import dataclasses
+    from collections import defaultdict
+
+    nodes = mesh.nodes.copy()
+    els = mesh.elements
+    dep = mesh.depths
+    ee = np.vstack([els[:, [0, 1]], els[:, [1, 2]],
+                    els[:, [2, 0]]])
+    ee.sort(axis=1)
+    uq, ct = np.unique(ee, axis=0, return_counts=True)
+    bnode = np.zeros(len(nodes), bool)
+    bnode[uq[ct == 1].ravel()] = True
+    obc = set()
+    for ob in mesh.open_boundaries:
+        obc.update(int(v) for v in np.asarray(ob))
+    node_els = defaultdict(list)
+    for j, t3 in enumerate(els):
+        for v in t3:
+            node_els[int(v)].append(j)
+    edge_cells = defaultdict(list)
+    for irow, (a0, b0) in enumerate(ee):
+        edge_cells[(int(a0), int(b0))].append(irow % len(els))
+
+    def _el_dt(j):
+        q = nodes[els[j]]
+        L3 = min(float(np.hypot(*(q[1] - q[0]))),
+                 float(np.hypot(*(q[2] - q[1]))),
+                 float(np.hypot(*(q[0] - q[2]))))
+        He = max(float(dep[els[j]].max()), 2.0)
+        return L3 / np.sqrt(9.81 * He)
+
+    def _worst_angle(rows):
+        w = 180.0
+        for j in rows:
+            q = nodes[els[j]]
+            for k in range(3):
+                u3 = q[(k + 1) % 3] - q[k]
+                v3 = q[(k + 2) % 3] - q[k]
+                c3 = np.dot(u3, v3) / (
+                    np.linalg.norm(u3) * np.linalg.norm(v3)
+                    + 1e-300)
+                w = min(w, float(np.degrees(
+                    np.arccos(np.clip(c3, -1, 1)))))
+        return w
+
+    def _ccw(rows):
+        for j in rows:
+            q = nodes[els[j]]
+            if ((q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1])
+                    - (q[2, 0] - q[0, 0])
+                    * (q[1, 1] - q[0, 1])) <= 1e-6:
+                return False
+        return True
+
+    def _ring_c4(rows):
+        worst = 0.0
+        for j in rows:
+            qj = nodes[els[j]]
+            Aj = 0.5 * abs(
+                (qj[1, 0] - qj[0, 0]) * (qj[2, 1] - qj[0, 1])
+                - (qj[2, 0] - qj[0, 0]) * (qj[1, 1] - qj[0, 1]))
+            t3 = els[j]
+            for e2 in ((t3[0], t3[1]), (t3[1], t3[2]),
+                       (t3[2], t3[0])):
+                lo3, hi3 = sorted((int(e2[0]), int(e2[1])))
+                for k2 in edge_cells[(lo3, hi3)]:
+                    if k2 == j:
+                        continue
+                    qk = nodes[els[k2]]
+                    Ak = 0.5 * abs(
+                        (qk[1, 0] - qk[0, 0])
+                        * (qk[2, 1] - qk[0, 1])
+                        - (qk[2, 0] - qk[0, 0])
+                        * (qk[1, 1] - qk[0, 1]))
+                    worst = max(worst, abs(Aj - Ak)
+                                / max(Aj, Ak, 1e-9))
+        return worst
+
+    dts = np.array([_el_dt(j) for j in range(len(els))])
+    order = [int(j) for j in np.argsort(dts)
+             if dts[j] < dt_floor_s]
+    ops = []
+    touched: set[int] = set()
+    for j in order:
+        q = nodes[els[j]]
+        L3 = [float(np.hypot(*(q[(k + 1) % 3] - q[k])))
+              for k in range(3)]
+        k0 = int(np.argmin(L3))
+        a = int(els[j][k0])
+        b = int(els[j][(k0 + 1) % 3])
+        if bnode[a] or bnode[b] or a in obc or b in obc:
+            continue
+        if a in touched or b in touched:
+            continue
+        He = max(float(dep[els[j]].max()), 2.0)
+        L = L3[k0]
+        need = dt_floor_s * np.sqrt(9.81 * He) * 1.04 - L
+        if need <= 0:
+            continue
+        u = (nodes[a] - nodes[b]) / max(L, 1e-9)
+        rows = sorted(set(node_els[a]) | set(node_els[b]))
+        pre_ang = _worst_angle(rows)
+        pre_c4 = _ring_c4(rows)
+        pre_dt = {r: _el_dt(r) for r in rows}
+        saved = {a: nodes[a].copy(), b: nodes[b].copy()}
+        done = False
+        for scale in (1.0, 0.7, 0.45):
+            nodes[a] = saved[a] + u * (0.5 * need * scale)
+            nodes[b] = saved[b] - u * (0.5 * need * scale)
+            if not _ccw(rows):
+                continue
+            ang = _worst_angle(rows)
+            c4 = _ring_c4(rows)
+            ok = ((ang >= 30.0 or ang > pre_ang)
+                  and (c4 <= 0.5 or c4 <= pre_c4 + 1e-9))
+            if ok:
+                for r in rows:
+                    d_new = _el_dt(r)
+                    if (d_new < pre_dt[r] - 1e-9
+                            and d_new < dt_floor_s):
+                        ok = False
+                        break
+            if ok:
+                done = True
+                break
+        if not done:
+            nodes[a] = saved[a]
+            nodes[b] = saved[b]
+            continue
+        touched.update(int(x) for r in rows
+                       for x in els[r])
+        ops.append({
+            "element": int(j),
+            "nodes": [a, b],
+            "dt_before": round(float(dts[j]), 2),
+            "dt_after": round(_el_dt(j), 2),
+            "moved_m": round(0.5 * need * scale, 1),
+        })
+    if not ops:
+        return mesh, {"fixed": 0, "ops": []}
+    mesh2 = dataclasses.replace(mesh, nodes=nodes)
+    return mesh2, {"fixed": len(ops), "ops": ops}
+
+
 def collapse_short_boundary_edges(
     mesh: Fort14Mesh,
     ratio: float = 0.5,
@@ -1417,6 +1580,9 @@ def finish_obc_mesh(
         if info["choke_widen"]["widened"]:
             mesh, info["choke_widen_2"] = widen_choke_sections(
                 mesh, land_union)
+    # STAGE-2 CFL polish: lift DistMesh-undershoot cells on a
+    # correctly-floored field (pure interior surgery, gated)
+    mesh, info["cfl_polish"] = cfl_polish(mesh)
     # FINAL perp pass: phase_h moves can re-tilt an OBC node's
     # best edge after the first alignment (node 1319, run 6184643:
     # perp_local had fixed it, phase_h re-broke it, flips could
