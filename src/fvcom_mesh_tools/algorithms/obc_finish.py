@@ -730,14 +730,17 @@ def widen_choke_sections(
         def _avail(v, sgn):
             """Feasible push distance along the outward ray.
             Mesh boundary nodes float 0-110 m off the land
-            polygon (run 6195753: a whole-segment covers() test
-            therefore never passed), so scan the ray in 20 m
-            steps: use only the FIRST contiguous land run
-            starting within 170 m (an oblique edge with no bank
-            in reach gets 0; a second run beyond a water gap is
-            NEVER entered -- no spit-hopping / fabricated
-            connections), and keep ``margin`` of wall beyond the
-            new bank."""
+            polygon (run 6195753), so scan the ray in 20 m
+            steps. POLYGON WATER passes freely: DistMesh retreats
+            from water strips thinner than ~0.5 cell, and pushing
+            the bank back onto the terrain line just reclaims
+            water the shoreline already grants (owner 2026-07-14,
+            OW13 Urayasu: 120-240 m unmeshed fringes made the
+            land-within-170 m rule refuse exactly the corners a
+            human would mesh). Land positions are allowed only
+            inside the FIRST land run, keeping ``margin`` of wall
+            beyond the new bank -- a second land run past a water
+            gap is never entered (no spit-hopping)."""
             step = 20.0
             ts = np.arange(step, cap + margin + 190.0, step)
             pts = shapely.points(
@@ -745,17 +748,42 @@ def widen_choke_sections(
                 nodes[v][1] + sgn * u[1] * ts)
             inl = shapely.covers(land_union, pts)
             if not bool(inl.any()):
-                return 0.0
+                return float(cap)     # open water all the way
             i0 = int(np.argmax(inl))
-            if ts[i0] > 170.0:
-                return 0.0
             i1 = i0
             while i1 + 1 < len(ts) and inl[i1 + 1]:
                 i1 += 1
-            return float(max(0.0, min(cap, ts[i1] - margin)))
+            # up to the land-run end minus the wall margin; the
+            # leading water fringe [0, ts[i0]) is always allowed
+            d_land_ok = ts[i1] - margin
+            if d_land_ok < ts[i0]:
+                d_land_ok = ts[i0] - step   # water fringe only
+            return float(max(0.0, min(cap, d_land_ok)))
 
         d_a = _avail(a, +1.0)
         d_b = _avail(b, -1.0)
+        # foreign-mesh guard: a push across a water fringe must
+        # stop short of any other mesh node (an island coast
+        # meshed across the strip would otherwise overlap)
+        from scipy.spatial import cKDTree
+        if not hasattr(_avail, "_tree"):
+            _avail._tree = cKDTree(nodes)
+        for v0, sgn0, dv in ((a, +1.0, d_a), (b, -1.0, d_b)):
+            dcur = dv
+            while dcur > 0:
+                p_t = nodes[v0] + sgn0 * u * dcur
+                dd, jj = _avail._tree.query(p_t, k=3)
+                dd = [d2 for d2, j2 in zip(np.atleast_1d(dd),
+                                           np.atleast_1d(jj))
+                      if j2 not in (a, b)]
+                if dd and min(dd) < 0.45 * h_loc:
+                    dcur -= 40.0
+                    continue
+                break
+            if v0 == a:
+                d_a = max(0.0, dcur)
+            else:
+                d_b = max(0.0, dcur)
         if d_a + d_b < min(need, 0.4 * h_loc):
             continue             # not enough room to matter
         frac = min(1.0, need / max(d_a + d_b, 1e-9))
@@ -780,10 +808,41 @@ def widen_choke_sections(
             continue
         best = None
         accept = False
+
+        def _tri_area_now(t3):
+            q = nodes[t3]
+            return 0.5 * abs(
+                (q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1])
+                - (q[2, 0] - q[0, 0]) * (q[1, 1] - q[0, 1]))
+
+        def _ring_c4_ok():
+            """Pushed nodes deform every ring cell; their area
+            ratios against OUTSIDE neighbours must also hold the
+            QA bound (run 6197604: 0.513 slipped past the
+            subs-only check)."""
+            for j in rows:
+                if j in cells2:
+                    continue
+                Aj = _tri_area_now(els[j])
+                t3 = els[j]
+                for e2 in ((t3[0], t3[1]), (t3[1], t3[2]),
+                           (t3[2], t3[0])):
+                    lo3, hi3 = sorted((int(e2[0]), int(e2[1])))
+                    for k2 in edge_cells[(lo3, hi3)]:
+                        if k2 == j or k2 in cells2:
+                            continue
+                        Ak = _tri_area_now(els[k2])
+                        if (abs(Aj - Ak)
+                                / max(Aj, Ak, 1e-9)) > 0.5:
+                            return False
+            return True
+
         for pscale in (1.0, 0.7, 0.45):
             for v, sgn2, dv in ((a, +1.0, d_a), (b, -1.0, d_b)):
                 nodes[v] = saved[v] + sgn2 * u * (
                     dv * frac * pscale)
+            if not _ring_c4_ok():
+                continue
             best = None
             for f in (0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65):
                 pm = nodes[a] * (1 - f) + nodes[b] * f

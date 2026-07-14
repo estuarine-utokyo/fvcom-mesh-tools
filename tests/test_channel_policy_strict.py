@@ -75,17 +75,23 @@ def test_default_mode_unchanged_keeps_tail_reported():
 
 
 def test_widen_choke_sections_noop_on_clean_lattice():
-    # smoke: a healthy two-wide strip has no bank-to-bank choke
-    # edge -- the operator must return the mesh untouched
+    # smoke: after strict pruning the strip is a healthy two-wide
+    # band with no bank-to-bank choke edge -- the operator must
+    # return the mesh untouched (the UNPRUNED tail is a real
+    # choke and legitimately fires since the water-fringe rule,
+    # owner 2026-07-14)
     import shapely
     from fvcom_mesh_tools.algorithms.obc_finish import (
         widen_choke_sections,
     )
 
     mesh, _ = _strip_with_one_wide_tail()
+    m1, _ = resolve_narrow_channels(
+        mesh, min_basin_elements=25, apply_widen=False,
+        strict_boundary_flag=True, max_rounds=8)
     land = shapely.box(-5000, -5000, 5000, 7000).difference(
         shapely.box(-100, -100, 900, 2100))
-    m2, info = widen_choke_sections(mesh, land)
+    m2, info = widen_choke_sections(m1, land)
     assert info["widened"] == 0
-    assert len(m2.elements) == len(mesh.elements)
-    assert np.allclose(m2.nodes, mesh.nodes)
+    assert len(m2.elements) == len(m1.elements)
+    assert np.allclose(m2.nodes, m1.nodes)
