@@ -807,19 +807,15 @@ def widen_choke_sections(
         if any(len(node_els[w0]) >= 8 for w0 in w12):
             continue
         best = None
-        accept = False
 
-        def _tri_area_now(t3):
-            q = nodes[t3]
+        def _tri_area_now(t3, pm=None):
+            q = np.array([pm if v == -1 else nodes[v]
+                          for v in t3])
             return 0.5 * abs(
                 (q[1, 0] - q[0, 0]) * (q[2, 1] - q[0, 1])
                 - (q[2, 0] - q[0, 0]) * (q[1, 1] - q[0, 1]))
 
         def _ring_c4_ok():
-            """Pushed nodes deform every ring cell; their area
-            ratios against OUTSIDE neighbours must also hold the
-            QA bound (run 6197604: 0.513 slipped past the
-            subs-only check)."""
             for j in rows:
                 if j in cells2:
                     continue
@@ -837,18 +833,50 @@ def widen_choke_sections(
                             return False
             return True
 
-        for pscale in (1.0, 0.7, 0.45):
+        # GATE-FIRST dense search (runs 6197628 replay: the old
+        # best-angle-then-gate selection discarded candidates
+        # that pass EVERY gate at a slightly smaller angle --
+        # OW23 had 31.8 deg with only sub-C4 over, while another
+        # f held sub-C4 and the angle both). Largest passing
+        # pscale wins (most widening), then the best angle.
+        for pscale in np.arange(1.0, 0.29, -0.05):
             for v, sgn2, dv in ((a, +1.0, d_a), (b, -1.0, d_b)):
                 nodes[v] = saved[v] + sgn2 * u * (
                     dv * frac * pscale)
+            if not _all_ccw([j for j in rows
+                             if j not in cells2], nodes):
+                continue
             if not _ring_c4_ok():
                 continue
-            best = None
-            for f in (0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65):
-                pm = nodes[a] * (1 - f) + nodes[b] * f
+            wring = _worst_angle(
+                [j for j in rows if j not in cells2], nodes)
+            # split-point search: along the edge (f) AND a small
+            # normal offset (owner analysis 2026-07-14, OW08: all
+            # on-line candidates capped at 29.6 deg -- 0.4 deg
+            # under the C1 bar; an off-line midpoint redistributes
+            # the sub angles). Orientation-consistency guarded.
+            _nrm = np.array([-u[1], u[0]])
+            for f, toff in [(float(f2), float(t2))
+                            for f2 in np.arange(0.30, 0.7001,
+                                                0.025)
+                            for t2 in (0.0, 0.15, -0.15)]:
+                if abs(2 * f - 1) / max(f, 1 - f) > 0.5:
+                    continue
+                pm = (nodes[a] * (1 - f) + nodes[b] * f
+                      + _nrm * (toff * h_loc))
                 worst_f = 180.0
                 ok_f = True
+                sub_c4 = 0.0
+                sub_area = {}     # EXACT areas (run 6198270:
+                #                   the f*A approximation is
+                #                   wrong off-line -> C4 0.586)
                 for ci, w0 in zip(cells2, w12):
+                    qp = np.array([nodes[a], nodes[b],
+                                   nodes[w0]])
+                    ar_par = ((qp[1, 0] - qp[0, 0])
+                              * (qp[2, 1] - qp[0, 1])
+                              - (qp[2, 0] - qp[0, 0])
+                              * (qp[1, 1] - qp[0, 1]))
                     for t3 in ([a, -1, w0], [-1, b, w0]):
                         q = np.array([pm if v == -1 else nodes[v]
                                       for v in t3])
@@ -856,9 +884,12 @@ def widen_choke_sections(
                               * (q[2, 1] - q[0, 1])
                               - (q[2, 0] - q[0, 0])
                               * (q[1, 1] - q[0, 1]))
-                        if abs(ar) < 1e-6:
+                        if abs(ar) < 1e-6 or ar * ar_par < 0:
                             ok_f = False
                             break
+                        As = 0.5 * abs(ar)
+                        v0 = t3[0] if t3[0] != -1 else t3[1]
+                        sub_area[(int(v0), int(w0))] = As
                         for k3 in range(3):
                             u3 = q[(k3 + 1) % 3] - q[k3]
                             v3 = q[(k3 + 2) % 3] - q[k3]
@@ -868,69 +899,63 @@ def widen_choke_sections(
                             worst_f = min(worst_f, float(
                                 np.degrees(np.arccos(
                                     np.clip(c3, -1, 1)))))
+                        lo3, hi3 = sorted((int(v0), int(w0)))
+                        for cj in edge_cells[(lo3, hi3)]:
+                            if cj in cells2:
+                                continue
+                            Ajx = _tri_area_now(els[cj])
+                            sub_c4 = max(
+                                sub_c4, abs(As - Ajx)
+                                / max(As, Ajx, 1e-9))
                     if not ok_f:
                         break
                 if not ok_f:
                     continue
-                # REAL C4 against external neighbours (run
-                # 6195779: 0.520 slipped through the seam-only
-                # proxy): each sub-triangle area f*A or (1-f)*A
-                # vs the unchanged neighbour across the outer
-                # edge must keep the QA ratio <= 0.5.
-                c4_ok = True
-                for ci, w0 in zip(cells2, w12):
-                    q0 = np.array([nodes[a], nodes[b],
-                                   nodes[w0]])
-                    A = 0.5 * abs(
-                        (q0[1, 0] - q0[0, 0])
-                        * (q0[2, 1] - q0[0, 1])
-                        - (q0[2, 0] - q0[0, 0])
-                        * (q0[1, 1] - q0[0, 1]))
-                    for v0, As in ((a, f * A),
-                                   (b, (1 - f) * A)):
-                        lo3, hi3 = sorted((v0, w0))
-                        for cj in edge_cells[(lo3, hi3)]:
-                            if cj in cells2:
-                                continue
-                            qj = nodes[els[cj]]
-                            Aj = 0.5 * abs(
-                                (qj[1, 0] - qj[0, 0])
-                                * (qj[2, 1] - qj[0, 1])
-                                - (qj[2, 0] - qj[0, 0])
-                                * (qj[1, 1] - qj[0, 1]))
-                            if (abs(As - Aj)
-                                    / max(As, Aj, 1e-9)) > 0.5:
-                                c4_ok = False
-                    if not c4_ok:
-                        break
-                if not c4_ok:
+                # internal seam pairs, exact areas: (a,w)-(b,w)
+                # across (m,w) per side, and (a,w1)-(a,w2) /
+                # (b,w1)-(b,w2) across (a,m)/(m,b)
+                for k1, k2 in (
+                        ((a, w12[0]), (b, w12[0])),
+                        ((a, w12[1]), (b, w12[1])),
+                        ((a, w12[0]), (a, w12[1])),
+                        ((b, w12[0]), (b, w12[1]))):
+                    A1 = sub_area.get((int(k1[0]), int(k1[1])))
+                    A2 = sub_area.get((int(k2[0]), int(k2[1])))
+                    if A1 is None or A2 is None:
+                        continue
+                    sub_c4 = max(sub_c4, abs(A1 - A2)
+                                 / max(A1, A2, 1e-9))
+                if sub_c4 > 0.5:
                     continue
-                worst_ring = _worst_angle(
-                    [j for j in rows if j not in cells2], nodes)
-                worst_f = min(worst_f, worst_ring)
-                if best is None or worst_f > best[1]:
-                    best = (f, worst_f)
-            accept = (best is not None
-                      and _all_ccw([j for j in rows
-                                    if j not in cells2], nodes)
-                      and (best[1] >= 30.0
-                           or best[1] > old_worst)
-                      and abs(2 * best[0] - 1)
-                      / max(best[0], 1 - best[0]) <= 0.5)
-            if accept:
+                wtot = min(worst_f, wring)
+                if not (wtot >= 30.0 or wtot > old_worst):
+                    continue
+                if best is None or wtot > best[1]:
+                    best = (f, wtot, toff)
+            if best is not None:
                 break
+        accept = best is not None
         if not accept:
             for v, p in saved.items():
                 nodes[v] = p
             continue
         f = best[0]
-        pm = nodes[a] * (1 - f) + nodes[b] * f
+        pm = (nodes[a] * (1 - f) + nodes[b] * f
+              + np.array([-u[1], u[0]]) * (best[2] * h_loc))
         mid = n_nodes + len(new_pts)
         new_pts.append(pm)
         new_dep.append(0.5 * float(dep[a] + dep[b]))
         for ci, w0 in zip(cells2, w12):
             repl_rows.append((ci, [[a, mid, w0], [mid, b, w0]]))
-        touched.update((a, b))
+        # freeze the 2-RING (runs 6198321/6198347: a later
+        # transaction 600 m away moved a node it shared with an
+        # already-gated pair of this one -- C4 0.616 post hoc;
+        # freezing only the quad was not enough). Every node of
+        # every cell touching a/b/w1/w2 becomes immovable for
+        # later transactions in this pass.
+        for v2 in (a, b, w12[0], w12[1]):
+            for j2 in node_els[v2]:
+                touched.update(int(x) for x in els[j2])
         ops.append({
             "nodes": [int(a), int(b)],
             "old": [saved[a].tolist(), saved[b].tolist()],
@@ -1321,6 +1346,13 @@ def finish_obc_mesh(
     if land_union is not None:
         mesh, info["choke_widen"] = widen_choke_sections(
             mesh, land_union)
+        # second pass: the 2-ring freeze defers any transaction
+        # that neighbours an accepted one (C4 post-hoc safety,
+        # run 6198347); a fresh pass on the updated topology
+        # picks those up with clean gates (run 6198387: G8-e4)
+        if info["choke_widen"]["widened"]:
+            mesh, info["choke_widen_2"] = widen_choke_sections(
+                mesh, land_union)
     # FINAL perp pass: phase_h moves can re-tilt an OBC node's
     # best edge after the first alignment (node 1319, run 6184643:
     # perp_local had fixed it, phase_h re-broke it, flips could
