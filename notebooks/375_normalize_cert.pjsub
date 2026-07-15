@@ -1,0 +1,43 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=01:10:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-crt375
+# CERTIFICATION run of the recommended final config: manual edits
+# KEPT (edit_004/edit_005 = owner's site-specific quality choice;
+# the policy dup-skips the already-wide corridor) + SR_NORMALIZE=on
+# (generic unresolved-water-= -land rule for the whole domain).
+# Expected: OW05 = A-quality (no east choke), axis centred, plus
+# the B-side domain-wide benefits. Green here -> flip the default.
+set -euo pipefail
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+export SR_NORMALIZE=on
+export SR_OBC_H1=1680
+echo "=== unit tests ==="
+python -m pytest tests/test_waterways.py \
+    tests/test_waterways_normalize.py tests/test_channel_arcs.py -q
+echo "=== generate (CERT: normalize on, ALL edits kept) ==="
+python notebooks/325_sample_repro.py
+echo "=== finish ==="
+python notebooks/331_finish2.py
+echo "=== QA final (non-fatal for measurement) ==="
+fmesh-mesh-qa outputs/sample_repro/sample_repro_final.14 || true
+echo "=== connectivity comparator ==="
+python notebooks/342_connectivity_check.py || true
+echo "=== one-wide ledger ==="
+python notebooks/346_one_wide_flags.py || true
+echo "=== over-resolution / wall integrity ==="
+python notebooks/364_over_resolution.py || true
+echo "=== OW05 axis-centering check ==="
+python notebooks/372_axis_check.py || true
+echo "=== OW05 detail sheets (visual inspection, west + east) ==="
+python notebooks/369_ow05w.py || true
+python notebooks/367_ow05_detail.py || true

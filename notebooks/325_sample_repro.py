@@ -216,7 +216,9 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
     # on the normalized land, so corridors widen SYMMETRICALLY and
     # arcs re-snap onto the real channel axis (the edit_004 +
     # edit_005 mechanism, automated).
-    if os.environ.get("SR_NORMALIZE", "off") == "on":
+    # default ON since the certification run (6210307: chokes 0,
+    # QA 21/21, WALL 61 = best; opt-out for A/B archaeology only)
+    if os.environ.get("SR_NORMALIZE", "on") == "on":
         from fvcom_mesh_tools.waterways import (
             normalize_unresolved_water,
         )
