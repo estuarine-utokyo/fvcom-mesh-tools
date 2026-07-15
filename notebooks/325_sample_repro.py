@@ -104,7 +104,16 @@ for r in chinfo["widened"] + chinfo["closed"]:
 import json as _json
 from fvcom_mesh_tools.channel_arcs import carve_channel_corridor
 CH_PF, CH_EG = [], []      # bank pfix/egfix accumulated per edit
+# A/B lever (explicit opt-in, loud): comma-separated edit STEMS to
+# skip -- used to validate that an automatic stage reproduces a
+# manual edit before retiring it. Never silent: every skip prints.
+_SR_EXCL = {s.strip() for s in os.environ.get(
+    "SR_EDITS_EXCLUDE", "").split(",") if s.strip()}
 for _ef in sorted(Path("recipes/edits/sample_repro").glob("*.json")):
+    if _ef.stem in _SR_EXCL:
+        print(f"[sr] channel edit {_ef.stem}: EXCLUDED "
+              f"(SR_EDITS_EXCLUDE)", flush=True)
+        continue
     _ed = _json.loads(_ef.read_text())
     if _ed.get("type") == "land_patch":
         # data-crack correction: force a region to LAND (e.g. the
@@ -160,8 +169,9 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
         apply_waterway_policy,
         detect_waterways,
     )
+    _land_pre_ww = _new_land   # post-edit land: pass-2 base
     _recs = detect_waterways(
-        _new_land, _dom, h_mesh_m=1.2 * H0,
+        _land_pre_ww, _dom, h_mesh_m=1.2 * H0,
         obc_point=tuple(OBC_ARC[6]),
         metric_scale=(111e3 * _cosw, 111e3))
     # OSM waterway CENTRELINES authorize bridge-gap opening
@@ -187,7 +197,7 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
     # verified dup-skip, crumb cleanup, severance override,
     # boundary short-edge collapse.
     _new_land, _winfo = apply_waterway_policy(
-        _new_land, _dom, _recs, h_mesh_m=1.2 * H0,
+        _land_pre_ww, _dom, _recs, h_mesh_m=1.2 * H0,
         metric_scale=(111e3 * _cosw, 111e3),
         h_grade_per_m=1.2 * GRADE,
         open_bridges="auto",
@@ -198,6 +208,57 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
             "SR_ATTAIN_BAR", "1.5")),
         force_two_rows=(os.environ.get(
             "SR_FORCE2ROWS", "off") == "on"))
+    # NORMALIZATION (owner rule 2026-07-15: water we decided not
+    # to resolve is LAND for later geometry decisions). Two fixed
+    # passes, never a loop: pass 1 above learns which corridors
+    # are kept; normalization converts every basin left behind a
+    # sub-floor passage into land; pass 2 re-detects and re-carves
+    # on the normalized land, so corridors widen SYMMETRICALLY and
+    # arcs re-snap onto the real channel axis (the edit_004 +
+    # edit_005 mechanism, automated).
+    if os.environ.get("SR_NORMALIZE", "off") == "on":
+        from fvcom_mesh_tools.waterways import (
+            normalize_unresolved_water,
+        )
+        _nfills, _ninfo = normalize_unresolved_water(
+            _new_land, _dom, h_mesh_m=1.2 * H0,
+            obc_point=tuple(OBC_ARC[6]),
+            metric_scale=(111e3 * _cosw, 111e3),
+            keep_tubes=_winfo["refine_arcs"])
+        print(f"[sr] normalize: components "
+              f"{_ninfo['components_filled']}, basins "
+              f"{_ninfo['basin_parts_filled']}, fringes "
+              f"{_ninfo['fringes_filled']}, neck stubs left "
+              f"{_ninfo['neck_stubs']}, filled "
+              f"{_ninfo['area_filled_ha']:.1f} ha", flush=True)
+        for _f in _ninfo["fills"]:
+            if _f["area_ha"] >= 1.0:
+                print(f"[sr]   fill {_f['area_ha']:8.1f} ha at "
+                      f"({_f['center'][0]:.4f}, "
+                      f"{_f['center'][1]:.4f})  {_f['why']}",
+                      flush=True)
+        (OUT / "normalize.json").write_text(_json.dumps(
+            {k: v for k, v in _ninfo.items()}))
+        if _nfills:
+            _land_pre2 = _uu([_land_pre_ww, *_nfills])
+            _recs = detect_waterways(
+                _land_pre2, _dom, h_mesh_m=1.2 * H0,
+                obc_point=tuple(OBC_ARC[6]),
+                metric_scale=(111e3 * _cosw, 111e3))
+            _new_land, _winfo = apply_waterway_policy(
+                _land_pre2, _dom, _recs, h_mesh_m=1.2 * H0,
+                metric_scale=(111e3 * _cosw, 111e3),
+                h_grade_per_m=1.2 * GRADE,
+                open_bridges="auto",
+                waterway_lines=list(_wl.geometry),
+                widen_factor=float(os.environ.get(
+                    "SR_WIDEN_FACTOR", "0.875")),
+                attain_bar_h=float(os.environ.get(
+                    "SR_ATTAIN_BAR", "1.5")),
+                force_two_rows=(os.environ.get(
+                    "SR_FORCE2ROWS", "off") == "on"))
+            print("[sr] normalize: pass 2 (re-detect + symmetric "
+                  "re-carve on normalized land) done", flush=True)
     # forced two-row ladder constraints from marginal kept
     # branches join the constrained-node set (same plumbing as
     # the manual-edit bank chains)

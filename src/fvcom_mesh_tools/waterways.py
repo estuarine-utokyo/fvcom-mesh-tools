@@ -42,7 +42,8 @@ from fvcom_mesh_tools.channel_arcs import (
     snap_arc_to_channel,
 )
 
-__all__ = ["detect_waterways", "apply_waterway_policy"]
+__all__ = ["detect_waterways", "apply_waterway_policy",
+           "normalize_unresolved_water"]
 
 
 def _polys(geom) -> list[Polygon]:
@@ -410,6 +411,150 @@ def detect_waterways(
                 rec["reason"] = f"arc extraction failed: {e}"
         records.append(rec)
     return records
+
+
+def normalize_unresolved_water(
+    land_union,
+    domain_poly,
+    *,
+    h_mesh_m: float,
+    obc_point,
+    metric_scale: tuple[float, float],
+    pass_floor_h: float = 1.0,
+    keep_tubes: list | None = None,
+) -> tuple[list, dict[str, Any]]:
+    """Owner rule 2026-07-15 (OW05 Urayasu): water we have decided
+    NOT to resolve is LAND for every subsequent geometry decision.
+
+    After the waterway policy has carved/filled, water that remains
+    reachable from the main body only through passages narrower
+    than ``pass_floor_h * h`` will not mesh (sub-two-row channels
+    are do-not-mesh by standing policy, and DistMesh abandons
+    sub-cell strips) -- yet as "water" in the shoreline data it
+    still deflects later geometry decisions: carve barrier guards
+    refuse to widen toward it, so corridors drift off the real
+    channel axis (OW05 sat 300 m south of the axis for exactly
+    this reason). This returns fill polygons that turn all such
+    water into land.
+
+    Connectivity stays sacred: parts joined to the main body
+    through carved corridors (``keep_tubes`` = (arc, width_m)
+    pairs, honoured at ANY realized width -- marginal-kept
+    branches exist precisely because closing them would sever)
+    are never filled, and a through passage joins two main-side
+    regions into one opened part, so it is untouched by
+    construction. Fills are RETURNED, not applied: the caller
+    applies them BEFORE re-running detection + carving --
+    fills-before-carves is what makes the re-carve symmetric
+    (the edit_004/edit_005 lesson).
+    """
+    sx, sy = metric_scale
+    if abs(sx - sy) / max(sx, sy) > 0.35:
+        raise ValueError("metric_scale too anisotropic; project first")
+    scale = 0.5 * (sx + sy)
+    h = h_mesh_m / scale
+    r = 0.5 * pass_floor_h * h
+    eps = 0.02 * h
+    obc_pt = shapely.Point(obc_point)
+
+    water = domain_poly.difference(land_union)
+    comps = _polys(water)
+    if not comps:
+        raise RuntimeError("domain minus land left no water")
+    main_ci = int(np.argmin([obc_pt.distance(g) for g in comps]))
+
+    fills: list = []
+    info: dict[str, Any] = {
+        "components_filled": 0, "basin_parts_filled": 0,
+        "fringes_filled": 0, "neck_stubs": 0,
+        "n_opened_parts": 0, "n_aug_parts": 0,
+        "area_filled_ha": 0.0, "fills": [],
+    }
+
+    def _log_fill(g, why, key):
+        c = g.representative_point()
+        ha = g.area * sx * sy / 1e4
+        info["fills"].append(
+            {"why": why, "area_ha": round(ha, 2),
+             "center": [round(float(c.x), 5),
+                        round(float(c.y), 5)]})
+        info["area_filled_ha"] += ha
+        info[key] += 1
+        fills.append(g)
+
+    # (1) whole components disconnected from the main body never
+    #     mesh (disjoint-element cleanup would drop their cells):
+    #     they are land by the owner rule, outright.
+    for k, g in enumerate(comps):
+        if k != main_ci:
+            _log_fill(g, "disconnected component",
+                      "components_filled")
+
+    # (2) within the main component: opened-connectivity test.
+    #     Erosion by r removes every passage narrower than
+    #     pass_floor_h * h; opened parts no longer attached to the
+    #     main opened part are basins whose only way in is
+    #     sub-floor = unresolved.
+    C = comps[main_ci]
+    opened = C.buffer(-r).buffer(
+        r * 1.02, join_style="mitre", mitre_limit=1.2)
+    opened = opened.intersection(C)
+    op_parts = _polys(opened)
+    if not op_parts:
+        raise RuntimeError(
+            "normalization opening removed ALL water -- "
+            "pass_floor_h too large for this domain?")
+    info["n_opened_parts"] = len(op_parts)
+    aug = opened
+    if keep_tubes:
+        tubes = []
+        for a2, w2 in keep_tubes:
+            a2 = np.asarray(a2, float)
+            if len(a2) < 2:
+                continue
+            w2 = np.asarray(w2, float)
+            rad = max(0.5 * float(np.median(w2)),
+                      0.6 * h_mesh_m) / scale
+            tubes.append(shapely.LineString(a2).buffer(rad))
+        if tubes:
+            # tube INTERSECTED with the water: a tube laid over a
+            # wall must never bridge across it
+            aug = unary_union(
+                [opened, unary_union(tubes).intersection(C)])
+    aug_parts = _polys(aug)
+    info["n_aug_parts"] = len(aug_parts)
+    main_pi = int(np.argmin([obc_pt.distance(g)
+                             for g in aug_parts]))
+    filled_parts = []
+    for k, g in enumerate(aug_parts):
+        if k == main_pi:
+            continue
+        _log_fill(g, "basin behind sub-floor passage",
+                  "basin_parts_filled")
+        filled_parts.append(g)
+
+    # (3) narrow fringe pieces attached ONLY to filled basins are
+    #     part of the same unresolved complex (the opened geometry
+    #     is eroded; without this the basin rim stays water-in-
+    #     data). A piece that also touches the main part is the
+    #     entrance NECK: left alone here -- the pass-2 policy
+    #     closes dead-end stubs by its own rules -- but counted
+    #     loudly.
+    if filled_parts:
+        from shapely.strtree import STRtree
+        main_part = aug_parts[main_pi]
+        ftree = STRtree(filled_parts)
+        for q in _polys(C.difference(aug)):
+            near = [int(i) for i in ftree.query(q.buffer(eps))
+                    if q.distance(filled_parts[int(i)]) < eps]
+            if not near:
+                continue
+            if q.distance(main_part) < eps:
+                info["neck_stubs"] += 1
+                continue
+            _log_fill(q, "fringe of filled basin",
+                      "fringes_filled")
+    return fills, info
 
 
 def apply_waterway_policy(

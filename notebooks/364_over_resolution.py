@@ -25,6 +25,7 @@ WALL sites exist outside kept tubes (gate; run after 342).
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -91,7 +92,13 @@ if wjson.exists():
             w2 = np.asarray(w2, float)
             tubes.append(shapely.LineString(a2).buffer(
                 0.65 * float(np.median(w2)) / 111e3))
+_SR_EXCL = {s.strip() for s in os.environ.get(
+    "SR_EDITS_EXCLUDE", "").split(",") if s.strip()}
 for ed in sorted((ROOT / "recipes/edits/sample_repro").glob("*.json")):
+    if ed.stem in _SR_EXCL:
+        print(f"[ovr] edit {ed.stem}: EXCLUDED "
+              f"(SR_EDITS_EXCLUDE)", flush=True)
+        continue
     d = json.loads(ed.read_text())
     if d.get("type") in ("water_patch",) and d.get("polygon"):
         tubes.append(shapely.Polygon(d["polygon"]))

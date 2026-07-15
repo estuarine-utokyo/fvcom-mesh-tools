@@ -135,8 +135,14 @@ tree = STRtree(polys)
 scale = 0.5 * (111e3 * COSW + 111e3)
 xflag: set[int] = set()
 arc_sources = []
+_SR_EXCL = {s.strip() for s in os.environ.get(
+    "SR_EDITS_EXCLUDE", "").split(",") if s.strip()}
 for ef in sorted(Path("recipes/edits/sample_repro")
                  .glob("*.json")):
+    if ef.stem in _SR_EXCL:
+        print(f"[ow] edit {ef.stem}: EXCLUDED "
+              f"(SR_EDITS_EXCLUDE)", flush=True)
+        continue
     ed = json.loads(ef.read_text())
     if "check_arcs" in ed:
         arc_sources += list(zip(ed["check_arcs"],

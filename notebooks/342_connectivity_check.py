@@ -193,8 +193,14 @@ def _edit_component_check(_geom, _eid, _allow):
               f"without allow_connect", flush=True)
 
 
+_SR_EXCL = {s.strip() for s in os.environ.get(
+    "SR_EDITS_EXCLUDE", "").split(",") if s.strip()}
 for _ef in sorted(
         _Path("recipes/edits/sample_repro").glob("*.json")):
+    if _ef.stem in _SR_EXCL:
+        print(f"[conn] edit {_ef.stem}: EXCLUDED "
+              f"(SR_EDITS_EXCLUDE)", flush=True)
+        continue
     _ed = _json.loads(_ef.read_text())
     if _ed.get("type") == "land_patch":
         import shapely.geometry as _sg

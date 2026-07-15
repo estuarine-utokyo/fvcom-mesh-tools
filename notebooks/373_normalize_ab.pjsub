@@ -1,0 +1,50 @@
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=01:10:00
+#PJM -j
+#PJM -X
+#PJM -N fvcm-ab373
+# A/B validation of the NORMALIZATION pass (owner rule 2026-07-15:
+# water we decided not to resolve is LAND for later geometry
+# decisions). B side = SR_NORMALIZE=on with the OW05 manual edits
+# (edit_004 harbor fill, edit_005 axis carve) EXCLUDED -- the pass
+# must reproduce their effect automatically. Baseline A = commit
+# 3dfa621 (run 6208689): QA 21/21, dt 16.55 s, chokes OW08 only,
+# axis offsets -3/-34 m.
+set -euo pipefail
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
+source "${HOME}/mambaforge/etc/profile.d/conda.sh"
+conda activate oceanmesh-bench
+cd "${HOME}/Github/fvcom-mesh-tools"
+
+# preserve the A-side artifacts before regeneration overwrites them
+cp -n outputs/sample_repro/sample_repro_final.14 \
+      outputs/sample_repro/sample_repro_final_A_3dfa621.14 || true
+cp -n outputs/figures/ow05_west_detail.png \
+      outputs/figures/ow05_west_detail_A_3dfa621.png || true
+
+export SR_NORMALIZE=on
+export SR_EDITS_EXCLUDE=edit_004_ow05_harbor,edit_005_ow05_urayasu
+export SR_OBC_H1=1680
+echo "=== unit tests ==="
+python -m pytest tests/test_waterways.py \
+    tests/test_waterways_normalize.py tests/test_channel_arcs.py -q
+echo "=== generate (B: normalize on, OW05 edits excluded) ==="
+python notebooks/325_sample_repro.py
+echo "=== finish ==="
+python notebooks/331_finish2.py
+echo "=== QA final (non-fatal for measurement) ==="
+fmesh-mesh-qa outputs/sample_repro/sample_repro_final.14 || true
+echo "=== connectivity comparator ==="
+python notebooks/342_connectivity_check.py || true
+echo "=== one-wide ledger ==="
+python notebooks/346_one_wide_flags.py || true
+echo "=== over-resolution / wall integrity ==="
+python notebooks/364_over_resolution.py || true
+echo "=== OW05 axis-centering check ==="
+python notebooks/372_axis_check.py || true
+echo "=== OW05 west detail sheet (visual inspection) ==="
+python notebooks/369_ow05w.py || true
