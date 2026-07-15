@@ -1,76 +1,13 @@
 {
- "id": "edit005-ow05-urayasu",
- "note": "OW05 Urayasu strait widening. rev 4 (rev 3 put the arc itself on land and the arc-on-land guard correctly refused, 1404 m > 400): the arc stays on the channel axis (rev 2 positions, arc_on_land 101 m) and the SOUTH bank is set by per-vertex widths that all reach lat 35.6266 -- effective channel after the edit_006 basin/wall refill = wall face 35.6326 down to 35.6266 ~ 665 m ~ 1.9h. Mouth vertices stay at 700 m so the upper block is only nibbled ~100 m.",
- "rev": 4,
- "arc": [
-  [
-   139.82452,
-   35.63041
-  ],
-  [
-   139.82542,
-   35.63094
-  ],
-  [
-   139.8264,
-   35.63137
-  ],
-  [
-   139.82746,
-   35.63168
-  ],
-  [
-   139.8286,
-   35.63179
-  ],
-  [
-   139.82973,
-   35.6319
-  ],
-  [
-   139.83086,
-   35.632
-  ],
-  [
-   139.832,
-   35.63211
-  ],
-  [
-   139.83313,
-   35.63222
-  ],
-  [
-   139.83427,
-   35.63232
-  ],
-  [
-   139.8352,
-   35.632
-  ],
-  [
-   139.8395,
-   35.6314
-  ],
-  [
-   139.844,
-   35.6303
-  ]
- ],
- "widths_m": [
-  846.0,
-  963.0,
-  1059.0,
-  1128.0,
-  1152.0,
-  1177.0,
-  1199.0,
-  1223.0,
-  1248.0,
-  1270.0,
-  700.0,
-  700.0,
-  700.0
- ],
- "min_gap_m": 150.0,
- "arc_on_land_tol_m": 400.0
+  "id": "edit005-ow05-urayasu",
+  "note": "OW05 Urayasu strait widening. rev 5 (owner: centre the corridor on the REAL channel axis; with the harbour complex now land via edit_004, north and south are symmetric). The arc follows the MEASURED axis of the original waterway (transect centres; the wall-reach axis 35.632 is approached from just south so the arc stays on original water and the arc-on-land guard holds). Constant 700 m: ~290 m from the harbour block (north), ~320 m from the south block.",
+  "rev": 5,
+  "arc": [[139.8245, 35.6291], [139.8255, 35.6293], [139.8265, 35.6305],
+          [139.8275, 35.6316], [139.8285, 35.6317], [139.8295, 35.6318],
+          [139.8305, 35.6318], [139.8315, 35.6319], [139.8325, 35.6319],
+          [139.8335, 35.6319], [139.8345, 35.6319], [139.8395, 35.6314],
+          [139.8440, 35.6303]],
+  "width_m": 700.0,
+  "min_gap_m": 150.0,
+  "arc_on_land_tol_m": 400.0
 }

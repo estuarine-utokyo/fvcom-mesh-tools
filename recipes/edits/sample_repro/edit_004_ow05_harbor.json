@@ -1,0 +1,13 @@
+{
+  "id": "edit004-ow05-harbor",
+  "type": "land_patch",
+  "note": "OW05 Urayasu harbour complex -> LAND (owner design rule 2026-07-15: 'a harbour we decided not to resolve should be treated as land; then the north and south sides are under equal conditions and the corridor can be centred on the real channel axis'). Covers the wall, the basin and its sub-resolution entrance. Applied BEFORE edit_005 (filename order), so the axis-centred carve then takes its northern half from this block symmetrically -- resolving the contradiction of ceding land only on the south.",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [[
+      [139.8213, 35.6320], [139.8348, 35.6320],
+      [139.8348, 35.6395], [139.8213, 35.6395],
+      [139.8213, 35.6320]
+    ]]
+  }
+}
