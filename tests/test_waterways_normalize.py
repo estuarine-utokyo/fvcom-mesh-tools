@@ -11,7 +11,10 @@ import pytest
 from shapely.geometry import Point, box
 from shapely.ops import unary_union
 
-from fvcom_mesh_tools.waterways import normalize_unresolved_water
+from fvcom_mesh_tools.waterways import (
+    _junction_bridge_pairs,
+    normalize_unresolved_water,
+)
 
 H = 350.0
 DOMAIN = box(0, 0, 20000, 10000)
@@ -103,6 +106,51 @@ class TestKeepTubes:
         fills, info = _run(land, keep_tubes=[(arc, w)])
         assert info["components_filled"] == 1
         assert _covers(fills, 10000, 9000)
+
+
+class TestJunctionBridges:
+    """F9-c4 lesson (run 6210307): per-branch arcs stop at
+    junctions; the junction hole must be bridged at corridor
+    width or the through path is left to realization roulette."""
+
+    def test_junction_gap_bridged_at_narrower_width(self):
+        a1 = np.array([[0.0, 0.0], [1000.0, 0.0]])
+        a2 = np.array([[1400.0, 0.0], [2400.0, 0.0]])
+        done = [(a1, np.array([700.0, 700.0])),
+                (a2, np.array([600.0, 600.0]))]
+        prs = _junction_bridge_pairs(done, 350.0, (1.0, 1.0))
+        assert len(prs) == 1     # gap 400 in (0.35h, 2h]
+        pa, pb, wj = prs[0]
+        assert wj == 600.0
+        assert {tuple(pa), tuple(pb)} == {(1000.0, 0.0),
+                                          (1400.0, 0.0)}
+
+    def test_touching_and_far_endpoints_skipped(self):
+        a1 = np.array([[0.0, 0.0], [1000.0, 0.0]])
+        a2 = np.array([[1000.0, 0.0], [2000.0, 0.0]])  # gap 0
+        a3 = np.array([[3000.0, 0.0], [4000.0, 0.0]])  # gap 1000
+        done = [(a, np.array([700.0, 700.0]))
+                for a in (a1, a2, a3)]
+        assert _junction_bridge_pairs(done, 350.0,
+                                      (1.0, 1.0)) == []
+
+    def test_network_geom_guard_rejects_cross_land_pair(self):
+        # parallel branches across a land spit: endpoints 400 m
+        # apart, but the connecting segment leaves the network
+        # water -> no bridge (run 6218497: fabricated H5-d3
+        # passage)
+        a1 = np.array([[0.0, 0.0], [1000.0, 0.0]])
+        a2 = np.array([[1400.0, 0.0], [2400.0, 0.0]])
+        done = [(a1, np.array([700.0, 700.0])),
+                (a2, np.array([600.0, 600.0]))]
+        water = unary_union([
+            box(-100, -200, 1100, 200),
+            box(1300, -200, 2500, 200)])   # gap NOT in water
+        assert _junction_bridge_pairs(
+            done, 350.0, (1.0, 1.0), network_geom=water) == []
+        joined = box(-100, -200, 2500, 200)  # junction in water
+        assert len(_junction_bridge_pairs(
+            done, 350.0, (1.0, 1.0), network_geom=joined)) == 1
 
 
 class TestLoudFailures:

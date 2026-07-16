@@ -413,6 +413,77 @@ def detect_waterways(
     return records
 
 
+def _tube_geom(arc, w, metric_scale):
+    """Carved-corridor tube: per-segment buffers at 0.48 x the
+    local carve width (carve semantics: segment width = min of its
+    endpoint widths). Used to PROTECT carved corridors from the
+    deferred fills -- fills are unioned onto the land at the end
+    of the policy pass, and without this difference a stub-head/
+    close fill computed on pre-carve geometry re-lands water that
+    a carve (e.g. a junction bridge) opened (F9-c4, run 6218466:
+    34 ha of fill sat on top of the bridged junction)."""
+    sx, sy = metric_scale
+    scale = 0.5 * (sx + sy)
+    a = np.asarray(arc, float)
+    w = np.asarray(w, float)
+    if w.ndim == 0:
+        w = np.full(len(a), float(w))
+    segs = []
+    for j in range(len(a) - 1):
+        r = 0.48 * float(min(w[j], w[min(j + 1, len(w) - 1)]))
+        segs.append(shapely.LineString(a[j:j + 2]).buffer(
+            r / scale))
+    return unary_union(segs)
+
+
+def _junction_bridge_pairs(done, h_mesh_m, metric_scale,
+                           network_geom=None):
+    """Endpoint pairs of DIFFERENT carved branches whose gap is a
+    junction-scale hole (0.35h .. 2.0h). Per-branch arcs stop AT
+    skeleton junctions, so the junction water between two carved
+    corridors is never widened -- it stays near natural (often
+    sub-h) width, and DistMesh either meshes it as a one-wide
+    choke or abandons it outright (realization roulette: run
+    6208689 got the OW08 choke, run 6210307 got a SEVERED Keihin
+    arm at F9-c4). Returns ``[(p_a, p_b, width_m), ...]`` with
+    width = the narrower of the two branch corridor medians, so
+    the healed junction is as wide as its narrower corridor.
+
+    ``network_geom`` (the network's water region, pre-buffered by
+    the caller): a real junction gap lies INSIDE the network
+    water, so the connecting segment must be covered by it.
+    Without this, endpoints of PARALLEL branches within 2h across
+    a land spit paired up and the bridge carved THROUGH the spit
+    (run 6218497: 133 bridges, a fabricated passage at H5-d3 and
+    3 new chokes)."""
+    sx, sy = metric_scale
+    ends = []
+    for bi, (a2, w2) in enumerate(done):
+        a2 = np.asarray(a2, float)
+        if len(a2) < 2:
+            continue
+        wmed = float(np.median(np.asarray(w2, float)))
+        ends.append((bi, a2[0], wmed))
+        ends.append((bi, a2[-1], wmed))
+    out = []
+    for i in range(len(ends)):
+        for j in range(i + 1, len(ends)):
+            bi, pa, wa = ends[i]
+            bj, pb, wb = ends[j]
+            if bi == bj:
+                continue
+            gap = float(np.hypot((pa[0] - pb[0]) * sx,
+                                 (pa[1] - pb[1]) * sy))
+            if not (0.35 * h_mesh_m < gap <= 2.0 * h_mesh_m):
+                continue
+            if network_geom is not None and not \
+                    network_geom.covers(
+                        shapely.LineString([pa, pb])):
+                continue
+            out.append((pa, pb, min(wa, wb)))
+    return out
+
+
 def normalize_unresolved_water(
     land_union,
     domain_poly,
@@ -607,11 +678,13 @@ def apply_waterway_policy(
             "marginal_kept": 0, "dup_skipped": 0,
             "thin_stubs_closed": 0,
             "line_branches": 0, "skel_branches": 0,
+            "junction_bridges": 0,
             "refine_arcs": [],
             "band_pfix": [], "band_egfix": [], "band_n": 0,
             "band_size_pts": [], "band_size_tgt": [],
             "land_removed_m2": 0.0}
     fills = []
+    protect_tubes = []   # carved corridors: fills never re-land them
     sx, sy = metric_scale
     scale = 0.5 * (sx + sy)
     wlist = ([g for g in waterway_lines]
@@ -989,6 +1062,47 @@ def apply_waterway_policy(
                     info["dup_skipped"] += 1
                 else:
                     _do_branch(i)
+            # JUNCTION BRIDGES (owner 2026-07-16, F9-c4 severance):
+            # heal the un-widened junction hole between carved
+            # branch corridors with a short connecting carve at
+            # the narrower corridor's width. Best-effort: the
+            # barrier-safe carve guards stay active, and a refusal
+            # is recorded loudly instead of raising.
+            if len(done) >= 2:
+                n_jb = 0
+                for pa, pb, wj in _junction_bridge_pairs(
+                        done, h_mesh_m, metric_scale,
+                        network_geom=geom_b):
+                    try:
+                        new_land, cj = carve_channel_corridor(
+                            new_land, np.vstack([pa, pb]), wj,
+                            min_gap_m=min_gap_m,
+                            metric_scale=metric_scale,
+                            domain_poly=domain_poly,
+                            arc_on_land_tol_m=0.35 * h_mesh_m
+                            + br_m,
+                            carve_crossings=False)
+                        n_jb += 1
+                        info["land_removed_m2"] += (
+                            cj["land_removed_m2"])
+                        protect_tubes.append(_tube_geom(
+                            np.vstack([pa, pb]), wj,
+                            metric_scale))
+                    except (RuntimeError, ValueError) as e4:
+                        rec.setdefault(
+                            "junction_bridge_failures",
+                            []).append(str(e4)[:90])
+                if n_jb:
+                    rec["junction_bridges"] = n_jb
+                    info["junction_bridges"] += n_jb
+            # NOTE: protection is deliberately restricted to the
+            # junction-bridge corridors. Protecting EVERY branch
+            # tube reopened ~492 ha of long-standing legitimate
+            # fills (stub heads / thin stubs trimming corridor
+            # banks) and shifted realizations domain-wide (run
+            # 6218519: C1+C4 QA tail, dt 15.32). The refill bug
+            # only ever bites where a NEW carve (the bridge) and a
+            # pre-carve fill overlap -- the junction pocket.
             if done:
                 li = int(np.argmax(
                     [shapely.LineString(a2).length
@@ -1122,7 +1236,20 @@ def apply_waterway_policy(
         # one real severance -- run 6186580). Raw fills leave a
         # 1-2 cell realization-sensitive quality tail at the
         # artificial west edge instead, tracked in the ledger.
-        new_land = unary_union([new_land, *fills])
+        fill_u = unary_union(fills)
+        if protect_tubes:
+            # fills are DEFERRED to this point, so a fill computed
+            # on pre-carve geometry (stub-head crescents, closes)
+            # can sit on top of water a carve opened during the
+            # loop -- carves must win inside carved corridors
+            # (F9-c4 junction refill, run 6218466).
+            prot = unary_union(protect_tubes)
+            cut = fill_u.intersection(prot)
+            if not cut.is_empty:
+                info["fill_on_carve_ha"] = round(
+                    cut.area * sx * sy / 1e4, 2)
+            fill_u = fill_u.difference(prot)
+        new_land = unary_union([new_land, fill_u])
     # LAND-CRUMB CLEANUP (run 6190495): corridor carving can
     # shave sub-cell land fragments off a bigger polygon (a
     # 290 m2 speck at G8-e4 fed C1 slivers). Drop pieces far

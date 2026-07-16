@@ -287,6 +287,11 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
           f"crumbs {_winfo.get('crumbs_dropped', 0)}), "
           f"land_removed "
           f"{_winfo['land_removed_m2']/1e4:.1f} ha", flush=True)
+    print(f"[sr] waterways detail: junction_bridges "
+          f"{_winfo.get('junction_bridges', 0)}, stub_fills "
+          f"{_winfo['stub_fills']}, thin_stubs "
+          f"{_winfo['thin_stubs_closed']}, fill_on_carve "
+          f"{_winfo.get('fill_on_carve_ha', 0)} ha", flush=True)
     # persist the records so the one-wide checker sweeps EVERY
     # kept waterway's arc (not just manual edits) and blocked
     # ones stay visible in the ledger
@@ -308,6 +313,9 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
                          if _r.get("width_m") is not None
                          else None),
             "marginal_branches": _r.get("marginal_branches"),
+            "junction_bridges": _r.get("junction_bridges"),
+            "junction_bridge_failures":
+                _r.get("junction_bridge_failures"),
             # EVERY carved branch arc (not just the longest):
             # side branches carry their own widths, and the
             # one-wide sweep + choke diagnosis must see them

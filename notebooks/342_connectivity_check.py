@@ -141,6 +141,126 @@ if len(missing):
         print(f"[conn]   missing x{rec[0]} at ({rec[1]:.4f}, "
               f"{rec[2]:.4f}) severs_sample={rec[3]}", flush=True)
 
+# ---------- KEPT-NETWORK THROUGH PROBE (owner 2026-07-16) --------
+# The F9-c4 lesson: the coverage+detour tests above MISSED a real
+# junction severance -- our wide cells covered part of the sample
+# pocket (shrinking the missing cluster to 4) and the canal loop
+# around the island closed within the max(20, 8n) hop bound. The
+# direct test: for every KEPT waterway network, chain its carved
+# branch arcs (bridging endpoint gaps <= ~3h) and require the
+# corridor-restricted dual graph of OUR mesh to connect the two
+# farthest arc ends whenever the SAMPLE's corridor does.
+from scipy.spatial import cKDTree as _KDT
+
+_SXm = 111e3 * float(np.cos(np.deg2rad(35.35)))
+_SYm = 111e3
+
+
+def _dense_chain(_arcs, bridge_max_m):
+    segs = []
+    for _a in _arcs:
+        _a = np.asarray(_a, float)
+        for _i in range(len(_a) - 1):
+            segs.append((_a[_i], _a[_i + 1]))
+    endpts = [np.asarray(_a, float)[k]
+              for _a in _arcs for k in (0, -1)]
+    for _i in range(len(endpts)):
+        for _j in range(_i + 1, len(endpts)):
+            _g = np.hypot((endpts[_i][0] - endpts[_j][0]) * _SXm,
+                          (endpts[_i][1] - endpts[_j][1]) * _SYm)
+            if 0 < _g <= bridge_max_m:
+                segs.append((endpts[_i], endpts[_j]))
+    pts = []
+    for _p, _q in segs:
+        _n = max(2, int(np.hypot((_q[0] - _p[0]) * _SXm,
+                                 (_q[1] - _p[1]) * _SYm) / 50))
+        pts.append(np.linspace(_p, _q, _n))
+    return np.vstack(pts), endpts
+
+
+def _corridor_probe(_P, _T, dense, _A, _B, rad=450.0):
+    """True/False = corridor connects the probe ends; None = not
+    probeable (no cells at an end)."""
+    from collections import defaultdict as _dd, deque as _dq
+    _cent = _P[_T].mean(axis=1)
+    _tree = _KDT(np.column_stack([dense[:, 0] * _SXm,
+                                  dense[:, 1] * _SYm]))
+    _d, _ = _tree.query(
+        np.column_stack([_cent[:, 0] * _SXm, _cent[:, 1] * _SYm]),
+        distance_upper_bound=rad)
+    _sel = np.where(np.isfinite(_d))[0]
+    if len(_sel) == 0:
+        return None
+    _edge = _dd(list)
+    for _j in _sel:
+        _t = _T[_j]
+        for _k in range(3):
+            _e = tuple(sorted((int(_t[_k]), int(_t[(_k + 1) % 3]))))
+            _edge[_e].append(int(_j))
+    _adj = _dd(list)
+    for _cells in _edge.values():
+        if len(_cells) == 2:
+            _adj[_cells[0]].append(_cells[1])
+            _adj[_cells[1]].append(_cells[0])
+
+    def _near(pt):
+        _dd2 = np.hypot((_cent[_sel, 0] - pt[0]) * _SXm,
+                        (_cent[_sel, 1] - pt[1]) * _SYm)
+        _k2 = int(np.argmin(_dd2))
+        return int(_sel[_k2]), float(_dd2[_k2])
+
+    _a, _da = _near(_A)
+    _b, _db = _near(_B)
+    if max(_da, _db) > 500.0:
+        return None
+    _seen = {_a}
+    _q = _dq([_a])
+    while _q:
+        _u = _q.popleft()
+        if _u == _b:
+            return True
+        for _v in _adj[_u]:
+            if _v not in _seen:
+                _seen.add(_v)
+                _q.append(_v)
+    return False
+
+
+severed_mesh = []
+_wpath = "outputs/sample_repro/waterways.json"
+if os.path.exists(_wpath):
+    import json as _json2
+    for _r in _json2.loads(open(_wpath).read()):
+        if _r.get("action") != "keep" or not _r.get("arcs_done"):
+            continue
+        _arcs = [_a for _a, _w in _r["arcs_done"]]
+        _dense, _endpts = _dense_chain(_arcs, bridge_max_m=1050.0)
+        _best = None
+        for _i in range(len(_endpts)):
+            for _j in range(_i + 1, len(_endpts)):
+                _g = np.hypot(
+                    (_endpts[_i][0] - _endpts[_j][0]) * _SXm,
+                    (_endpts[_i][1] - _endpts[_j][1]) * _SYm)
+                if _best is None or _g > _best[0]:
+                    _best = (_g, _endpts[_i], _endpts[_j])
+        if _best is None or _best[0] < 700.0:
+            continue
+        _rs = _corridor_probe(Pll_s, Ts, _dense, _best[1], _best[2])
+        _ro = _corridor_probe(Pll_o, T_o, _dense, _best[1], _best[2])
+        if _rs is True and _ro is False:
+            severed_mesh.append(_r["center"])
+            print(f"[conn] CRITICAL mesh-severed kept network at "
+                  f"({_r['center'][0]:.4f}, {_r['center'][1]:.4f})"
+                  f": sample corridor CONNECTED, ours "
+                  f"DISCONNECTED", flush=True)
+        elif _rs is True and _ro is None:
+            print(f"[conn]   note: kept network at "
+                  f"({_r['center'][0]:.4f}, {_r['center'][1]:.4f})"
+                  f" not probeable on our mesh (no cells at an "
+                  f"arc end)", flush=True)
+print(f"[conn] kept-network mesh probes: {len(severed_mesh)} "
+      f"CRITICAL mesh-severed", flush=True)
+
 # ---------- BREACH: our elements on ORIGINAL land ----------------
 land = unary_union(list(gpd.read_file(
     "outputs/tb_varres_3r/land_osm_wide.shp").geometry))
@@ -294,6 +414,8 @@ print(f"[conn] CRITICAL severed passages: {len(severed)}",
       flush=True)
 print(f"[conn] CRITICAL land breaches:    {len(breaches)}",
       flush=True)
+print(f"[conn] CRITICAL mesh-severed nets: {len(severed_mesh)}",
+      flush=True)
 
 # map figure -- markers must NOT hide the mesh (owner
 # 2026-07-12): hollow, translucent markers; legend outside the
@@ -310,6 +432,9 @@ if len(missing):
 for nrec, x, y, crit in severed:
     ax.plot([x], [y], marker="x", ms=16, mew=3, color="red",
             alpha=0.9, zorder=6)
+for _x, _y in severed_mesh:
+    ax.plot([_x], [_y], marker="X", ms=16, mew=2.4, mec="red",
+            mfc="none", alpha=0.9, zorder=6)
 if len(breach_idx):
     ax.scatter(cent_o[breach_idx, 0], cent_o[breach_idx, 1],
                s=55, marker="s", facecolors="none",
@@ -326,4 +451,4 @@ ax.set_title("connectivity comparison vs sample + original land\n"
 fig.savefig("outputs/figures/connectivity_check.png", dpi=190,
             bbox_inches="tight")
 print("[conn] saved map", flush=True)
-sys.exit(1 if (severed or breaches) else 0)
+sys.exit(1 if (severed or breaches or severed_mesh) else 0)

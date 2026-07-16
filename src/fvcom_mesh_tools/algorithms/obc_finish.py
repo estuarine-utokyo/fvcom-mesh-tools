@@ -1144,6 +1144,7 @@ def cfl_polish(
     order = [int(j) for j in np.argsort(dts)
              if dts[j] < dt_floor_s]
     ops = []
+    refused = []
     touched: set[int] = set()
     for j in order:
         q = nodes[els[j]]
@@ -1152,8 +1153,28 @@ def cfl_polish(
         k0 = int(np.argmin(L3))
         a = int(els[j][k0])
         b = int(els[j][(k0 + 1) % 3])
-        if bnode[a] or bnode[b] or a in obc or b in obc:
+        if a in obc or b in obc:
+            refused.append({"element": int(j),
+                            "reason": "OBC endpoint"})
             continue
+        # boundary handling (run 6218831, elem 170 Futtsu: a
+        # 271 m BOUNDARY edge between two shore nodes over a
+        # 32 m dropoff was silently skipped, leaving dt 15.29 <
+        # sample): if the short edge IS a boundary edge, moving
+        # its endpoints apart along the edge slides them
+        # TANGENTIALLY along the local shore line (~12 m here) --
+        # allowed under the same gates. One boundary endpoint:
+        # move only the interior one, full distance. Two boundary
+        # endpoints on DIFFERENT shore lines (interior cross-water
+        # edge): refuse loudly.
+        eb = len(edge_cells[(min(a, b), max(a, b))]) == 1
+        if bnode[a] and bnode[b] and not eb:
+            refused.append({"element": int(j),
+                            "reason": "cross-water edge between "
+                                      "two shore nodes"})
+            continue
+        fa, fb = ((0.5, 0.5) if (eb or not (bnode[a] or bnode[b]))
+                  else (0.0, 1.0) if bnode[a] else (1.0, 0.0))
         if a in touched or b in touched:
             continue
         He = max(float(dep[els[j]].max()), 2.0)
@@ -1169,8 +1190,8 @@ def cfl_polish(
         saved = {a: nodes[a].copy(), b: nodes[b].copy()}
         done = False
         for scale in (1.0, 0.7, 0.45):
-            nodes[a] = saved[a] + u * (0.5 * need * scale)
-            nodes[b] = saved[b] - u * (0.5 * need * scale)
+            nodes[a] = saved[a] + u * (fa * need * scale)
+            nodes[b] = saved[b] - u * (fb * need * scale)
             if not _ccw(rows):
                 continue
             ang = _worst_angle(rows)
@@ -1190,6 +1211,9 @@ def cfl_polish(
         if not done:
             nodes[a] = saved[a]
             nodes[b] = saved[b]
+            refused.append({"element": int(j),
+                            "reason": "quality gates at all "
+                                      "scales"})
             continue
         touched.update(int(x) for r in rows
                        for x in els[r])
@@ -1201,9 +1225,10 @@ def cfl_polish(
             "moved_m": round(0.5 * need * scale, 1),
         })
     if not ops:
-        return mesh, {"fixed": 0, "ops": []}
+        return mesh, {"fixed": 0, "ops": [], "refused": refused}
     mesh2 = dataclasses.replace(mesh, nodes=nodes)
-    return mesh2, {"fixed": len(ops), "ops": ops}
+    return mesh2, {"fixed": len(ops), "ops": ops,
+                   "refused": refused}
 
 
 def collapse_short_boundary_edges(

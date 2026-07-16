@@ -54,8 +54,8 @@ SITES = [
     ("OW05 east slot", "I6-d2", 139.8393, 35.6310,
      "east taper kept open (choke-free in final)"),
     ("OW08 junction pocket", "F9-c4", 139.6768, 35.4682,
-     "pocket CLOSED by normalization (marginal ~1.1h throat); "
-     "choke removed with it; sample meshes it partially"),
+     "junction BRIDGED (carved to corridor width): through path "
+     "connected, sample-equivalent coverage"),
     ("OW13 Urayasu corner", "I6-c3", 139.8243, 35.6301,
      "water-fringe widen + split"),
     ("OW10", "F9-c5", 139.6734, 35.4555,
