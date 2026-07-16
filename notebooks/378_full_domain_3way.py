@@ -39,7 +39,7 @@ MESHES = [
     ("goto2023 sample", *load14_ll(OUT / "sample_original.14")),
     ("BEFORE automation (3dfa621, manual edits)",
      *load14_ll(OUT / "sample_repro_final_A_3dfa621.14")),
-    ("AFTER automation (normalize cert, run 6210307)",
+    ("AFTER automation (junction-bridge fix, run 6218996)",
      *load14_ll(OUT / "sample_repro_final.14")),
 ]
 land = unary_union(list(gpd.read_file(
