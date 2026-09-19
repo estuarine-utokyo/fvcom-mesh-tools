@@ -29,7 +29,7 @@ prep:
 
 build:
   engine: oceanmesh-multiscale
-  dem: ${DATA_DIR}/bathymetry/tokyo_bay/depth_0090-05+06+07.nc
+  dem: ${DATA_DIR}/geodata/bathymetry/tokyo_bay/depth_0090-05+06+07.nc
   seed: 0
   courant: {timestep: 16.0, max: 0.5}   # OM2D dt-limiter, sample-calibrated
   nests:

@@ -42,7 +42,7 @@ prep:
   skeleton_px_m: 50.0
 
 build:
-  dem: ${DATA_DIR}/bathymetry/tokyo_bay/depth_0090-05+06+07.nc
+  dem: ${DATA_DIR}/geodata/bathymetry/tokyo_bay/depth_0090-05+06+07.nc
   engine: oceanmesh
   hmin_m: 400   # sample parity: bay interior p50 520-550 m
   hmax_m: 2000  # sample p90 at the mouth = 1979 m

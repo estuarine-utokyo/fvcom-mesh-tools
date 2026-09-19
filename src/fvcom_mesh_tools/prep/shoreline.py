@@ -46,7 +46,7 @@ def default_water_shp() -> Path | None:
     data_dir = os.environ.get("DATA_DIR")
     if not data_dir:
         return None
-    cand = (Path(data_dir) / "OSM" / "geofabrik_kanto"
+    cand = (Path(data_dir) / "geodata" / "OSM" / "geofabrik_kanto"
             / "gis_osm_water_a_free_1.shp")
     return cand if cand.exists() else None
 
@@ -59,7 +59,7 @@ def default_land_shp() -> Path | None:
     data_dir = os.environ.get("DATA_DIR")
     if not data_dir:
         return None
-    cand = (Path(data_dir) / "OSM" / "land-polygons-split-4326"
+    cand = (Path(data_dir) / "geodata" / "OSM" / "land-polygons-split-4326"
             / "land_polygons.shp")
     return cand if cand.exists() else None
 

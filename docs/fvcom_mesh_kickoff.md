@@ -78,7 +78,7 @@ Deliverable: **audit all inputs first** into `docs/DATA_INVENTORY.md`. Per datas
 record CRS/EPSG, vertical datum, resolution, coverage, source/authority, license,
 known issues, and precedence.
 
-Bathymetry — `$DATA_DIR/bathymetry/`
+Bathymetry — `$DATA_DIR/geodata/bathymetry/`
 - `M7001`, `tokyo_bay` — primary inner-bay sources (document how they overlap and which
   wins where).
 - `mesh500` — baseline for the Japanese coast **outside** Tokyo Bay.
@@ -87,8 +87,8 @@ Bathymetry — `$DATA_DIR/bathymetry/`
 - `GEBCO` — low accuracy near Japan; **fallback only**.
 
 Coastline / rivers
-- `$DATA_DIR/OSM/` — key source for coastline and river-bank geometry.
-- `$DATA_DIR/coastline/` — use `tokyo_bay/` as the base (from Japanese government data).
+- `$DATA_DIR/geodata/OSM/` — key source for coastline and river-bank geometry.
+- `$DATA_DIR/geodata/coastline/` — use `tokyo_bay/` as the base (from Japanese government data).
   `GSHHS` is low accuracy near Japan; **fallback only**.
 
 Precedence (agent applies, and records the resolved precedence):

@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--land-shp", type=Path, default=None,
         help="OSM land-polygons source shapefile (needed on a cache "
-             "miss; default: $DATA_DIR/OSM/land-polygons-split-4326/"
+             "miss; default: $DATA_DIR/geodata/OSM/land-polygons-split-4326/"
              "land_polygons.shp when DATA_DIR is set).",
     )
     p.add_argument(

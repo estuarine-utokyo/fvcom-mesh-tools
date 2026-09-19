@@ -15,7 +15,7 @@ prep:
   skeleton_px_m: 50.0
 
 build:
-  dem: ${DATA_DIR}/bathymetry/tokyo_bay/depth_0030-11+12+13+14+15.nc
+  dem: ${DATA_DIR}/geodata/bathymetry/tokyo_bay/depth_0030-11+12+13+14+15.nc
   engine: oceanmesh
   hmin_m: 300
   hmax_m: 1500

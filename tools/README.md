@@ -44,8 +44,8 @@ The `fvcom-mesh-tools` repo accesses these via three top-level symlinks
 under `data/` (gitignored):
 
 ```
-data/bathymetry -> $DATA_DIR/bathymetry
-data/coastline  -> $DATA_DIR/coastline
+data/bathymetry -> $DATA_DIR/geodata/bathymetry
+data/coastline  -> $DATA_DIR/geodata/coastline
 data/mesh       -> $DATA_DIR/mesh
 ```
 
@@ -97,8 +97,8 @@ read the same paths transparently.
 ```bash
 cd "${HOME}/Github/fvcom-mesh-tools"
 mkdir -p data
-ln -s "${DATA_DIR}/bathymetry"  data/bathymetry
-ln -s "${DATA_DIR}/coastline"   data/coastline
+ln -s "${DATA_DIR}/geodata/bathymetry"  data/bathymetry
+ln -s "${DATA_DIR}/geodata/coastline"   data/coastline
 ln -s "${DATA_DIR}/mesh"        data/mesh
 ```
 
@@ -109,7 +109,7 @@ tracked.
 
 After the data lands in `$DATA_DIR`, drop a small `PROVENANCE.md` into
 each source directory recording origin, acquisition date, and license.
-Example for `$DATA_DIR/bathymetry/GEBCO/PROVENANCE.md`:
+Example for `$DATA_DIR/geodata/bathymetry/GEBCO/PROVENANCE.md`:
 
 ```markdown
 # GEBCO 2024

@@ -52,8 +52,8 @@ echo
 # Phase 0: create destination layout
 # -----------------------------------------------------------------------------
 echo "[migrate] === Phase 0: mkdir destinations ==="
-mkdir -p "${DATA_DIR}"/bathymetry/{GEBCO,SRTM15plus,CUDEM,tokyo_bay}
-mkdir -p "${DATA_DIR}"/coastline/{GSHHS,tokyo_bay/{MLIT_C23,Futtsu,SMS,Wang,misc}}
+mkdir -p "${DATA_DIR}"/geodata/bathymetry/{GEBCO,SRTM15plus,CUDEM,tokyo_bay}
+mkdir -p "${DATA_DIR}"/geodata/coastline/{GSHHS,tokyo_bay/{MLIT_C23,Futtsu,SMS,Wang,misc}}
 mkdir -p "${DATA_DIR}"/mesh/{reference/tokyo_bay/source,fvcom/tokyo_bay}
 echo "[migrate] destinations ready."
 echo
@@ -64,30 +64,30 @@ echo
 RS=(rsync -avh --info=progress2 --no-perms --omit-dir-times)
 
 echo "[migrate] === Phase 1a: bathymetry ==="
-"${RS[@]}" "${OM2D}/datasets/GEBCO_2024.nc"  "${DATA_DIR}/bathymetry/GEBCO/"
-"${RS[@]}" "${OM2D}/datasets/SRTM15+.nc"     "${DATA_DIR}/bathymetry/SRTM15plus/"
-"${RS[@]}" "${OM2D}/datasets/CUDEMS/"        "${DATA_DIR}/bathymetry/CUDEM/"
-"${RS[@]}" "${OM2D}/datasets/TokyoBay/dem/"  "${DATA_DIR}/bathymetry/tokyo_bay/"
+"${RS[@]}" "${OM2D}/datasets/GEBCO_2024.nc"  "${DATA_DIR}/geodata/bathymetry/GEBCO/"
+"${RS[@]}" "${OM2D}/datasets/SRTM15+.nc"     "${DATA_DIR}/geodata/bathymetry/SRTM15plus/"
+"${RS[@]}" "${OM2D}/datasets/CUDEMS/"        "${DATA_DIR}/geodata/bathymetry/CUDEM/"
+"${RS[@]}" "${OM2D}/datasets/TokyoBay/dem/"  "${DATA_DIR}/geodata/bathymetry/tokyo_bay/"
 
 echo "[migrate] === Phase 1b: coastline ==="
-"${RS[@]}" "${OM2D}/datasets/GSHHS_shp/"     "${DATA_DIR}/coastline/GSHHS/"
+"${RS[@]}" "${OM2D}/datasets/GSHHS_shp/"     "${DATA_DIR}/geodata/coastline/GSHHS/"
 
 # MLIT C23 shapefiles (3 layers: main + INNER + OUTER), flat layout in source.
 for stem in C23-06_TOKYOBAY C23-06_TOKYOBAY_INNER C23-06_TOKYOBAY_OUTER; do
   "${RS[@]}" "${OM2D}/Tokyo_Bay/data/${stem}".* \
-             "${DATA_DIR}/coastline/tokyo_bay/MLIT_C23/"
+             "${DATA_DIR}/geodata/coastline/tokyo_bay/MLIT_C23/"
 done
 
 # Futtsu coastline: two source dirs are byte-identical (verified). Either OK.
-"${RS[@]}" "${OM2D}/Tokyo_Bay/data/Futtsu_coastline/"  "${DATA_DIR}/coastline/tokyo_bay/Futtsu/"
+"${RS[@]}" "${OM2D}/Tokyo_Bay/data/Futtsu_coastline/"  "${DATA_DIR}/geodata/coastline/tokyo_bay/Futtsu/"
 
 # SMS, Wang_coastline (both under datasets/TokyoBay/shp/)
-"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/SMS/"             "${DATA_DIR}/coastline/tokyo_bay/SMS/"
-"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/Wang_coastline/"  "${DATA_DIR}/coastline/tokyo_bay/Wang/"
+"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/SMS/"             "${DATA_DIR}/geodata/coastline/tokyo_bay/SMS/"
+"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/Wang_coastline/"  "${DATA_DIR}/geodata/coastline/tokyo_bay/Wang/"
 
 # Loose .nc files in shp/ (not shapefiles, but include for completeness)
-"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/tokyo.nc"       "${DATA_DIR}/coastline/tokyo_bay/misc/"
-"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/tokyo_0001.nc"  "${DATA_DIR}/coastline/tokyo_bay/misc/"
+"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/tokyo.nc"       "${DATA_DIR}/geodata/coastline/tokyo_bay/misc/"
+"${RS[@]}" "${OM2D}/datasets/TokyoBay/shp/tokyo_0001.nc"  "${DATA_DIR}/geodata/coastline/tokyo_bay/misc/"
 
 echo "[migrate] === Phase 1c: mesh references ==="
 # fort.14 + .mat artifacts (the extension-less tokyobay_futtsu5.0 is a MATLAB v5 mat file)
@@ -139,16 +139,16 @@ md5_check () {
 echo "[migrate] === Phase 2: verification ==="
 
 # Tree-level diffs
-diff_check "${OM2D}/datasets/CUDEMS"                      "${DATA_DIR}/bathymetry/CUDEM"
-diff_check "${OM2D}/datasets/TokyoBay/dem"                "${DATA_DIR}/bathymetry/tokyo_bay"
-diff_check "${OM2D}/datasets/GSHHS_shp"                   "${DATA_DIR}/coastline/GSHHS"
-diff_check "${OM2D}/Tokyo_Bay/data/Futtsu_coastline"      "${DATA_DIR}/coastline/tokyo_bay/Futtsu"
-diff_check "${OM2D}/datasets/TokyoBay/shp/SMS"            "${DATA_DIR}/coastline/tokyo_bay/SMS"
-diff_check "${OM2D}/datasets/TokyoBay/shp/Wang_coastline" "${DATA_DIR}/coastline/tokyo_bay/Wang"
+diff_check "${OM2D}/datasets/CUDEMS"                      "${DATA_DIR}/geodata/bathymetry/CUDEM"
+diff_check "${OM2D}/datasets/TokyoBay/dem"                "${DATA_DIR}/geodata/bathymetry/tokyo_bay"
+diff_check "${OM2D}/datasets/GSHHS_shp"                   "${DATA_DIR}/geodata/coastline/GSHHS"
+diff_check "${OM2D}/Tokyo_Bay/data/Futtsu_coastline"      "${DATA_DIR}/geodata/coastline/tokyo_bay/Futtsu"
+diff_check "${OM2D}/datasets/TokyoBay/shp/SMS"            "${DATA_DIR}/geodata/coastline/tokyo_bay/SMS"
+diff_check "${OM2D}/datasets/TokyoBay/shp/Wang_coastline" "${DATA_DIR}/geodata/coastline/tokyo_bay/Wang"
 
 # md5 checks for large single files
-md5_check "${OM2D}/datasets/GEBCO_2024.nc"          "${DATA_DIR}/bathymetry/GEBCO/GEBCO_2024.nc"
-md5_check "${OM2D}/datasets/SRTM15+.nc"             "${DATA_DIR}/bathymetry/SRTM15plus/SRTM15+.nc"
+md5_check "${OM2D}/datasets/GEBCO_2024.nc"          "${DATA_DIR}/geodata/bathymetry/GEBCO/GEBCO_2024.nc"
+md5_check "${OM2D}/datasets/SRTM15+.nc"             "${DATA_DIR}/geodata/bathymetry/SRTM15plus/SRTM15+.nc"
 md5_check "${OM2D}/tb_mesh/tb_futtsu20220311.14"    "${DATA_DIR}/mesh/reference/tokyo_bay/tb_futtsu20220311.14"
 md5_check "${OM2D}/tb_mesh/tb_futtsu.14"            "${DATA_DIR}/mesh/reference/tokyo_bay/tb_futtsu.14"
 md5_check "${OM2D}/tb_mesh/tokyobay_futtsu5.0.14"   "${DATA_DIR}/mesh/reference/tokyo_bay/tokyobay_futtsu5.0.14"
