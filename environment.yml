@@ -17,6 +17,13 @@ dependencies:
   - scikit-image
   - scikit-fmm
   - meshio
+  - numba       # oceanmesh JIT kernels
+  - xarray
+  - h5py
+  - pyyaml      # recipe files
+  - plotly
+  - pyogrio     # xcoast
+  - triangle    # oceanmesh optional import
   - fiona
   - pyproj
   # Mesh-generation backends
@@ -29,6 +36,9 @@ dependencies:
   - mpfr
   - cython
   - pybind11
+  - setuptools
+  - wheel
+  - cxx-compiler  # conda-forge toolchain; rpath-links the env's gmp/mpfr
   # Dev tooling
   - pytest
   - ruff
@@ -37,8 +47,10 @@ dependencies:
   # install our fork (constrained Delaunay / pfix / egfix) from a
   # local clone after env creation:
   #   git clone <fork> ../oceanmesh && cd ../oceanmesh
-  #   pip install -e . --no-deps                  # GNU toolchain
-  #   CC=icx CXX=icpx pip install -e . --no-deps  # Intel oneAPI
+  #   pip install -e . --no-deps --no-build-isolation      # GNU toolchain
+  #   CC=icx CXX=icpx pip install -e . --no-deps --no-build-isolation
   # (-static-intel is applied automatically; see oceanmesh README 3.4)
-  # Then this repo:
-  #   pip install --no-deps -e .
+  # Then this repo (and ../xcoast the same way):
+  #   pip install --no-deps --no-build-isolation -e .
+  # --no-build-isolation keeps pip from fetching build deps from PyPI;
+  # every dependency comes from conda-forge.

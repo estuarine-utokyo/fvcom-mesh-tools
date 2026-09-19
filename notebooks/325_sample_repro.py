@@ -14,7 +14,6 @@ from pathlib import Path
 import oceanmesh as om
 from oceanmesh import DEM, Region, Shoreline
 
-OM2D = Path(os.path.expanduser("~/Github/OceanMesh2D"))
 OUT = Path("outputs/sample_repro")
 OUT.mkdir(parents=True, exist_ok=True)
 DEG = 1.0 / 111e3
@@ -346,7 +345,14 @@ gpd.GeoDataFrame(geometry=_geoms, crs=_land_g.crs).to_file(CH_SHP)
 
 sh = Shoreline(str(CH_SHP), poly, H0 * DEG)
 sdf = om.signed_distance_function(sh)
-dem = DEM(str(OM2D / "datasets/TokyoBay/dem/SRTM15_kanto_15s.nc"),
+# Same SRTM15 Kanto DEM that OM2D ships under datasets/TokyoBay/dem;
+# read from the shared data tree so the run does not depend on an
+# OM2D datasets checkout (absent on OCTOPUS).
+if not os.environ.get("DATA_DIR"):
+    raise RuntimeError("DATA_DIR is not set -- required for the DEM "
+                       "(geodata/bathymetry/tokyo_bay/SRTM15_kanto_15s.nc)")
+dem = DEM(os.path.join(os.environ["DATA_DIR"],
+                       "geodata/bathymetry/tokyo_bay/SRTM15_kanto_15s.nc"),
           bbox=reg, nc_reader="coords")
 print(f"[sr] inputs +{time.time()-t0:.0f}s", flush=True)
 

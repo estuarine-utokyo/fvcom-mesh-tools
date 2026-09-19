@@ -69,3 +69,6 @@ HANDOVER.md
 
 # Claude Code per-session runtime state
 .claude/
+
+# OCTOPUS job logs
+logs/

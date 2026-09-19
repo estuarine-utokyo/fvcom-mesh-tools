@@ -71,14 +71,23 @@ compiled scientific stack from conda-forge or a pip-only setup.
 ### Conda (recommended for full functionality)
 
 ```bash
-mamba env create -f environment.yml
-mamba activate fvcom-mesh
-pip install --no-deps oceanmesh        # GPL-3.0-or-later
-pip install --no-deps -e .             # this package, editable
+mamba env create -n oceanmesh-bench -f environment.yml   # conda-forge only
+mamba activate oceanmesh-bench
+# Local repositories only; --no-build-isolation keeps pip off PyPI.
+(cd ../oceanmesh && pip install -e . --no-deps --no-build-isolation)  # our fork, GPL-3.0-or-later
+pip install -e . --no-deps --no-build-isolation                        # this package
+(cd ../xcoast && pip install -e . --no-deps --no-build-isolation)     # coastline plotting
 ```
 
-Two pre-built env scripts under `notebooks/` reproduce the exact GENKAI
-setup used to validate PoCs #18-#23:
+Dependencies come from conda-forge only; pip is used solely for the
+editable installs of local repositories.
+
+On OCTOPUS (Osaka University, NQSV `qsub`) the env is created on the
+login node (compute nodes have no network) and the compile/install
+step runs as a batch job: `qsub jobs/octopus/build_env.sh`. Job
+scripts for OCTOPUS live in `jobs/octopus/`; the `notebooks/*.pjsub`
+wrappers are for GENKAI (Kyushu University, `pjsub`), where these
+scripts reproduce the setup used to validate PoCs #18-#23:
 
 | Script | Purpose |
 |--------|---------|
