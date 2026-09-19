@@ -34,6 +34,7 @@ degenerate control volume). Quality/topology acceptance is
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
@@ -222,6 +223,79 @@ def write_2dm(
     return path
 
 
+def fvcom_next_obc(
+    nodes: np.ndarray, elements: np.ndarray, obc_nodes: Sequence[int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Interior neighbour FVCOM pairs with each open-boundary node.
+
+    Mirrors ``mod_obcs.F`` (Cartesian build): the inward normal of an OBC
+    node is the (normalised sum of the) inward normals of the edges to its
+    OBC neighbours, each oriented toward the centroid of the element(s)
+    sharing that edge; ``NEXT_OBC`` is the edge-connected non-OBC node whose
+    unit direction has the largest dot product with that normal.
+
+    Returns ``(next_obc, margin)``: 0-indexed neighbour per OBC node and the
+    gap between the best and second-best dot product. FVCOM breaks exact
+    ties by its neighbour ordering, so a margin near zero means the choice
+    is not reproducible from geometry alone.
+    """
+    nodes = np.asarray(nodes, float)
+    tri = np.asarray(elements, int)
+    obc = np.asarray(obc_nodes, int)
+    is_obc = np.zeros(len(nodes), bool)
+    is_obc[obc] = True
+    nbrs: list[set[int]] = [set() for _ in range(len(nodes))]
+    node_elems: list[list[int]] = [[] for _ in range(len(nodes))]
+    for e, (a, b, c) in enumerate(tri):
+        nbrs[a].update((b, c))
+        nbrs[b].update((a, c))
+        nbrs[c].update((a, b))
+        for v in (a, b, c):
+            node_elems[v].append(e)
+    centroid = nodes[tri].mean(axis=1)
+
+    next_obc = np.empty(len(obc), int)
+    margin = np.empty(len(obc))
+    for i, n in enumerate(obc):
+        normal = np.zeros(2)
+        for m in sorted(j for j in nbrs[n] if is_obc[j]):
+            d = nodes[m] - nodes[n]
+            unit = np.array([d[1], -d[0]]) / np.hypot(*d)
+            for e in node_elems[n]:
+                if m in tri[e]:
+                    c = centroid[e] - nodes[n]
+                    # FVCOM: CROSS = SIGN(1, DXC*DYN - DYC*DXN)
+                    normal += np.sign(c[0] * d[1] - c[1] * d[0]) * unit
+        if not normal.any():
+            raise ValueError(f"OBC node {n} has no OBC neighbour; cannot define its normal")
+        normal /= np.hypot(*normal)
+        cand = sorted(j for j in nbrs[n] if not is_obc[j])
+        if not cand:
+            raise ValueError(f"OBC node {n} has no interior neighbour")
+        vec = nodes[cand] - nodes[n]
+        dots = (vec @ normal) / np.hypot(vec[:, 0], vec[:, 1])
+        order = np.argsort(-dots)
+        next_obc[i] = cand[order[0]]
+        margin[i] = dots[order[0]] - dots[order[1]] if len(cand) > 1 else np.inf
+    return next_obc, margin
+
+
+def apply_obc_depth_control(mesh: Fort14Mesh) -> tuple[Fort14Mesh, np.ndarray]:
+    """Copy of ``mesh`` with each OBC node's depth set to its NEXT_OBC depth.
+
+    FVCOM does this at start-up (``OBC_DEPTH_CONTROL_ON``, default true,
+    ``mod_startup.F``), so a mesh that does not already satisfy it runs
+    with different bathymetry than the one written. Returns the new mesh
+    and the per-OBC-node depth change (new - old), in open-boundary order.
+    """
+    obc = np.concatenate([np.asarray(b, int) for b in mesh.open_boundaries])
+    nxt, _ = fvcom_next_obc(mesh.nodes, mesh.elements, obc)
+    depths = mesh.depths.copy()
+    change = depths[nxt] - depths[obc]
+    depths[obc] = depths[nxt]
+    return replace(mesh, depths=depths), change
+
+
 def export_fvcom_case(
     mesh: Fort14Mesh,
     outdir: str | Path,
@@ -233,14 +307,21 @@ def export_fvcom_case(
     write_empty_spg: bool = False,
     twodm: bool = True,
     z_convention: str = "depth",
+    obc_depth_control: bool = True,
 ) -> dict[str, Path]:
     """Write the full FVCOM input set for ``casename`` into ``outdir``.
+
+    With ``obc_depth_control`` (default) the open-boundary depths are first
+    set to their NEXT_OBC depths (:func:`apply_obc_depth_control`), so the
+    written ``_dep.dat`` is exactly the bathymetry FVCOM will run with.
 
     Always writes ``_grd.dat``, ``_dep.dat``, ``_obc.dat``; ``_cor.dat``
     when ``cor`` is given; ``_spg.dat`` when ``sponge`` is given or
     ``write_empty_spg`` is set; ``.2dm`` unless ``twodm=False``.
     Returns the mapping of file kind to written path.
     """
+    if obc_depth_control and mesh.open_boundaries:
+        mesh, _ = apply_obc_depth_control(mesh)
     outdir = Path(outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {
@@ -260,7 +341,9 @@ def export_fvcom_case(
 
 
 __all__ = [
+    "apply_obc_depth_control",
     "export_fvcom_case",
+    "fvcom_next_obc",
     "write_2dm",
     "write_cor",
     "write_dep",

@@ -15,7 +15,9 @@ import pytest
 from fvcom_mesh_tools.cli import exportfvcom
 from fvcom_mesh_tools.io import Fort14Mesh, write_fort14
 from fvcom_mesh_tools.io.fvcom_native import (
+    apply_obc_depth_control,
     export_fvcom_case,
+    fvcom_next_obc,
     write_2dm,
     write_cor,
     write_dep,
@@ -264,3 +266,50 @@ def test_cli_export_refuses_flipped(tmp_path):
 
 def test_cli_export_missing_input(tmp_path):
     assert exportfvcom.main([str(tmp_path / "nope.14")]) == 2
+
+
+def test_fvcom_next_obc_picks_most_normal_interior_neighbour():
+    # OBC on the x=0 edge: inward normal is +x. Node (0,1) has interior
+    # neighbours (0,0) [dot 0], (1,1) [dot 1] and (1,2) [dot 0.707];
+    # node (0,2)'s only interior neighbour is (1,2).
+    m = _mesh()
+    nxt, margin = fvcom_next_obc(m.nodes, m.elements, m.open_boundaries[0])
+    assert nxt.tolist() == [_nid(1, 1), _nid(1, 2)]
+    assert margin[0] == pytest.approx(1 - np.sqrt(0.5))
+    assert np.isinf(margin[1])
+
+
+def test_fvcom_next_obc_is_orientation_independent():
+    m = _mesh()
+    cw = m.elements[:, [0, 2, 1]]
+    a, _ = fvcom_next_obc(m.nodes, m.elements, m.open_boundaries[0])
+    b, _ = fvcom_next_obc(m.nodes, cw, m.open_boundaries[0])
+    assert a.tolist() == b.tolist()
+
+
+def test_fvcom_next_obc_rejects_isolated_obc_node():
+    m = _mesh()
+    with pytest.raises(ValueError, match="no OBC neighbour"):
+        fvcom_next_obc(m.nodes, m.elements, [_nid(0, 1)])
+
+
+def test_apply_obc_depth_control():
+    m = _mesh()
+    out, change = apply_obc_depth_control(m)
+    obc = m.open_boundaries[0]
+    assert out.depths[obc].tolist() == [m.depths[_nid(1, 1)], m.depths[_nid(1, 2)]]
+    assert change.tolist() == (out.depths[obc] - m.depths[obc]).tolist()
+    interior = np.setdiff1d(np.arange(m.n_nodes), obc)
+    assert np.array_equal(out.depths[interior], m.depths[interior])
+    assert np.array_equal(m.depths, np.arange(2.0, 2.0 + N * N))  # input untouched
+
+
+def test_export_applies_obc_depth_control_by_default(tmp_path):
+    m = _mesh()
+    obc = m.open_boundaries[0]
+    on = export_fvcom_case(m, tmp_path / "on", "c", twodm=False)
+    off = export_fvcom_case(m, tmp_path / "off", "c", twodm=False, obc_depth_control=False)
+    dep_on = np.array([float(r[2]) for r in _data_rows(on["dep"])])
+    dep_off = np.array([float(r[2]) for r in _data_rows(off["dep"])])
+    assert dep_on[obc].tolist() == [m.depths[_nid(1, 1)], m.depths[_nid(1, 2)]]
+    assert np.allclose(dep_off, m.depths)

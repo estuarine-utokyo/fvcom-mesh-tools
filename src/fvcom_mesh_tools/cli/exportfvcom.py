@@ -19,6 +19,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+
 from fvcom_mesh_tools.io import read_fort14
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
 
@@ -54,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
                    default="depth",
                    help="ND z column of the .2dm: fort.14 depth as-is "
                         "(default) or -depth.")
+    p.add_argument("--no-obc-depth-control", action="store_true",
+                   help="Keep open-boundary depths as in the input. By "
+                        "default they are set to FVCOM's NEXT_OBC depths, "
+                        "which FVCOM imposes at start-up anyway "
+                        "(OBC_DEPTH_CONTROL_ON).")
     return p
 
 
@@ -68,6 +75,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     mesh = read_fort14(args.input)
+    if mesh.open_boundaries and not args.no_obc_depth_control:
+        from fvcom_mesh_tools.io.fvcom_native import apply_obc_depth_control
+
+        _, change = apply_obc_depth_control(mesh)
+        n = int((np.abs(change) > 0).sum())
+        print(f"obc depth control: {n}/{len(change)} OBC depths set to NEXT_OBC "
+              f"(max |change| {np.abs(change).max():.3f} m)")
     casename = args.casename or args.input.stem
     outdir = args.outdir or args.input.parent
 
@@ -89,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
             write_empty_spg=args.write_empty_spg,
             twodm=not args.no_2dm,
             z_convention=args.z_convention,
+            obc_depth_control=not args.no_obc_depth_control,
         )
     except ValueError as e:
         print(f"export refused: {e}", file=sys.stderr)
