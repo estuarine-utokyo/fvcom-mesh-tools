@@ -15,6 +15,12 @@ THRESH = {
 }
 
 
+def cross2d(u, v):
+    """z-component of u x v for (..., 2) arrays. np.cross rejects 2-D
+    vectors since NumPy 2.5; this is the same arithmetic it used."""
+    return u[..., 0] * v[..., 1] - u[..., 1] * v[..., 0]
+
+
 def _angles(P, T):
     out = np.empty((len(T), 3))
     for k in range(3):
@@ -50,7 +56,7 @@ def detect_violations(points, cells, thresholds=None):
 
     ang = _angles(P, T)
     a, b, c = P[T[:, 0]], P[T[:, 1]], P[T[:, 2]]
-    area = 0.5 * np.abs(np.cross(b - a, c - a))
+    area = 0.5 * np.abs(cross2d(b - a, c - a))
 
     out = {}
     out["c1"] = {"elements": np.where(

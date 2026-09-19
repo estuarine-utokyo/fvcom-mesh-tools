@@ -572,7 +572,8 @@ def realize_perpendicular_junctions(mesh, arc_utm, shore_lines_utm,
         a = pts[tris[ids, 0]]
         b = pts[tris[ids, 1]]
         c = pts[tris[ids, 2]]
-        return np.cross(b - a, c - a)
+        u, v = b - a, c - a
+        return u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]
 
     moved = 0
     for end in (obc[0], obc[-1]):

@@ -8,13 +8,13 @@ from collections import defaultdict
 
 import numpy as np
 
-from .detect import THRESH, _angles
+from .detect import THRESH, _angles, cross2d
 
 
 def _local_ok(P, T, ring, e2t, sign0, area_of, th):
     ring = np.asarray(sorted(ring))
     a, b, c = P[T[ring, 0]], P[T[ring, 1]], P[T[ring, 2]]
-    ar = 0.5 * np.cross(b - a, c - a)
+    ar = 0.5 * cross2d(b - a, c - a)
     if (np.sign(ar) != sign0[ring]).any() or (ar == 0).any():
         return False, np.inf, 0.0
     aa = np.abs(ar)
@@ -61,11 +61,11 @@ def execute_patches(points, cells, patches, obc_nodes=None,
             n2t[int(v)].append(i)
 
     a, b, c = P[T[:, 0]], P[T[:, 1]], P[T[:, 2]]
-    sign0 = np.sign(0.5 * np.cross(b - a, c - a))
+    sign0 = np.sign(0.5 * cross2d(b - a, c - a))
 
     def area_of(e):
         aa = P[T[e]]
-        return abs(0.5 * np.cross(aa[1] - aa[0], aa[2] - aa[0]))
+        return abs(0.5 * cross2d(aa[1] - aa[0], aa[2] - aa[0]))
 
     ledger = []
     for q in patches:
