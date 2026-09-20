@@ -23,6 +23,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 export SR_NORMALIZE=on SR_OBC_H1=1680
 echo "=== 364 (corrected WALL criterion) ==="
 python notebooks/364_over_resolution.py || true
+export FMESH_OVERWRITE=1
 echo "=== 389 resolvable unmeshed water (new detector) ==="
 python notebooks/389_coverage_gaps.py || true
 echo "=== 386 issue map ==="

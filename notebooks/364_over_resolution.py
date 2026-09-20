@@ -4,14 +4,17 @@ never kept and punched through thin levees, and NO existing gate
 caught either class -- the sample was better and the owner had to
 find it by eye).
 
-Two element classes are measured against the ORIGINAL OSM land and
-the goto2023 sample:
+Measured against the ORIGINAL OSM land; the goto2023 sample is
+reported for information only, never gated (owner 2026-09-20: the
+sample is a reference, not ground truth, so water it omits is not a
+defect).
 
-STRAY over-resolution
-    Our element lies outside the sample triangulation, its centroid
-    is in ORIGINAL water narrower than 0.5 h (distance to original
-    land), and it is NOT inside a kept-corridor tube or an applied
-    manual edit. The policy never asked for this water -- target 0.
+NARROW water meshed
+    The element's centroid sits in original water whose local width
+    (2 x distance to the original coast) is under the element's own
+    median edge length, and it is NOT inside a kept-corridor tube or
+    an applied manual edit. w/h < 1 cannot carry one row and is
+    advisory; w/h < 0.5 is severe and gates.
 
 WALL crossings
     An element edge crosses original land over > 40 m of its
@@ -20,8 +23,9 @@ WALL crossings
     Intended corridor widenings are excluded the same way.
 
 Both lists print with atlas refs and are drawn to
-outputs/figures/over_resolution.png. Exit code 1 when STRAY or
-WALL sites exist outside kept tubes (gate; run after 342).
+outputs/figures/over_resolution.png. Exit code 1 when severe narrow
+water or WALL crossings exist outside kept tubes (gate; run after
+342).
 """
 
 import json
@@ -122,17 +126,37 @@ if wops_f.exists():
                 0.7 * op["h_loc"] / 111e3))
 tube_u = unary_union(tubes) if tubes else shapely.Polygon()
 
-# ---- STRAY over-resolution -------------------------------------
-un = np.nonzero(~cov)[0]
-upts = [shapely.Point(cent[i]) for i in un]
-stray = []
-for i, p in zip(un, upts):
-    dl = lparts[ltree.nearest(p)].distance(p) * 111e3
-    if dl >= 0.5 * H:
-        continue                       # open-water class
+# ---- NARROW water meshed (was: STRAY over-resolution) ----------
+# The old test called an element "stray" when goto2023 did not have
+# it. goto2023 is a reference, not ground truth (owner 2026-09-20),
+# so water it omits is not a defect by itself. What the policy does
+# care about is water too narrow to carry a row of elements at the
+# local size, meshed anyway outside a kept corridor: that is what
+# produces one-cell-wide channels and bank-to-bank cells.
+#
+#   w_loc = 2 * distance(centroid, original coast)   [local width]
+#   h_loc = median edge length of the element        [local size]
+#
+# w/h < 1 cannot hold one row; w/h < 0.5 is severe. Elements inside a
+# kept corridor or an applied edit are excluded: those widths are
+# intended. The goto2023 comparison is still printed, as information.
+_ll = po[tri_o]
+_dx = (_ll[:, [1, 2, 0], 0] - _ll[:, :, 0]) * 111e3 * np.cos(np.deg2rad(35.35))
+_dy = (_ll[:, [1, 2, 0], 1] - _ll[:, :, 1]) * 111e3
+h_elem = np.median(np.hypot(_dx, _dy), axis=1)
+narrow, narrow_wh = [], {}
+for i in range(len(cent)):
+    p = shapely.Point(cent[i])
     if tube_u.covers(p):
-        continue                       # intended widening
-    stray.append(i)
+        continue                       # intended widening / edit
+    w_loc = 2.0 * lparts[ltree.nearest(p)].distance(p) * 111e3
+    ratio = w_loc / h_elem[i]
+    if ratio >= 1.0:
+        continue
+    narrow.append(i)
+    narrow_wh[i] = (round(w_loc, 1), round(h_elem[i], 1), round(ratio, 3))
+severe = [i for i in narrow if narrow_wh[i][2] < 0.5]
+stray = narrow                         # keep the downstream name
 
 # ---- WALL crossings --------------------------------------------
 # An edge that FOLLOWS a slightly curved coastline overlaps the land
@@ -202,13 +226,14 @@ def _clusters(pts, ids):
         cl[(round(pts[i][0] / 0.008), round(pts[i][1] / 0.008))].append(i)
     return sorted(cl.values(), key=len, reverse=True)
 
-print(f"[364] beyond-sample elements: {int((~cov).sum())}; "
-      f"STRAY over-resolution: {len(stray)}; "
-      f"WALL crossings: {len(wall)}", flush=True)
+print(f"[364] beyond-sample elements (information only): "
+      f"{int((~cov).sum())}; NARROW water meshed (w/h<1, outside kept "
+      f"corridors): {len(narrow)}, of which severe (w/h<0.5): "
+      f"{len(severe)}; WALL crossings: {len(wall)}", flush=True)
 seg_mid = np.array([[segs[s].interpolate(0.5, normalized=True).x,
                      segs[s].interpolate(0.5, normalized=True).y]
                     for s in wall]) if wall else np.zeros((0, 2))
-for name, ids, pts in (("STRAY", stray, cent),
+for name, ids, pts in (("NARROW", narrow, cent),
                        ("WALL", list(range(len(wall))), seg_mid)):
     for c in _clusters(pts, ids)[:10]:
         p = pts[c].mean(axis=0) if len(c) > 1 else pts[c[0]]
@@ -224,8 +249,8 @@ ax.triplot(po[:, 0], po[:, 1], tri_o, color="steelblue",
 if stray:
     ax.scatter(cent[stray, 0], cent[stray, 1], s=46,
                facecolors="none", edgecolors="crimson",
-               linewidths=1.6, label=f"stray over-resolution "
-               f"({len(stray)} elems)")
+               linewidths=1.6, label=f"narrow water meshed, w/h<1 "
+               f"({len(narrow)} elems)")
 if len(seg_mid):
     ax.scatter(seg_mid[:, 0], seg_mid[:, 1], s=70, marker="s",
                facecolors="none", edgecolors="darkorange",
@@ -246,15 +271,25 @@ print(f"[364] figure -> {FIG / 'over_resolution.png'}", flush=True)
 # Element / edge identities for the issue map (386), 0-indexed into the
 # final mesh read above.
 (OUT / "over_resolution.json").write_text(json.dumps({
+    "narrow_elements": [int(i) for i in narrow],
+    "narrow_detail": {str(int(i)): {"width_m": narrow_wh[i][0],
+                                    "h_m": narrow_wh[i][1],
+                                    "w_over_h": narrow_wh[i][2]} for i in narrow},
+    "severe_elements": [int(i) for i in severe],
+    "beyond_sample_elements": [int(i) for i in np.nonzero(~cov)[0]],
     "stray_elements": [int(i) for i in stray],
     "wall_edges": [[int(ee[s][0]), int(ee[s][1])] for s in wall],
     "wall_detail": {str(int(s)): wall_detail[s] for s in wall},
 }, indent=1) + "\n")
 print(f"[364] wrote {OUT / 'over_resolution.json'}", flush=True)
 
-if stray or wall:
-    print(f"[364] GATE FAIL: {len(stray)} stray + {len(wall)} "
-          f"wall sites", flush=True)
+# The gate is now the two OBJECTIVE defects: a mesh edge tunnelling
+# through a thin land wall, and water meshed at less than half the
+# width one row needs. Plain w/h<1 water and "goto2023 does not have
+# it" are reported, not gated (owner 2026-09-20).
+if severe or wall:
+    print(f"[364] GATE FAIL: {len(severe)} severe narrow (w/h<0.5) + "
+          f"{len(wall)} wall sites", flush=True)
     sys.exit(1)
-print("[364] GATE PASS: no stray resolution, no wall crossings",
-      flush=True)
+print(f"[364] GATE PASS: no wall crossings, no severe narrow water "
+      f"({len(narrow)} advisory w/h<1 elements)", flush=True)

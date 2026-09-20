@@ -60,14 +60,19 @@ for rec in ow["confirmed_sites"]:
 for e, (i, u) in enumerate(zip(brc["elements"], brc["unintended"])):
     items.append(("LAND-UNINTENDED" if u else "LAND-INTENDED", [i], [], cen[i],
                   "on original land"))
-for i in ovr["stray_elements"]:
-    items.append(("STRAY", [i], [], cen[i], "over-resolution"))
+for i in ovr.get("severe_elements", []):
+    items.append(("NARROW-SEVERE", [i], [], cen[i], "water narrower than 0.5 h"))
+for i in ovr.get("narrow_elements", ovr.get("stray_elements", [])):
+    if i in set(ovr.get("severe_elements", [])):
+        continue
+    items.append(("NARROW", [i], [], cen[i], "water narrower than one row"))
 for a, b in ovr["wall_edges"]:
     items.append(("WALL", [], [(a, b)], po[[a, b]].mean(0), "crosses a thin land wall"))
 
 STYLE = {
     "WALL": dict(color="#d7191c", label="WALL crossing (364 gate fail)"),
-    "STRAY": dict(color="#e66101", label="stray over-resolution (364 gate fail)"),
+    "NARROW-SEVERE": dict(color="#e66101", label="water meshed at w/h<0.5 (364 gate fail)"),
+    "NARROW": dict(color="#fdb863", label="water meshed at w/h<1 (364 advisory)"),
     "1WIDE": dict(color="#7b3294", label="confirmed one-element-wide (346)"),
     "LAND-UNINTENDED": dict(color="#2c7bb6", label="element on land, UNINTENDED (342)"),
     "LAND-INTENDED": dict(color="#92c5de", label="element on land, intended widening (342)"),
@@ -76,7 +81,7 @@ counts = {k: sum(1 for it in items if it[0] == k) for k in STYLE}
 print("[386] " + "  ".join(f"{k}={v}" for k, v in counts.items()), flush=True)
 
 # Cluster the items that matter into zoom windows, worst class first.
-PRIORITY = ["1WIDE", "WALL", "LAND-UNINTENDED", "STRAY"]
+PRIORITY = ["1WIDE", "WALL", "NARROW-SEVERE", "LAND-UNINTENDED", "NARROW"]
 HALF = 0.010  # degrees of latitude; the window is 2*HALF tall
 windows = []
 used = [False] * len(items)
@@ -103,9 +108,23 @@ land = unary_union(list(gpd.read_file(ROOT / "outputs/tb_varres_3r/land_osm_wide
 gl = gpd.GeoSeries([land], crs="EPSG:4326")
 
 
+# Mesh boundary edges (an edge used by exactly one element): the mesh's own
+# shoreline. Drawn heavier than the interior so the reader can see which mesh
+# edges follow the coast (owner 2026-09-20); modest in the overview so the
+# mesh itself stays visible.
+_e = np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]])
+_e.sort(axis=1)
+_uniq, _cnt = np.unique(_e, axis=0, return_counts=True)
+BND = _uniq[_cnt == 1]
+
+
 def base(ax, xlim, ylim, lw):
-    gl.plot(ax=ax, color="0.88", edgecolor="0.6", linewidth=0.5)
+    gl.plot(ax=ax, color="0.88", edgecolor="0.7", linewidth=0.4)
     ax.triplot(po[:, 0], po[:, 1], tri, color="0.5", linewidth=lw, alpha=0.9)
+    seg = po[BND]
+    ax.plot(np.c_[seg[:, 0, 0], seg[:, 1, 0], np.full(len(seg), np.nan)].ravel(),
+            np.c_[seg[:, 0, 1], seg[:, 1, 1], np.full(len(seg), np.nan)].ravel(),
+            color="0.2", linewidth=0.7 if lw <= 0.5 else 2.0, zorder=3)
     ax.set_xlim(*xlim)
     ax.set_ylim(*ylim)
     ax.set_aspect(1.0 / COSW)
@@ -135,9 +154,9 @@ for n, w in enumerate(windows, 1):
     col = STYLE[w["lead"]]["color"]
     ax.add_patch(Rectangle((cx - HALF / COSW, cy - HALF), 2 * HALF / COSW, 2 * HALF,
                            fill=False, edgecolor=col, linewidth=2.2, zorder=7))
-    ax.text(cx, cy + HALF + 0.004, str(n), color=col, fontsize=15, fontweight="bold",
-            ha="center", va="bottom", zorder=8,
-            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec=col, alpha=0.9))
+    # Plain text: a label box would hide the mesh underneath (owner 2026-09-20).
+    ax.text(cx, cy + HALF + 0.004, str(n), color=col, fontsize=16, fontweight="bold",
+            ha="center", va="bottom", zorder=8)
 handles = [plt.Line2D([], [], color=st["color"], lw=3, label=st["label"])
            for st in STYLE.values()]
 ax.legend(handles=handles, loc="lower right", fontsize=11, framealpha=0.95,

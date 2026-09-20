@@ -83,9 +83,20 @@ def draw(mesh, land, report):
     colours = {"clear-defect": "#d7191c", "marginal": "#e66101",
                "subtarget": "#2c7bb6", "unmeasured": "#7b3294"}
 
+    # Mesh boundary edges = the mesh's own shoreline (used by one element only).
+    _e = np.vstack([mesh.elements[:, [0, 1]], mesh.elements[:, [1, 2]],
+                    mesh.elements[:, [2, 0]]])
+    _e.sort(axis=1)
+    _uniq, _cnt = np.unique(_e, axis=0, return_counts=True)
+    bnd = _uniq[_cnt == 1]
+
     def base(ax, bounds, lw):
-        coast.clip(box(*bounds)).plot(ax=ax, color="0.88", edgecolor="0.55", linewidth=0.4)
+        coast.clip(box(*bounds)).plot(ax=ax, color="0.88", edgecolor="0.7", linewidth=0.4)
         ax.triplot(xy[:, 0], xy[:, 1], mesh.elements, color="0.4", linewidth=lw, zorder=4)
+        seg = xy[bnd]
+        ax.plot(np.c_[seg[:, 0, 0], seg[:, 1, 0], np.full(len(seg), np.nan)].ravel(),
+                np.c_[seg[:, 0, 1], seg[:, 1, 1], np.full(len(seg), np.nan)].ravel(),
+                color="0.2", linewidth=0.7 if lw <= 0.4 else 2.0, zorder=5)
         ax.set_xlim(bounds[0], bounds[2])
         ax.set_ylim(bounds[1], bounds[3])
         ax.set_aspect(1 / np.cos(np.deg2rad(35.35)))
@@ -103,21 +114,38 @@ def draw(mesh, land, report):
         overview.add_patch(Rectangle(bounds[:2], bounds[2] - bounds[0], bounds[3] - bounds[1],
                                      fill=False, edgecolor=colour, linewidth=2, zorder=6))
         overview.text(bounds[0], bounds[3], str(rec["id"]), color=colour,
-                      fontweight="bold", bbox=dict(fc="white", ec=colour, alpha=0.9), zorder=7)
+                      fontweight="bold", fontsize=13, ha="right", va="bottom", zorder=7)
         ax = fig.add_subplot(grid[i // 3, 1 + i % 3])
         base(ax, bounds, 0.65)
         gpd.GeoSeries([poly], crs=4326).plot(ax=ax, color=colour, alpha=0.6, zorder=3)
         policy = [transform(LL.transform, shape(p["geometry"])) for p in report["policy_filled"]
                   if shape(p["geometry"]).intersects(shape(rec["geometry"]).buffer(1000))]
         if policy:
-            clipped = gpd.GeoSeries(policy, crs=4326).clip(box(*bounds))
-            clipped = clipped[~clipped.is_empty]
+            # The policy-fill union can be topologically invalid (a clip then
+            # raises "side location conflict"); it is only a backdrop here.
+            try:
+                series = gpd.GeoSeries(policy, crs=4326).make_valid()
+                clipped = series.clip(box(*bounds))
+                clipped = clipped[~clipped.is_empty]
+            except Exception as exc:   # noqa: BLE001 - backdrop only
+                print(f"[389] policy backdrop skipped for {rec['id']}: {exc}", flush=True)
+                clipped = gpd.GeoSeries([], crs=4326)
             if len(clipped):   # geopandas cannot set an aspect from nothing
                 clipped.plot(ax=ax, color="#888888", alpha=0.5, hatch="///", zorder=2)
         ratio = rec.get("w_h_p50")
         detail = f"w/h={ratio:.2f}" if ratio is not None else "unmeasured"
         ax.set_title(f"[{rec['id']}] {rec['gridref']} {rec['classification']}\n{detail}",
                      color=colour, fontsize=12)
+    from matplotlib.patches import Patch as _Patch
+    overview.legend(handles=[
+        _Patch(facecolor=colours.get("clear-defect", "#d7191c"), alpha=0.6,
+               label="unmeshed water: clear defect"),
+        _Patch(facecolor=colours.get("marginal", "#e66101"), alpha=0.6,
+               label="unmeshed water: marginal"),
+        _Patch(facecolor="#888888", alpha=0.5, hatch="///",
+               label="water the policy turned into land"),
+        _Patch(facecolor="0.88", edgecolor="0.15", linewidth=1.8, label="land (OSM)"),
+    ], loc="lower left", fontsize=8, framealpha=0.95)
     fig.suptitle("Coverage gaps: coloured original water, mesh edges overlaid; "
                  "grey hatching = policy-filled", fontsize=16)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
@@ -138,7 +166,10 @@ def main():
     destination = OUT / "coverage_gaps.json"
     for path in [destination] + ([] if args.no_figure else [FIG]):
         if path.exists():
-            raise FileExistsError(f"preserve existing output; move it before rerunning: {path}")
+            if os.environ.get("FMESH_OVERWRITE") != "1":
+                raise FileExistsError(
+                    f"preserve existing output; move it or set "
+                    f"FMESH_OVERWRITE=1: {path}")
     mesh = read_fort14(mesh_path)
     land = unary_union(gpd.read_file(original_path).to_crs(32654).geometry)
     policy = unary_union(gpd.read_file(policy_path).to_crs(32654).geometry)
