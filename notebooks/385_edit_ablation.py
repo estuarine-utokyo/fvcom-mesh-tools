@@ -14,12 +14,12 @@ import geopandas as gpd
 import matplotlib
 
 matplotlib.use("Agg")
+import sys  # noqa: E402
+
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from pyproj import Transformer  # noqa: E402
 from shapely.ops import unary_union  # noqa: E402
-
-import sys  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from fvcom_mesh_tools.plotting import add_atlas_grid, use_readable_style  # noqa: E402
