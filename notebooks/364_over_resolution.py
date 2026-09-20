@@ -35,6 +35,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -134,27 +135,77 @@ tube_u = unary_union(tubes) if tubes else shapely.Polygon()
 # local size, meshed anyway outside a kept corridor: that is what
 # produces one-cell-wide channels and bank-to-bank cells.
 #
-#   w_loc = 2 * distance(centroid, original coast)   [local width]
-#   h_loc = median edge length of the element        [local size]
+# The local WIDTH of the water must not be confused with the distance
+# to the coast: every element lying against the shore of a wide bay is
+# close to land while the water there is kilometres wide. Width is
+# measured ACROSS the water: from the element centroid take d1 = the
+# distance to the nearest land, then march along the ray pointing away
+# from that land point until land is met again (d2, capped at 5 h).
+# w = d1 + d2 is the channel width for a canal and "wider than the cap"
+# for an element sitting on the shore of open water.
 #
-# w/h < 1 cannot hold one row; w/h < 0.5 is severe. Elements inside a
-# kept corridor or an applied edit are excluded: those widths are
-# intended. The goto2023 comparison is still printed, as information.
+#   w/h < 1    cannot carry one row  -> advisory
+#   w/h < 0.5  clearly too narrow    -> gate
+from scipy.ndimage import distance_transform_edt  # noqa: E402
+
 _ll = po[tri_o]
 _dx = (_ll[:, [1, 2, 0], 0] - _ll[:, :, 0]) * 111e3 * np.cos(np.deg2rad(35.35))
 _dy = (_ll[:, [1, 2, 0], 1] - _ll[:, :, 1]) * 111e3
 h_elem = np.median(np.hypot(_dx, _dy), axis=1)
+
+_PIX = 25.0                                   # raster step (m)
+_cos = np.cos(np.deg2rad(35.35))
+_x0, _y0 = po[:, 0].min() - 0.02, po[:, 1].min() - 0.02
+_x1, _y1 = po[:, 0].max() + 0.02, po[:, 1].max() + 0.02
+_nx = int((_x1 - _x0) * 111e3 * _cos / _PIX) + 1
+_ny = int((_y1 - _y0) * 111e3 / _PIX) + 1
+_gx = _x0 + (np.arange(_nx) + 0.5) * _PIX / (111e3 * _cos)
+_gy = _y0 + (np.arange(_ny) + 0.5) * _PIX / 111e3
+_XX, _YY = np.meshgrid(_gx, _gy)
+_water = ~shapely.contains_xy(land, _XX, _YY)
+_edt, _idx = distance_transform_edt(_water, sampling=_PIX, return_indices=True)
+print(f"[364] width raster {_nx}x{_ny} at {_PIX:.0f} m", flush=True)
+
+
+def _pix(lon, lat):
+    return (int(round((lat - _gy[0]) * 111e3 / _PIX)),
+            int(round((lon - _gx[0]) * 111e3 * _cos / _PIX)))
+
+
+w_elem = np.full(len(cent), np.inf)
+for i in range(len(cent)):
+    r, c = _pix(cent[i, 0], cent[i, 1])
+    if not (0 <= r < _ny and 0 <= c < _nx) or not _water[r, c]:
+        continue                       # centroid on land: 342's business
+    d1 = float(_edt[r, c])
+    lr, lc = int(_idx[0, r, c]), int(_idx[1, r, c])
+    vr, vc = r - lr, c - lc            # away from the nearest land pixel
+    norm = np.hypot(vr, vc)
+    if norm == 0:
+        continue
+    vr, vc = vr / norm, vc / norm
+    cap = 5.0 * h_elem[i]
+    d2 = cap
+    for t in np.arange(_PIX, cap, _PIX):
+        rr = int(round(r + vr * t / _PIX))
+        cc = int(round(c + vc * t / _PIX))
+        if not (0 <= rr < _ny and 0 <= cc < _nx):
+            break
+        if not _water[rr, cc]:
+            d2 = float(t)
+            break
+    w_elem[i] = d1 + d2
+
 narrow, narrow_wh = [], {}
 for i in range(len(cent)):
-    p = shapely.Point(cent[i])
-    if tube_u.covers(p):
-        continue                       # intended widening / edit
-    w_loc = 2.0 * lparts[ltree.nearest(p)].distance(p) * 111e3
-    ratio = w_loc / h_elem[i]
+    ratio = w_elem[i] / h_elem[i]
     if ratio >= 1.0:
         continue
+    if tube_u.covers(shapely.Point(cent[i])):
+        continue                       # intended widening / edit
     narrow.append(i)
-    narrow_wh[i] = (round(w_loc, 1), round(h_elem[i], 1), round(ratio, 3))
+    narrow_wh[i] = (round(float(w_elem[i]), 1), round(float(h_elem[i]), 1),
+                    round(float(ratio), 3))
 severe = [i for i in narrow if narrow_wh[i][2] < 0.5]
 stray = narrow                         # keep the downstream name
 
