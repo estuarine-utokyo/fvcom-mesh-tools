@@ -194,12 +194,15 @@ def detect_waterways(
     max_canal_extent_cells: float = 15.0,
     min_canal_width_frac: float = 0.5,
     min_resolve_width_frac: float = 0.2,
+    one_wide: str = "forbid",
 ) -> list[dict[str, Any]]:
     """Find sub-``detect_factor*h`` waterways and decide their
     fate. Returns one record per waterway network:
     ``{arc, width_m (profile), action: keep|close, kind, geometry,
     extent_cells, basin_cells}``.
     """
+    from fvcom_mesh_tools.one_wide import parse_one_wide
+    allow = parse_one_wide(one_wide) == "allow"
     sx, sy = metric_scale
     if abs(sx - sy) / max(sx, sy) > 0.35:
         raise ValueError("metric_scale too anisotropic; project first")
@@ -342,7 +345,7 @@ def detect_waterways(
                         / max(wsrc.boundary.length, 1e-9)) / h
         big_canal = (big_deadend_cells <= extent_cells
                      <= max_canal_extent_cells
-                     and mean_w_cells >= min_canal_width_frac)
+                     and (allow or mean_w_cells >= min_canal_width_frac))
         # RESOLVE-WIDTH floor (owner 2026-07-12): a channel whose
         # NATURAL width is far below the minimum mesh size is not
         # a resolve target AT ALL -- the sample leaves such
@@ -350,7 +353,7 @@ def detect_waterways(
         # corridors across land with one-wide remnants. Applies
         # to EVERY keep path (through/anchor rules had no width
         # condition).
-        resolvable = mean_w_cells >= min_resolve_width_frac
+        resolvable = allow or mean_w_cells >= min_resolve_width_frac
         keep = (connector or big_canal) and worthy and resolvable
 
         # a narrow piece that barely touches LAND is not a
@@ -493,6 +496,7 @@ def normalize_unresolved_water(
     metric_scale: tuple[float, float],
     pass_floor_h: float = 1.0,
     keep_tubes: list | None = None,
+    one_wide: str = "forbid",
 ) -> tuple[list, dict[str, Any]]:
     """Owner rule 2026-07-15 (OW05 Urayasu): water we have decided
     NOT to resolve is LAND for every subsequent geometry decision.
@@ -519,11 +523,17 @@ def normalize_unresolved_water(
     fills-before-carves is what makes the re-carve symmetric
     (the edit_004/edit_005 lesson).
     """
+    from fvcom_mesh_tools.one_wide import parse_one_wide
+    allow = parse_one_wide(one_wide) == "allow"
     sx, sy = metric_scale
     if abs(sx - sy) / max(sx, sy) > 0.35:
         raise ValueError("metric_scale too anisotropic; project first")
     scale = 0.5 * (sx + sy)
     h = h_mesh_m / scale
+    if allow:
+        return [], dict(components_filled=0, basin_parts_filled=0,
+                        fringes_filled=0, neck_stubs=0, area_filled_ha=0.0, fills=[],
+                        n_opened_parts=0, n_aug_parts=0)
     r = 0.5 * pass_floor_h * h
     eps = 0.02 * h
     obc_pt = shapely.Point(obc_point)
@@ -647,6 +657,7 @@ def apply_waterway_policy(
     attain_bar_h: float = 1.7,
     thin_close_w_h: float = 1.0,
     thin_close_len_h: float = 2.5,
+    one_wide: str = "forbid",
 ) -> tuple[Any, dict[str, Any]]:
     """Execute the detected actions: KEEP -> carve the corridor to
     two LOCAL rows along the arc, barrier-safe; CLOSE -> fill the
@@ -672,6 +683,13 @@ def apply_waterway_policy(
     never left as sub-cell water that meshes one cell wide. The
     record keeps action "blocked" plus ``closed=True`` so the
     decision stays visible."""
+    from fvcom_mesh_tools.one_wide import parse_one_wide
+    allow = parse_one_wide(one_wide) == "allow"
+    if allow:
+        widen_rows, widen_factor, attain_bar_h = 1.0, 1.0, 0.0
+        branch_floor_frac = thin_close_w_h = 0.0
+        force_two_rows = close_blocked = False
+    # Allow disables width-only closure; basin selection and barrier guards remain.
     new_land = land_union
     info = {"kept": 0, "closed": 0, "ignored": 0, "blocked": [],
             "retried": 0, "bridges_opened": 0, "stub_fills": 0,
@@ -1055,7 +1073,7 @@ def apply_waterway_policy(
                     satv = wv >= 0.95 * 2.0 * 2.5 * h_mesh_m
                     wnv = wv[~satv] if bool((~satv).any()) else wv
                     dup_ok = (float(np.median(wnv))
-                              >= 1.8 * h_mesh_m)
+                              >= (0.9 if allow else 1.8) * h_mesh_m)
                 except (RuntimeError, ValueError):
                     dup_ok = False    # unmeasurable: carve it
                 if dup_ok:
@@ -1204,7 +1222,8 @@ def apply_waterway_policy(
                                    []).append(str(e3))
             rec["bridges_opened"] = opened
             info["bridges_opened"] += opened
-        if rec["action"] == "keep" and rec.get("w_used") is not None:
+        if (not allow and rec["action"] == "keep"
+                and rec.get("w_used") is not None):
             # STUB HEADS (owner do-not-mesh rule applied to kept
             # networks): residual network water OUTSIDE the arc
             # corridor that stays narrower than 0.5 h cannot be

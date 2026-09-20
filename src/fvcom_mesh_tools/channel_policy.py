@@ -177,6 +177,7 @@ def resolve_narrow_channels(
     small_cluster_delete: int = 0,
     strict_boundary_flag: bool = False,
     max_rounds: int = 1,
+    one_wide: str = "forbid",
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Apply the owner's narrow-channel policy. Returns
     ``(new_mesh, info)``; raises if the open boundary cannot be
@@ -189,6 +190,8 @@ def resolve_narrow_channels(
     and get undone by quality finishing). For the same reason pass
     ``apply_widen=False`` in a FINISHING context (after the two-pass
     refinement): widen clusters are then only reported.
+    ``one_wide="allow"`` retains flagged clusters without deleting or widening;
+    detection and cluster reporting are unchanged. The default preserves legacy actions.
     ``small_cluster_delete``: flagged clusters with at most this
     many members are DELETED regardless of classification -- after
     the geometry-stage policy every real channel is >= 2 cells
@@ -208,6 +211,8 @@ def resolve_narrow_channels(
     sample meshes none of those). ``max_rounds`` repeats the pass
     until no deletion happens (pruning a throat exposes the next
     one-wide section of a collapsing tail)."""
+    from fvcom_mesh_tools.one_wide import parse_one_wide
+    allow = parse_one_wide(one_wide) == "allow"
     flag, chinfo = under_resolved_channels_flag(
         mesh, min_w_h=min_w_h, coords=coords)
     ob_nodes = set(
@@ -280,7 +285,9 @@ def resolve_narrow_channels(
         nonmain = [l for l in nbr if l != main]
         big = [l for l in nonmain if sizes[l] >= min_basin_elements]
         small = [l for l in nonmain if sizes[l] < min_basin_elements]
-        if (0 < small_cluster_delete
+        if allow:
+            action = "keep"
+        elif (0 < small_cluster_delete
                 and len(members) <= small_cluster_delete):
             # junction corner caps: after the geometry-stage
             # policy every real channel is >= 2 cells wide, so
@@ -415,7 +422,7 @@ def resolve_narrow_channels(
             apply_widen=apply_widen,
             small_cluster_delete=small_cluster_delete,
             strict_boundary_flag=strict_boundary_flag,
-            max_rounds=max_rounds - 1)
+            max_rounds=max_rounds - 1, one_wide=one_wide)
         info["n_deleted_elements"] += nxt["n_deleted_elements"]
         info["n_widened"] += nxt.get("n_widened", 0)
         info["clusters"] = (info.get("clusters", [])

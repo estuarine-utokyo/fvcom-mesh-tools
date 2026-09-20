@@ -2,7 +2,14 @@
 # fvcom_mesh_tools.algorithms.obc_finish.finish_obc_mesh chain
 # (perp-local -> phase_h frozen -> compact -> perp/R4 flips ->
 # phase_h -> compact -> C4 flips, OBC-line displacement verified).
-import numpy as np
+import os
+
+from fvcom_mesh_tools.one_wide import finishing_one_wide
+from fvcom_mesh_tools.sizing import load_sizing
+
+_recipe = load_sizing(os.environ["SR_SIZING"]) if os.environ.get("SR_SIZING") else None
+ONE_WIDE = finishing_one_wide("outputs/sample_repro/channel_policy.json", _recipe)
+print(f"[fin] one_wide={ONE_WIDE}", flush=True)
 from fvcom_mesh_tools.algorithms.obc_finish import finish_obc_mesh
 from fvcom_mesh_tools.channel_policy import resolve_narrow_channels
 from fvcom_mesh_tools.io import read_fort14, write_fort14
@@ -11,7 +18,8 @@ SRC = "outputs/sample_repro/sample_repro_utm.14"
 DST = "outputs/sample_repro/sample_repro_final.14"
 
 mesh = read_fort14(SRC)
-# narrow-channel policy (owner 2026-07-13: "do not create
+# The selected policy controls ACTION; strict detection still reports in both modes.
+# Legacy forbid behavior below (owner 2026-07-13: "do not create
 # one-mesh-wide channels"): STRICT mode -- the ledger's confirmed
 # one-wide criterion joins the w/h flag, throats into small
 # appendixes are pruned WITH the appendix (measured census run
@@ -26,7 +34,7 @@ mesh, cinfo = resolve_narrow_channels(mesh, min_basin_elements=25,
                                       apply_widen=False,
                                       small_cluster_delete=0,
                                       strict_boundary_flag=True,
-                                      max_rounds=8)
+                                      max_rounds=8, one_wide=ONE_WIDE)
 print(f"[fin] channel policy: flagged={cinfo['n_flagged']} "
       f"widened={cinfo['n_widened']} "
       f"deleted={cinfo['n_deleted_elements']}", flush=True)
@@ -35,14 +43,19 @@ for cl in cinfo.get("clusters", []):
           f"(neighbor basins {cl['neighbor_sizes']})", flush=True)
 # meshing land in mesh CRS: the widen-then-split choke operator
 # needs it for the wall-thickness guard
-import geopandas as _gpd
 import json as _json
+
+import geopandas as _gpd
 from shapely.ops import unary_union as _uu
 
 _land_utm = _uu(list(_gpd.read_file(
     "outputs/sample_repro/land_channel_adj.shp")
     .to_crs(32654).geometry))
-mesh, info = finish_obc_mesh(mesh, seed=42, land_union=_land_utm)
+# The stochastic local repair takes a seed; a handful of stubborn
+# elements can depend on it, so it is selectable for sweeps.
+mesh, info = finish_obc_mesh(
+    mesh, seed=int(os.environ.get("SR_FIN_SEED", 42)),
+    land_union=_land_utm, one_wide=ONE_WIDE)
 _wops = (info.get("choke_widen") or {}).get("ops", [])
 _wops += (info.get("choke_widen_2") or {}).get("ops", [])
 # HUMAN-JUDGMENT mesh edits (owner 2026-07-15): coordinate-

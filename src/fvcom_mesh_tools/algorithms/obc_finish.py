@@ -1524,6 +1524,7 @@ def finish_obc_mesh(
     seed: int = 42,
     verify_tol_m: float = 1e-3,
     land_union=None,
+    one_wide: str = "forbid",
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Standard finishing chain for a mesh built with a constrained
     OBC line: perp-local moves -> phase_h (OBC frozen) -> compact ->
@@ -1540,6 +1541,8 @@ def finish_obc_mesh(
     )
 
     info: dict[str, Any] = {}
+    from fvcom_mesh_tools.one_wide import parse_one_wide
+    allow = parse_one_wide(one_wide) == "allow"
     arc0 = mesh.nodes[np.asarray(mesh.open_boundaries[0], int)].copy()
     mesh, info["perp_local"] = align_open_boundary_local(mesh)
     mesh, hinfo = phase_h_finish(mesh, seed=seed,
@@ -1569,7 +1572,8 @@ def finish_obc_mesh(
     # CHOKE-EDGE split (owner 2026-07-12): a widened channel can
     # still be throttled to one bank-to-bank edge; insert the
     # midpoint so the section carries two cells, then polish.
-    mesh, info["choke_split"] = split_choke_edges(mesh)
+    if not allow:
+        mesh, info["choke_split"] = split_choke_edges(mesh)
     mesh, info["c4_split"] = split_c4_edges(mesh)
     # SHORT BOUNDARY EDGES (run 6191386): carve-bank steps left
     # sub-half-cell boundary edges whose spanning triangles are
@@ -1598,7 +1602,7 @@ def finish_obc_mesh(
     # (mid-chain placement saw none, run 6195749), and unlike the
     # bare late split the bank push gives the section real room,
     # so the gated split makes two well-proportioned cells.
-    if land_union is not None:
+    if land_union is not None and not allow:
         mesh, info["choke_widen"] = widen_choke_sections(
             mesh, land_union)
         # second pass: the 2-ring freeze defers any transaction

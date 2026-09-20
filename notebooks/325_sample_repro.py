@@ -2,15 +2,22 @@
 # faithful OM2D stack: bay-only domain, the sample's OBC arc as a
 # CONSTRAINED input line (pfix+egfix), uniform-Courant sizing
 # (h = sqrt(gH)*dt/Cr clipped to [hmin, maxel]), OSM coastline.
-import os, sys, logging, time
 import faulthandler
+import json
+import logging
+import os
+import sys
+import time
+
 faulthandler.enable()
 faulthandler.dump_traceback_later(600, repeat=True)
 import numpy as np
+
 logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                     format="%(levelname)s %(name)s: %(message)s")
 sys.path.insert(0, os.path.expanduser("~/Github/oceanmesh"))
 from pathlib import Path
+
 import oceanmesh as om
 from oceanmesh import DEM, Region, Shoreline
 
@@ -25,7 +32,44 @@ MAXEL = float(os.environ.get("SR_MAXEL", 1400.0))    # m
 GRADE = float(os.environ.get("SR_GRADE", 0.165))
 DT = float(os.environ.get("SR_DT", 15.0))            # s
 CRMIN = float(os.environ.get("SR_CRMIN", 0.45))
-FS = float(os.environ.get("SR_FS", 3.0))
+from fvcom_mesh_tools.one_wide import configured_one_wide, generation_options
+
+# Recipe values take precedence over the five corresponding SR_* knobs.
+_sizing_recipe = None
+if os.environ.get("SR_SIZING"):
+    from fvcom_mesh_tools.sizing import load_sizing
+    _sizing_recipe = load_sizing(os.environ["SR_SIZING"])
+    H0 = _sizing_recipe["coastal_target_m"]
+    MAXEL = _sizing_recipe["max_edge_length_m"]
+    GRADE = _sizing_recipe["gradation"]
+    DT = _sizing_recipe["cfl"]["dt_s"]
+    CRMIN = _sizing_recipe["cfl"]["cr"]
+
+ONE_WIDE = configured_one_wide(_sizing_recipe)
+_row_options = generation_options(ONE_WIDE)
+FS = _row_options["feature_rows"]
+print(f"[sr] one_wide={ONE_WIDE}", flush=True)
+
+# How the size targets are read (owner 2026-09-20):
+#   SR_H_TARGET=achieved (default)  H0/ZBASE/DMAX and the growth rate are
+#       the EDGE LENGTHS wanted in the finished mesh. DistMesh returns bars
+#       about SR_DM_SCALE times the sizing field (oceanmesh
+#       mesh_generator.py:981, L0mult; measured 1.19-1.25 by notebook 394),
+#       so the DISTANCE-derived part of the field is divided by that factor.
+#   SR_H_TARGET=field   the certified behaviour: the numbers go into the
+#       field as-is and the mesh comes out ~1.2x coarser.
+# The CFL floor and MAXEL are NOT scaled: the floor is a condition on the
+# ACHIEVED edge length (and is already written in field space with its own
+# /1.2), and MAXEL caps cost. Scaling them too shrank the deep mouth and
+# halved the time step (job 115234: dt 16.32 -> 8.97 s).
+H_TARGET = os.environ.get("SR_H_TARGET", "achieved")
+if H_TARGET not in ("achieved", "field"):
+    raise SystemExit(f"SR_H_TARGET must be 'achieved' or 'field', got {H_TARGET!r}")
+DM_SCALE = float(os.environ.get("SR_DM_SCALE", 1.2)) if H_TARGET == "achieved" else 1.0
+H0F = H0 / DM_SCALE          # coastal base, sizing-field space
+GRADEF = GRADE / DM_SCALE    # growth rate, sizing-field space
+print(f"[sr] size targets: {H_TARGET} (DistMesh scale {DM_SCALE}); "
+      f"coastal base {H0:.0f} m mesh = {H0F:.0f} m field", flush=True)
 
 # The OBC is an INPUT: the goto2023 sample's 13-node smooth arc
 # (TokyoBay_obc.dat + TokyoBay_grd.dat, EPSG:32654 -> 4326),
@@ -59,6 +103,7 @@ reg = Region(bbox, 4326)
 import geopandas as gpd
 from shapely.geometry import Polygon as _Poly
 from shapely.ops import unary_union as _uu
+
 from fvcom_mesh_tools.prep.channel_policy_geom import (
     apply_channel_policy_to_land,
 )
@@ -101,7 +146,9 @@ for r in chinfo["widened"] + chinfo["closed"]:
 # carve_channel_corridor is barrier-safe: it raises instead of
 # piercing land that separates other water.
 import json as _json
+
 from fvcom_mesh_tools.channel_arcs import carve_channel_corridor
+
 CH_PF, CH_EG = [], []      # bank pfix/egfix accumulated per edit
 # A/B lever (explicit opt-in, loud): comma-separated edit STEMS to
 # skip -- used to validate that an automatic stage reproduces a
@@ -170,7 +217,7 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
     )
     _land_pre_ww = _new_land   # post-edit land: pass-2 base
     _recs = detect_waterways(
-        _land_pre_ww, _dom, h_mesh_m=1.2 * H0,
+        _land_pre_ww, _dom, h_mesh_m=1.2 * H0, one_wide=ONE_WIDE,
         obc_point=tuple(OBC_ARC[6]),
         metric_scale=(111e3 * _cosw, 111e3))
     # OSM waterway CENTRELINES authorize bridge-gap opening
@@ -196,17 +243,13 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
     # verified dup-skip, crumb cleanup, severance override,
     # boundary short-edge collapse.
     _new_land, _winfo = apply_waterway_policy(
-        _land_pre_ww, _dom, _recs, h_mesh_m=1.2 * H0,
+        _land_pre_ww, _dom, _recs, h_mesh_m=1.2 * H0, one_wide=ONE_WIDE,
         metric_scale=(111e3 * _cosw, 111e3),
         h_grade_per_m=1.2 * GRADE,
         open_bridges="auto",
         waterway_lines=list(_wl.geometry),
-        widen_factor=float(os.environ.get(
-            "SR_WIDEN_FACTOR", "0.875")),
-        attain_bar_h=float(os.environ.get(
-            "SR_ATTAIN_BAR", "1.5")),
-        force_two_rows=(os.environ.get(
-            "SR_FORCE2ROWS", "off") == "on"))
+        **{k: _row_options[k] for k in
+               ("widen_factor", "attain_bar_h", "force_two_rows")})
     # NORMALIZATION (owner rule 2026-07-15: water we decided not
     # to resolve is LAND for later geometry decisions). Two fixed
     # passes, never a loop: pass 1 above learns which corridors
@@ -222,7 +265,7 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
             normalize_unresolved_water,
         )
         _nfills, _ninfo = normalize_unresolved_water(
-            _new_land, _dom, h_mesh_m=1.2 * H0,
+            _new_land, _dom, h_mesh_m=1.2 * H0, one_wide=ONE_WIDE,
             obc_point=tuple(OBC_ARC[6]),
             metric_scale=(111e3 * _cosw, 111e3),
             keep_tubes=_winfo["refine_arcs"])
@@ -243,21 +286,17 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
         if _nfills:
             _land_pre2 = _uu([_land_pre_ww, *_nfills])
             _recs = detect_waterways(
-                _land_pre2, _dom, h_mesh_m=1.2 * H0,
+                _land_pre2, _dom, h_mesh_m=1.2 * H0, one_wide=ONE_WIDE,
                 obc_point=tuple(OBC_ARC[6]),
                 metric_scale=(111e3 * _cosw, 111e3))
             _new_land, _winfo = apply_waterway_policy(
-                _land_pre2, _dom, _recs, h_mesh_m=1.2 * H0,
+                _land_pre2, _dom, _recs, h_mesh_m=1.2 * H0, one_wide=ONE_WIDE,
                 metric_scale=(111e3 * _cosw, 111e3),
                 h_grade_per_m=1.2 * GRADE,
                 open_bridges="auto",
                 waterway_lines=list(_wl.geometry),
-                widen_factor=float(os.environ.get(
-                    "SR_WIDEN_FACTOR", "0.875")),
-                attain_bar_h=float(os.environ.get(
-                    "SR_ATTAIN_BAR", "1.5")),
-                force_two_rows=(os.environ.get(
-                    "SR_FORCE2ROWS", "off") == "on"))
+                **{k: _row_options[k] for k in
+               ("widen_factor", "attain_bar_h", "force_two_rows")})
             print("[sr] normalize: pass 2 (re-detect + symmetric "
                   "re-carve on normalized land) done", flush=True)
     # forced two-row ladder constraints from marginal kept
@@ -343,7 +382,7 @@ else:
 _geoms = list(_new_land.geoms) if hasattr(_new_land, "geoms")     else [_new_land]
 gpd.GeoDataFrame(geometry=_geoms, crs=_land_g.crs).to_file(CH_SHP)
 
-sh = Shoreline(str(CH_SHP), poly, H0 * DEG)
+sh = Shoreline(str(CH_SHP), poly, H0F * DEG)
 sdf = om.signed_distance_function(sh)
 # Same SRTM15 Kanto DEM that OM2D ships under datasets/TokyoBay/dem;
 # read from the shared data tree so the run does not depend on an
@@ -375,16 +414,16 @@ ZW = float(os.environ.get("SR_ZW_LAT", 35.215))    # zone lat at 139.695
 ZE = float(os.environ.get("SR_ZE_LAT", 35.17))     # zone lat at 139.795
 DMAX = float(os.environ.get("SR_DMAX", 1030.0))    # bay far-field cap, m
 if os.environ.get("SR_MODE", "courant") == "courant":
-    fdst = om.distance_sizing_function(sh, rate=GRADE,
+    fdst = om.distance_sizing_function(sh, rate=GRADEF,
                                        max_edge_length=None)
     vals = np.ma.filled(np.ma.asarray(fdst.values), MAXEL * DEG)
-    d_m = (vals / DEG - H0) / GRADE            # metric coast distance
+    d_m = (vals / DEG - H0F) / GRADEF          # metric coast distance
     lon_g, lat_g = fdst.create_grid()
     lat_line = ZW + (ZE - ZW) / 0.10 * (lon_g - 139.695)
     in_zone = lat_g < lat_line
-    base_m = np.where(in_zone, ZBASE, H0)
-    cap_m = np.where(in_zone, MAXEL, DMAX)
-    h_m = np.minimum(base_m + GRADE * d_m, cap_m)
+    base_m = np.where(in_zone, ZBASE / DM_SCALE, H0F)
+    cap_m = np.where(in_zone, MAXEL, DMAX / DM_SCALE)
+    h_m = np.minimum(base_m + GRADEF * d_m, cap_m)
     fdst.values = h_m * DEG
     fdst.build_interpolant()
     f = fdst
@@ -392,8 +431,8 @@ if os.environ.get("SR_MODE", "courant") == "courant":
           f"/{DMAX:.0f}, mouth {ZBASE:.0f}/{MAXEL:.0f}, seam "
           f"({139.695},{ZW})-({139.795},{ZE}), g={GRADE})", flush=True)
 g, dt_eff = om.finalize_sizing(
-    [f], dem=dem, shoreline=sh, hmin=H0,
-    max_edge_length=MAXEL, gradation=GRADE, courant=None)
+    [f], dem=dem, shoreline=sh, hmin=H0F,
+    max_edge_length=MAXEL, gradation=GRADEF, courant=None)
 print(f"[sr] sizing done +{time.time()-t0:.0f}s", flush=True)
 
 # GRADED, DEPTH-DILATED CFL FLOOR (owner 2026-07-14: the CFL
@@ -507,7 +546,7 @@ if _cfl_dt != "off":
 # are allowed wherever they do NOT tighten the CFL condition --
 # more nodes at unchanged dt are nearly free). Along every carved
 # branch, lower the size field so an INTEGER number of rows fits
-# the ACHIEVED width: n = ceil(W/(1.2*H0) - 0.15) rows (min 2,
+# the ACHIEVED width: n = ceil(W/(1.2*H0) - 0.15) rows (policy minimum,
 # max 4), field target W/(1.2*n). v1 lessons (run 6190761):
 # (a) a flat H<=30 m CFL cap was violated by deep dredged
 # channels (implied dt 12.0 -> 10.1 s) -- the floor now uses the
@@ -538,7 +577,8 @@ if (os.environ.get("SR_CH_REFINE", "off") == "on"
     for _ra, _rw in _winfo["refine_arcs"]:
         _ra = np.asarray(_ra, float)
         _rw = np.asarray(_rw, float)
-        _nrow = np.clip(np.ceil(_rw / (1.2 * H0) - 0.15), 2, 4)
+        _nrow = np.clip(np.ceil(_rw / (1.2 * H0) - 0.15),
+                        _row_options["min_rows"], 4)
         _tf = np.clip(_rw / (1.2 * _nrow), 0.5 * H0, H0)
         _do = (_tf < H0 - 1.0) & (_rw < 3.2 * 1.2 * H0)
         if not bool(_do.any()):
@@ -618,7 +658,7 @@ if (os.environ.get("SR_CH_REFINE", "off") == "on"
         g.build_interpolant()
     print(f"[sr] channel refinement v2: lowered {_n_low} lattice "
           f"cells over {len(_winfo['refine_arcs'])} branch arcs "
-          f"(row-aware n=2-4, DEM-depth CFL floor dt>="
+          f"(row-aware, DEM-depth CFL floor dt>="
           f"{_DT_FLOOR:.0f} s; depth guard re-raised {_n_guard} "
           f"cells)", flush=True)
 
@@ -628,8 +668,7 @@ if (os.environ.get("SR_CH_REFINE", "off") == "on"
 # crossing, applied AFTER limgrad. General rule (sample-calibrated
 # K=1.25); no sample-specific numbers remain.
 if os.environ.get("SR_OBC_LADDER", "on") == "on":
-    from fvcom_mesh_tools.obc_band import (
-        apply_corridor, build_obc_band, corridor_targets)
+    from fvcom_mesh_tools.obc_band import apply_corridor, build_obc_band, corridor_targets
     h_arc_m = np.asarray(g.eval(OBC_ARC)).ravel() / DEG * 1.2
     # end sizes: a field eval AT an arc end that abuts a coast or
     # an artificial closure is contaminated by the coastal halo
@@ -639,8 +678,13 @@ if os.environ.get("SR_OBC_LADDER", "on") == "on":
         h_arc_m[0] = float(os.environ["SR_OBC_H0"])
     if os.environ.get("SR_OBC_H1"):
         h_arc_m[-1] = float(os.environ["SR_OBC_H1"])
-    band = build_obc_band(OBC_ARC, h_arc_m, k_offset=1.25,
-                          skip_ends=1)
+    # Band geometry knobs: with a finer coastal mesh (SR_H_TARGET=
+    # achieved) the NW junction carried every QA failure, so the offset
+    # factor and a uniform scale on the arc sizes are selectable.
+    h_arc_m = h_arc_m * float(os.environ.get("SR_OBC_HSCALE", 1.0))
+    band = build_obc_band(OBC_ARC, h_arc_m,
+                          k_offset=float(os.environ.get("SR_OBC_K", 1.25)),
+                          skip_ends=int(os.environ.get("SR_OBC_SKIP", 1)))
     PFIX, SEGS = band["pfix"], band["egfix"]
     print(f"[sr] OBC band: offsets "
           f"{band['offsets_m'].min():.0f}-"
@@ -680,6 +724,25 @@ if os.environ.get("SR_OBC_LADDER", "on") == "on":
 else:
     PFIX, SEGS = OBC_ARC, OBC_SEG
 
+# Apply explicit targets last, after every legacy sizing guard/corridor.
+# No recipe (or no regions/hmin) executes no array conversion or limiter.
+if _sizing_recipe is not None and (
+        _sizing_recipe["regions"] or "hmin_m" in _sizing_recipe):
+    import json
+
+    from fvcom_mesh_tools.sizing import apply_sizing_regions
+    _region_lon, _region_lat = g.create_grid()
+    _region_depth = np.maximum(0, -np.asarray(dem.eval(np.column_stack([
+        _region_lon.ravel(), _region_lat.ravel()]))).reshape(_region_lon.shape))
+    _region_values, _region_report = apply_sizing_regions(
+        np.asarray(g.values, float) / DEG, _region_lon, _region_lat,
+        _sizing_recipe["regions"], gradation=GRADE,
+        hmin_m=_sizing_recipe.get("hmin_m"),
+        cfl={**_sizing_recipe["cfl"], "depth_m": _region_depth})
+    g.values = _region_values * DEG
+    g.build_interpolant()
+    print("[sr] regional sizing " + json.dumps(_region_report), flush=True)
+
 # channel-bank constraints from the applied edits: the same
 # pfix+egfix primitive as the OBC ladder, holding both banks of a
 # sub-cell-width channel so the 1-row band is meshed, not bridged
@@ -694,8 +757,9 @@ if CH_PF:
 # the built-in msh.clean('default') runs with pfix nodes pinned and
 # (fork feature) egfix-carrying faces excluded from the boundary
 # deletion loop, so the constrained OBC line survives the clean
-from scipy.spatial import cKDTree
 import shapely
+from scipy.spatial import cKDTree
+
 from fvcom_mesh_tools.algorithms.obc_finish import (
     prune_one_wide_protected,
 )
@@ -768,11 +832,14 @@ om.write_fort14(str(OUT / "sample_repro.14"), p, t, depth=b,
 np.save(OUT / "p.npy", p); np.save(OUT / "t.npy", t)
 # kickoff: FVCOM production mesh is cartesian UTM54N (EPSG:32654)
 from pyproj import Transformer as _T
+
 _tr = _T.from_crs("EPSG:4326", "EPSG:32654", always_xy=True)
 _xu, _yu = _tr.transform(p[:, 0], p[:, 1])
 om.write_fort14(str(OUT / "sample_repro_utm.14"),
                 np.column_stack([_xu, _yu]), t, depth=b,
                 boundaries=bc)
+(OUT / "channel_policy.json").write_text(
+    json.dumps({"one_wide": ONE_WIDE}))
 print("[sr] wrote UTM54N fort.14", flush=True)
 
 # per-node Courant at DT (msh.CalcCFL port) -- the design target is
@@ -785,6 +852,7 @@ print(f"[sr] Cr(dt={DT}) p50/p90/p99/max = "
 
 from oceanmesh.fix_mesh import simp_qual
 from pyproj import Transformer
+
 tr = Transformer.from_crs("EPSG:4326", "EPSG:32654", always_xy=True)
 xx, yy = tr.transform(p[:, 0], p[:, 1])
 q = simp_qual(np.column_stack([xx, yy]), t)

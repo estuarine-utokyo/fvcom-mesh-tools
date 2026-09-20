@@ -1,0 +1,14 @@
+# Width policy: forbid preserves the certified chain; allow permits one row.
+one_wide: forbid
+coastal_target_m: 290
+max_edge_length_m: 1400
+gradation: 0.165
+cfl: {dt_s: 15, cr: 0.45}
+regions: []
+# To enable a region, replace `regions: []` with:
+# regions:
+#   - name: example_fishery
+#     geometry: {bbox: [139.85, 35.50, 139.87, 35.52]}
+#     target_h_m: 30
+#     transition_m: 500
+#     priority: 0
