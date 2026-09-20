@@ -224,10 +224,14 @@ def _add_coast(ax, coast, crs: str, coast_config=None, *, zorder: float = 0.5) -
 
 
 def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
-                   color: str = "crimson", labels: bool = True):
+                   color: str = "0.35", labels: bool = True,
+                   linestyle: str = "--"):
     """Overlay the atlas reference grid (user-AI location pointing:
     column letters west->east, row numbers north->south, quadrant
-    a/b/c/d). Default grid = gridref.TOKYO_BAY_GRID. Draws only
+    a/b/c/d). Default grid = gridref.TOKYO_BAY_GRID: dark grey dashed
+    lines, so the grid locates things without competing with the mesh
+    or with flagged features drawn in colour (owner 2026-09-20).
+    Draws only
     within the current axis limits; call AFTER setting xlim/ylim.
 
     Zoomed views (window smaller than ~2.5 cells) automatically get
@@ -258,14 +262,14 @@ def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
             xs, ys = tf(np.full(50, gx),
                         np.linspace(la0, la1, 50))
             ax.plot(xs, ys, color=color, lw=0.8, alpha=0.65,
-                    zorder=6)
+                    ls=linestyle, zorder=6)
     for j in range(g.nrow + 1):
         gy = g.lat1 - j * g.dlat
         if la0 - g.dlat < gy < la1 + g.dlat:
             xs, ys = tf(np.linspace(lo0, lo1, 50),
                         np.full(50, gy))
             ax.plot(xs, ys, color=color, lw=0.8, alpha=0.65,
-                    zorder=6)
+                    ls=linestyle, zorder=6)
     # zoomed view -> sub-cell lattice + fully-qualified labels.
     # The lattice must stay VISIBLE over mesh + land (owner
     # 2026-07-12: an invisible grid means locations cannot be
@@ -288,14 +292,14 @@ def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
             ax.plot(xs, ys, color=color,
                     lw=0.7 if i % sub else 1.3,
                     alpha=0.5 if i % sub else 0.85,
-                    ls="--" if i % sub else "-", zorder=6)
+                    ls="--" if i % sub else linestyle, zorder=6)
         for j in range(max(j0, 0), min(j1, g.nrow * sub) + 1):
             gy = g.lat1 - j * sdy
             xs, ys = tf(np.linspace(lo0, lo1, 20), np.full(20, gy))
             ax.plot(xs, ys, color=color,
                     lw=0.7 if j % sub else 1.3,
                     alpha=0.5 if j % sub else 0.85,
-                    ls="--" if j % sub else "-", zorder=6)
+                    ls="--" if j % sub else linestyle, zorder=6)
         if labels:
             import string as _string
             for i in range(max(i0, 0), min(i1, g.ncol * sub - 1)):

@@ -135,31 +135,64 @@ for i, p in zip(un, upts):
     stray.append(i)
 
 # ---- WALL crossings --------------------------------------------
-# coastline-following edges touch the ORIGINAL land boundary over
-# their whole length, so test against a 15 m ERODED land core:
-# only edges genuinely tunnelling through a wall keep >25 m of
-# intersection with the core.
+# An edge that FOLLOWS a slightly curved coastline overlaps the land
+# over a long distance while barely entering it; the earlier test
+# measured that overlap LENGTH and flagged 68 such edges, none of
+# which tunnels through anything (owner 2026-09-20, measured: every
+# one of them had a maximum penetration depth below 0.5 h). What a
+# levee crossing actually looks like is
+#   (a) the edge enters the land DEEPLY relative to the local cell
+#       size, measured perpendicular to the coast, and
+#   (b) it comes out on the far side: water on both sides of the land
+#       strip it crosses, i.e. it connects two water areas through
+#       land thinner than the local cells.
+# Both are required here.
+WALL_DEPTH_FRAC = 0.5      # penetration depth / local h
+WALL_STRIP_FRAC = 1.0      # crossed land strip thickness / local h
 ee = np.vstack([tri_o[:, [0, 1]], tri_o[:, [1, 2]], tri_o[:, [2, 0]]])
 ee.sort(axis=1)
 ee = np.unique(ee, axis=0)
 segs = [shapely.LineString([po[a], po[b]]) for a, b in ee]
 segtree = STRtree(segs)
-er = [g.buffer(-15.0 / 111e3) for g in lparts]
-er = [g for g in er if not g.is_empty]
+land_bnd = land.boundary
 hits = set()
-for k in segtree.query(er, predicate="intersects").T:
+wall_detail = {}
+for k in segtree.query(lparts, predicate="intersects").T:
     li, si = int(k[0]), int(k[1])
     a, b = ee[si]
     pa, pb = shapely.Point(po[a]), shapely.Point(po[b])
     if land.covers(pa) or land.covers(pb):
         continue                       # handled by 342 on-land
-    ln = segs[si].intersection(er[li]).length * 111e3
-    if ln < 25.0:
-        continue
     mid = segs[si].interpolate(0.5, normalized=True)
     if tube_u.covers(mid):
         continue                       # intended widening
-    hits.add(si)
+    inter = segs[si].intersection(lparts[li])
+    if inter.is_empty:
+        continue
+    pieces = list(inter.geoms) if hasattr(inter, "geoms") else [inter]
+    h_loc = H                          # local target size (m)
+    for piece in pieces:
+        if piece.length <= 0:
+            continue
+        # (a) how deep inside the land does the edge run?
+        depth = max(piece.interpolate(t, normalized=True).distance(land_bnd)
+                    for t in np.linspace(0.0, 1.0, 21)) * 111e3
+        if depth < WALL_DEPTH_FRAC * h_loc:
+            continue
+        # (b) does it come out into water again, through a thin strip?
+        p0, p1 = piece.interpolate(0.0, normalized=True), \
+            piece.interpolate(1.0, normalized=True)
+        strip = p0.distance(p1) * 111e3           # land thickness on this line
+        before = segs[si].project(p0) * 111e3
+        after = (segs[si].length - segs[si].project(p1)) * 111e3
+        if strip > WALL_STRIP_FRAC * h_loc:
+            continue                   # not a thin wall: real land
+        if min(before, after) < 1.0:
+            continue                   # ends on the coast, no far side
+        hits.add(si)
+        wall_detail[si] = dict(depth_m=round(depth, 1), strip_m=round(strip, 1),
+                               water_before_m=round(before, 1),
+                               water_after_m=round(after, 1))
 wall = sorted(hits)
 
 def _clusters(pts, ids):
@@ -209,6 +242,15 @@ FIG.mkdir(parents=True, exist_ok=True)
 fig.savefig(FIG / "over_resolution.png", dpi=150,
             bbox_inches="tight")
 print(f"[364] figure -> {FIG / 'over_resolution.png'}", flush=True)
+
+# Element / edge identities for the issue map (386), 0-indexed into the
+# final mesh read above.
+(OUT / "over_resolution.json").write_text(json.dumps({
+    "stray_elements": [int(i) for i in stray],
+    "wall_edges": [[int(ee[s][0]), int(ee[s][1])] for s in wall],
+    "wall_detail": {str(int(s)): wall_detail[s] for s in wall},
+}, indent=1) + "\n")
+print(f"[364] wrote {OUT / 'over_resolution.json'}", flush=True)
 
 if stray or wall:
     print(f"[364] GATE FAIL: {len(stray)} stray + {len(wall)} "

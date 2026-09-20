@@ -386,6 +386,11 @@ if _wops_f.exists() and len(breach_idx):
         for _k, _i in enumerate(breach_idx):
             if unint[_k] and _wz.covers(opts[_i]):
                 unint[_k] = False
+# Element identities for the issue map (386), 0-indexed into our mesh.
+_Path("outputs/sample_repro/land_breaches.json").write_text(_json.dumps({
+    "elements": [int(i) for i in breach_idx],
+    "unintended": [bool(u) for u in unint],
+}, indent=1) + "\n")
 print(f"[conn] our elements on ORIGINAL land: {len(breach_idx)} "
       f"(intended widening: {int((~unint).sum())}, UNINTENDED: "
       f"{int(unint.sum())})", flush=True)
