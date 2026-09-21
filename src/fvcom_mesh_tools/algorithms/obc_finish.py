@@ -1541,8 +1541,8 @@ def finish_obc_mesh(
     )
 
     info: dict[str, Any] = {}
-    from fvcom_mesh_tools.one_wide import parse_one_wide
-    allow = parse_one_wide(one_wide) == "allow"
+    from fvcom_mesh_tools.one_wide import permits_one_row
+    allow = permits_one_row(one_wide)
     arc0 = mesh.nodes[np.asarray(mesh.open_boundaries[0], int)].copy()
     mesh, info["perp_local"] = align_open_boundary_local(mesh)
     mesh, hinfo = phase_h_finish(mesh, seed=seed,

@@ -201,8 +201,8 @@ def detect_waterways(
     ``{arc, width_m (profile), action: keep|close, kind, geometry,
     extent_cells, basin_cells}``.
     """
-    from fvcom_mesh_tools.one_wide import parse_one_wide
-    allow = parse_one_wide(one_wide) == "allow"
+    from fvcom_mesh_tools.one_wide import relaxes_selection
+    allow = relaxes_selection(one_wide)
     sx, sy = metric_scale
     if abs(sx - sy) / max(sx, sy) > 0.35:
         raise ValueError("metric_scale too anisotropic; project first")
@@ -530,8 +530,8 @@ def normalize_unresolved_water(
     fills-before-carves is what makes the re-carve symmetric
     (the edit_004/edit_005 lesson).
     """
-    from fvcom_mesh_tools.one_wide import parse_one_wide
-    allow = parse_one_wide(one_wide) == "allow"
+    from fvcom_mesh_tools.one_wide import relaxes_selection
+    allow = relaxes_selection(one_wide)
     sx, sy = metric_scale
     if abs(sx - sy) / max(sx, sy) > 0.35:
         raise ValueError("metric_scale too anisotropic; project first")
@@ -690,8 +690,8 @@ def apply_waterway_policy(
     never left as sub-cell water that meshes one cell wide. The
     record keeps action "blocked" plus ``closed=True`` so the
     decision stays visible."""
-    from fvcom_mesh_tools.one_wide import parse_one_wide
-    allow = parse_one_wide(one_wide) == "allow"
+    from fvcom_mesh_tools.one_wide import permits_one_row, relaxes_selection
+    allow = relaxes_selection(one_wide)
     defaults = (widen_rows, widen_factor, attain_bar_h, branch_floor_frac,
                 thin_close_w_h, force_two_rows, close_blocked)
     # Only terminating records may bypass width-only enforcement.
@@ -801,10 +801,12 @@ def apply_waterway_policy(
 
     for rec in records:
         # Consume the policy classification; do not infer topology from the arc.
-        allow = one_wide == "allow" and rec["kind"] in ("port", "dead-end")
+        allow = permits_one_row(one_wide, rec["kind"])
         (widen_rows, widen_factor, record_attain_bar_h, branch_floor_frac,
          thin_close_w_h, force_two_rows, close_blocked) = defaults
         if allow:
+            # One row at the channel's NATURAL width: no bank pushing, no
+            # attainability bar, nothing to close for being too thin.
             widen_rows, widen_factor, record_attain_bar_h = 1.0, 1.0, 0.0
             branch_floor_frac = thin_close_w_h = 0.0
             force_two_rows = close_blocked = False
@@ -1265,7 +1267,7 @@ def apply_waterway_policy(
             if n_stub:
                 rec["stub_fills"] = n_stub
                 info["stub_fills"] += n_stub
-        if one_wide == "allow":
+        if one_wide != "forbid":
             info.setdefault("refine_min_rows", []).extend(
                 [1 if allow else 2] * (len(info["refine_arcs"]) - refine_start))
         if rec["action"] == "blocked":

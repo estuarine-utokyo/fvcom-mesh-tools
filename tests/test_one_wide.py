@@ -181,3 +181,37 @@ def test_row_treatment_uses_policy_classification(mode, kind, rows, monkeypatch)
     assert info['band_n'] == 0
     widths = np.concatenate([w for r in kept for _, w in r['arcs_done']])
     assert widths.min() == pytest.approx(rows * kw['h_mesh_m'])
+
+
+def test_natural_keeps_the_forbid_selection_but_permits_one_row():
+    from fvcom_mesh_tools.one_wide import permits_one_row, relaxes_selection
+
+    # Which channels are kept: only `allow` moves that bar.
+    assert not relaxes_selection('forbid')
+    assert not relaxes_selection('natural')
+    assert relaxes_selection('allow')
+
+    # How wide a kept channel is carved: `natural` and `allow` agree.
+    assert not permits_one_row('forbid')
+    assert not permits_one_row('forbid', 'port')
+    for mode in ('natural', 'allow'):
+        assert permits_one_row(mode)
+        assert permits_one_row(mode, 'port')
+        assert permits_one_row(mode, 'dead-end')
+        # A through route or a canal is a corridor, not a one-cell basin.
+        assert not permits_one_row(mode, 'through')
+        assert not permits_one_row(mode, 'canal')
+
+
+def test_natural_leaves_the_sizing_field_alone():
+    # `natural` changes the carve, not the size field, so it must ask for the
+    # same rows as `forbid`; only `allow` drops the field to a single row.
+    assert generation_options('natural', environ={}) == generation_options(
+        'forbid', environ={})
+    assert generation_options('allow', environ={})['feature_rows'] == 1.0
+
+
+def test_natural_is_an_accepted_policy_value():
+    assert parse_one_wide('natural') == 'natural'
+    assert configured_one_wide({'one_wide': 'natural'}, environ={}) == 'natural'
+    assert configured_one_wide({}, environ={'SR_ONE_WIDE': 'natural'}) == 'natural'

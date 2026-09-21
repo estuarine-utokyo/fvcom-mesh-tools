@@ -211,8 +211,10 @@ def resolve_narrow_channels(
     sample meshes none of those). ``max_rounds`` repeats the pass
     until no deletion happens (pruning a throat exposes the next
     one-wide section of a collapsing tail)."""
-    from fvcom_mesh_tools.one_wide import parse_one_wide
-    allow = parse_one_wide(one_wide) == "allow"
+    # Retaining flagged clusters is about how the mesh is FINISHED, so it
+    # follows the row policy, not the channel-selection policy.
+    from fvcom_mesh_tools.one_wide import permits_one_row
+    allow = permits_one_row(one_wide)
     flag, chinfo = under_resolved_channels_flag(
         mesh, min_w_h=min_w_h, coords=coords)
     ob_nodes = set(
