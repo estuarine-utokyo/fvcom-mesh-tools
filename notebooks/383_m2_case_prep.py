@@ -35,7 +35,10 @@ FV = BASE / "Github/FVCOM"
 TIDES = Path("/octfs/work/G16445/share/Data/tides").resolve()
 DEFAULT_RUN_ROOT = BASE / "scratch/m2_383"
 DEP = TB / "grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat"
-B_MESH = ROOT / "outputs/sample_repro/sample_repro_final.14"
+DEFAULT_B_MESH = ROOT / "outputs/sample_repro/sample_repro_final.14"
+# The mesh under test.  Overridable so a candidate can be validated without
+# first promoting it into the repository (--mesh).
+B_MESH = DEFAULT_B_MESH
 TEMPLATE = FV / "Tests/PrecipEvap/run/out_pe_rain/pe_rain_run.nml"
 START = "2021-01-01 00:00:00"
 END = "2021-01-12 00:00:00"
@@ -331,9 +334,16 @@ def prepare(run_root):
 
 
 def main():
+    global B_MESH
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=DEFAULT_RUN_ROOT)
+    parser.add_argument("--mesh", type=Path, default=DEFAULT_B_MESH,
+                        help="fort.14 for case B (default: the repository mesh)")
     args = parser.parse_args()
+    B_MESH = args.mesh.resolve()
+    if not B_MESH.exists():
+        raise SystemExit(f"mesh not found: {B_MESH}")
+    print(f"[383] case B mesh = {B_MESH}", flush=True)
     prepare(args.root.resolve())
 
 
