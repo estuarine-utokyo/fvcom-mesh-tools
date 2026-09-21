@@ -1,0 +1,21 @@
+#!/bin/bash
+#PBS -q OCT-S
+#PBS --group=G16445
+#PBS -l cpunum_job=8
+#PBS -l memsz_job=64GB
+#PBS -l elapstim_req=01:00:00
+#PBS -N fmesh_413ana
+#PBS -j o
+#PBS -o logs/413_m2_analysis.pbs.log
+#PBS -r n
+# Analyse the three finished integrations.
+# Required: FMESH_RUN_ROOT.  Optional: FMESH_OUT.
+set -euo pipefail
+cd "${PBS_O_WORKDIR:?Submit from the repository root}"
+. jobs/octopus/common.sh 413_m2_analysis 8
+REPO=$(pwd)
+RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
+OUT=${FMESH_OUT:-$REPO/outputs/m2_$(basename "$RUN_ROOT")}
+python notebooks/384_m2_analysis.py --root "$RUN_ROOT" --output "$OUT"
+echo "wrote $OUT"
+echo "end=$(date -Is)"
