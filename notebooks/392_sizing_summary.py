@@ -76,6 +76,10 @@ def log_stats(log) -> dict:
         chokes=first(r"real chokes: (\d+) sites"),
         gaps=first(r"clear defects=(\d+)"),
         critical=sum(int(x) for x in re.findall(r"CRITICAL [a-z -]+:\s+(\d+)", text)) or 0,
+        # Coastline offsets, as 404 prints them: the first block is against the
+        # polygon the generator was given, the second against raw OSM.
+        off_med=first(r"\|offset\|  median\s+([\d.]+)", float),
+        off_p90=first(r"\|offset\|  median\s+[\d.]+\s+p90\s+([\d.]+)", float),
     )
 
 
@@ -86,7 +90,8 @@ for d in sorted(x for x in COLLECT.iterdir() if x.is_dir()):
         rows[f"variant {d.name}"] = mesh_stats(mesh) | log_stats(d / "run.log")
 
 cols = ["nodes", "elements", "coast_median", "coast_p05", "shallow_median", "edge_median",
-        "dt_s", "qa", "critical", "one_wide", "chokes", "narrow", "severe", "wall", "gaps"]
+        "dt_s", "qa", "critical", "one_wide", "chokes", "narrow", "severe", "wall", "gaps",
+        "off_med", "off_p90"]
 w = max(len(k) for k in rows) + 2
 print(f"{'variant':{w}}" + "".join(f"{c:>15}" for c in cols))
 print("-" * (w + 15 * len(cols)))
