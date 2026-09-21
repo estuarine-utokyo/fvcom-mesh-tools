@@ -51,12 +51,37 @@ def _keys(obj, required, optional=()):
         raise ValueError(f"unknown keys: {obj.keys() - set(required) - set(optional)}")
 
 
+def shapely_affine(geom, sx, sy, centre):
+    """Scale a unit geometry by (sx, sy) degrees and move it to ``centre``."""
+    from shapely.affinity import affine_transform
+
+    return affine_transform(geom, [sx, 0.0, 0.0, sy, float(centre[0]), float(centre[1])])
+
+
 def _geometry(spec):
     from shapely.geometry import box, shape
 
     if not isinstance(spec, dict):
         raise ValueError("geometry must be a mapping")
-    if "bbox" in spec:
+    if "circle" in spec:
+        # A centre and a radius is the most direct way to say "this fishery,
+        # roughly here"; it is turned into a polygon so everything downstream
+        # sees one geometry type.  The radius is metres, the centre lon/lat,
+        # and the local scale is the same equirectangular one used elsewhere.
+        _keys(spec, ["circle"])
+        c = spec["circle"]
+        _keys(c, ["center", "radius_m"])
+        centre = np.asarray(c["center"], dtype=float)
+        if centre.shape != (2,) or not np.isfinite(centre).all():
+            raise ValueError("circle center must be [lon, lat]")
+        radius = _positive(c["radius_m"], "radius_m")
+        from shapely.geometry import Point
+        cos = float(np.cos(np.radians(centre[1])))
+        if cos <= 0:
+            raise ValueError("circle center must not be at a pole")
+        geom = Point(0.0, 0.0).buffer(1.0, quad_segs=64)
+        geom = shapely_affine(geom, radius / (111000.0 * cos), radius / 111000.0, centre)
+    elif "bbox" in spec:
         _keys(spec, ["bbox"])
         b = np.asarray(spec["bbox"], dtype=float)
         if b.shape != (4,) or not np.isfinite(b).all() or np.any(b[:2] >= b[2:]):

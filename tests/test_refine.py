@@ -1,144 +1,205 @@
-"""Tests for refine_bad_triangles."""
+"""Tests for the local-refinement specification and its pre-flight checks."""
 
 from __future__ import annotations
 
 import numpy as np
+import pytest
+from shapely.geometry import Polygon
 
-from fvcom_mesh_tools.algorithms import (
-    min_interior_angle,
-    refine_bad_triangles,
-    signed_areas,
+from fvcom_mesh_tools.refine import (
+    RefineRegion,
+    frozen_changes,
+    load_refine,
+    preflight,
+    transition_width_m,
 )
-from fvcom_mesh_tools.io import Fort14Mesh
+
+AMBIENT = 350.0
+GRAD = 0.165
 
 
-def _sliver_mesh() -> Fort14Mesh:
-    """Two triangles in CCW orientation, one a deliberate sliver
-    (min-angle ~ 6 deg).
+def _region(**over):
+    spec = {
+        "name": "fishery",
+        "geometry": {"circle": {"center": [139.7881, 35.3228], "radius_m": 300}},
+        "target_h_m": 30,
+    }
+    spec.update(over)
+    return RefineRegion(spec)
 
-    Quad 0-1-2-3 split along the long diagonal (0,2). Node 3 is pulled
-    very close to the (0,2) line so the (0,2,3) triangle is a sliver,
-    while (0,1,2) is well-shaped.
-    """
-    nodes = np.array(
-        [
-            [0.0, 0.0],
-            [2.0, 0.0],
-            [1.0, 1.0],     # 2: above
-            [1.0, -0.05],   # 3: just below x-axis -> sliver below
-        ],
-        dtype=np.float64,
+
+def _flat_depth(value):
+    return lambda lon, lat: np.full(np.size(lon), float(value))
+
+
+def _land_north_of(lat):
+    return Polygon([(139.0, lat), (140.5, lat), (140.5, lat + 1.0), (139.0, lat + 1.0)])
+
+
+# --- the width a gradation needs -------------------------------------------
+
+def test_transition_width_is_the_size_gap_over_the_gradation():
+    assert transition_width_m(30, 350, 0.165) == pytest.approx(320 / 0.165)
+    # A 30 m target in a 350 m field needs nearly 2 km, six times a 300 m core.
+    assert transition_width_m(30, 350, 0.165) == pytest.approx(1939.4, abs=0.1)
+
+
+def test_transition_width_is_zero_when_no_climb_is_needed():
+    assert transition_width_m(350, 350, 0.165) == 0.0
+    assert transition_width_m(400, 350, 0.165) == 0.0
+
+
+def test_a_steeper_gradation_buys_a_shorter_transition():
+    assert transition_width_m(30, 350, 0.33) < transition_width_m(30, 350, 0.165)
+
+
+# --- the specification ------------------------------------------------------
+
+def test_circle_geometry_has_the_requested_radius():
+    r = _region()
+    w, s, e, n = r.geometry.bounds
+    half_ns = (n - s) / 2 * 111000.0
+    half_ew = (e - w) / 2 * 111000.0 * np.cos(np.radians(35.3228))
+    assert half_ns == pytest.approx(300, abs=1)
+    assert half_ew == pytest.approx(300, abs=1)
+
+
+@pytest.mark.parametrize("bad", [
+    {"name": ""},
+    {"target_h_m": 0},
+    {"target_h_m": -30},
+    {"priority": True},
+    {"touch_coast": "yes"},
+    {"transition_m": -1},
+])
+def test_invalid_region_fields_are_rejected(bad):
+    with pytest.raises(ValueError):
+        _region(**bad)
+
+
+def test_unknown_region_keys_are_rejected():
+    with pytest.raises(ValueError):
+        RefineRegion({"name": "x", "geometry": {"bbox": [139.7, 35.3, 139.8, 35.4]},
+                      "target_h_m": 30, "surprise": 1})
+
+
+def test_recipe_round_trip(tmp_path):
+    mesh = tmp_path / "base.14"
+    mesh.write_text("stub\n")
+    p = tmp_path / "r.yaml"
+    p.write_text(
+        "base_mesh: base.14\ndt_floor_s: 4.5\ngradation: 0.165\n"
+        "refine:\n  - name: a\n"
+        "    geometry: {circle: {center: [139.79, 35.32], radius_m: 300}}\n"
+        "    target_h_m: 30\n"
     )
-    elements = np.array([[0, 1, 2], [1, 0, 3]], dtype=np.int64)
-    land = np.array([0, 3, 1, 2], dtype=np.int64)
-    return Fort14Mesh(
-        title="sliver",
-        nodes=nodes,
-        depths=np.array([1.0, 2.0, 3.0, 4.0]),
-        elements=elements,
-        open_boundaries=[],
-        land_boundaries=[(0, land)],
+    cfg = load_refine(p)
+    assert cfg["base_mesh"] == mesh.resolve()
+    assert cfg["dt_floor_s"] == 4.5
+    assert [r.name for r in cfg["refine"]] == ["a"]
+
+
+def test_recipe_rejects_a_missing_base_mesh(tmp_path):
+    p = tmp_path / "r.yaml"
+    p.write_text(
+        "base_mesh: nowhere.14\ndt_floor_s: 4.5\ngradation: 0.165\n"
+        "refine:\n  - name: a\n    geometry: {bbox: [139.7, 35.3, 139.8, 35.4]}\n"
+        "    target_h_m: 30\n"
     )
+    with pytest.raises(ValueError, match="base_mesh"):
+        load_refine(p)
 
 
-def test_refine_keeps_mesh_valid_on_pathological_sliver() -> None:
-    """An isolated sliver triangle whose long edge is the only interior
-    edge cannot be improved by longest-edge bisection alone (Rivara
-    propagation has no neighbour to recurse into). The algorithm may
-    still insert a midpoint - what matters is that the resulting mesh
-    is *valid* (no flipped triangles), not that the sliver count drops."""
-    before = _sliver_mesh()
-    bad_before = int((min_interior_angle(before) < 20.0).sum())
-    assert bad_before == 1
-    after, _ = refine_bad_triangles(
-        before, min_angle_threshold=20.0, max_passes=5,
+def test_recipe_rejects_duplicate_region_names(tmp_path):
+    mesh = tmp_path / "base.14"
+    mesh.write_text("stub\n")
+    p = tmp_path / "r.yaml"
+    p.write_text(
+        "base_mesh: base.14\ndt_floor_s: 4.5\ngradation: 0.165\nrefine:\n"
+        + "".join(
+            "  - name: a\n    geometry: {bbox: [139.7, 35.3, 139.8, 35.4]}\n"
+            "    target_h_m: 30\n" for _ in range(2))
     )
-    assert (signed_areas(after) > 0).all()
+    with pytest.raises(ValueError):
+        load_refine(p)
 
 
-def _interior_sliver_mesh() -> Fort14Mesh:
-    """Square split into two triangles, with one corner pulled in close
-    to the diagonal so the (0,1,3) triangle is a sliver whose *longest*
-    edge is the interior diagonal (1,3). Bisecting (1,3) splits the
-    sliver along its long axis and creates a balanced sub-triangle on
-    the bad-vertex side."""
-    nodes = np.array(
-        [
-            [0.4, 0.5],    # 0 - pulled close to diagonal (1, 3)
-            [1.0, 0.0],    # 1
-            [1.0, 1.0],    # 2
-            [0.0, 1.0],    # 3
-        ],
-        dtype=np.float64,
-    )
-    elements = np.array(
-        [
-            [0, 1, 3],   # CCW sliver: 0 close to line (1, 3)
-            [1, 2, 3],   # CCW good
-        ],
-        dtype=np.int64,
-    )
-    # The boundary walks 0 -> 1 -> 2 -> 3 -> 0; (1, 3) is the interior
-    # diagonal.
-    land = np.array([0, 1, 2, 3], dtype=np.int64)
-    return Fort14Mesh(
-        title="interior-sliver",
-        nodes=nodes,
-        depths=np.zeros(4),
-        elements=elements,
-        open_boundaries=[],
-        land_boundaries=[(0, land)],
-    )
+# --- pre-flight -------------------------------------------------------------
+
+def test_preflight_passes_and_reports_the_derived_width():
+    rep = preflight(_region(), gradation=GRAD, dt_floor_s=4.5, ambient_h_m=AMBIENT,
+                    depth_of=_flat_depth(4.0), land=None)
+    assert rep["transition_m"] == pytest.approx(1939.4, abs=0.1)
+    assert rep["dt_s"] == pytest.approx(30 / np.sqrt(9.81 * 4.0), rel=1e-9)
+    assert rep["elements_core"] > 700
+    assert rep["core_on_land"] == 0
 
 
-def test_refine_returns_valid_mesh_on_interior_sliver() -> None:
-    """Refine on a mesh whose bad triangle has an interior longest edge.
-    The refinement may or may not improve the metric on this small
-    fixture (regression rollback may decline the change), but the
-    returned mesh must always be valid (no flipped triangles)."""
-    before = _interior_sliver_mesh()
-    bad_before = int((min_interior_angle(before) < 20.0).sum())
-    assert bad_before >= 1
-    after, info = refine_bad_triangles(
-        before, min_angle_threshold=20.0, max_passes=3,
-    )
-    assert (signed_areas(after) > 0).all()
-    bad_after = int((min_interior_angle(after) < 20.0).sum())
-    # Early-stop guarantees: bad_after <= bad_before.
-    assert bad_after <= bad_before
-    assert "stop_reason" in info
+def test_preflight_refuses_a_target_that_breaks_the_time_step():
+    # 30 m over 20 m of water allows 2.1 s, far below a 4.5 s floor.
+    with pytest.raises(ValueError, match="allows dt"):
+        preflight(_region(), gradation=GRAD, dt_floor_s=4.5, ambient_h_m=AMBIENT,
+                  depth_of=_flat_depth(20.0), land=None)
 
 
-def test_refine_no_op_when_clean() -> None:
-    """Equilateral triangle pair: no triangle is bad, so refinement
-    must leave the mesh untouched."""
-    s = np.sqrt(3.0) / 2.0
-    nodes = np.array(
-        [[0.0, 0.0], [1.0, 0.0], [0.5, s], [1.5, s]],
-        dtype=np.float64,
-    )
-    elements = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int64)
-    mesh = Fort14Mesh(
-        title="eq", nodes=nodes,
-        depths=np.zeros(4), elements=elements,
-        open_boundaries=[],
-        land_boundaries=[(0, np.array([0, 1, 3, 2], dtype=np.int64))],
-    )
-    after, info = refine_bad_triangles(mesh, min_angle_threshold=20.0)
-    np.testing.assert_array_equal(after.nodes, mesh.nodes)
-    np.testing.assert_array_equal(after.elements, mesh.elements)
-    assert info["total_nodes_inserted"] == 0
-    assert info["passes"] == 0
+def test_preflight_names_the_largest_target_the_water_permits():
+    with pytest.raises(ValueError) as exc:
+        preflight(_region(), gradation=GRAD, dt_floor_s=4.5, ambient_h_m=AMBIENT,
+                  depth_of=_flat_depth(20.0), land=None)
+    permitted = 4.5 * np.sqrt(9.81 * 20.0)
+    assert f"{permitted:.0f} m" in str(exc.value)
 
 
-def test_refine_does_not_change_boundary_node_ids() -> None:
-    """Original boundary node-ids must keep referring to the same
-    coordinates after refinement; only interior node-ids are added."""
-    before = _sliver_mesh()
-    land_ids = before.land_boundaries[0][1]
-    after, _ = refine_bad_triangles(before, min_angle_threshold=20.0, max_passes=5)
-    # Boundary-list arrays are shared by reference (algorithm doesn't
-    # touch them); the same indices in `after.nodes` must give the
-    # same coordinates.
-    np.testing.assert_array_equal(after.nodes[land_ids], before.nodes[land_ids])
-    assert after.n_nodes >= before.n_nodes
+def test_preflight_refuses_a_transition_too_short_for_the_gradation():
+    with pytest.raises(ValueError, match="shorter than"):
+        preflight(_region(transition_m=500), gradation=GRAD, dt_floor_s=4.5,
+                  ambient_h_m=AMBIENT, depth_of=_flat_depth(4.0), land=None)
+
+
+def test_preflight_accepts_a_transition_wider_than_required():
+    rep = preflight(_region(transition_m=3000), gradation=GRAD, dt_floor_s=4.5,
+                    ambient_h_m=AMBIENT, depth_of=_flat_depth(4.0), land=None)
+    assert rep["transition_m"] == 3000
+    assert rep["transition_required_m"] == pytest.approx(1939.4, abs=0.1)
+
+
+def test_preflight_refuses_a_core_on_land_unless_asked():
+    land = _land_north_of(35.3228)          # covers the northern half of the core
+    with pytest.raises(ValueError, match="touch_coast"):
+        preflight(_region(), gradation=GRAD, dt_floor_s=4.5, ambient_h_m=AMBIENT,
+                  depth_of=_flat_depth(4.0), land=land)
+    rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_floor_s=4.5,
+                    ambient_h_m=AMBIENT, depth_of=_flat_depth(4.0), land=land)
+    assert rep["core_on_land"] > 0
+
+
+def test_preflight_refuses_a_core_entirely_on_land():
+    land = _land_north_of(35.0)
+    with pytest.raises(ValueError, match="entirely on land"):
+        preflight(_region(touch_coast=True), gradation=GRAD, dt_floor_s=4.5,
+                  ambient_h_m=AMBIENT, depth_of=_flat_depth(4.0), land=land)
+
+
+# --- the frozen-region contract --------------------------------------------
+
+def test_frozen_changes_passes_when_only_affected_nodes_moved():
+    base = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
+    new = base.copy()
+    new[0] += 5.0
+    out = frozen_changes(base, new, np.array([True, False, False]))
+    assert out["ok"] and out["n_moved_in_frozen"] == 0 and out["n_frozen"] == 2
+
+
+def test_frozen_changes_catches_a_node_that_moved_outside_the_region():
+    base = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
+    new = base.copy()
+    new[2, 0] += 0.01          # x only: the move is exactly 0.01 m
+    out = frozen_changes(base, new, np.array([True, False, False]))
+    assert not out["ok"]
+    assert out["n_moved_in_frozen"] == 1
+    assert out["max_move_in_frozen_m"] == pytest.approx(0.01)
+
+
+def test_frozen_changes_requires_matching_arrays():
+    with pytest.raises(ValueError):
+        frozen_changes(np.zeros((3, 2)), np.zeros((4, 2)), np.zeros(3, bool))
