@@ -65,6 +65,12 @@ def _signed_areas(xy: np.ndarray, tri: np.ndarray) -> np.ndarray:
                   - (c[:, 0] - a[:, 0]) * (b[:, 1] - a[:, 1]))
 
 
+def _edge_lengths(xy: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """The three edge lengths of one triangle."""
+    p = xy[t][:, :2]
+    return np.linalg.norm(p[[1, 2, 0]] - p, axis=1)
+
+
 def _angles_deg(xy: np.ndarray, tri: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Smallest and largest interior angle of every triangle, in degrees."""
     p = xy[tri][:, :, :2]
@@ -81,17 +87,91 @@ def _angles_deg(xy: np.ndarray, tri: np.ndarray) -> tuple[np.ndarray, np.ndarray
 
 
 def _implied_dt(xy: np.ndarray, tri: np.ndarray, depth: np.ndarray) -> np.ndarray:
-    """External-mode time step allowed by each element.
+    """External-mode time step allowed by each element, by two measures.
 
-    ``shortest edge / sqrt(g * deepest node)`` -- the same expression the QA
-    advisory reports (qa.py: ``implied_dt``), so a guard written against it
-    protects exactly the number the gate prints.
+    Returns ``(dt_edge, dt_altitude)``:
+
+    * ``dt_edge`` uses the shortest edge, the expression the QA advisory
+      reports (qa.py: ``implied_dt``);
+    * ``dt_altitude`` uses the smallest altitude ``2 * area / longest edge``,
+      which is what notebook 392 reports and what actually limits an explicit
+      scheme -- a triangle can keep all three edges long and still be a
+      flattened sliver.
+
+    Guarding only the first let the fit cost 19 % of the second (job 115300:
+    11.9 -> 9.7 s), so both are guarded.
     """
     p = xy[tri][:, :, :2]
-    lmin = np.min([np.linalg.norm(p[:, (k + 1) % 3] - p[:, k], axis=1) for k in range(3)],
-                  axis=0)
+    lengths = np.stack([np.linalg.norm(p[:, (k + 1) % 3] - p[:, k], axis=1)
+                        for k in range(3)], axis=1)
     h = np.maximum(depth[tri].max(axis=1), DT_DEPTH_FLOOR_M)
-    return lmin / np.sqrt(GRAVITY_M_S2 * h)
+    c = np.sqrt(GRAVITY_M_S2 * h)
+    alt = 2.0 * np.abs(_signed_areas(xy, tri)) / np.maximum(lengths.max(axis=1), 1e-30)
+    return lengths.min(axis=1) / c, alt / c
+
+
+class WaterWidth:
+    """Local water width on a raster, the way the 364 gate measures it.
+
+    From a point, ``d1`` is the distance to the nearest land and ``d2`` the
+    distance to the next land along the ray pointing away from it, so
+    ``w = d1 + d2`` is the width ACROSS the water rather than the distance to
+    the coast.  A point against the shore of a wide bay is close to land while
+    the water there is kilometres wide; only the second number tells them
+    apart.
+
+    ``at_least`` answers the only question the fit asks -- is the water here
+    at least ``wmin`` wide? -- and stops marching as soon as the answer is
+    settled, which keeps the check to a handful of steps per point.
+    """
+
+    def __init__(self, land: Any, bounds: tuple[float, float, float, float],
+                 pix: float = 25.0, margin: float = 500.0):
+        from scipy.ndimage import distance_transform_edt
+
+        x0, y0, x1, y1 = bounds
+        self.pix = float(pix)
+        self.x0 = x0 - margin
+        self.y0 = y0 - margin
+        self.nx = int((x1 + margin - self.x0) / self.pix) + 1
+        self.ny = int((y1 + margin - self.y0) / self.pix) + 1
+        gx = self.x0 + (np.arange(self.nx) + 0.5) * self.pix
+        gy = self.y0 + (np.arange(self.ny) + 0.5) * self.pix
+        XX, YY = np.meshgrid(gx, gy)
+        self.water = ~shapely.contains_xy(land, XX, YY)
+        self.edt, self.idx = distance_transform_edt(
+            self.water, sampling=self.pix, return_indices=True)
+
+    def _rc(self, x: float, y: float) -> tuple[int, int]:
+        return (int(round((y - self.y0) / self.pix - 0.5)),
+                int(round((x - self.x0) / self.pix - 0.5)))
+
+    def at_least(self, pts: np.ndarray, wmin: float) -> bool:
+        """True when every row of ``pts`` sits in water at least ``wmin`` wide."""
+        for x, y in np.asarray(pts, dtype=float)[:, :2]:
+            r, c = self._rc(x, y)
+            if not (0 <= r < self.ny and 0 <= c < self.nx):
+                continue                      # outside the raster: no opinion
+            if not self.water[r, c]:
+                return False                  # on land
+            d1 = float(self.edt[r, c])
+            need = wmin - d1
+            if need <= 0.0:
+                continue
+            vr = r - int(self.idx[0, r, c])
+            vc = c - int(self.idx[1, r, c])
+            norm = float(np.hypot(vr, vc))
+            if norm == 0.0:
+                continue
+            vr, vc = vr / norm, vc / norm
+            for t in np.arange(self.pix, need + self.pix, self.pix):
+                rr = int(round(r + vr * t / self.pix))
+                cc = int(round(c + vc * t / self.pix))
+                if not (0 <= rr < self.ny and 0 <= cc < self.nx):
+                    break
+                if not self.water[rr, cc]:
+                    return False              # land again before wmin
+        return True
 
 
 def _edge_neighbours(tri: np.ndarray) -> np.ndarray:
@@ -225,6 +305,8 @@ def fit_boundary_to_coast(
     max_angle_deg: float = MAX_ANGLE_DEG,
     max_area_change: float = MAX_AREA_CHANGE,
     keep_centroids_wet: bool = True,
+    min_water_width_frac: float | None = 0.5,
+    width_land: Any | None = None,
     freeze_fixed_neighbours: bool = True,
     depths: np.ndarray | None = None,
     dt_floor_s: float | None = None,
@@ -255,6 +337,22 @@ def fit_boundary_to_coast(
         bound and the move improves it.
     keep_centroids_wet
         Reject a move that would put an incident element's centroid on land.
+    min_water_width_frac
+        Reject a move that would leave an incident element's centroid in water
+        narrower than this many local edge lengths, measured ACROSS the water
+        the way the 364 gate measures it.  Without it the fit walks a boundary
+        node into a creek narrower than one row: the nearest point on the
+        coastline from a node beside a creek mouth is often inside the creek,
+        and following it took three elements into 50-75 m of water at h = 320-
+        400 m (job 115300).  ``None`` switches the check off; it costs one
+        raster of the land per call.
+    width_land
+        The land polygon the width guard measures against.  Defaults to
+        ``land``, but the 364 gate judges channel width against the ORIGINAL
+        shoreline data, so pass that here: fitting onto a widened corridor is
+        exactly what puts an element into water the original data calls too
+        narrow (job 115300: 0 severe -> 3 severe with the carved polygon as
+        the only reference).
     freeze_fixed_neighbours
         Also hold still the boundary nodes edge-adjacent to a ``fixed`` node.
         The open-boundary orthogonality gate leaves little headroom (worst
@@ -323,16 +421,24 @@ def fit_boundary_to_coast(
             if lst is not None:
                 lst.append(e)
 
+    width = None
+    if min_water_width_frac:
+        b = (float(xy[:, 0].min()), float(xy[:, 1].min()),
+             float(xy[:, 0].max()), float(xy[:, 1].max()))
+        width = WaterWidth(land if width_land is None else width_land, b)
+
     nb = _edge_neighbours(tri)
     area = np.abs(_signed_areas(xy, tri))
     dep = None if depths is None else np.asarray(depths, dtype=float)
-    dt_all = None if dep is None else _implied_dt(xy, tri, dep)
+    dt_all = None if dep is None else np.column_stack(_implied_dt(xy, tri, dep))
     if dep is not None and dt_floor_s is None:
         # Default: keep the time step the mesh arrived with.  Fidelity is not
         # worth paying for in dt, and the sweep below reaches the coastline
         # just as well with the floor in place (measured: p90 offset 10.2 m
         # unguarded vs 11.8 m guarded, dt 15.44 s vs 16.38 s).
-        dt_floor_s = float(dt_all.min())
+        dt_floor = dt_all.min(axis=0)      # per measure
+    elif dt_all is not None:
+        dt_floor = np.array([float(dt_floor_s)] * 2)
     if dt_floor_s is not None and dt_floor_s <= 0:
         dt_all = None
     orient = np.sign(_signed_areas(xy, tri))
@@ -387,14 +493,28 @@ def fit_boundary_to_coast(
                 if not ok:
                     area[es] = old_area
             if ok and dt_all is not None:
-                dt_new = _implied_dt(xy, tri[es], dep)
-                ok = bool((dt_new >= np.minimum(dt_floor_s, dt_all[es])).all())
+                dt_new = np.column_stack(_implied_dt(xy, tri[es], dep))
+                ok = bool((dt_new >= np.minimum(dt_floor, dt_all[es])).all())
                 if not ok:
                     area[es] = old_area
-            if ok and keep_centroids_wet:
+            if ok and (keep_centroids_wet or width is not None):
                 cen = xy[tri[es]][:, :, :2].mean(axis=1)
-                ok = not bool(shapely.contains(
-                    land, shapely.points(cen[:, 0], cen[:, 1])).any())
+                if keep_centroids_wet:
+                    ok = not bool(shapely.contains(
+                        land, shapely.points(cen[:, 0], cen[:, 1])).any())
+                if ok and width is not None:
+                    # Judge each element against its own size, so a coarse
+                    # offshore element is not held to a channel's standard.
+                    # h is the MEDIAN EDGE LENGTH, the same measure the 364
+                    # gate uses -- an area-equivalent side is far smaller for
+                    # a sliver and would wave through exactly the elements
+                    # this guard exists to stop.
+                    for ei, ce in zip(es, cen):
+                        hl = float(np.median(_edge_lengths(xy, tri[ei])))
+                        if not width.at_least(ce[None, :],
+                                              min_water_width_frac * hl):
+                            ok = False
+                            break
                 if not ok:
                     area[es] = old_area
             if not ok:
@@ -403,7 +523,7 @@ def fit_boundary_to_coast(
                 continue
             lo_all[es], hi_all[es] = _angles_deg(xy, tri[es])
             if dt_all is not None:
-                dt_all[es] = _implied_dt(xy, tri[es], dep)
+                dt_all[es] = np.column_stack(_implied_dt(xy, tri[es], dep))
             moved[k] = True
             any_move = True
         res.sweeps = sweep + 1
@@ -419,7 +539,7 @@ def fit_boundary_to_coast(
     res.max_angle_after_deg = float(hi.max())
     res.max_move_m = float(np.linalg.norm(xy[:, :2] - xy0[:, :2], axis=1).max())
     if dep is not None:
-        res.dt_before_s = float(_implied_dt(xy0, tri, dep).min())
-        res.dt_after_s = float(_implied_dt(xy, tri, dep).min())
+        res.dt_before_s = float(min(a.min() for a in _implied_dt(xy0, tri, dep)))
+        res.dt_after_s = float(min(a.min() for a in _implied_dt(xy, tri, dep)))
     res.nodes = xy
     return res

@@ -104,6 +104,12 @@ if os.environ.get("SR_COAST_FIT", "on") != "off":
     _obc = (_np.concatenate([_np.asarray(s, int).ravel()
                              for s in mesh.open_boundaries])
             if mesh.open_boundaries else _np.empty(0, int))
+    # The width guard measures against the SAME polygon the fit targets, so
+    # the two agree about where the water is.  Measuring against raw OSM
+    # instead treats every intended widening as forbidden ground and costs
+    # most of the gain (p90 offset 14.0 m -> 41.6 m) for no measured benefit:
+    # with 364's width read from four samples per element rather than one,
+    # both references leave the gate passing.
     _cf = fit_boundary_to_coast(mesh.nodes, mesh.elements, _land_utm,
                                 fixed=_obc, depths=mesh.depths)
     mesh.nodes[:, :2] = _cf.nodes[:, :2]

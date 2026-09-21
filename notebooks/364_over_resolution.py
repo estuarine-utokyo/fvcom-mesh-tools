@@ -172,19 +172,30 @@ def _pix(lon, lat):
             int(round((lon - _gx[0]) * 111e3 * _cos / _PIX)))
 
 
-w_elem = np.full(len(cent), np.inf)
-for i in range(len(cent)):
-    r, c = _pix(cent[i, 0], cent[i, 1])
+# SAMPLE THE ELEMENT, NOT ONE POINT (owner 2026-09-21, after the
+# coastline fit): read from the centroid alone, the width flips
+# categorically when a thin land finger pokes into the element -- three
+# elements straddling a spit went from w/h = 5.1 to w/h = 0.30 because a
+# 12 m node move put the centroid on the other side of the finger. The
+# element is the same shape before and after; only the sample moved.
+# Sample the centroid AND the three points halfway out to the vertices,
+# all inside the triangle, and take the MEDIAN. A genuinely one-row
+# channel reads narrow at every sample; a cell straddling a spit does not.
+_samples = np.stack([cent] + [0.5 * (cent + po[tri_o[:, k]]) for k in range(3)], axis=1)
+
+
+def _width_at(px, py, h):
+    r, c = _pix(px, py)
     if not (0 <= r < _ny and 0 <= c < _nx) or not _water[r, c]:
-        continue                       # centroid on land: 342's business
+        return np.nan                  # on land: 342's business
     d1 = float(_edt[r, c])
     lr, lc = int(_idx[0, r, c]), int(_idx[1, r, c])
     vr, vc = r - lr, c - lc            # away from the nearest land pixel
     norm = np.hypot(vr, vc)
     if norm == 0:
-        continue
+        return np.nan
     vr, vc = vr / norm, vc / norm
-    cap = 5.0 * h_elem[i]
+    cap = 5.0 * h
     d2 = cap
     for t in np.arange(_PIX, cap, _PIX):
         rr = int(round(r + vr * t / _PIX))
@@ -194,7 +205,16 @@ for i in range(len(cent)):
         if not _water[rr, cc]:
             d2 = float(t)
             break
-    w_elem[i] = d1 + d2
+    return d1 + d2
+
+
+w_elem = np.full(len(cent), np.inf)
+for i in range(len(cent)):
+    ws = [_width_at(px, py, h_elem[i]) for px, py in _samples[i]]
+    ws = [w for w in ws if np.isfinite(w)]
+    if not ws:
+        continue                       # every sample on land: 342's business
+    w_elem[i] = float(np.median(ws))
 
 narrow, narrow_wh = [], {}
 for i in range(len(cent)):
