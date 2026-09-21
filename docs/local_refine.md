@@ -50,6 +50,14 @@ B is what the rest of this document specifies.
 | **transition** | the annulus the gradation needs to reach the ambient size | remeshed; changes |
 | **frozen** | everything else | node coordinates and connectivity **identical** to the base mesh |
 
+**The bathymetry is not refined.** The base mesh is the topography actually
+being simulated, so a refined region sits on the same seabed: retained nodes
+keep their exact depths and new nodes take the base field interpolated at
+their position (`refine.depths_from_base`). Refining the bathymetry as well is
+a separate question, deliberately left for later — mixing a finer seabed into
+this change would make the effect of resolving the fishery impossible to
+separate from the effect of changing the depths.
+
 The frozen guarantee is the point of the exercise, so it is **checked, not
 asserted**. `refine.frozen_changes()` is a start and not yet sufficient: it
 compares coordinates in row correspondence, which only holds while the node
@@ -136,10 +144,14 @@ The certified mesh allows 11.9 s. A 30 m region costs a factor of 2–4,
 refine, deep water is not. The step count is not the whole cost — added
 elements, shape and solver settings matter too.
 
-`dt_floor_s` is **mandatory** in the recipe, and `refine.preflight()` refuses a
-target the water cannot carry, naming the largest target that water does
-permit. A failed pre-flight costs a second; a failure discovered after meshing
-costs the run.
+**The time step does not veto a region** (owner 2026-09-22). A fishery is
+*given*: its position and the resolution it needs are inputs, not preferences,
+so a recipe that cannot hold a time step is still the recipe. `dt_expected_s`
+is therefore advisory — `refine.preflight()` raises an **alert** in its report,
+naming the step the region will actually allow, the factor by which the run
+gets longer, and the target that would have kept the expected step. Refusal is
+reserved for what makes the operation impossible, not for what makes it
+expensive.
 
 ### 3.3 Node count, for completeness
 
@@ -157,7 +169,7 @@ specification belongs in a file.
 
 ```yaml
 base_mesh: ../../outputs/verify_409.115302/fit/sample_repro_final.14
-dt_floor_s: 4.5
+dt_expected_s: 4.5      # advisory: an alert, not a veto
 gradation: 0.165
 
 refine:
@@ -174,7 +186,7 @@ refine:
 | key | meaning |
 |---|---|
 | `base_mesh` | the mesh to patch; relative paths resolve against the recipe |
-| `dt_floor_s` | mandatory; the external time step the result must still allow |
+| `dt_expected_s` | mandatory to state, advisory in effect: an alert when the region will not deliver it |
 | `gradation` | size growth per metre through the transition |
 | `refine[].name` | unique, non-empty |
 | `refine[].geometry` | `circle`, `bbox` or GeoJSON `Polygon`, all lon/lat |
@@ -278,8 +290,8 @@ and the declared centre lies 654 m north of its edge.
 | target | 30 m | |
 | core depth | 3.00 – 4.15 m | |
 | dt by shortest edge | 4.70 s | flattering |
-| **dt by minimum altitude** | **4.07 s** | **fails the 4.5 s floor** |
-| coarsest target this water needs | 33 m | |
+| **dt by minimum altitude** | **4.07 s** | **alert: 1.1x the expected steps** |
+| target that would hold 4.5 s | 33 m | |
 | transition | 1,939 m | |
 | centre to the land boundary | 1,014 m | **hole reaches the coast** |
 | largest gradation that would fit | 0.448 | above the C4-safe range |
@@ -290,15 +302,19 @@ and the declared centre lies 654 m north of its edge.
 Of 1,200 candidate cells 650–750 m north of the flat with the **core** clear of
 land, 112 met a 4.5 s floor **computed from the shortest edge**. Both filters
 were wrong: the core is the wrong body to test for land, and the edge is the
-wrong length for dt. Under the corrected checks this recipe is refused twice
-over, and the site search has to be redone against the hole and the altitude.
+wrong length for dt. Under the corrected checks the dt raises an alert (which is now the intended
+behaviour) and the hole reaching the coast is the real obstacle.
 
-Nothing about the Futtsu area is unsuitable; the declaration was. A 300 m core
-at 30 m in 3–4 m of water is close to feasible — 33 m clears the floor — but
-the 1,939 m transition needs 2.2 km of open water in every direction, and the
-Futtsu spit is 1 km away. The honest options are a coarser target, a steeper
-gradation with the C4 cost measured, `touch_coast: true` with the coastline
-re-cut inside the patch, or a site further offshore.
+**The site cannot move**: a fishery is given. So the remaining levers are the
+ones that let the declared position and resolution be reproduced —
+
+* a coarser target, if the resolution is negotiable (33 m holds 4.5 s);
+* a steeper gradation, shortening the transition, with the C4 cost measured;
+* `touch_coast: true`, re-cutting the coastline inside the patch.
+
+All three are acceptable to the owner. The 1,939 m transition needs 2.2 km of
+open water in every direction and the Futtsu spit is 1 km away, so
+`touch_coast: true` is the lever that actually reaches this site.
 
 ## 7. What is still missing before this can be built
 

@@ -7,7 +7,7 @@
 # clear of land.  At 30 m that water allows dt = 4.72 s against the 4.5 s
 # floor; the nearby shallower sites reach 4.88 s but sit on the flat itself.
 base_mesh: ../../outputs/verify_409.115302/fit/sample_repro_final.14
-dt_floor_s: 4.5
+dt_expected_s: 4.5      # advisory: an alert, not a veto
 gradation: 0.165
 
 refine:

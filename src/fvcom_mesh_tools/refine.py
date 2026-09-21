@@ -31,10 +31,16 @@ it is too small to be reached at the recipe's gradation.
 
 The cost that bites is the time step.  FVCOM integrates with one global
 external step, so the smallest element anywhere sets it for the whole run:
-``dt = h / sqrt(g * H)``.  A 30 m target over 4 m of water allows 4.8 s where
-the present mesh allows 11.9 s.  ``dt_floor_s`` is therefore mandatory, and
-:func:`preflight` refuses a region that would break it -- before spending the
-compute, not after.
+``dt = L / sqrt(g * H)`` with ``L`` the minimum altitude.  A 30 m target over
+4 m of water allows 4.1 s where the present mesh allows 11.9 s.
+
+**The time step does not veto a region** (owner 2026-09-22).  A fishery is
+given -- its position and its required resolution are inputs, not preferences
+-- so a recipe that cannot meet a time step is still the recipe.  What the
+caller needs is to be *told*, loudly, before the run: ``dt_expected_s`` is the
+step the caller was counting on, and :func:`preflight` raises an alert in its
+report when the region will not deliver it.  Refusal is reserved for things
+that make the operation impossible, not expensive.
 """
 
 from __future__ import annotations
@@ -49,6 +55,7 @@ from fvcom_mesh_tools.sizing import _geometry, _keys, _positive
 __all__ = [
     "GRAVITY_M_S2",
     "ALTITUDE_OVER_EDGE",
+    "depths_from_base",
     "RefineRegion",
     "frozen_changes",
     "hole_clearance",
@@ -110,7 +117,7 @@ def load_refine(path) -> dict[str, Any]:
     Schema (unknown keys are errors)::
 
         base_mesh: outputs/.../sample_repro_final.14
-        dt_floor_s: 4.5
+        dt_expected_s: 4.5      # advisory: an alert, not a veto
         gradation: 0.165
         refine:
           - name: futtsu_nori
@@ -136,14 +143,14 @@ def load_refine(path) -> dict[str, Any]:
     UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
     with Path(path).resolve().open() as stream:
         cfg = yaml.load(stream, Loader=UniqueLoader)
-    _keys(cfg, ["base_mesh", "dt_floor_s", "gradation", "refine"])
+    _keys(cfg, ["base_mesh", "dt_expected_s", "gradation", "refine"])
     base = Path(cfg["base_mesh"])
     if not base.is_absolute():
         base = (Path(path).resolve().parent / base).resolve()
     if not base.exists():
         raise ValueError(f"base_mesh not found: {base}")
     cfg["base_mesh"] = base
-    cfg["dt_floor_s"] = _positive(cfg["dt_floor_s"], "dt_floor_s")
+    cfg["dt_expected_s"] = _positive(cfg["dt_expected_s"], "dt_expected_s")
     cfg["gradation"] = _positive(cfg["gradation"], "gradation")
     if not isinstance(cfg["refine"], list) or not cfg["refine"]:
         raise ValueError("refine must be a nonempty list")
@@ -166,7 +173,7 @@ def preflight(
     region: RefineRegion,
     *,
     gradation: float,
-    dt_floor_s: float,
+    dt_expected_s: float,
     ambient_h_m: float,
     depth_of,
     land=None,
@@ -185,9 +192,11 @@ def preflight(
     while its 2,239 m hole reached a coastline 1,014 m from the centre.
     :func:`hole_clearance` is the test for that, and needs the mesh.
 
-    Returns a report. Raises ``ValueError`` when the region cannot be built as
-    declared -- a failure here costs a second, a failure after meshing costs
-    the run.
+    Returns a report. ``ValueError`` is reserved for a region that cannot be
+    built at all -- an empty or wholly dry geometry, a transition too short for
+    the gradation, a missing land polygon. A time step below ``dt_expected_s``
+    sets ``dt_alert`` in the report instead: the region is still built, and the
+    caller is told what it will cost.
     """
     import shapely
 
@@ -234,14 +243,16 @@ def preflight(
     c = np.sqrt(GRAVITY_M_S2 * depth.max())
     dt_edge = region.target_h_m / c
     dt = ALTITUDE_OVER_EDGE * dt_edge          # the measure that is reported
-    if dt < dt_floor_s:
-        allowed = dt_floor_s * c / ALTITUDE_OVER_EDGE
-        raise ValueError(
+    alert = None
+    if dt < dt_expected_s:
+        would_need = dt_expected_s * c / ALTITUDE_OVER_EDGE
+        alert = (
             f"{region.name}: target {region.target_h_m:g} m over {depth.max():.2f} m of "
             f"water allows dt = {dt:.2f} s by minimum altitude ({dt_edge:.2f} s by "
-            f"shortest edge), below the floor {dt_floor_s:g} s; the coarsest this water "
-            f"needs is {allowed:.0f} m. This assumes equilateral cells: a legal "
-            "30-30-120 triangle has half that altitude and allows half the step.")
+            f"shortest edge), against the {dt_expected_s:g} s expected -- the run will "
+            f"cost {dt_expected_s / dt:.1f}x the external steps. Keeping {dt_expected_s:g} s "
+            f"would need a {would_need:.0f} m target. This is an equilateral upper bound: "
+            "a legal 30-30-120 cell halves the altitude and halves the step again.")
 
     area = _to_metres(geom, lat0).area
     outer = _to_metres(geom.buffer(width / 111000.0), lat0).area
@@ -269,12 +280,62 @@ def preflight(
         "dt_s": float(dt),
         "dt_by_shortest_edge_s": float(dt_edge),
         "dt_measure": "minimum altitude of an equilateral cell / sqrt(g*Hmax)",
-        "dt_floor_s": float(dt_floor_s),
+        "dt_expected_s": float(dt_expected_s),
+        "dt_alert": alert,
+        "dt_step_cost_factor": float(dt_expected_s / dt) if dt > 0 else float("inf"),
         "elements_core": float(n_core),
         "elements_transition": float(n_trans),
         "elements_replaced": float(n_was),
         "elements_added": float(n_core + n_trans - n_was),
     }
+
+
+def depths_from_base(base_nodes, base_elements, base_depths, new_nodes):
+    """Depths for the patched mesh, taken from the base mesh's own field.
+
+    The bathymetry is **not** refined (owner 2026-09-22). The base mesh is the
+    topography actually being simulated; a refined region has to sit on the
+    same seabed, so new nodes get the base field evaluated at their position
+    and every retained node keeps its exact value. Refining the bathymetry
+    too is a separate question for later.
+
+    This also settles what looked like the hardest open problem. Re-sampling a
+    survey inside the patch would have produced a mixed-source depth field and
+    an r-factor constraint problem across the seam -- a mutable node beside a
+    frozen depth ``H`` must satisfy ``H/1.5 <= h <= 1.5H``, and two frozen
+    neighbours can make that infeasible. Interpolation cannot: a value inside
+    a base element lies between that element's own vertex depths, so for two
+    points in the same element
+
+        |h_a - h_b| / (h_a + h_b)  <=  (h_max - h_min) / (h_max + h_min)
+
+    which is the r of the base edge joining that element's deepest and
+    shallowest vertices. **Refinement can only leave the r-factor where it was
+    or improve it**, never worsen it.
+
+    Linear interpolation over the base triangulation; points outside it fall
+    back to the nearest base node, and the count is reported.
+    """
+    from scipy.spatial import cKDTree
+
+    xy = np.asarray(base_nodes, dtype=float)[:, :2]
+    tri = np.asarray(base_elements, dtype=np.int64)
+    dep = np.asarray(base_depths, dtype=float)
+    if dep.shape[0] != xy.shape[0]:
+        raise ValueError("base depths must be one per base node")
+    if not np.isfinite(dep).all():
+        raise ValueError("base depths must be finite")
+    new = np.asarray(new_nodes, dtype=float)[:, :2]
+
+    from matplotlib.tri import LinearTriInterpolator, Triangulation
+
+    mtri = Triangulation(xy[:, 0], xy[:, 1], tri)
+    out = np.asarray(LinearTriInterpolator(mtri, dep)(new[:, 0], new[:, 1]))
+    outside = ~np.isfinite(out)
+    if outside.any():
+        out = np.array(out, dtype=float)
+        out[outside] = dep[cKDTree(xy).query(new[outside])[1]]
+    return np.asarray(out, dtype=float), int(outside.sum())
 
 
 def hole_clearance(nodes, elements, region, *, transition_m, open_boundaries=()):
