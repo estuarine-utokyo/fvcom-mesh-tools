@@ -182,8 +182,17 @@ def read_run(case, manifest):
     if abs(t[0]) > 1 or abs(t[-1] - manifest["duration_seconds"]) > 1:
         raise ValueError(f"{case.name}: incomplete run: {t[0]} .. {t[-1]} seconds")
     select = t >= manifest["spinup_seconds"]
-    if np.ptp(t[select]) < 7 * 86400:
-        raise ValueError("Less than seven analysis days")
+    # What the fit needs is enough M2 cycles to separate M2, M4 and M6, not a
+    # fixed number of days.  A fixed 7-day floor also forces a LONGER window
+    # than is wanted once the spin-up is the long part of the run: averaging
+    # over more of a still-converging signal biases the constants low.  Four
+    # cycles (about 2.1 days) is the bar; 20 days with 15 of spin-up leaves
+    # 5 days, or 9.7 cycles.
+    MIN_CYCLES = 4.0
+    cycles = np.ptp(t[select]) / manifest["period_seconds"]
+    if cycles < MIN_CYCLES:
+        raise ValueError(
+            f"analysis window is {cycles:.1f} M2 cycles, need {MIN_CYCLES:g}")
     weights = node_areas(mesh["xy"], mesh["tri"])
     volume = (z + mesh["depth"]) @ weights
     _, _, coef = harmonic_fit(t[select], volume[select], manifest["period_seconds"], trend=True)
