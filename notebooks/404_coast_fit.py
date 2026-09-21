@@ -24,6 +24,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -91,6 +92,7 @@ hloc = hsum[nod] / np.maximum(hcnt[nod], 1)
 REFS = [("normalized land (given to oceanmesh)", SHPDIR / "land_channel_adj.shp"),
         ("raw OSM land", ROOT / "outputs/tb_varres_3r/land_osm_wide.shp")]
 signed = {}
+report: dict[str, object] = {"mesh": MESH.name, "n_land_boundary_nodes": int(len(nod))}
 for tag, shp in REFS:
     if not shp.exists():
         print(f"[404] missing {shp}", flush=True)
@@ -113,6 +115,18 @@ for tag, shp in REFS:
     for f in (0.25, 0.5, 1.0):
         print(f"[404]   nodes |offset| > {f:4.2f} * local h : "
               f"{int((r > f).sum()):5d} / {len(nod)}", flush=True)
+    report[tag] = {
+        "median_m": float(np.median(np.abs(s))),
+        "p90_m": float(np.percentile(np.abs(s), 90)),
+        "p99_m": float(np.percentile(np.abs(s), 99)),
+        "max_m": float(np.abs(s).max()),
+        "n_on_land": int((s < 0).sum()),
+        "n_beyond_quarter_h": int((r > 0.25).sum()),
+        "n_beyond_half_h": int((r > 0.5).sum()),
+    }
+
+(SHPDIR / "coast_offsets.json").write_text(json.dumps(report, indent=1))
+print(f"[404] wrote {SHPDIR / 'coast_offsets.json'}", flush=True)
 
 REF = REFS[0][0]
 if REF not in signed:

@@ -78,7 +78,7 @@ for v in forbid natural allow; do
     cp -p "$WORK/$v"/outputs/figures/404_*.png "$COLLECT/$v/" 2>/dev/null || true
     for f in sample_repro_final.14 sample_repro_final_qa.json one_wide_cells.json \
              over_resolution.json coverage_gaps.json waterways.json \
-             channel_policy.json coast_fit.json land_breaches.json; do
+             channel_policy.json coast_fit.json coast_offsets.json land_breaches.json; do
         [ -f "$WORK/$v/outputs/sample_repro/$f" ] && cp -p "$WORK/$v/outputs/sample_repro/$f" "$COLLECT/$v/"
     done
 done
