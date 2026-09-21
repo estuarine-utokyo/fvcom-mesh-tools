@@ -57,6 +57,13 @@ The guards, in the order they are tested:
 | time step | take an incident element below `dt_floor_s` |
 | wet centroids | put an incident element's centroid on land |
 
+Boundary nodes edge-adjacent to a `fixed` node are held still as well
+(`freeze_fixed_neighbours`, on by default). The open-boundary orthogonality
+gate has little headroom -- worst 19.4° against a 20° limit -- and is set by the
+geometry immediately beside the OBC, which is an input. Without the freeze the
+fit pushed it to 19.5°; with it, the number does not move, at a cost of two
+nodes and 0.3 m of p90.
+
 Each bound is waived for an element that already violated it, provided the
 move improves that element -- so the pass can help a bad element but never
 creates a new violation.
@@ -85,8 +92,8 @@ On the passing `achieved` mesh, 6.5 s of wall time:
 | | before | after |
 |---|---|---|
 | \|offset\| median | 10.1 m | **0.0 m** |
-| \|offset\| p90 | 84.0 m | **11.8 m** |
-| boundary nodes moved | -- | 1,085 / 1,219 |
+| \|offset\| p90 | 84.0 m | **12.1 m** |
+| boundary nodes moved | -- | 1,083 / 1,219 |
 | QA gates | 21/21 PASS | 21/21 PASS |
 | min / max interior angle | 30.01° / 116.00° | 30.01° / 119.26° |
 | implied dt | 16.34 s | 16.38 s |

@@ -225,6 +225,7 @@ def fit_boundary_to_coast(
     max_angle_deg: float = MAX_ANGLE_DEG,
     max_area_change: float = MAX_AREA_CHANGE,
     keep_centroids_wet: bool = True,
+    freeze_fixed_neighbours: bool = True,
     depths: np.ndarray | None = None,
     dt_floor_s: float | None = None,
 ) -> CoastFitResult:
@@ -254,6 +255,12 @@ def fit_boundary_to_coast(
         bound and the move improves it.
     keep_centroids_wet
         Reject a move that would put an incident element's centroid on land.
+    freeze_fixed_neighbours
+        Also hold still the boundary nodes edge-adjacent to a ``fixed`` node.
+        The open-boundary orthogonality gate leaves little headroom (worst
+        19.4 deg against a 20 deg limit on the certified mesh) and it is set by
+        the geometry right next to the OBC, which is an input.  Those few nodes
+        sit at the mouth, where the coastline carries the least information.
     depths, dt_floor_s
         Node depths and the external time step the mesh must keep.  Pulling a
         boundary node onto the coast can flatten a triangle, and the time step
@@ -287,6 +294,10 @@ def fit_boundary_to_coast(
     res.before = _stats(off0)
 
     frozen = set() if fixed is None else set(np.asarray(fixed).ravel().tolist())
+    if frozen and freeze_fixed_neighbours:
+        e = np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]])
+        touch = np.isin(e, list(frozen))
+        frozen |= set(e[touch[:, ::-1]].ravel().tolist())
     movable = np.array([i for i in ids if i not in frozen], dtype=np.int64)
     if movable.size == 0:
         res.after = res.before
