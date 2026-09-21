@@ -127,38 +127,59 @@ def test_recipe_rejects_duplicate_region_names(tmp_path):
 # --- pre-flight -------------------------------------------------------------
 
 def test_preflight_passes_and_reports_the_derived_width():
-    rep = preflight(_region(), gradation=GRAD, dt_floor_s=4.5, ambient_h_m=AMBIENT,
-                    depth_of=_flat_depth(4.0), land=None)
+    # 2 m of water is shallow enough that a 30 m target clears a 4.5 s floor.
+    rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_floor_s=4.5,
+                    ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=None)
     assert rep["transition_m"] == pytest.approx(1939.4, abs=0.1)
-    assert rep["dt_s"] == pytest.approx(30 / np.sqrt(9.81 * 4.0), rel=1e-9)
     assert rep["elements_core"] > 700
     assert rep["core_on_land"] == 0
 
 
+def test_preflight_reports_the_altitude_time_step_not_the_edge_one():
+    # The reported dt uses the minimum ALTITUDE (notebook 392), which for an
+    # equilateral cell is sqrt(3)/2 of the edge. Quoting the edge figure
+    # overstates the step by 15 % -- enough to clear a floor it does not meet.
+    rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_floor_s=4.0,
+                    ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=None)
+    edge = 30 / np.sqrt(9.81 * 2.0)
+    assert rep["dt_by_shortest_edge_s"] == pytest.approx(edge, rel=1e-9)
+    assert rep["dt_s"] == pytest.approx(np.sqrt(3) / 2 * edge, rel=1e-9)
+    assert rep["dt_s"] < rep["dt_by_shortest_edge_s"]
+
+
 def test_preflight_refuses_a_target_that_breaks_the_time_step():
-    # 30 m over 20 m of water allows 2.1 s, far below a 4.5 s floor.
+    # 30 m over 20 m of water allows 1.9 s by altitude, far below a 4.5 s floor.
     with pytest.raises(ValueError, match="allows dt"):
-        preflight(_region(), gradation=GRAD, dt_floor_s=4.5, ambient_h_m=AMBIENT,
-                  depth_of=_flat_depth(20.0), land=None)
+        preflight(_region(touch_coast=True), gradation=GRAD, dt_floor_s=4.5,
+                  ambient_h_m=AMBIENT, depth_of=_flat_depth(20.0), land=None)
+
+
+def test_preflight_refuses_the_futtsu_target_on_its_own_floor():
+    # 30 m over 4.15 m of water: 4.70 s by edge, 4.07 s by altitude. The first
+    # Futtsu recipe was accepted on the edge figure and fails on the real one.
+    with pytest.raises(ValueError, match="4.07 s by minimum altitude"):
+        preflight(_region(touch_coast=True), gradation=GRAD, dt_floor_s=4.5,
+                  ambient_h_m=AMBIENT, depth_of=_flat_depth(4.15), land=None)
 
 
 def test_preflight_names_the_largest_target_the_water_permits():
     with pytest.raises(ValueError) as exc:
-        preflight(_region(), gradation=GRAD, dt_floor_s=4.5, ambient_h_m=AMBIENT,
-                  depth_of=_flat_depth(20.0), land=None)
-    permitted = 4.5 * np.sqrt(9.81 * 20.0)
+        preflight(_region(touch_coast=True), gradation=GRAD, dt_floor_s=4.5,
+                  ambient_h_m=AMBIENT, depth_of=_flat_depth(20.0), land=None)
+    permitted = 4.5 * np.sqrt(9.81 * 20.0) / (np.sqrt(3) / 2)
     assert f"{permitted:.0f} m" in str(exc.value)
 
 
 def test_preflight_refuses_a_transition_too_short_for_the_gradation():
     with pytest.raises(ValueError, match="shorter than"):
-        preflight(_region(transition_m=500), gradation=GRAD, dt_floor_s=4.5,
-                  ambient_h_m=AMBIENT, depth_of=_flat_depth(4.0), land=None)
+        preflight(_region(transition_m=500, touch_coast=True), gradation=GRAD,
+                  dt_floor_s=4.5, ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=None)
 
 
 def test_preflight_accepts_a_transition_wider_than_required():
-    rep = preflight(_region(transition_m=3000), gradation=GRAD, dt_floor_s=4.5,
-                    ambient_h_m=AMBIENT, depth_of=_flat_depth(4.0), land=None)
+    rep = preflight(_region(transition_m=3000, touch_coast=True), gradation=GRAD,
+                    dt_floor_s=4.5, ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0),
+                    land=None)
     assert rep["transition_m"] == 3000
     assert rep["transition_required_m"] == pytest.approx(1939.4, abs=0.1)
 
@@ -167,17 +188,25 @@ def test_preflight_refuses_a_core_on_land_unless_asked():
     land = _land_north_of(35.3228)          # covers the northern half of the core
     with pytest.raises(ValueError, match="touch_coast"):
         preflight(_region(), gradation=GRAD, dt_floor_s=4.5, ambient_h_m=AMBIENT,
-                  depth_of=_flat_depth(4.0), land=land)
+                  depth_of=_flat_depth(2.0), land=land)
     rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_floor_s=4.5,
-                    ambient_h_m=AMBIENT, depth_of=_flat_depth(4.0), land=land)
+                    ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=land)
     assert rep["core_on_land"] > 0
+
+
+def test_preflight_requires_a_land_polygon_when_the_core_must_avoid_it():
+    # Passing land=None used to be a silent pass, which is the wrong default
+    # for a check whose whole purpose is to refuse.
+    with pytest.raises(ValueError, match="land polygon is required"):
+        preflight(_region(), gradation=GRAD, dt_floor_s=4.5, ambient_h_m=AMBIENT,
+                  depth_of=_flat_depth(2.0), land=None)
 
 
 def test_preflight_refuses_a_core_entirely_on_land():
     land = _land_north_of(35.0)
     with pytest.raises(ValueError, match="entirely on land"):
         preflight(_region(touch_coast=True), gradation=GRAD, dt_floor_s=4.5,
-                  ambient_h_m=AMBIENT, depth_of=_flat_depth(4.0), land=land)
+                  ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=land)
 
 
 # --- the frozen-region contract --------------------------------------------
@@ -203,3 +232,85 @@ def test_frozen_changes_catches_a_node_that_moved_outside_the_region():
 def test_frozen_changes_requires_matching_arrays():
     with pytest.raises(ValueError):
         frozen_changes(np.zeros((3, 2)), np.zeros((4, 2)), np.zeros(3, bool))
+
+
+# --- what the hole actually cuts -------------------------------------------
+
+def _strip(nx=12, ny=4, h=100.0):
+    """A regular right-triangle strip: a stand-in for a patch of real mesh."""
+    xs, ys = np.meshgrid(np.arange(nx + 1) * h, np.arange(ny + 1) * h, indexing="ij")
+    nodes = np.column_stack([xs.ravel(), ys.ravel()])
+
+    def nid(i, j):
+        return i * (ny + 1) + j
+
+    tri = []
+    for i in range(nx):
+        for j in range(ny):
+            tri.append([nid(i, j), nid(i + 1, j), nid(i + 1, j + 1)])
+            tri.append([nid(i, j), nid(i + 1, j + 1), nid(i, j + 1)])
+    return nodes, np.asarray(tri, dtype=np.int64)
+
+
+def test_hole_clearance_sees_a_footprint_that_reaches_the_boundary():
+    from shapely.geometry import Point
+
+    from fvcom_mesh_tools.refine import hole_clearance
+
+    nodes, tri = _strip()
+    # Centred on the strip, a 400 m footprint reaches the top and bottom edges.
+    rep = hole_clearance(nodes, tri, Point(600.0, 200.0).buffer(1.0),
+                         transition_m=400.0)
+    assert rep["n_selected"] > 0
+    assert rep["reaches_boundary"] is True
+    assert rep["n_physical_boundary_edges"] > 0
+
+
+def test_hole_clearance_reports_an_interior_footprint_as_clear():
+    from shapely.geometry import Point
+
+    from fvcom_mesh_tools.refine import hole_clearance
+
+    nodes, tri = _strip(nx=20, ny=20)
+    rep = hole_clearance(nodes, tri, Point(1000.0, 1000.0).buffer(1.0),
+                         transition_m=250.0)
+    assert rep["n_selected"] > 0
+    assert rep["reaches_boundary"] is False
+    assert rep["n_interface_edges"] == rep["n_rim_edges"]
+
+
+def test_hole_clearance_reports_the_reach_beyond_the_requested_envelope():
+    from shapely.geometry import Point
+
+    from fvcom_mesh_tools.refine import hole_clearance
+
+    nodes, tri = _strip(nx=20, ny=20)
+    rep = hole_clearance(nodes, tri, Point(1000.0, 1000.0).buffer(1.0),
+                         transition_m=250.0)
+    # Whole triangles are taken, so the selection always reaches past the
+    # analytic envelope; the caller needs the number, not a promise.
+    assert rep["selection_reach_m"] > rep["requested_reach_m"]
+
+
+def test_hole_clearance_flags_the_open_boundary():
+    from shapely.geometry import Point
+
+    from fvcom_mesh_tools.refine import hole_clearance
+
+    nodes, tri = _strip(nx=20, ny=20)
+    rep = hole_clearance(nodes, tri, Point(1000.0, 1000.0).buffer(1.0),
+                         transition_m=250.0, open_boundaries=[np.arange(0, 21)])
+    assert rep["reaches_open_boundary"] is False
+    near = hole_clearance(nodes, tri, Point(100.0, 100.0).buffer(1.0),
+                          transition_m=250.0, open_boundaries=[np.arange(0, 21)])
+    assert near["reaches_open_boundary"] is True
+    assert near["n_open_boundary_nodes"] > 0
+
+
+def test_frozen_changes_rejects_a_destroyed_coordinate():
+    # NaN fails every comparison, so a bare `moved > tol` passed this.
+    base = np.array([[0.0, 0.0], [1.0, 0.0]])
+    new = base.copy()
+    new[1, 0] = np.nan
+    with pytest.raises(ValueError, match="non-finite"):
+        frozen_changes(base, new, np.array([True, False]))

@@ -48,14 +48,24 @@ from fvcom_mesh_tools.sizing import _geometry, _keys, _positive
 
 __all__ = [
     "GRAVITY_M_S2",
+    "ALTITUDE_OVER_EDGE",
     "RefineRegion",
     "frozen_changes",
+    "hole_clearance",
     "load_refine",
     "preflight",
     "transition_width_m",
 ]
 
 GRAVITY_M_S2 = 9.81
+
+#: The reported time step uses the MINIMUM ALTITUDE of a triangle, not an edge
+#: (notebook 392, and coast_fit guards both).  For an equilateral triangle the
+#: altitude is sqrt(3)/2 of the edge, so a target edge length buys only 0.866
+#: of the dt a naive edge estimate suggests -- which is how a 30 m target over
+#: 4.15 m of water came to be advertised as 4.70 s when the honest figure is
+#: 4.07 s, below its own 4.5 s floor.
+ALTITUDE_OVER_EDGE = float(np.sqrt(3.0) / 2.0)
 
 
 def transition_width_m(target_h_m: float, ambient_h_m: float, gradation: float) -> float:
@@ -166,7 +176,14 @@ def preflight(
 
     ``depth_of(lon, lat)`` returns positive-down depths in metres (the same
     bathymetry the mesh will carry, floors already applied). ``land`` is the
-    land polygon in lon/lat; it is required when ``touch_coast`` is false.
+    land polygon in lon/lat; it is **required** when ``touch_coast`` is false,
+    and omitting it is an error rather than a silent pass.
+
+    This checks the CORE only. The hole the generator actually cuts is the
+    core plus its transition, which is several times larger, so a core clear
+    of land says nothing about the hole -- the first Futtsu recipe passed here
+    while its 2,239 m hole reached a coastline 1,014 m from the centre.
+    :func:`hole_clearance` is the test for that, and needs the mesh.
 
     Returns a report. Raises ``ValueError`` when the region cannot be built as
     declared -- a failure here costs a second, a failure after meshing costs
@@ -195,6 +212,10 @@ def preflight(
         raise ValueError(f"{region.name}: geometry contains no sample points")
     plon, plat = gx.ravel()[inside], gy.ravel()[inside]
 
+    if land is None and not region.touch_coast:
+        raise ValueError(
+            f"{region.name}: touch_coast is false, so a land polygon is required "
+            "to check it")
     on_land = np.zeros(plon.size, dtype=bool)
     if land is not None:
         on_land = shapely.contains(land, shapely.points(plon, plat))
@@ -210,13 +231,17 @@ def preflight(
     depth = np.asarray(depth_of(plon[wet], plat[wet]), dtype=float)
     if not np.isfinite(depth).all() or (depth <= 0).any():
         raise ValueError(f"{region.name}: depths must be finite and positive-down")
-    dt = region.target_h_m / np.sqrt(GRAVITY_M_S2 * depth.max())
+    c = np.sqrt(GRAVITY_M_S2 * depth.max())
+    dt_edge = region.target_h_m / c
+    dt = ALTITUDE_OVER_EDGE * dt_edge          # the measure that is reported
     if dt < dt_floor_s:
-        allowed = dt_floor_s * np.sqrt(GRAVITY_M_S2 * depth.max())
+        allowed = dt_floor_s * c / ALTITUDE_OVER_EDGE
         raise ValueError(
             f"{region.name}: target {region.target_h_m:g} m over {depth.max():.2f} m of "
-            f"water allows dt = {dt:.2f} s, below the floor {dt_floor_s:g} s; the "
-            f"smallest target this water permits is {allowed:.0f} m")
+            f"water allows dt = {dt:.2f} s by minimum altitude ({dt_edge:.2f} s by "
+            f"shortest edge), below the floor {dt_floor_s:g} s; the coarsest this water "
+            f"needs is {allowed:.0f} m. This assumes equilateral cells: a legal "
+            "30-30-120 triangle has half that altitude and allows half the step.")
 
     area = _to_metres(geom, lat0).area
     outer = _to_metres(geom.buffer(width / 111000.0), lat0).area
@@ -242,11 +267,68 @@ def preflight(
         "core_depth_min_m": float(depth.min()),
         "core_depth_max_m": float(depth.max()),
         "dt_s": float(dt),
+        "dt_by_shortest_edge_s": float(dt_edge),
+        "dt_measure": "minimum altitude of an equilateral cell / sqrt(g*Hmax)",
         "dt_floor_s": float(dt_floor_s),
         "elements_core": float(n_core),
         "elements_transition": float(n_trans),
         "elements_replaced": float(n_was),
         "elements_added": float(n_core + n_trans - n_was),
+    }
+
+
+def hole_clearance(nodes, elements, region, *, transition_m, open_boundaries=()):
+    """What the hole would actually cut, on the real mesh.
+
+    :func:`preflight` judges the core; the generator cuts core + transition,
+    which is several times larger. This selects the elements whose centroid
+    falls inside that footprint and reports what they touch -- the physical
+    boundary, the open boundary, and how far the selection reaches beyond the
+    analytic envelope, which it always does because whole triangles are taken.
+
+    ``nodes`` are in the mesh CRS (metres) and ``region`` is the geometry in
+    the same CRS. Returns a report; the caller decides what is acceptable.
+    """
+    import shapely
+
+    xy = np.asarray(nodes, dtype=float)[:, :2]
+    tri = np.asarray(elements, dtype=np.int64)
+    footprint = region.buffer(float(transition_m))
+    centroid = xy[tri].mean(axis=1)
+    inside = shapely.contains(footprint, shapely.points(centroid[:, 0], centroid[:, 1]))
+    sel = tri[inside]
+    if not len(sel):
+        return {"n_selected": 0, "reaches_boundary": False, "reaches_open_boundary": False}
+
+    e = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]), axis=1)
+    u, c = np.unique(e, axis=0, return_counts=True)
+    mesh_boundary = set(map(tuple, u[c == 1].tolist()))
+    es = np.sort(np.vstack([sel[:, [0, 1]], sel[:, [1, 2]], sel[:, [2, 0]]]), axis=1)
+    us, cs = np.unique(es, axis=0, return_counts=True)
+    rim = us[cs == 1]
+    physical = [tuple(x) for x in rim.tolist() if tuple(x) in mesh_boundary]
+    interface = [tuple(x) for x in rim.tolist() if tuple(x) not in mesh_boundary]
+    obc = set()
+    for seg in open_boundaries:
+        obc.update(np.asarray(seg, dtype=np.int64).ravel().tolist())
+    touched = set(np.unique(sel).tolist())
+    lengths = np.linalg.norm(xy[rim[:, 0]] - xy[rim[:, 1]], axis=1) if len(rim) else np.zeros(0)
+    reach = shapely.distance(
+        shapely.points(xy[np.unique(sel), 0], xy[np.unique(sel), 1]), region.centroid)
+    return {
+        "n_selected": int(inside.sum()),
+        "n_rim_edges": int(len(rim)),
+        "n_interface_edges": int(len(interface)),
+        "n_physical_boundary_edges": int(len(physical)),
+        "reaches_boundary": bool(physical),
+        "reaches_open_boundary": bool(touched & obc),
+        "n_open_boundary_nodes": int(len(touched & obc)),
+        "rim_edge_min_m": float(lengths.min()) if len(lengths) else 0.0,
+        "rim_edge_median_m": float(np.median(lengths)) if len(lengths) else 0.0,
+        "rim_edge_max_m": float(lengths.max()) if len(lengths) else 0.0,
+        "selection_reach_m": float(reach.max()) if len(reach) else 0.0,
+        "requested_reach_m": float(shapely.distance(region.centroid, region.boundary)
+                                   + transition_m),
     }
 
 
@@ -256,14 +338,25 @@ def frozen_changes(base_nodes, new_nodes, affected_mask, tol_m: float = 1e-6) ->
     ``affected_mask`` marks the nodes inside core + transition. Every other
     node must keep its coordinates; the count of those that did not is the
     number this contract is judged by.
+
+    This is a COORDINATE check on arrays in row correspondence, which only
+    holds while the node numbering is unchanged. A patch inserts and deletes
+    nodes and renumbers them, so the generator must supply an old-to-new node
+    map and this check must be applied through it -- and it is only one of the
+    invariants the contract needs: retained connectivity and orientation,
+    depths, boundary membership and order must be compared too.
     """
     a = np.asarray(base_nodes, dtype=float)[:, :2]
     b = np.asarray(new_nodes, dtype=float)[:, :2]
     mask = np.asarray(affected_mask, dtype=bool)
     if a.shape != b.shape or mask.shape[0] != a.shape[0]:
         raise ValueError("frozen check needs matching node arrays and a mask over them")
+    if not np.isfinite(b).all():
+        raise ValueError("the new coordinates contain non-finite values")
     moved = np.linalg.norm(b - a, axis=1)
     frozen = ~mask
+    # NaN fails every comparison, so `moved > tol` would pass a node whose
+    # coordinate was destroyed; the finiteness check above is what catches it.
     bad = frozen & (moved > tol_m)
     return {
         "n_frozen": int(frozen.sum()),
