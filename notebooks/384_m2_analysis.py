@@ -54,6 +54,49 @@ def harmonic_fit(t, z, period, trend=False):
     return amp, phase, coef
 
 
+def station_weights(xy, tri, station_xy, wet):
+    """Barycentric weights of each station inside its containing element.
+
+    The nearest WET NODE is not a fair sample: two meshes put their nearest
+    node in different places -- up to 1,062 m from the gauge in the Tokyo Bay
+    comparison -- so part of the difference between cases was just the
+    difference between two sampling points.  Interpolating inside the element
+    that contains the gauge samples both meshes at the SAME position.
+
+    Returns ``(node_ids, weights, distance_m)`` per station, where distance is
+    0 for a station inside the mesh and the nearest-node distance otherwise
+    (a station outside every element falls back to that node, weight 1).
+    """
+    p = xy[tri]
+    v0 = p[:, 1] - p[:, 0]
+    v1 = p[:, 2] - p[:, 0]
+    den = v0[:, 0] * v1[:, 1] - v1[:, 0] * v0[:, 1]
+    ids = np.zeros((len(station_xy), 3), dtype=int)
+    w = np.zeros((len(station_xy), 3))
+    dist = np.zeros(len(station_xy))
+    candidates = np.flatnonzero(wet)
+    tree = cKDTree(xy[candidates])
+    for k, sxy in enumerate(np.asarray(station_xy, float)):
+        v2 = sxy - p[:, 0]
+        b1 = (v2[:, 0] * v1[:, 1] - v1[:, 0] * v2[:, 1]) / den
+        b2 = (v0[:, 0] * v2[:, 1] - v2[:, 0] * v0[:, 1]) / den
+        b0 = 1.0 - b1 - b2
+        inside = (b0 >= -1e-9) & (b1 >= -1e-9) & (b2 >= -1e-9)
+        hit = np.flatnonzero(inside & wet[tri].all(axis=1))
+        if hit.size:
+            e = int(hit[0])
+            ids[k] = tri[e]
+            w[k] = [b0[e], b1[e], b2[e]]
+            dist[k] = 0.0
+        else:
+            d, local = tree.query(sxy)
+            node = int(candidates[local])
+            ids[k] = node
+            w[k] = [1.0, 0.0, 0.0]
+            dist[k] = float(d)
+    return ids, w, dist
+
+
 def phase_difference(a, b):
     return (np.asarray(a) - np.asarray(b) + 180) % 360 - 180
 
@@ -184,39 +227,77 @@ def analyze(run_root, output, figure):
                 t[select & (t < half)], z[select & (t < half)], manifest["period_seconds"]
             )
             a2, p2, _ = harmonic_fit(t[t >= half], z[t >= half], manifest["period_seconds"])
-            candidates = np.flatnonzero(wet)
-            if not len(candidates):
+            if not np.flatnonzero(wet).size:
                 raise ValueError("No nodes remain wet throughout the run")
-            dist, local = cKDTree(mesh["xy"][candidates]).query(station_xy)
-            nodes = candidates[local]
+            sids, sw, sdist = station_weights(mesh["xy"], mesh["tri"], station_xy, wet)
+            # Interpolate the harmonic COEFFICIENTS, not amplitude and phase:
+            # averaging phases across a node triple is meaningless near 0/360.
+            c_cos = (coef[1][sids] * sw).sum(axis=1)
+            c_sin = (coef[2][sids] * sw).sum(axis=1)
+            s_amp = np.hypot(c_cos, c_sin)
+            s_phase = np.degrees(np.arctan2(c_sin, c_cos)) % 360
+            s_mean = (coef[0][sids] * sw).sum(axis=1)
+            h1c = (a1[sids] * sw).sum(axis=1)
+            h2c = (a2[sids] * sw).sum(axis=1)
+            hp1 = (p1[sids] * sw).sum(axis=1)
+            hp2 = (p2[sids] * sw).sum(axis=1)
             lon, lat = ll.transform(mesh["xy"][:, 0], mesh["xy"][:, 1])
             maps[label] = (np.column_stack([lon, lat]), mesh["tri"], amp, phase)
-            for station, node, distance in zip(STATIONS, nodes, dist):
+            for k, (station, distance) in enumerate(zip(STATIONS, sdist)):
                 row = rows.setdefault(station, {"observed": manifest["gauges"][station]})
                 obs = row["observed"]
                 row[label] = dict(
-                    node_id=int(node + 1),
+                    node_id=int(sids[k, 0] + 1),
+                    element_nodes=[int(n + 1) for n in sids[k]],
+                    element_weights=[float(v) for v in sw[k]],
+                    interpolated=bool(distance == 0.0),
                     distance_m=float(distance),
-                    node_lon=float(lon[node]),
-                    node_lat=float(lat[node]),
-                    amplitude_m=float(amp[node]),
-                    phase_deg=float(phase[node]),
-                    amplitude_minus_observed_m=float(amp[node] - obs["amplitude_m"]),
-                    phase_minus_observed_deg=float(phase_difference(phase[node], obs["phase_deg"])),
-                    half_window_amplitude_change_m=float(a2[node] - a1[node]),
-                    half_window_phase_change_deg=float(phase_difference(p2[node], p1[node])),
-                    mean_m=float(coef[0, node]),
+                    node_lon=float(lon[sids[k, 0]]),
+                    node_lat=float(lat[sids[k, 0]]),
+                    amplitude_m=float(s_amp[k]),
+                    phase_deg=float(s_phase[k]),
+                    amplitude_minus_observed_m=float(s_amp[k] - obs["amplitude_m"]),
+                    phase_minus_observed_deg=float(
+                        phase_difference(s_phase[k], obs["phase_deg"])),
+                    half_window_amplitude_change_m=float(h2c[k] - h1c[k]),
+                    half_window_phase_change_deg=float(phase_difference(hp2[k], hp1[k])),
+                    mean_m=float(s_mean[k]),
                 )
         except (ValueError, OSError, KeyError) as exc:
             health.setdefault(label, {}).update(error=str(exc), complete_pass=False)
+    # SPIN-UP GATE.  The M2 response approaches steady state slowly (e-folding
+    # ~3.8 days in Tokyo Bay), so a harmonic fit over a window that is still
+    # growing reports a transient average, not an M2 constant -- which is how
+    # job 115305's 11-day run came to understate every amplitude.  The two
+    # halves of the analysis window must agree.
+    TOL_M = 0.002
+    convergence = {}
+    for label in maps:
+        changes = [abs(rows[s2][label]["half_window_amplitude_change_m"])
+                   for s2 in rows if label in rows[s2]]
+        worst = max(changes) if changes else float("nan")
+        converged = bool(changes) and worst < TOL_M
+        convergence[label] = {
+            "max_half_window_amplitude_change_m": worst,
+            "tolerance_m": TOL_M,
+            "converged": converged,
+        }
+        print(f"[384] {label}: half-window amplitude change {worst * 1000:.2f} mm "
+              f"({'converged' if converged else 'NOT CONVERGED -- integrate longer'})",
+              flush=True)
+
     report = dict(
         design=manifest,
         health=health,
+        spinup=convergence,
         stations=rows,
         caveats=[
             "Published harmonics are observational references, not contemporaneous measurements.",
             "No equivalence tolerance supplied; report differences without a match verdict.",
             "B_m7001: depths rebuilt from M7001 by A's recipe, not interpolated from A.",
+            "Stations are interpolated inside the containing element, so every case "
+            "is sampled at the gauge position rather than at its own nearest node.",
+            "Trust the constants only where spinup.converged is true.",
         ],
     )
     if len(maps) == 3:
@@ -244,14 +325,30 @@ def analyze(run_root, output, figure):
     print(json.dumps(clean(health), indent=2, allow_nan=False), flush=True)
     if len(maps) != 3:
         raise RuntimeError("Incomplete or unhealthy run(s); see comparison.json and FVCOM logs")
-    table = ["station,case,node,distance_m,M2_m,phase_deg,delta_obs_m,delta_obs_deg"]
+    # A gauge that sits OUTSIDE the mesh gets the nearest wet node instead, and
+    # two meshes put that node in different places -- so at those stations the
+    # A/B difference is partly the difference between two sampling points, not
+    # between two meshes.  Say so rather than letting the number stand alone.
+    outside = sorted({s2 for s2 in rows for label in LABELS
+                      if label in rows[s2] and not rows[s2][label]["interpolated"]})
+    if outside:
+        print(f"[384] {len(outside)} of {len(rows)} gauges lie OUTSIDE the mesh and are "
+              f"sampled at a nearby node, not at the gauge: {', '.join(outside)}",
+              flush=True)
+        for s2 in outside:
+            d = {label: rows[s2][label]["distance_m"] for label in LABELS if label in rows[s2]}
+            print("[384]   " + s2 + ": " + ", ".join(f"{k} {v:.0f} m" for k, v in d.items()),
+                  flush=True)
+
+    table = ["station,case,node,distance_m,in_mesh,M2_m,phase_deg,delta_obs_m,delta_obs_deg"]
     for s, row in rows.items():
         obs = row["observed"]
-        table.append(f"{s},observed,,,{obs['amplitude_m']:.6f},{obs['phase_deg']:.6f},0,0")
+        table.append(f"{s},observed,,,,{obs['amplitude_m']:.6f},{obs['phase_deg']:.6f},0,0")
         for label in LABELS:
             r = row[label]
             table.append(
                 f"{s},{label},{r['node_id']},{r['distance_m']:.1f},"
+                f"{'yes' if r['interpolated'] else 'no'},"
                 f"{r['amplitude_m']:.6f},{r['phase_deg']:.6f},"
                 f"{r['amplitude_minus_observed_m']:.6f},{r['phase_minus_observed_deg']:.6f}"
             )

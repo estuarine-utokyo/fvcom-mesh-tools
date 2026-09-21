@@ -1,9 +1,9 @@
 #!/bin/bash
-#PBS -q OCT-S
+#PBS -q OCT
 #PBS --group=G16445
-#PBS -l cpunum_job=48
-#PBS -l memsz_job=144GB
-#PBS -l elapstim_req=02:00:00
+#PBS -l cpunum_job=192
+#PBS -l memsz_job=360GB
+#PBS -l elapstim_req=03:00:00
 #PBS -N fmesh_410
 #PBS -j o
 #PBS -o logs/410_m2_optimised.pbs.log
@@ -16,6 +16,7 @@
 #             by A's own recipe (isolates the mesh from the depth source)
 # The previous round (job 6203xxx, certified 3,393-node mesh) gave
 # B_own - A = +0.006 to +0.009 m in M2 amplitude and -0.3 to -0.4 deg in phase.
+# 20-day integration; the analysis fits the last 5 days.
 # Submit from the fvcom-mesh-tools repository root:
 #   qsub jobs/octopus/410_m2_optimised.sh
 set -euo pipefail
@@ -69,11 +70,15 @@ ldd "$FVCOM"
 sha256sum "$FVCOM"
 # The three integrations are independent, so run them CONCURRENTLY: wall time
 # is one case, not three.  8 ranks each is the count every previous run used;
-# 3 x 8 = 24 of the 48 requested cores.  RANKS can be raised (RANKS*3 <= 48)
-# but the mesh manifest warns that some decomposition counts have produced
-# NON FINITE VALUE, so a new count wants a throwaway run first.
+# 64 ranks each, 3 x 64 = 192 cores: half of a 128-core CPU per case, the
+# owner's production choice scaled from GENKAI's 120-core node.  That needs the
+# OCT queue -- OCT-S caps a request at 64 cores (O1SS) / 128 (O1S), OCT reaches
+# 256 (probe job 115306: cpunum_job IS a core count, the node is shared, and
+# the requested cores are pinned across both sockets).
+# A rank count that diverges is a halo-exchange bug, not a reason to avoid the
+# count (owner 2026-09-21); report it rather than working around it.
 status=0
-RANKS=${FMESH_RANKS:-8}
+RANKS=${FMESH_RANKS:-64}
 echo "running 3 cases concurrently at $RANKS ranks each $(date -Is)"
 pids=()
 for case in A B_own B_m7001; do

@@ -39,12 +39,18 @@ DEFAULT_B_MESH = ROOT / "outputs/sample_repro/sample_repro_final.14"
 # first promoting it into the repository (--mesh).
 B_MESH = DEFAULT_B_MESH
 TEMPLATE = FV / "Tests/PrecipEvap/run/out_pe_rain/pe_rain_run.nml"
+# The bay's M2 response approaches its steady state with an e-folding time of
+# about 3.8 days (measured on job 115305: the amplitude at HARUMI was still
+# climbing 0.406 -> 0.447 m between day 6 and day 10).  The earlier 11-day run
+# therefore reported a harmonic fit over a GROWING transient, not an M2
+# constant.  20 days leaves a residual of exp(-20/3.8) = 0.5 %, and the
+# analysis fits the last 5 days.
 START = "2021-01-01 00:00:00"
-END = "2021-01-12 00:00:00"
+END = "2021-01-21 00:00:00"
 DTE = 5.0  # TB-FVCOM production EXTSTEP_SECONDS; implied dt >= 15.4 s for all meshes
 ISPLIT = 10
-SPINUP = 3 * 86400
-DURATION = 11 * 86400
+SPINUP = 15 * 86400
+DURATION = 20 * 86400
 STATIONS = ("TOKYO-SIBAURA", "HARUMI", "TIBA-TIBA LIGHT", "SINKO", "YOKOSUKA")
 
 
