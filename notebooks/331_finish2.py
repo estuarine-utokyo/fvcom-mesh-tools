@@ -88,6 +88,30 @@ if _eds:
               flush=True)
 with open("outputs/sample_repro/widen_ops.json", "w") as _f:
     _json.dump(_wops, _f)
+# COASTLINE FIT (owner 2026-09-21: "the mesh shoreline is visibly off the OSM
+# coastline where a human could place it by eye").  DistMesh only projects a
+# point back when it has stepped OUTSIDE the domain, so a boundary node that
+# stopped just inside is never pulled to the coast; the mesh shoreline then
+# zig-zags across the real one (measured: median 10 m, p90 84 m, 32 % of the
+# boundary nodes on the land side).  This pass moves those nodes onto the
+# polygon the generator was given, under the C1/C2/C4 gates plus a time-step
+# floor, and changes no topology.
+if os.environ.get("SR_COAST_FIT", "on") != "off":
+    import numpy as _np
+
+    from fvcom_mesh_tools.coast_fit import fit_boundary_to_coast
+
+    _obc = (_np.concatenate([_np.asarray(s, int).ravel()
+                             for s in mesh.open_boundaries])
+            if mesh.open_boundaries else _np.empty(0, int))
+    _cf = fit_boundary_to_coast(mesh.nodes, mesh.elements, _land_utm,
+                                fixed=_obc, depths=mesh.depths)
+    mesh.nodes[:, :2] = _cf.nodes[:, :2]
+    print(f"[fin] {_cf.summary()}", flush=True)
+    with open("outputs/sample_repro/coast_fit.json", "w") as _f:
+        _json.dump(_cf.to_dict(), _f, indent=1)
+else:
+    print("[fin] coast fit: OFF", flush=True)
 for k, v in info.items():
     print(f"[fin] {k}: {v}", flush=True)
 write_fort14(mesh, DST)
