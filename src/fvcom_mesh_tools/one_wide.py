@@ -1,8 +1,8 @@
 """Single policy switch for width-based channel enforcement.
 
 ``forbid`` preserves the certified chain (including its connectivity exceptions).
-``allow`` permits one row; it is not a claim that a mesh passes QA.
-Environment overrides the recipe. Legacy tuning knobs apply only in forbid mode.
+``allow`` permits one row only for port and dead-end policy records. QA still applies.
+Environment overrides the recipe. Canal and through records retain the legacy row baseline.
 """
 from __future__ import annotations
 
@@ -21,14 +21,14 @@ def configured_one_wide(recipe=None, *, environ=None):
 
 
 def generation_options(one_wide, *, environ=None):
-    """Resolve row knobs together so legacy overrides cannot contradict allow."""
+    """Resolve global sizing and the baseline for canal/through treatment."""
     env = os.environ if environ is None else environ
     allow = parse_one_wide(one_wide) == "allow"
     return dict(
         feature_rows=1.0 if allow else float(env.get("SR_FS", 3.0)),
         min_rows=1 if allow else 2,
-        widen_factor=1.0 if allow else float(env.get("SR_WIDEN_FACTOR", "0.875")),
-        attain_bar_h=0.0 if allow else float(env.get("SR_ATTAIN_BAR", "1.5")),
+        widen_factor=float(env.get("SR_WIDEN_FACTOR", "0.875")),
+        attain_bar_h=float(env.get("SR_ATTAIN_BAR", "1.5")),
         force_two_rows=False if allow else env.get("SR_FORCE2ROWS", "off") == "on",
     )
 

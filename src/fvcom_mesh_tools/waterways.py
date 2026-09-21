@@ -685,11 +685,9 @@ def apply_waterway_policy(
     decision stays visible."""
     from fvcom_mesh_tools.one_wide import parse_one_wide
     allow = parse_one_wide(one_wide) == "allow"
-    if allow:
-        widen_rows, widen_factor, attain_bar_h = 1.0, 1.0, 0.0
-        branch_floor_frac = thin_close_w_h = 0.0
-        force_two_rows = close_blocked = False
-    # Allow disables width-only closure; basin selection and barrier guards remain.
+    defaults = (widen_rows, widen_factor, attain_bar_h, branch_floor_frac,
+                thin_close_w_h, force_two_rows, close_blocked)
+    # Only terminating records may bypass width-only enforcement.
     new_land = land_union
     info = {"kept": 0, "closed": 0, "ignored": 0, "blocked": [],
             "retried": 0, "bridges_opened": 0, "stub_fills": 0,
@@ -711,7 +709,9 @@ def apply_waterway_policy(
     wtree_g = STRtree(wlist) if wlist else None
 
     def _carve(base, arc, widths, tol_extra_m=0.0,
-               attain_bar_h=attain_bar_h):
+               attain_bar_h=None):
+        if attain_bar_h is None:
+            attain_bar_h = record_attain_bar_h
         w_nat = np.asarray(widths, float)
         target = widen_factor * widen_rows * (
             h_mesh_m + h_grade_per_m * w_nat / 2.0)
@@ -793,6 +793,18 @@ def apply_waterway_policy(
         return hit[0] != hit[1]
 
     for rec in records:
+        # Consume the policy classification; do not infer topology from the arc.
+        allow = one_wide == "allow" and rec["kind"] in ("port", "dead-end")
+        (widen_rows, widen_factor, record_attain_bar_h, branch_floor_frac,
+         thin_close_w_h, force_two_rows, close_blocked) = defaults
+        if allow:
+            widen_rows, widen_factor, record_attain_bar_h = 1.0, 1.0, 0.0
+            branch_floor_frac = thin_close_w_h = 0.0
+            force_two_rows = close_blocked = False
+        elif one_wide == "allow":
+            widen_rows = max(2.0, widen_rows)
+            force_two_rows = False  # This policy adds no fixed points.
+        refine_start = len(info["refine_arcs"])
         if rec["action"] == "ignore":
             info["ignored"] += 1
         elif rec["action"] == "close":
@@ -1246,6 +1258,9 @@ def apply_waterway_policy(
             if n_stub:
                 rec["stub_fills"] = n_stub
                 info["stub_fills"] += n_stub
+        if one_wide == "allow":
+            info.setdefault("refine_min_rows", []).extend(
+                [1 if allow else 2] * (len(info["refine_arcs"]) - refine_start))
         if rec["action"] == "blocked":
             info["blocked"].append(rec)
     if fills:

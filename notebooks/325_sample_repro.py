@@ -574,11 +574,13 @@ if (os.environ.get("SR_CH_REFINE", "off") == "on"
     _DT_FLOOR = 15.0        # global implied dt is 12.0 s; the
     #                         margin absorbs sub-target edges
     _n_low = 0
-    for _ra, _rw in _winfo["refine_arcs"]:
+    for _ri, (_ra, _rw) in enumerate(_winfo["refine_arcs"]):
         _ra = np.asarray(_ra, float)
         _rw = np.asarray(_rw, float)
+        _min_rows = (_winfo["refine_min_rows"][_ri] if ONE_WIDE == "allow"
+                     else _row_options["min_rows"])
         _nrow = np.clip(np.ceil(_rw / (1.2 * H0) - 0.15),
-                        _row_options["min_rows"], 4)
+                        _min_rows, 4)
         _tf = np.clip(_rw / (1.2 * _nrow), 0.5 * H0, H0)
         _do = (_tf < H0 - 1.0) & (_rw < 3.2 * 1.2 * H0)
         if not bool(_do.any()):

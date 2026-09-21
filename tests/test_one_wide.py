@@ -31,7 +31,7 @@ def test_sources_and_knobs():
         attain_bar_h=1.5, force_two_rows=False)
     assert generation_options('allow', environ={'SR_FS': '9', 'SR_FORCE2ROWS': 'on',
                               'SR_ATTAIN_BAR': '9', 'SR_WIDEN_FACTOR': '9'}) == dict(
-        feature_rows=1., min_rows=1, widen_factor=1., attain_bar_h=0., force_two_rows=False)
+        feature_rows=1., min_rows=1, widen_factor=9., attain_bar_h=9., force_two_rows=False)
 
 
 def test_recipe(tmp_path):
@@ -91,14 +91,14 @@ def test_allow_geometry_and_normalization():
                            one_wide='allow', min_resolve_width_frac=10, **kw)
     assert any(r['action'] == 'keep' for r in recs)
     allowed, ai = apply_waterway_policy(land, domain, recs, one_wide='allow',
-                                      force_two_rows=True, attain_bar_h=10, **kw)
+                                      force_two_rows=True, **kw)
     assert ai['kept'] and not ai['band_n']
     recs = detect_waterways(land, domain, obc_point=(1000, 5000), **kw)
     default, di = apply_waterway_policy(land, domain, recs, **kw)
     recs = detect_waterways(land, domain, obc_point=(1000, 5000), one_wide='forbid', **kw)
     forbid, fi = apply_waterway_policy(land, domain, recs, one_wide='forbid', **kw)
     assert default.equals_exact(forbid, 0)
-    assert allowed.area > forbid.area  # one-row target removes less land
+    assert allowed.wkb == forbid.wkb  # THROUGH treatment is unchanged
     fills, info = normalize_unresolved_water(
         allowed, domain, obc_point=(1000, 5000), one_wide='allow', **kw)
     assert not fills and info['area_filled_ha'] == 0
@@ -146,3 +146,38 @@ def test_finish_width_operators(monkeypatch, mode, expected):
     monkeypatch.setattr(f, 'widen_choke_sections', widen)
     result, _ = f.finish_obc_mesh(mesh, one_wide=mode, land_union=object())
     assert result is mesh and calls == expected
+
+
+@pytest.mark.parametrize("mode", ["allow", "forbid"])
+@pytest.mark.parametrize("kind,rows", [("through", 2), ("canal", 2),
+                                      ("dead-end", 1), ("port", 1)])
+def test_row_treatment_uses_policy_classification(mode, kind, rows, monkeypatch):
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+
+    from fvcom_mesh_tools import waterways as ww
+
+    domain = box(0, 0, 20000, 10000)
+    land = unary_union([box(8000, 2000, 12000, 4850),
+                        box(8000, 5150, 12000, 8000)])
+    kw = dict(h_mesh_m=350., metric_scale=(1., 1.))
+    records = ww.detect_waterways(land, domain, obc_point=(1000, 5000), **kw)
+    assert any(r['action'] == 'keep' for r in records)
+    # Identical geometry, deliberately different policy labels: the consumer
+    # must use the record rather than perform another connectivity test.
+    for rec in records:
+        rec['kind'] = kind
+    monkeypatch.setattr(ww, 'detect_waterways', lambda *a, **k: pytest.fail('reclassified'))
+    _, info = ww.apply_waterway_policy(land, domain, records, one_wide=mode,
+                                       force_two_rows=mode == 'allow', **kw)
+    kept = [r for r in records if r['action'] == 'keep']
+    assert kept
+    if mode == 'allow':
+        assert info['refine_min_rows']
+        assert set(info['refine_min_rows']) == {rows}
+    else:
+        rows = 2
+        assert 'refine_min_rows' not in info
+    assert info['band_n'] == 0
+    widths = np.concatenate([w for r in kept for _, w in r['arcs_done']])
+    assert widths.min() == pytest.approx(rows * kw['h_mesh_m'])
