@@ -53,6 +53,7 @@ import numpy as np
 from fvcom_mesh_tools.sizing import _geometry, _keys, _positive
 
 __all__ = [
+    "COASTLINE_MODES",
     "GRAVITY_M_S2",
     "ALTITUDE_OVER_EDGE",
     "depths_from_base",
@@ -63,6 +64,27 @@ __all__ = [
     "preflight",
     "transition_width_m",
 ]
+
+#: How the coastline inside the hole is treated.  The hole reaches the coast
+#: whenever the transition does, which is normal and not a reason to refuse:
+#: the coastline is simply meshed at the target size like any other boundary.
+#: What differs is where the new boundary nodes are placed.
+#:
+#: ``preserve``  on the existing segments only.  The polyline is geometrically
+#:               identical -- subdividing a segment does not move it.
+#: ``resample``  along the SOURCE shoreline at the target size.  This is the
+#:               default because it is the only one that improves fidelity:
+#:               the base polyline is 300-600 m between nodes and sits up to
+#:               68.5 m from the real coast at its segment midpoints, and a
+#:               30 m resample recovers that for free where we are refining
+#:               anyway.
+#: ``spline``    a smooth resample of the base polyline, for when there is no
+#:               usable source shoreline.  It eases a sharp corner but adds no
+#:               information.
+#:
+#: Every mode is bounded by ``coastline_tolerance_m`` against the base
+#: polyline, and none of them touches the coastline outside the hole.
+COASTLINE_MODES = ("preserve", "resample", "spline")
 
 GRAVITY_M_S2 = 9.81
 
@@ -87,7 +109,7 @@ class RefineRegion:
 
     def __init__(self, spec: dict[str, Any]):
         _keys(spec, ["name", "geometry", "target_h_m"],
-              ["transition_m", "priority", "touch_coast"])
+              ["transition_m", "priority"])
         name = spec["name"]
         if not isinstance(name, str) or not name.strip():
             raise ValueError("region name must be a nonempty string")
@@ -102,10 +124,6 @@ class RefineRegion:
                 or not np.isfinite(priority):
             raise ValueError("priority must be finite numeric")
         self.priority = float(priority)
-        touch = spec.get("touch_coast", False)
-        if not isinstance(touch, bool):
-            raise ValueError("touch_coast must be true or false")
-        self.touch_coast = touch
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<RefineRegion {self.name} target={self.target_h_m:g} m>"
@@ -117,13 +135,14 @@ def load_refine(path) -> dict[str, Any]:
     Schema (unknown keys are errors)::
 
         base_mesh: outputs/.../sample_repro_final.14
-        dt_expected_s: 4.5      # advisory: an alert, not a veto
+        dt_expected_s: 4.5            # advisory: an alert, not a veto
         gradation: 0.165
+        coastline: resample           # preserve | resample | spline
+        coastline_tolerance_m: 100    # max departure from the base polyline
         refine:
           - name: futtsu_nori
             geometry: {circle: {center: [139.7881, 35.3228], radius_m: 300}}
             target_h_m: 30
-            touch_coast: false
             priority: 0
     """
     import yaml
@@ -143,7 +162,8 @@ def load_refine(path) -> dict[str, Any]:
     UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
     with Path(path).resolve().open() as stream:
         cfg = yaml.load(stream, Loader=UniqueLoader)
-    _keys(cfg, ["base_mesh", "dt_expected_s", "gradation", "refine"])
+    _keys(cfg, ["base_mesh", "dt_expected_s", "gradation", "refine"],
+          ["coastline", "coastline_tolerance_m"])
     base = Path(cfg["base_mesh"])
     if not base.is_absolute():
         base = (Path(path).resolve().parent / base).resolve()
@@ -152,6 +172,11 @@ def load_refine(path) -> dict[str, Any]:
     cfg["base_mesh"] = base
     cfg["dt_expected_s"] = _positive(cfg["dt_expected_s"], "dt_expected_s")
     cfg["gradation"] = _positive(cfg["gradation"], "gradation")
+    mode = cfg.setdefault("coastline", "resample")
+    if mode not in COASTLINE_MODES:
+        raise ValueError(f"coastline must be one of {COASTLINE_MODES}, got {mode!r}")
+    cfg["coastline_tolerance_m"] = _positive(
+        cfg.get("coastline_tolerance_m", 100.0), "coastline_tolerance_m")
     if not isinstance(cfg["refine"], list) or not cfg["refine"]:
         raise ValueError("refine must be a nonempty list")
     regions = [RefineRegion(r) for r in cfg["refine"]]
@@ -182,15 +207,15 @@ def preflight(
     """Decide whether a region can be met, before any meshing happens.
 
     ``depth_of(lon, lat)`` returns positive-down depths in metres (the same
-    bathymetry the mesh will carry, floors already applied). ``land`` is the
-    land polygon in lon/lat; it is **required** when ``touch_coast`` is false,
-    and omitting it is an error rather than a silent pass.
+    bathymetry the mesh will carry). ``land`` is the land polygon in lon/lat;
+    when given, the report says how much of the core is dry.
 
-    This checks the CORE only. The hole the generator actually cuts is the
-    core plus its transition, which is several times larger, so a core clear
-    of land says nothing about the hole -- the first Futtsu recipe passed here
-    while its 2,239 m hole reached a coastline 1,014 m from the centre.
-    :func:`hole_clearance` is the test for that, and needs the mesh.
+    This looks at the CORE only. The hole the generator cuts is the core plus
+    its transition, several times larger, and it commonly reaches the coast --
+    the Futtsu core clears land by 714 m while its 2,239 m hole overlaps the
+    coastline by 1,225 m. That is normal: the coastline is meshed at the target
+    size like any other boundary, under the recipe's ``coastline`` mode.
+    :func:`hole_clearance` measures what the hole actually touches.
 
     Returns a report. ``ValueError`` is reserved for a region that cannot be
     built at all -- an empty or wholly dry geometry, a transition too short for
@@ -221,18 +246,17 @@ def preflight(
         raise ValueError(f"{region.name}: geometry contains no sample points")
     plon, plat = gx.ravel()[inside], gy.ravel()[inside]
 
-    if land is None and not region.touch_coast:
-        raise ValueError(
-            f"{region.name}: touch_coast is false, so a land polygon is required "
-            "to check it")
     on_land = np.zeros(plon.size, dtype=bool)
+    land_alert = None
     if land is not None:
         on_land = shapely.contains(land, shapely.points(plon, plat))
-        if not region.touch_coast and on_land.any():
-            raise ValueError(
-                f"{region.name}: {int(on_land.sum())} of {plon.size} core samples are on "
-                "land and touch_coast is false; move the region, shrink it, or set "
-                "touch_coast: true to remesh the coastline inside it")
+        if on_land.any():
+            # The region is given, so a dry patch of it is news, not grounds
+            # for refusal -- unless there is no water at all to mesh.
+            land_alert = (
+                f"{region.name}: {int(on_land.sum())} of {plon.size} core samples "
+                f"({100 * on_land.mean():.0f} %) are on land; the core will be meshed "
+                "only where there is water")
     wet = ~on_land
     if not wet.any():
         raise ValueError(f"{region.name}: the core is entirely on land")
@@ -282,6 +306,7 @@ def preflight(
         "dt_measure": "minimum altitude of an equilateral cell / sqrt(g*Hmax)",
         "dt_expected_s": float(dt_expected_s),
         "dt_alert": alert,
+        "land_alert": land_alert,
         "dt_step_cost_factor": float(dt_expected_s / dt) if dt > 0 else float("inf"),
         "elements_core": float(n_core),
         "elements_transition": float(n_trans),

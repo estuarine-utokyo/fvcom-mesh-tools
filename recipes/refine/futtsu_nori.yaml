@@ -4,16 +4,20 @@
 # largest connected patch of water shallower than 1.5 m (T.P.) off Futtsu --
 # 4.02 km2, lon 139.768-139.821, lat 35.304-35.331 -- and this point lies
 # 654 m north of its edge, in 3.0-4.11 m of water, with the whole 300 m core
-# clear of land.  At 30 m that water allows dt = 4.72 s against the 4.5 s
-# floor; the nearby shallower sites reach 4.88 s but sit on the flat itself.
+# clear of land.  The transition does reach the coast -- it overlaps it by
+# 1,225 m -- which is normal: the coastline there is meshed at the target size
+# under `coastline: resample`, and the coastline outside the hole is untouched.
+# At 30 m this water allows dt = 4.07 s by minimum altitude against the 4.5 s
+# expected, which raises an alert and does not stop the run.
 base_mesh: ../../outputs/verify_409.115302/fit/sample_repro_final.14
-dt_expected_s: 4.5      # advisory: an alert, not a veto
+dt_expected_s: 4.5            # advisory: an alert, not a veto
 gradation: 0.165
+coastline: resample           # follow the source shoreline at the target size
+coastline_tolerance_m: 100    # max departure from the base polyline
 
 refine:
   - name: futtsu_nori
     geometry:
       circle: {center: [139.7881, 35.3228], radius_m: 300}
-    target_h_m: 30        # achieved edge length, as elsewhere in the chain
-    touch_coast: false    # keep the core off the coastline for this first run
+    target_h_m: 30            # achieved edge length, as elsewhere in the chain
     priority: 0

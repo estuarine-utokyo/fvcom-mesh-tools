@@ -1,7 +1,7 @@
 # Local refinement of an existing mesh — design
 
-**Status: specification implemented, generator NOT designed to a buildable
-state, first worked example REJECTED by its own rules.** This document is
+**Status: specification implemented and the first worked example buildable;
+the generator is designed but not written.** This document is
 revised as the design moves, and records the decisions and their reasons so
 that a later change is made knowingly rather than by accident.
 
@@ -15,7 +15,7 @@ factual errors and records what the review showed is still missing.
 
 | claim in revision 1 | what is true |
 |---|---|
-| the Futtsu recipe is eligible | its hole reaches the coast: the centre is **1,014 m** from the land boundary and the hole has a 2,239 m radius. `touch_coast: false` must reject it |
+| the Futtsu recipe is eligible | it is — but not for the reason given. Only the **core** was checked against land. The hole is 2,239 m and overlaps the coastline by 1,225 m; the `touch_coast: false` rule wrongly made that a refusal, when meshing a coastline at the target size is ordinary work (revision 3 replaces the flag with a `coastline` mode) |
 | the region allows dt = 4.70 s | that is the **shortest-edge** figure. The reported measure is minimum altitude: **4.07 s**, below its own 4.5 s floor |
 | the base mesh carries production depths | it does not: min 2.00 m (not the 3 m floor), max 735.3 m (not the 300 m cap), 2,258 edges above r = 0.2 |
 | `pfix` constrains the rim | `pfix` fixes positions only. Segments need `egfix`, which is what drives the CDT (`mesh_generator.py:1077`) |
@@ -169,15 +169,16 @@ specification belongs in a file.
 
 ```yaml
 base_mesh: ../../outputs/verify_409.115302/fit/sample_repro_final.14
-dt_expected_s: 4.5      # advisory: an alert, not a veto
+dt_expected_s: 4.5            # advisory: an alert, not a veto
 gradation: 0.165
+coastline: resample           # preserve | resample | spline
+coastline_tolerance_m: 100    # max departure from the base polyline
 
 refine:
   - name: futtsu_nori
     geometry:
       circle: {center: [139.7881, 35.3228], radius_m: 300}
-    target_h_m: 30        # achieved edge length, as elsewhere in the chain
-    touch_coast: false
+    target_h_m: 30            # achieved edge length, as elsewhere in the chain
     priority: 0
 ```
 
@@ -192,7 +193,8 @@ refine:
 | `refine[].geometry` | `circle`, `bbox` or GeoJSON `Polygon`, all lon/lat |
 | `refine[].target_h_m` | **achieved** edge length, matching `SR_H_TARGET=achieved` |
 | `refine[].transition_m` | optional; derived when absent, checked when present |
-| `refine[].touch_coast` | may the core overlap land? default `false` |
+| `coastline` | `preserve`, `resample` (default) or `spline`; see below |
+| `coastline_tolerance_m` | max departure from the base polyline, default 100 m |
 | `refine[].priority` | higher wins an overlap; ties take the smaller target |
 
 Unknown keys, non-finite values and invalid geometry are errors.
@@ -206,13 +208,49 @@ boundary — a fishery-right polygon read from GeoJSON or a shapefile — is mor
 reproducible than typed coordinates; **reading geometry from a file is not yet
 implemented** and is the first extension to make.
 
-### `touch_coast`
+### The coastline inside the hole
 
-When false, a core overlapping land is refused. When true, the coastline
-inside the patch is re-cut at the target size. That improves shoreline
-fidelity where it matters most, but it changes the land-boundary node list, so
-the frozen guarantee then covers only the water boundary away from the patch.
-**Default false**, because it keeps the first runs simple to verify.
+The hole reaches the coast whenever the **transition** does, and that is
+normal — the core need not go anywhere near land. Measured on Futtsu: the core
+clears the coastline by 714 m while the 2,239 m hole overlaps it by 1,225 m,
+picking up 12 coastline edges (4,236 m, lengths 180 / 321 / 597 m). This is
+not a reason to refuse anything; the coastline there is simply meshed at the
+target size, as any boundary is.
+
+What has to be decided is **where the new boundary nodes go**. Keeping the
+existing boundary node list is not an option: a 30 m cell against an untouched
+597 m boundary edge would need its apex 172 m away, so it cannot be 30 m, and
+the coarse boundary row would break C4 against the fine cells behind it.
+
+| mode | where new nodes go | the sharp corner | fidelity to the real coast |
+|---|---|---|---|
+| `preserve` | on the existing segments only | kept as it is | unchanged |
+| **`resample`** (default) | along the **source** shoreline at the target size | follows the data | **improves** |
+| `spline` | on a smooth curve through the base polyline | eased | unchanged |
+
+`preserve` keeps the polyline geometrically identical — subdividing a segment
+does not move it — and is the strictest option. `resample` is the default
+because it is the only one that *adds* information: the base polyline runs
+300–600 m between nodes and sits up to **68.5 m** from the source shoreline at
+its segment midpoints (median 5.1 m), and a 30 m resample recovers that for
+free exactly where the mesh is being refined anyway. `spline` exists for a
+patch with no usable source shoreline; it eases a corner but invents the
+easing.
+
+Measured on the Futtsu chain, 10 of its 11 interior vertices turn by 164–180°,
+so straight subdivision would be unproblematic along almost all of it; a
+single vertex turns by **42.4°**, and that one corner is the whole argument
+for `resample` over `preserve` — the source data says whether the coast is
+really that sharp or whether 300 m sampling made it so.
+
+Every mode is bounded by `coastline_tolerance_m` (default 100 m) against the
+base polyline and verified against it. **No mode touches the coastline outside
+the hole**, and the two endpoints where the hole's coastline chain meets the
+frozen coastline are fixed, so the polyline joins exactly.
+
+Re-cutting the coastline from the original OSM data — as opposed to resampling
+the shoreline polygon the generator was already given — is **not** part of
+this operation.
 
 ## 5. The patch generator (designed, not yet written)
 
@@ -293,8 +331,9 @@ and the declared centre lies 654 m north of its edge.
 | **dt by minimum altitude** | **4.07 s** | **alert: 1.1x the expected steps** |
 | target that would hold 4.5 s | 33 m | |
 | transition | 1,939 m | |
-| centre to the land boundary | 1,014 m | **hole reaches the coast** |
-| largest gradation that would fit | 0.448 | above the C4-safe range |
+| core clears the coastline by | 714 m | the fishery itself is offshore |
+| transition overlaps the coastline by | 1,225 m | normal; meshed at the target size |
+| coastline edges on the rim | 12 (4,236 m) | `coastline: resample` |
 | selected elements / rim edges | 173 / 47 | |
 | rim edge min / median / max | 180 / 467 / 819 m | not 350 m |
 | selection reach vs requested | 2,615 m vs 2,239 m | |
@@ -302,19 +341,16 @@ and the declared centre lies 654 m north of its edge.
 Of 1,200 candidate cells 650–750 m north of the flat with the **core** clear of
 land, 112 met a 4.5 s floor **computed from the shortest edge**. Both filters
 were wrong: the core is the wrong body to test for land, and the edge is the
-wrong length for dt. Under the corrected checks the dt raises an alert (which is now the intended
-behaviour) and the hole reaching the coast is the real obstacle.
+wrong length for dt. Under the corrected rules **this recipe is buildable as declared**. The dt
+raises an alert, which is the intended behaviour for a given region, and the
+transition reaching the coast is ordinary work rather than an obstacle: the
+12 coastline edges on the rim are resampled at 30 m along the source
+shoreline, and the coastline outside the hole is untouched.
 
-**The site cannot move**: a fishery is given. So the remaining levers are the
-ones that let the declared position and resolution be reproduced —
-
-* a coarser target, if the resolution is negotiable (33 m holds 4.5 s);
-* a steeper gradation, shortening the transition, with the C4 cost measured;
-* `touch_coast: true`, re-cutting the coastline inside the patch.
-
-All three are acceptable to the owner. The 1,939 m transition needs 2.2 km of
-open water in every direction and the Futtsu spit is 1 km away, so
-`touch_coast: true` is the lever that actually reaches this site.
+**The site cannot move** — a fishery is given — so if the cost ever has to
+come down, the levers are a coarser target (33 m would hold 4.5 s) or a
+steeper gradation (shortening the 1,939 m transition, with the C4 cost
+measured). Neither is needed to build this one.
 
 ## 7. What is still missing before this can be built
 

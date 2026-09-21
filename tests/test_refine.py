@@ -69,7 +69,6 @@ def test_circle_geometry_has_the_requested_radius():
     {"target_h_m": 0},
     {"target_h_m": -30},
     {"priority": True},
-    {"touch_coast": "yes"},
     {"transition_m": -1},
 ])
 def test_invalid_region_fields_are_rejected(bad):
@@ -128,7 +127,7 @@ def test_recipe_rejects_duplicate_region_names(tmp_path):
 
 def test_preflight_passes_and_reports_the_derived_width():
     # 2 m of water is shallow enough that a 30 m target clears a 4.5 s floor.
-    rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_expected_s=4.5,
+    rep = preflight(_region(), gradation=GRAD, dt_expected_s=4.5,
                     ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=None)
     assert rep["transition_m"] == pytest.approx(1939.4, abs=0.1)
     assert rep["elements_core"] > 700
@@ -139,7 +138,7 @@ def test_preflight_reports_the_altitude_time_step_not_the_edge_one():
     # The reported dt uses the minimum ALTITUDE (notebook 392), which for an
     # equilateral cell is sqrt(3)/2 of the edge. Quoting the edge figure
     # overstates the step by 15 % -- enough to clear a floor it does not meet.
-    rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_expected_s=4.0,
+    rep = preflight(_region(), gradation=GRAD, dt_expected_s=4.0,
                     ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=None)
     edge = 30 / np.sqrt(9.81 * 2.0)
     assert rep["dt_by_shortest_edge_s"] == pytest.approx(edge, rel=1e-9)
@@ -150,7 +149,7 @@ def test_preflight_reports_the_altitude_time_step_not_the_edge_one():
 def test_a_short_time_step_alerts_but_does_not_veto():
     # The region is given: its position and resolution are inputs, so a time
     # step the caller did not expect is news, not grounds for refusal.
-    rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_expected_s=4.5,
+    rep = preflight(_region(), gradation=GRAD, dt_expected_s=4.5,
                     ambient_h_m=AMBIENT, depth_of=_flat_depth(20.0), land=None)
     assert rep["dt_alert"] is not None
     assert "cost" in rep["dt_alert"]
@@ -158,7 +157,7 @@ def test_a_short_time_step_alerts_but_does_not_veto():
 
 
 def test_the_alert_names_the_target_that_would_keep_the_expected_step():
-    rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_expected_s=4.5,
+    rep = preflight(_region(), gradation=GRAD, dt_expected_s=4.5,
                     ambient_h_m=AMBIENT, depth_of=_flat_depth(20.0), land=None)
     needed = 4.5 * np.sqrt(9.81 * 20.0) / (np.sqrt(3) / 2)
     assert f"{needed:.0f} m" in rep["dt_alert"]
@@ -166,7 +165,7 @@ def test_the_alert_names_the_target_that_would_keep_the_expected_step():
 
 def test_the_futtsu_target_alerts_at_its_expected_step():
     # 30 m over 4.15 m of water: 4.70 s by edge, 4.07 s by altitude.
-    rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_expected_s=4.5,
+    rep = preflight(_region(), gradation=GRAD, dt_expected_s=4.5,
                     ambient_h_m=AMBIENT, depth_of=_flat_depth(4.15), land=None)
     assert rep["dt_alert"] is not None
     assert "4.07 s by minimum altitude" in rep["dt_alert"]
@@ -174,48 +173,76 @@ def test_the_futtsu_target_alerts_at_its_expected_step():
 
 
 def test_no_alert_when_the_expected_step_is_met():
-    rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_expected_s=4.0,
+    rep = preflight(_region(), gradation=GRAD, dt_expected_s=4.0,
                     ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=None)
     assert rep["dt_alert"] is None
 
 
 def test_preflight_refuses_a_transition_too_short_for_the_gradation():
     with pytest.raises(ValueError, match="shorter than"):
-        preflight(_region(transition_m=500, touch_coast=True), gradation=GRAD,
+        preflight(_region(transition_m=500), gradation=GRAD,
                   dt_expected_s=4.5, ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=None)
 
 
 def test_preflight_accepts_a_transition_wider_than_required():
-    rep = preflight(_region(transition_m=3000, touch_coast=True), gradation=GRAD,
+    rep = preflight(_region(transition_m=3000), gradation=GRAD,
                     dt_expected_s=4.5, ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0),
                     land=None)
     assert rep["transition_m"] == 3000
     assert rep["transition_required_m"] == pytest.approx(1939.4, abs=0.1)
 
 
-def test_preflight_refuses_a_core_on_land_unless_asked():
+def test_a_partly_dry_core_alerts_but_does_not_veto():
+    # The region is given; a dry patch of it is news, not grounds for refusal.
     land = _land_north_of(35.3228)          # covers the northern half of the core
-    with pytest.raises(ValueError, match="touch_coast"):
-        preflight(_region(), gradation=GRAD, dt_expected_s=4.5, ambient_h_m=AMBIENT,
-                  depth_of=_flat_depth(2.0), land=land)
-    rep = preflight(_region(touch_coast=True), gradation=GRAD, dt_expected_s=4.5,
+    rep = preflight(_region(), gradation=GRAD, dt_expected_s=4.5,
                     ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=land)
     assert rep["core_on_land"] > 0
+    assert rep["land_alert"] is not None
 
 
-def test_preflight_requires_a_land_polygon_when_the_core_must_avoid_it():
-    # Passing land=None used to be a silent pass, which is the wrong default
-    # for a check whose whole purpose is to refuse.
-    with pytest.raises(ValueError, match="land polygon is required"):
-        preflight(_region(), gradation=GRAD, dt_expected_s=4.5, ambient_h_m=AMBIENT,
-                  depth_of=_flat_depth(2.0), land=None)
+def test_no_land_alert_for_a_wet_core():
+    rep = preflight(_region(), gradation=GRAD, dt_expected_s=4.5,
+                    ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0),
+                    land=_land_north_of(35.40))
+    assert rep["core_on_land"] == 0
+    assert rep["land_alert"] is None
 
 
 def test_preflight_refuses_a_core_entirely_on_land():
     land = _land_north_of(35.0)
     with pytest.raises(ValueError, match="entirely on land"):
-        preflight(_region(touch_coast=True), gradation=GRAD, dt_expected_s=4.5,
+        preflight(_region(), gradation=GRAD, dt_expected_s=4.5,
                   ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=land)
+
+
+def test_coastline_mode_defaults_to_resample(tmp_path):
+    mesh = tmp_path / "base.14"
+    mesh.write_text("stub\n")
+    p = tmp_path / "r.yaml"
+    p.write_text(
+        "base_mesh: base.14\ndt_expected_s: 4.5\ngradation: 0.165\n"
+        "refine:\n  - name: a\n"
+        "    geometry: {circle: {center: [139.79, 35.32], radius_m: 300}}\n"
+        "    target_h_m: 30\n"
+    )
+    cfg = load_refine(p)
+    assert cfg["coastline"] == "resample"
+    assert cfg["coastline_tolerance_m"] == 100.0
+
+
+def test_an_unknown_coastline_mode_is_rejected(tmp_path):
+    mesh = tmp_path / "base.14"
+    mesh.write_text("stub\n")
+    p = tmp_path / "r.yaml"
+    p.write_text(
+        "base_mesh: base.14\ndt_expected_s: 4.5\ngradation: 0.165\n"
+        "coastline: redraw\n"
+        "refine:\n  - name: a\n"
+        "    geometry: {bbox: [139.7, 35.3, 139.8, 35.4]}\n    target_h_m: 30\n"
+    )
+    with pytest.raises(ValueError, match="coastline must be one of"):
+        load_refine(p)
 
 
 # --- the frozen-region contract --------------------------------------------
