@@ -1,8 +1,8 @@
 #!/bin/bash
 #PBS -q OCT-S
 #PBS --group=G16445
-#PBS -l cpunum_job=8
-#PBS -l memsz_job=32GB
+#PBS -l cpunum_job=48
+#PBS -l memsz_job=144GB
 #PBS -l elapstim_req=02:00:00
 #PBS -N fmesh_410
 #PBS -j o
@@ -12,7 +12,8 @@
 # coastline fit), against the goto2023 production mesh.
 #   A         goto2023 production mesh and depths
 #   B_own     the mesh under test with its own depths
-#   B_Adepth  the mesh under test carrying A's depths (isolates geometry)
+#   B_m7001   the mesh under test with depths rebuilt from the M7001 survey
+#             by A's own recipe (isolates the mesh from the depth source)
 # The previous round (job 6203xxx, certified 3,393-node mesh) gave
 # B_own - A = +0.006 to +0.009 m in M2 amplitude and -0.3 to -0.4 deg in phase.
 # Submit from the fvcom-mesh-tools repository root:
@@ -34,7 +35,7 @@ export PYTHONDONTWRITEBYTECODE=1
 # scratch run directories aside manually before resubmitting a completed case.
 # The run root carries the job id, so a resubmission never lands on an
 # existing result; this stays as a guard against a hand-edited RUN_ROOT.
-for case in A B_own B_Adepth; do
+for case in A B_own B_m7001; do
     if compgen -G "$RUN_ROOT/$case/output/m2_*.nc" >/dev/null; then
         echo "Existing model output: $RUN_ROOT/$case/output; archive before rerunning"
         exit 2
@@ -66,20 +67,35 @@ ulimit -s unlimited
 mpiexec --version
 ldd "$FVCOM"
 sha256sum "$FVCOM"
+# The three integrations are independent, so run them CONCURRENTLY: wall time
+# is one case, not three.  8 ranks each is the count every previous run used;
+# 3 x 8 = 24 of the 48 requested cores.  RANKS can be raised (RANKS*3 <= 48)
+# but the mesh manifest warns that some decomposition counts have produced
+# NON FINITE VALUE, so a new count wants a throwaway run first.
 status=0
-for case in A B_own B_Adepth; do
+RANKS=${FMESH_RANKS:-8}
+echo "running 3 cases concurrently at $RANKS ranks each $(date -Is)"
+pids=()
+for case in A B_own B_m7001; do
     echo "START $case $(date -Is)"
     (
         cd "$RUN_ROOT/$case"
-        mpiexec -np 8 "$FVCOM" --casename=m2 > fvcom.log 2>&1
-    ) || status=1
-    tail -30 "$RUN_ROOT/$case/fvcom.log"
+        mpiexec -np "$RANKS" "$FVCOM" --casename=m2 > fvcom.log 2>&1
+    ) &
+    pids+=($!)
+done
+for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || status=1
+done
+for case in A B_own B_m7001; do
+    echo "=== $case $(date -Is)"
+    tail -20 "$RUN_ROOT/$case/fvcom.log"
     # Some Fortran STOP paths return zero: analysis also requires complete output.
     if grep -Ei 'fatal|non[ -]?finite|floating.*exception|segmentation|nan detected' "$RUN_ROOT/$case/fvcom.log"; then
         status=1
     fi
-    echo "END $case $(date -Is)"
 done
+echo "all cases done $(date -Is) status=$status"
 # Restore the Python environment without allowing module libraries to override conda.
 module purge
 unset LD_LIBRARY_PATH

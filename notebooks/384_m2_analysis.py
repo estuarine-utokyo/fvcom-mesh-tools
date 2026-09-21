@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from fvcom_mesh_tools.plotting import add_atlas_grid, use_readable_style  # noqa: E402
 
 DEFAULT_RUN_ROOT = Path("/octfs/work/G16445/v61021/scratch/m2_383").resolve()
-LABELS = ("A", "B_own", "B_Adepth")
+LABELS = ("A", "B_own", "B_m7001")
 STATIONS = ("TOKYO-SIBAURA", "HARUMI", "TIBA-TIBA LIGHT", "SINKO", "YOKOSUKA")
 
 
@@ -216,13 +216,13 @@ def analyze(run_root, output, figure):
         caveats=[
             "Published harmonics are observational references, not contemporaneous measurements.",
             "No equivalence tolerance supplied; report differences without a match verdict.",
-            "B_Adepth: different coastlines; node offsets and fallback counts are reported.",
+            "B_m7001: depths rebuilt from M7001 by A's recipe, not interpolated from A.",
         ],
     )
     if len(maps) == 3:
         for row in rows.values():
             row["differences"] = {}
-            for b, a in [("B_own", "A"), ("B_Adepth", "A"), ("B_own", "B_Adepth")]:
+            for b, a in [("B_own", "A"), ("B_m7001", "A"), ("B_own", "B_m7001")]:
                 row["differences"][f"{b}_minus_{a}"] = dict(
                     amplitude_m=row[b]["amplitude_m"] - row[a]["amplitude_m"],
                     phase_deg=float(phase_difference(row[b]["phase_deg"], row[a]["phase_deg"])),

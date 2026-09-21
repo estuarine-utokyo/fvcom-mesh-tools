@@ -20,12 +20,11 @@ from pathlib import Path
 
 import numpy as np
 from pyproj import Transformer
-from scipy.interpolate import LinearNDInterpolator
-from scipy.spatial import cKDTree
 
 sys.dont_write_bytecode = True  # In particular, never write into the shared tide product.
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+from fvcom_mesh_tools.dem.m7001 import production_depths  # noqa: E402
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import apply_obc_depth_control, write_dep  # noqa: E402
 
@@ -203,11 +202,19 @@ def prepare(run_root):
     order = np.argsort(anchor_s)
     if np.ptp(anchor_s) < 1000:
         raise ValueError("Tidal anchors do not span the mouth")
-    ba_depth = LinearNDInterpolator(a.nodes, a.depths)(b.nodes)
-    missing = ~np.isfinite(ba_depth)
-    ba_depth[missing] = a.depths[cKDTree(a.nodes).query(b.nodes[missing])[1]]
+    # Case B_m7001 carries depths built the way A's were: the M7001 survey on
+    # the T.P. datum, floored at 3 m, r-factor smoothed to r <= 0.2, capped at
+    # 300 m (TB-FVCOM MESH.md / build_bathy_variants.py).  Interpolating A's
+    # FINISHED node depths instead would carry A's own smoothing and A's own
+    # coastline into B, which is the thing the comparison is trying to hold
+    # apart.  Validated on A's mesh: median -0.64 m, MAE 1.14 m against the
+    # production file, same 3-300 m range.
+    xy_to_ll = Transformer.from_crs(32654, 4326, always_xy=True)
+    b_lon, b_lat = xy_to_ll.transform(b.nodes[:, 0], b.nodes[:, 1])
+    ba_depth, ba_report = production_depths(b_lon, b_lat, b.elements)
+    print("B_m7001 depth:", json.dumps(ba_report), flush=True)
     ba = Fort14Mesh(
-        "B interpolated A production depth",
+        "B M7001 production-recipe depth",
         b.nodes,
         ba_depth,
         b.elements,
@@ -220,7 +227,7 @@ def prepare(run_root):
     obc_depth_change = {}
     a, obc_depth_change["A"] = apply_obc_depth_control(a)
     b, obc_depth_change["B_own"] = apply_obc_depth_control(b)
-    ba, obc_depth_change["B_Adepth"] = apply_obc_depth_control(ba)
+    ba, obc_depth_change["B_m7001"] = apply_obc_depth_control(ba)
     run_root.mkdir(parents=True, exist_ok=True)
     metadata = dict(
         epoch_utc=START,
@@ -248,8 +255,9 @@ def prepare(run_root):
         anchor_offset_m=anchor_offset.tolist(),
         bathymetry_A=str(DEP),
         bathymetry_B="SRTM15 Kanto, min 2 m; notebooks/325",
-        interpolation="Linear Delaunay on A nodes; nearest outside convex hull; no clipping",
-        nearest_depth_fallback_nodes=int(missing.sum()),
+        bathymetry_B_m7001="M7001 T.P. survey, min 3 m, r-factor <= 0.2, cap 300 m "
+                           "(A's own recipe, applied to B's nodes)",
+        bathymetry_B_m7001_report=ba_report,
         runs={},
     )
     # Production sponge (TokyoBay_spg.dat: per-OBC-node radius and damping).
@@ -265,7 +273,7 @@ def prepare(run_root):
     a_order = np.argsort(a_pos)
     spg_radius = np.array([spg[n][0] for n in a_obc])[a_order]
     spg_coef = np.array([spg[n][1] for n in a_obc])[a_order]
-    for label, mesh in [("A", a), ("B_own", b), ("B_Adepth", ba)]:
+    for label, mesh in [("A", a), ("B_own", b), ("B_m7001", ba)]:
         case = run_root / label
         inp, out = case / "input", case / "output"
         inp.mkdir(parents=True, exist_ok=True)
@@ -292,7 +300,7 @@ def prepare(run_root):
                 ],
                 check=True,
             )
-            if label == "B_Adepth":
+            if label == "B_m7001":
                 write_dep(mesh, inp / "m2_dep.dat")
         (inp / "sigma.dat").write_text(
             "NUMBER OF SIGMA LEVELS = 6\nSIGMA COORDINATE TYPE = UNIFORM\n"
