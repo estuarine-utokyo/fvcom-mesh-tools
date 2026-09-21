@@ -181,8 +181,19 @@ def mesh_metrics(mesh):
 
 def prepare(run_root):
     a, b = load_a(), read_fort14(B_MESH)
-    if (b.n_nodes, b.n_elements, list(map(len, b.open_boundaries))) != (3393, 5849, [13]):
-        raise ValueError("Unexpected B mesh identity")
+    # The experiment only holds together if case B carries the SAME open
+    # boundary as case A -- one segment of 13 nodes on the goto2023 arc, which
+    # is an input to both.  Node and element counts are properties of the
+    # candidate, so they are pinned only for the default mesh, where an
+    # unannounced change would be a regression.
+    if list(map(len, b.open_boundaries)) != [13]:
+        raise ValueError(
+            f"case B must have one 13-node open boundary, got "
+            f"{list(map(len, b.open_boundaries))}")
+    if B_MESH == DEFAULT_B_MESH and (b.n_nodes, b.n_elements) != (3393, 5849):
+        raise ValueError(
+            f"the repository mesh changed: {b.n_nodes} nodes, {b.n_elements} "
+            "elements, expected 3393/5849")
     period, gauges = tide_constants()
     arc = a.nodes[a.open_boundaries[0]]
     ll_to_xy = Transformer.from_crs(4326, 32654, always_xy=True)
