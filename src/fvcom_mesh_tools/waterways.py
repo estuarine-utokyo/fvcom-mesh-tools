@@ -282,6 +282,14 @@ def detect_waterways(
     else:
         lab = np.zeros(0, dtype=int)
 
+    # The land_frac test below needs the land dilated by eps.  That buffer is
+    # loop-invariant but used to be rebuilt once per network: 1.9 s each on
+    # the 168k-vertex Tokyo Bay coastline, which was most of the 1,450 s the
+    # input stage took (job 115299 caught the process inside it).  Build it
+    # once.  (An STRtree over its parts was measured slower than letting GEOS
+    # index the whole thing: 86 ms vs 31 ms per network.)
+    land_buf = land_union.buffer(eps)
+
     records: list[dict[str, Any]] = []
     for net in range(lab.max() + 1 if n_it else 0):
         members = np.where(lab == net)[0]
@@ -366,9 +374,8 @@ def detect_waterways(
         # meshes as huge sliver cells at the edge (16.8 deg C1,
         # run 6186561): close it.
         blen = float(union.boundary.length)
-        land_frac = (float(union.boundary.intersection(
-            land_union.buffer(eps)).length) / blen
-            if blen > 0 else 0.0)
+        land_frac = (float(union.boundary.intersection(land_buf).length) / blen
+                     if blen > 0 else 0.0)
 
         rec: dict[str, Any] = {
             "kind": ("through" if through else
