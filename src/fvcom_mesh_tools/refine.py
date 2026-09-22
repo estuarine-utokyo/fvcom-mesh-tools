@@ -351,8 +351,16 @@ def depths_from_base(base_nodes, base_elements, base_depths, new_nodes):
         |h_a - h_b| / (h_a + h_b)  <=  (h_max - h_min) / (h_max + h_min)
 
     which is the r of the base edge joining that element's deepest and
-    shallowest vertices. **Refinement can only leave the r-factor where it was
-    or improve it**, never worsen it.
+    shallowest vertices.
+
+    That bound holds **only between two points of the same base element**.
+    Refinement changes the connectivity, so a new edge can join points from
+    different base elements and is not bounded by it: on a 3x2 grid with
+    column depths 2, 3 and 4.5 every base edge has r <= 0.2, and the new edge
+    between the interpolated 2.1 and 4.35 has r = 0.349 (second review,
+    finding 8).  The earlier revisions of this docstring claimed the bound
+    globally; they were wrong.  If the r-factor is a requirement, measure it
+    on the finished mesh -- the QA battery does not gate it.
 
     Linear interpolation over the base triangulation; points outside it fall
     back to the nearest base node, and the count is reported.

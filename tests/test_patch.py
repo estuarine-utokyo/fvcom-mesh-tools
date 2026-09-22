@@ -782,3 +782,133 @@ def test_a_slide_cannot_cut_a_corner():
     rings2, _ = boundary_rings(out, u2[c2 == 1])
     after = shapely.LineString(out[np.append(rings2[0], rings2[0][0])])
     assert curve.hausdorff_distance(after) < 1e-9
+
+
+# ------------------------------------- what the SECOND adversarial review found
+#
+# gpt-6-astra reviewed commit 8caca27 (docs/local_refine_implementation_review_2.md)
+# and supplied nine more failing assertions. All nine reproduced.
+
+
+def test_a_missing_patch_face_is_rejected():
+    """Every other invariant survives a hole in the water intact.
+
+    Deleting one interior patch triangle left the frozen zone exact, no
+    retained face missing, no interface split, no extra face, no non-manifold
+    edge, no inversion and no orphan -- and 5,000 m2 of water gone. The
+    boundary is what tells, and only if the caller says what it should be.
+    """
+    from fvcom_mesh_tools.patch import boundary_after_patch
+
+    nodes, elements = grid_mesh()
+    depths = np.full(len(nodes), 8.0)
+    foot = shapely.Point(400, 400).buffer(150.0)
+    sel, rc, pn, pt = replay_patch(nodes, elements, foot)
+    out, oute, outd, nm, _ = stitch_patch(nodes, elements, depths, sel, pn, pt,
+                                          rc["pfix"], rc["pfix_base"])
+    want = boundary_after_patch(elements, sel, rc, out, nm)
+    good = verify_patch(nodes, depths, elements, sel, out, oute, outd, nm,
+                        expected_boundary=want)
+    assert good["ok"] and good["boundary_checked"]
+
+    # an interior patch face, all of whose vertices are used elsewhere
+    n_ret = len(sel.retained)
+    interior = next(k for k in range(n_ret, len(oute))
+                    if ((oute == oute[k][0]).sum() > 1
+                        and (oute == oute[k][1]).sum() > 1
+                        and (oute == oute[k][2]).sum() > 1))
+    holed = np.delete(oute, interior, axis=0)
+    bad = verify_patch(nodes, depths, elements, sel, out, holed, outd, nm,
+                       expected_boundary=want)
+    assert not bad["ok"]
+    assert bad["n_unexpected_boundary_edges"] > 0
+
+
+def test_verify_says_when_it_did_not_check_coverage():
+    nodes, elements = grid_mesh()
+    depths = np.full(len(nodes), 8.0)
+    sel, rc, pn, pt = replay_patch(nodes, elements,
+                                   shapely.Point(400, 400).buffer(150.0))
+    out, oute, outd, nm, _ = stitch_patch(nodes, elements, depths, sel, pn, pt,
+                                          rc["pfix"], rc["pfix_base"])
+    assert not verify_patch(nodes, depths, elements, sel, out, oute, outd,
+                            nm)["boundary_checked"]
+
+
+def test_an_island_taken_whole_carries_its_own_curve():
+    """Otherwise it is measured against somebody else's coastline.
+
+    A 15x15 grid with one cell removed as land and a cut that takes the
+    island and part of the mainland: the island had no curve at all, so the
+    driver measured its unmoved vertices 700 m from a mainland stretch and
+    rejected identity geometry.
+    """
+    nodes, elements = grid_mesh(15, 15)
+    cen = nodes[elements].mean(axis=1)
+    land = ((cen[:, 0] > 600) & (cen[:, 0] < 700)
+            & (cen[:, 1] > 600) & (cen[:, 1] < 700))
+    elements = elements[~land]
+    sel = select_patch(nodes, elements,
+                       shapely.box(-1.0, 400.0, 850.0, 900.0))
+    rc = rim_constraints(nodes, sel, size=1e9, coastline="preserve")
+    assert sum(sel.ring_is_hole) == 1
+    assert len(rc["curves"]) >= 2, "the island ring registered no curve"
+    curves = shapely.MultiLineString([np.asarray(c) for c in rc["curves"]])
+    new = rc["pfix"][rc["pfix_base"] < 0]
+    assert float(shapely.distance(shapely.points(new), curves).max()) < 1e-9
+
+
+def test_the_source_is_chosen_by_the_whole_stretch():
+    """A line that touches one endpoint and leaves wins a closest-pair test."""
+    pts = np.array([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]])
+    alongside = shapely.LineString([(0, 0.1), (5, 0.1), (10, 0.1)])
+    diagonal = shapely.LineString([(0, 0), (10, -8)])
+    out = coastline_points(pts, 1.0, mode="resample",
+                           shoreline=[diagonal, alongside], tolerance_m=1.0)
+    assert float(np.abs(out[:, 1]).max()) < 0.5
+
+
+def test_a_sole_retained_face_is_not_a_spike():
+    """It has no edge-neighbour because there is nothing left to be one."""
+    nodes = np.array([[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]])
+    elements = np.array([[0, 1, 2], [0, 2, 3]])
+    sel = select_patch(nodes, elements, shapely.Point(75.0, 25.0).buffer(30.0))
+    assert sel.n_removed == 1
+    assert len(sel.retained) == 1
+
+
+def test_rings_that_touch_are_refused_rather_than_unioned():
+    """A valid Polygon is not evidence that it is the domain the rim asked for."""
+    xy = np.array([[0, 0], [2, 0], [2, 2], [0, 2],
+                   [2, 0], [4, 0], [4, 2], [2, 2]], dtype=float)
+    edges = np.array([[0, 1], [1, 2], [2, 3], [3, 0],
+                      [4, 5], [5, 6], [6, 7], [7, 4]])
+    with pytest.raises(ValueError, match="rings touch or overlap"):
+        hole_polygon(xy, edges)
+
+
+def test_a_new_edge_is_not_bounded_by_the_base_r_factor():
+    """The same-triangle bound does not survive a change of connectivity.
+
+    Every base edge here is within r = 0.2 and a new edge between two
+    interpolated depths is at 0.349. The earlier docstring promised the
+    bound globally; this pins the counterexample so it cannot come back.
+    """
+    from fvcom_mesh_tools.refine import depths_from_base
+
+    nodes, elements = grid_mesh(3, 2, 1.0)
+    depths = 2.0 * 1.5 ** nodes[:, 0]
+    u, _ = _edge_table_for_test(elements)
+    base_r = (np.abs(depths[u[:, 0]] - depths[u[:, 1]])
+              / (depths[u[:, 0]] + depths[u[:, 1]])).max()
+    new, outside = depths_from_base(nodes, elements, depths,
+                                    np.array([[0.1, 0.5], [1.9, 0.5]]))
+    assert outside == 0
+    assert base_r <= 0.2
+    assert abs(new[0] - new[1]) / new.sum() > 0.34
+
+
+def _edge_table_for_test(elements):
+    from fvcom_mesh_tools.patch import _edge_table
+
+    return _edge_table(elements)

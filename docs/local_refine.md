@@ -16,7 +16,10 @@ independently before revision 2 was written. Revision 4 replaced the design of
 the generator with what was built. `docs/local_refine_implementation_review.md`
 is an adversarial review of that implementation (gpt-6-astra, 2026-09-22):
 sixteen findings and nine executable tests, **all nine of which reproduced**.
-Revision 5 is what those fixed; §5.3 lists them.
+Revision 5 is what those fixed; §5.3 lists them. A **second** review of the
+result (`docs/local_refine_implementation_review_2.md`) found eight more,
+nine assertions, all nine reproduced; §5.5 lists what those changed and what
+is deliberately left open.
 
 ### What revision 1 got wrong
 
@@ -421,6 +424,23 @@ Two further things were needed before any seed passed:
   element 1.8–2.3 km out, where the transition is coarse and the coast is
   not. This is not detail thrown away — there is no room for it at that size
   — and what remains is still bounded by `coastline_tolerance_m`.
+
+### 5.5 What the second review changed
+
+| finding | what was wrong | what it is now |
+|---|---|---|
+| **coverage** | every gate was about the faces that are there. Deleting one interior patch triangle left the frozen zone exact, no retained face missing, no interface split, no extra face, no non-manifold edge, no inversion, no orphan — and 5,000 m² of water gone | `boundary_after_patch` states the boundary edge set the patch was built to have, and `verify_patch` compares it. When the caller does not supply it, `boundary_checked` says so |
+| **island provenance** | an island taken whole got no curve at all, so the driver measured its unmoved vertices 700 m from a mainland stretch and rejected identity geometry | the island ring registers its own closed curve and its nodes are bound to it |
+| **bank selection** | per-stretch selection still picked by a single closest pair: a line that touches one endpoint and then departs diagonally beat one that stays 0.1 from the whole stretch | the fit is measured along 32 samples of the stretch |
+| **a sole retained face** | "no retained edge-neighbour" was read as "spike" even when there is nothing left to be a neighbour, so a valid one-triangle remainder was absorbed and then refused as an empty mesh | fewer than two retained faces means no spikes |
+| **touching rings** | two rings meeting along an edge with distinct node ids unioned into a rectangle and two units of constraint vanished from its boundary. A valid Polygon is not evidence that it is the domain the rim asked for | the assembled boundary length must match the rim's |
+| **the failed artefact** | the mesh was re-written only when the accepted seed was not the first tried, so a failed run could leave one seed's file beside another's node map and QA; and `serialise` wrote its argument and read a global | the accepted candidate is always written; `serialise` reads its own path |
+| **a bad first seed** | `stitch_patch` raises when a fill loses a constrained point, and with no boundary around `attempt` that ended the whole search | a candidate-level `ValueError` records the attempt and moves to the next seed; the report is saved on every exit |
+| **the r-factor claim** | `depths_from_base` promised that refinement can only improve the r-factor. The bound holds between two points of the SAME base element; a new edge joining different ones does not obey it — on a 3×2 grid with every base edge at r ≤ 0.2, a new edge lands at 0.349 | the docstring says what is true, and the counterexample is a test |
+
+`tests/test_local_refine_driver.py` is new: the seed state machine is lifted
+out of the driver's source and run against stubs, because it decides which
+mesh is delivered and had no coverage at all.
 
 ### Where the code goes
 

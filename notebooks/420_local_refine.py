@@ -32,6 +32,7 @@ from shapely.ops import unary_union
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14, write_fort14
 from fvcom_mesh_tools.patch import (
     ambient_size_field,
+    boundary_after_patch,
     effective_gradation,
     hole_polygon,
     improve_patch,
@@ -302,6 +303,12 @@ def attempt(seed):
         rc["pfix"], rc["pfix_base"])
     out["stitch"] = st
     say("stitch: " + json.dumps(st))
+    # Before the repair, while a fixed point is still exactly where it was
+    # put: the repair slides boundary nodes along their curve, so matching
+    # pfix by coordinate afterwards fails.  Node ids do not change in the
+    # repair, so the edge set built here stays valid.
+    want_boundary = boundary_after_patch(base.elements, sel, rc, nodes, node_map)
+    out["want_boundary"] = want_boundary
 
     # Orientation: fort.14 wants counter-clockwise.  The retained faces already
     # are, so only the patch can be wrong, and flipping the whole array would
@@ -407,7 +414,8 @@ def attempt(seed):
     # ---------------------------------------------------------------- verify
     ver = verify_patch(base.nodes, base.depths, base.elements, sel,
                        nodes, elements, depths, node_map,
-                       open_boundaries=base.open_boundaries)
+                       open_boundaries=base.open_boundaries,
+                       expected_boundary=want_boundary)
     out["verify"] = ver
     say("verify: " + json.dumps(ver))
     if not ver["ok"]:
@@ -467,11 +475,12 @@ def serialise(candidate, out, path):
     # through the map again, and run the whole 21-gate battery.  A generator
     # whose quality claim rests on someone remembering to run QA afterwards does
     # not have a quality claim (review findings 3 and 15, 2026-09-22).
-    written = read_fort14(out14)
+    written = read_fort14(path)
     out["verify_on_disk"] = verify_patch(
         base.nodes, base.depths, base.elements, sel,
         written.nodes, written.elements, written.depths, node_map,
-        open_boundaries=base.open_boundaries)
+        open_boundaries=base.open_boundaries,
+        expected_boundary=out["want_boundary"])
     if not out["verify_on_disk"]["ok"]:
         return None, None
     if not np.array_equal(written.open_boundaries[0], mesh.open_boundaries[0]) or \
@@ -485,15 +494,34 @@ out14 = OUT / f"{Path(cfg['base_mesh']).stem}_{recipe.stem}.14"
 seeds = [int(x) for x in os.environ.get("LR_SEEDS", "0,1,2,3,4").split(",")]
 best = None
 reports["attempts"] = []
+def save_report():
+    (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
+
+
 for seed in seeds:
     say(f"--- seed {seed}")
-    candidate, out = attempt(seed)
+    try:
+        candidate, out = attempt(seed)
+    except ValueError as exc:
+        # A candidate that cannot be built is one seed's problem, not the
+        # search's: stitch_patch raises when the fill loses a constrained
+        # point, and a bad first seed used to end the whole run (second
+        # review, finding 5).  Anything that is not a candidate failure --
+        # a bad recipe, a coding error -- still propagates.
+        say(f"    seed {seed}: {exc}")
+        reports["attempts"].append({"seed": seed, "error": str(exc)})
+        save_report()
+        continue
     if candidate is None:
-        reports["attempts"].append(out)
+        reports["attempts"].append({k: v for k, v in out.items()
+                                    if k != "want_boundary"})
+        save_report()
         continue
     written, mesh = serialise(candidate, out, out14)
     if written is None:
-        reports["attempts"].append(out)
+        reports["attempts"].append({k: v for k, v in out.items()
+                                    if k != "want_boundary"})
+        save_report()
         continue
     qa = run_qa(written, name=out14.stem, path=out14)
     out["qa"] = {"n_gate_total": qa.n_gate_total,
@@ -501,7 +529,9 @@ for seed in seeds:
                  "failed": [{"check": c.check_id, "requirement": c.requirement,
                              "observed": c.observed} for c in qa.checks
                             if c.status == "fail"]}
-    reports["attempts"].append(out)
+    reports["attempts"].append({k: v for k, v in out.items()
+                                if k != "want_boundary"})
+    save_report()
     say(f"    seed {seed}: QA {qa.n_gate_total - qa.n_gate_failed}/"
         f"{qa.n_gate_total}"
         + ("" if not qa.n_gate_failed else "  "
@@ -513,18 +543,21 @@ for seed in seeds:
         break
 
 if best is None:
+    save_report()
     raise SystemExit("no seed produced a mesh that keeps the frozen-zone "
-                     "contract; see attempts in the report")
+                     f"contract; see attempts in {OUT / 'report.json'}")
 _, seed, candidate, out, written, qa = best
 nodes, elements, depths, node_map = candidate
-reports.update({k: v for k, v in out.items() if k != "seed"})
+reports.update({k: v for k, v in out.items()
+                if k not in ("seed", "want_boundary")})
 reports["seed"] = seed
 np.save(OUT / "node_map.npy", node_map)
-if seed != seeds[0]:
-    # The accepted mesh is not the last one written; write it again.
-    serialise(candidate, out, out14)
-    written = read_fort14(out14)
-    qa = run_qa(written, name=out14.stem, path=out14)
+# Always, not only when the accepted seed is not the first one tried: the
+# file on disk is whichever attempt ran last, and when none passed that is
+# not the best one.  A failed artefact investigated with another attempt's
+# node map and QA is worse than no artefact (second review, finding 4).
+written, mesh = serialise(candidate, out, out14)
+qa = run_qa(written, name=out14.stem, path=out14)
 say(f"accepted seed {seed}")
 
 reports["qa"] = {"n_gate_total": qa.n_gate_total,

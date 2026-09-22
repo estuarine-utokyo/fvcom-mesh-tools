@@ -41,6 +41,7 @@ import numpy as np
 
 __all__ = [
     "PatchSelection",
+    "boundary_after_patch",
     "refresh_depths",
     "ambient_size_field",
     "boundary_rings",
@@ -95,7 +96,11 @@ def _edge_table(tri: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def _isolated_faces(tri: np.ndarray, removed: np.ndarray) -> np.ndarray:
     """Retained faces with no retained edge-neighbour: spikes on the rim."""
     keep = np.flatnonzero(~removed)
-    if not keep.size:
+    if keep.size < 2:
+        # One face has no edge-neighbour because there is nothing left to be
+        # a neighbour, not because it is a spike.  Absorbing it turns a valid
+        # if tiny result into "the footprint removes the entire mesh"
+        # (second review, finding 7).
         return np.zeros(len(tri), dtype=bool)
     sub = tri[keep]
     e = np.sort(np.vstack([sub[:, [0, 1]], sub[:, [1, 2]], sub[:, [2, 0]]]), axis=1)
@@ -537,7 +542,16 @@ def _source_substring(pts: np.ndarray, shoreline):
     if not lines:
         return None
     here = shapely.LineString(pts)
-    line = min(lines, key=here.distance)
+    # By the fit along the WHOLE stretch, not by the closest pair.  A
+    # candidate that merely touches one endpoint and then departs wins a
+    # min-distance contest: a line running diagonally away from (0,0) beat
+    # one that stays 0.1 from the entire base stretch (second review,
+    # finding 3).
+    probe = shapely.points(np.column_stack([
+        np.interp(np.linspace(0, 1, 32), np.linspace(0, 1, len(pts)), pts[:, 0]),
+        np.interp(np.linspace(0, 1, 32), np.linspace(0, 1, len(pts)), pts[:, 1])]))
+    line = min(lines, key=lambda ln: float(shapely.distance(probe, ln).max()))
+    del here
     s0 = line.project(shapely.Point(pts[0]))
     s1 = line.project(shapely.Point(pts[-1]))
     if s0 == s1:
@@ -632,6 +646,14 @@ def rim_constraints(
             # them in a node map that only carries survivors (review finding
             # 6, 2026-09-22).
             ring_rows = [_push(pts, base_id, xy[v], -1) for v in ring]
+            # Its own closed curve, and its own nodes bound to it.  Without
+            # this the island has no provenance at all: the driver measures
+            # every new boundary node against the curves it was given, so an
+            # island that did not move measured 700 m from a mainland stretch
+            # and the whole run was rejected (second review, finding 1).
+            curves.append(np.asarray(xy[np.append(ring, ring[0])], dtype=float))
+            for row in ring_rows:
+                curve_of[row] = len(curves) - 1
             n_new += len(ring)
         else:
             start = int(np.argmax(~is_free))
@@ -725,6 +747,18 @@ def hole_polygon(pfix: np.ndarray, egfix: np.ndarray):
     out = shapely.union_all(shells)
     if out.is_empty:
         raise ValueError("the rim segments do not close a polygon")
+    # A valid Polygon is not evidence that it is the domain the rim asked
+    # for.  Two rings touching along an edge with distinct node ids union
+    # into a rectangle and two units of constraint simply vanish from its
+    # boundary (second review, finding 6).  The lengths must agree.
+    want = float(sum(shapely.LineString(np.asarray(pfix, dtype=float)[
+        np.append(r, r[0])]).length for r in rings))
+    got = float(shapely.length(shapely.boundary(out)))
+    if abs(got - want) > 1e-6 * max(1.0, want):
+        raise ValueError(
+            f"the assembled hole boundary is {got:.6g} m against {want:.6g} m "
+            "of rim constraints; the rings touch or overlap, which this does "
+            "not represent")
     return out
 
 
@@ -976,6 +1010,46 @@ def refresh_depths(base_nodes, base_elements, base_depths, nodes, moved, depths)
     return depths, int(n_outside)
 
 
+def boundary_after_patch(base_elements, selection, rc, nodes, node_map,
+                         tol_m: float = 1e-6):
+    """The boundary edge set the patched mesh must have, in final node ids.
+
+    Two parts and nothing else: the base mesh's boundary edges that the cut
+    did not take, and the rim segments that are supposed to BE boundary --
+    the coastline chains, not the interface ones.  Comparing the finished
+    mesh against this is what notices a face that is simply gone: every other
+    invariant survives a missing patch triangle intact.
+    """
+    from scipy.spatial import cKDTree
+
+    tri = np.asarray(base_elements, dtype=np.int64)
+    nm = np.asarray(node_map, dtype=np.int64)
+    u, c = _edge_table(tri)
+    base_boundary = u[c == 1]
+    taken = _edge_table(tri[selection.removed])[0]
+    taken_set = {tuple(x) for x in taken.tolist()}
+    kept = [tuple(sorted(nm[list(e)].tolist())) for e in base_boundary.tolist()
+            if tuple(e) not in taken_set]
+    if any(v < 0 for e in kept for v in e):
+        raise ValueError("a retained boundary edge lost a node in the patch")
+
+    pfix = np.asarray(rc["pfix"], dtype=float)[:, :2]
+    base_id = np.asarray(rc["pfix_base"], dtype=np.int64)
+    d, row = cKDTree(np.asarray(nodes, dtype=float)[:, :2]).query(pfix)
+    if (d > tol_m).any():
+        raise ValueError("a constrained rim point is not in the patched mesh")
+    interface = {tuple(sorted(e)) for e, phys
+                 in zip(selection.rim_edges.tolist(), selection.physical_rim)
+                 if not phys}
+    coast = []
+    for i, j in np.asarray(rc["egfix"], dtype=np.int64).tolist():
+        if base_id[i] >= 0 and base_id[j] >= 0 and \
+                tuple(sorted((int(base_id[i]), int(base_id[j])))) in interface:
+            continue
+        coast.append(tuple(sorted((int(row[i]), int(row[j])))))
+    return set(kept) | set(coast)
+
+
 # --------------------------------------------------------------------------
 # verification
 # --------------------------------------------------------------------------
@@ -992,6 +1066,7 @@ def verify_patch(
     node_map,
     *,
     open_boundaries=(),
+    expected_boundary=None,
 ) -> dict[str, Any]:
     """Check the frozen zone really is frozen, through the node map.
 
@@ -1000,8 +1075,9 @@ def verify_patch(
     coordinates, they kept their depths, the retained faces are all still
     there with the same vertices, their orientation did not flip, the
     interface segments are still shared rather than split, and the open
-    boundary is the same list in the same order.  A patch can satisfy all but
-    one of those and still break the model.  ``area_change_fraction`` is
+    boundary is the same list in the same order, and the boundary is the one
+    the patch was built to have.  A patch can satisfy all but one of those
+    and still break the model.  ``area_change_fraction`` is
     reported rather than gated: it moves legitimately when the coastline is
     resampled (-0.008 % on the Futtsu patch) and is the one number that
     notices a face quietly dropped.
@@ -1073,6 +1149,21 @@ def verify_patch(
     # shows up here and nowhere else.
     nonmanifold = int((c > 2).sum())
 
+    # Coverage.  Every gate above is about the faces that are there; none of
+    # them notices a face that is not.  Deleting one interior patch triangle
+    # left the frozen zone exact, no retained face missing, no interface
+    # split, no extra face, no non-manifold edge, no inversion, no orphan --
+    # and a 5,000 m2 hole in the water (second review, finding 2).  The
+    # boundary is what tells: a mesh that covers what it promised has exactly
+    # the boundary edges it was built to have.
+    boundary = {tuple(x) for x in u[c == 1].tolist()}
+    unexpected: set = set()
+    absent: set = set()
+    if expected_boundary is not None:
+        want_b = {tuple(sorted(e)) for e in expected_boundary}
+        unexpected = boundary - want_b
+        absent = want_b - boundary
+
     # Area is the blunt instrument that catches a hole nothing else notices:
     # a dropped face keeps every other invariant intact.
     def _area(xy_, t_):
@@ -1093,6 +1184,9 @@ def verify_patch(
         "n_duplicate_nodes": dup,
         "n_orphan_nodes": orphan,
         "n_interface_segments_split": int(len(split)),
+        "boundary_checked": bool(expected_boundary is not None),
+        "n_unexpected_boundary_edges": int(len(unexpected)),
+        "n_missing_boundary_edges": int(len(absent)),
         "n_extra_faces": int(extra),
         "n_nonmanifold_edges": nonmanifold,
         "frozen_exact": frozen_exact,
@@ -1100,7 +1194,8 @@ def verify_patch(
         "area_change_fraction": float((new_area - base_area) / base_area)
         if base_area > 0 else 0.0,
         "ok": bool(frozen_exact and not missing and (area2 > 0).all()
-                   and extra == 0 and nonmanifold == 0
+                   and extra == 0 and nonmanifold == 0 and not unexpected
+                   and not absent
                    and dup == 0 and orphan == 0 and obc_ok and not split),
     }
 
