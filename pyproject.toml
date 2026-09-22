@@ -55,6 +55,7 @@ fmesh-mesh-quality = "fvcom_mesh_tools.cli.meshquality:main"
 fmesh-mesh-qa = "fvcom_mesh_tools.cli.meshqa:main"
 fmesh-export-fvcom = "fvcom_mesh_tools.cli.exportfvcom:main"
 fmesh-plot-mesh = "fvcom_mesh_tools.cli.meshplot:main"
+fmesh-renumber = "fvcom_mesh_tools.cli.renumber:main"
 fmesh-mesh-pipeline = "fvcom_mesh_tools.cli.meshpipeline:main"
 
 [project.urls]
