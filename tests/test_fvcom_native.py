@@ -401,3 +401,35 @@ def test_land_boundaries_are_derived_around_the_open_arc(tmp_path: Path) -> None
     land = back.land_boundaries[0][1].tolist()
     assert land[0] == 2 and land[-1] == 0
     assert 1 not in land[1:-1], "the interior of the open arc is not land"
+
+
+def test_an_obc_type_survives_a_round_trip(tmp_path: Path) -> None:
+    """It is part of the model input -- odd is elevation only, even adds
+    nonlinear flux -- and a base declaring type 2 came back as type 1."""
+    from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
+
+    mesh, _ = _case(tmp_path)
+    written = export_fvcom_case(mesh, tmp_path / "two", "t", obc_type=2,
+                                cor=mesh.nodes[:, 1] * 0 + 35.0,
+                                obc_depth_control=False)
+    back = read_fvcom_case(written["grd"], written["dep"], written["obc"])
+    assert back.obc_type == 2
+    again = export_fvcom_case(back, tmp_path / "three", "u",
+                              cor=back.nodes[:, 1] * 0 + 35.0,
+                              obc_depth_control=False)
+    types = [int(ln.split()[2])
+             for ln in Path(again["obc"]).read_text().splitlines()[1:]]
+    assert set(types) == {2}
+
+
+def test_a_non_finite_depth_coordinate_is_refused(tmp_path: Path) -> None:
+    """`off.max() > tol` is False for NaN, so one NaN turned the check off."""
+    from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
+
+    _, written = _case(tmp_path)
+    dep = Path(written["dep"])
+    lines = dep.read_text().split("\n")
+    lines[1] = "nan 0.0 5.0"
+    dep.write_text("\n".join(lines))
+    with pytest.raises(ValueError, match="non-finite"):
+        read_fvcom_case(written["grd"], dep, written["obc"])

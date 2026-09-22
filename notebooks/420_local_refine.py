@@ -467,12 +467,34 @@ def attempt(seed):
         depths, rinfo = limit_rfactor(
             elements, depths, is_new, rmax,
             depth_min=float(base.depths.min()), depth_max=float(base.depths.max()))
+        # A frozen-pair edge over the limit is the base's only if the base
+        # has that edge. New connectivity can join two retained nodes that
+        # were never neighbours, and that edge is the patch's.
+        _b_edges = {tuple(sorted(x)) for x in
+                    np.unique(np.sort(np.vstack(
+                        [base.elements[:, [0, 1]], base.elements[:, [1, 2]],
+                         base.elements[:, [2, 0]]]), axis=1),
+                        axis=0).tolist()}
+        _inv = np.full(len(nodes), -1, dtype=np.int64)
+        _inv[node_map[node_map >= 0]] = np.flatnonzero(node_map >= 0)
+        _new_over = [ab for ab in rinfo["frozen_pair_edges_over_rmax"]
+                     if tuple(sorted(_inv[list(ab)].tolist())) not in _b_edges]
+        rinfo["n_new_frozen_pair_over_rmax"] = len(_new_over)
+        rinfo.pop("frozen_pair_edges_over_rmax", None)
         out["rfactor"] = rinfo
         say(f"r-factor <= {rmax:.4f}: {rinfo['n_depths_changed']} new depths "
             f"moved, worst {rinfo['max_depth_change_m']:.2f} m, "
             f"{'converged' if rinfo['converged'] else 'NOT CONVERGED'} in "
             f"{rinfo['rounds']} rounds (base depths moved "
             f"{rinfo['max_frozen_depth_change_m']:.3g} m)")
+        if rinfo["n_over_rmax_movable"] or rinfo["n_new_frozen_pair_over_rmax"]:
+            # The base guarantees r <= rmax and the patch is supposed to
+            # inherit it. Failing to is this seed's problem, not something to
+            # print and carry on from.
+            say(f"    the patch leaves {rinfo['n_over_rmax_movable']} movable "
+                f"and {rinfo['n_new_frozen_pair_over_rmax']} new frozen-pair "
+                f"edge(s) above r = {rmax:.4f}")
+            return None, out
     # How faithful the patch's coastline is, measured against the curve it was
     # cut from rather than against itself.  Both the nodes and the line between
     # them are checked: a node is kept on the curve by construction, but the
@@ -733,7 +755,8 @@ _lon, _lat = Transformer.from_crs(f"EPSG:{MESH_EPSG}", "EPSG:4326",
                                   always_xy=True).transform(
     written.nodes[:, 0], written.nodes[:, 1])
 _case = export_fvcom_case(written, OUT / "fvcom", recipe.stem,
-                          cor=_lat, obc_depth_control=False)
+                          cor=_lat, obc_depth_control=False,
+                          obc_type=getattr(base, "obc_type", 1))
 reports["fvcom_case"] = {k: str(v) for k, v in _case.items()}
 _check = read_fvcom_case(_case["grd"], _case["dep"], _case["obc"])
 if not np.array_equal(_check.depths[node_map[node_map >= 0]],

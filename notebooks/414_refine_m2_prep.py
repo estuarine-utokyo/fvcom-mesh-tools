@@ -130,7 +130,8 @@ def prepare(run_root: Path, cases: dict[str, Path], dte: float | None) -> dict:
         spinup_seconds=M383.SPINUP, duration_seconds=M383.DURATION,
         period_seconds=period, dte_seconds=M383.DTE, isplit=M383.ISPLIT,
         sigma_layers=5, roughness_length_m=0.002693138,
-        minimum_drag_coefficient=0.003, ramp_tanh_timescale_seconds=86400,
+        minimum_drag_coefficient=0.003,
+        ramp_tanh_timescale_seconds=M383.RAMP_SECONDS,
         physics="3D constant T=20 C/S=30; inactive scalars; closure mixing; "
                 "production sponge mapped by arc position",
         ranks=64,
@@ -154,7 +155,8 @@ def prepare(run_root: Path, cases: dict[str, Path], dte: float | None) -> dict:
         out.mkdir(exist_ok=True)
         _, lat = to_ll.transform(mesh.nodes[:, 0], mesh.nodes[:, 1])
         export_fvcom_case(mesh, inp, "m2", cor=lat, twodm=False,
-                          obc_depth_control=False)
+                          obc_depth_control=False,
+                          obc_type=getattr(meshes[label], "obc_type", 1))
         (inp / "sigma.dat").write_text(
             "NUMBER OF SIGMA LEVELS = 6\nSIGMA COORDINATE TYPE = UNIFORM\n")
         obc = mesh.open_boundaries[0]

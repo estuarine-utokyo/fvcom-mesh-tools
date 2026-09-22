@@ -49,6 +49,11 @@ START = "2021-01-01 00:00:00"
 END = "2021-01-21 00:00:00"
 DTE = 5.0  # TB-FVCOM production EXTSTEP_SECONDS; implied dt >= 15.4 s for all meshes
 ISPLIT = 10
+# The tanh ramp, in SECONDS. FVCOM's IRAMP counts INTERNAL steps
+# (DTI = DTE * ISPLIT), so a hard-coded IRAMP means the ramp changes whenever
+# the external step does: 8640 was 5 days at DTE = 5 and would be 1.5 days at
+# DTE = 1.5, while the manifest said 86,400 s either way (fourth review).
+RAMP_SECONDS = 86400.0
 SPINUP = 15 * 86400
 DURATION = 20 * 86400
 STATIONS = ("TOKYO-SIBAURA", "HARUMI", "TIBA-TIBA LIGHT", "SINKO", "YOKOSUKA")
@@ -139,7 +144,7 @@ def namelist(input_dir, output_dir):
         OUTPUT_DIR=f"'{output_dir}/'",
         EXTSTEP_SECONDS=str(DTE),
         ISPLIT=str(ISPLIT),
-        IRAMP="8640",
+        IRAMP=str(max(1, round(RAMP_SECONDS / (DTE * ISPLIT)))),
         MIN_DEPTH="0.1",
         IREPORT="360",
         NC_OUT_INTERVAL="'seconds = 1800.0'",
@@ -246,7 +251,7 @@ def prepare(run_root):
         sigma_layers=5,
         roughness_length_m=0.002693138,
         minimum_drag_coefficient=0.003,
-        ramp_tanh_timescale_seconds=86400,
+        ramp_tanh_timescale_seconds=RAMP_SECONDS,
         physics=(
             "3D constant T=20 C/S=30; inactive scalars; closure mixing; "
             "production sponge mapped by arc position"

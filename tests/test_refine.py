@@ -629,3 +629,39 @@ def test_a_missing_geometry_file_says_so(tmp_path):
     with pytest.raises(ValueError, match="geometry file not found"):
         RefineRegion({"name": "x", "target_h_m": 30,
                       "geometry": {"file": str(tmp_path / "nope.geojson")}})
+
+
+def test_a_self_intersecting_polygon_is_not_repaired_by_a_buffer(tmp_path):
+    """`buffer(d)` silently repairs a bow-tie, and the validity check
+    downstream then sees only the repair."""
+    import json
+
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    path = tmp_path / "bad.geojson"
+    ring = [[139.0, 35.0], [139.01, 35.01], [139.0, 35.01],
+            [139.01, 35.0], [139.0, 35.0]]
+    path.write_text(json.dumps({
+        "type": "FeatureCollection",
+        "features": [{"type": "Feature", "properties": {},
+                      "geometry": {"type": "Polygon", "coordinates": [ring]}}]}))
+    for spec in ({"file": str(path)}, {"file": str(path), "buffer_m": 1}):
+        with pytest.raises(ValueError, match="not a valid polygon"):
+            RefineRegion({"name": "bad", "target_h_m": 30, "geometry": spec})
+
+
+def test_the_ramp_is_declared_in_seconds_not_internal_steps(tmp_path):
+    """IRAMP counts internal steps, so a hard-coded value made the ramp move
+    with the external step while the manifest kept saying 86,400 s."""
+    import re
+    import runpy
+    from pathlib import Path as P
+
+    root = P(__file__).resolve().parents[1]
+    env = runpy.run_path(str(root / "notebooks/383_m2_case_prep.py"))
+    for dte in (5.0, 1.5):
+        env["namelist"].__globals__["DTE"] = dte
+        text = env["namelist"](P("/tmp/in"), P("/tmp/out"))
+        iramp = int(re.search(r"(?m)^\s*IRAMP\s*=\s*(\d+)", text).group(1))
+        assert iramp * dte * env["ISPLIT"] == pytest.approx(
+            env["RAMP_SECONDS"], rel=1e-3)

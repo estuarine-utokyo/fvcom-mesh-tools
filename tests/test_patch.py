@@ -1060,3 +1060,105 @@ def test_the_field_slope_is_measured_not_derived():
     assert g["max_slope"] < g["c4_reference_gradation"]
     assert t["max_slope"] > g["max_slope"]
     assert t["fraction_above_reference"] > 0
+
+
+# --------------------------------------------- what the FOURTH review found
+#
+# gpt-6-astra's fourth pass ran out of model capacity before writing a
+# report, but not before leaving twelve failing probes. All twelve
+# reproduced. These are the regressions.
+
+
+def _check(check_id="c1_min_angle", n=1, offenders=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(check_id=check_id, status="fail", requirement=">= 30",
+                           observed=f"{n} failures", n_violations=n,
+                           offenders=offenders if offenders is not None else [])
+
+
+def test_a_failing_check_that_names_nobody_is_the_patch_s():
+    """The most dangerous shape of this bug: QA fails, nothing is attributed,
+    and "0 introduced" accepts the mesh.
+
+    `node_index_valid` fails with `offenders=[]`, and the attribution loop
+    then yields nothing at all.
+    """
+    from fvcom_mesh_tools.patch import introduced_violations
+
+    out = introduced_violations([_check("node_index_valid", n=1)], 10)
+    assert len(out) == 1
+    assert out[0]["kind"] == "unattributed"
+
+
+def test_violations_a_check_counted_but_did_not_name_are_the_patch_s():
+    """run_qa truncates its offender list; the unlisted ones are unproven."""
+    from fvcom_mesh_tools.patch import introduced_violations
+
+    listed = [{"kind": "element", "id": i} for i in range(3)]
+    out = introduced_violations([_check(n=10, offenders=listed)], 10)
+    assert [v["kind"] for v in out] == ["unattributed"]
+    assert out[0]["n_unattributed"] == 7
+
+
+def test_an_offender_this_cannot_place_is_not_waved_through():
+    """An id that is a pair used to raise TypeError inside the attribution."""
+    from fvcom_mesh_tools.patch import introduced_violations
+
+    tri = np.array([[0, 1, 2], [0, 2, 3]])
+    out = introduced_violations(
+        [_check("no_duplicate_nodes", n=1,
+                offenders=[{"kind": "node_pair", "id": [0, 1]}])], 2, tri)
+    assert len(out) == 1
+
+
+def test_limit_rfactor_accepts_a_flat_bottom():
+    """`rfactor_limit: base` passes the base's own worst r, which is 0 for a
+    constant-depth base, and that used to raise."""
+    from fvcom_mesh_tools.refine import limit_rfactor
+
+    elements = np.array([[0, 1, 2], [0, 2, 3]])
+    depths = np.full(4, 8.0)
+    out, info = limit_rfactor(elements, depths, np.array([0, 1, 1, 0], dtype=bool), 0.0)
+    assert info["converged"]
+    assert np.array_equal(out, depths)
+
+
+def test_an_unfixable_r_factor_edge_is_not_called_converged():
+    """A new edge between two frozen nodes cannot be fixed here, and saying
+    so is the caller's only chance to notice it."""
+    from fvcom_mesh_tools.refine import limit_rfactor
+
+    depths = np.array([3.0, 4.5, 6.75, 4.5])
+    after = np.array([[0, 1, 2], [0, 2, 3]])   # new connectivity: 0-2 is new
+    _, info = limit_rfactor(after, depths, np.zeros(4, dtype=bool), 0.2,
+                            depth_min=3.0, depth_max=6.75)
+    assert not info["converged"]
+    assert info["n_over_rmax_frozen_pair"] == 1
+    assert info["n_over_rmax_movable"] == 0
+
+
+def test_field_gradation_measures_the_gradient_not_the_axes():
+    """A ramp rising equally in x and y has slope sqrt(2) * 0.35, and axis
+    differences report 0.35 -- a factor sqrt(2) gentler than it is."""
+    from fvcom_mesh_tools.patch import field_gradation
+
+    box = shapely.box(0, 0, 100, 100)
+    rep = field_gradation(lambda p: 100 + 0.35 * np.asarray(p)[:, 0]
+                          + 0.35 * np.asarray(p)[:, 1], box, spacing=10.0)
+    assert rep["max_slope"] == pytest.approx(np.hypot(0.35, 0.35), rel=1e-6)
+
+
+def test_a_region_swallowed_by_another_s_transition_is_reported():
+    """Only core-to-core overlap was looked at, so a 5 m core 200 m away with
+    a 1 km transition swallowed a 90 m core and nothing was said."""
+    from fvcom_mesh_tools.patch import region_conflicts
+
+    fine = shapely.Point(500, 700).buffer(50.0)
+    coarse = shapely.Point(700, 700).buffer(30.0)
+    rep = region_conflicts([(fine, 5.0, 1000.0), (coarse, 90.0, 100.0)],
+                           ["fine", "coarse"])
+    assert not rep["any_overlap"], "their cores do not touch"
+    assert "coarse" in rep["finer_than_declared"]
+    assert rep["finer_than_declared"]["coarse"]["gets_h_m"] < 90.0
+    assert rep["finer_than_declared"]["coarse"]["by_core_overlap"] is False

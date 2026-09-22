@@ -301,7 +301,7 @@ def export_fvcom_case(
     outdir: str | Path,
     casename: str,
     *,
-    obc_type: int | Sequence[int] = 1,
+    obc_type: int | Sequence[int] | None = None,
     cor: np.ndarray | Sequence[float] | None = None,
     sponge: Sequence[tuple[int, float, float]] | None = None,
     write_empty_spg: bool = False,
@@ -320,6 +320,12 @@ def export_fvcom_case(
     ``write_empty_spg`` is set; ``.2dm`` unless ``twodm=False``.
     Returns the mapping of file kind to written path.
     """
+    # A mesh read by read_fvcom_case carries the type its file declared, and
+    # that is the right default: making every caller remember to pass it is
+    # how a base declaring type 2 got written back out as type 1 with nothing
+    # said (fourth review).
+    if obc_type is None:
+        obc_type = getattr(mesh, "obc_type", 1)
     if obc_depth_control and mesh.open_boundaries:
         mesh, _ = apply_obc_depth_control(mesh)
     outdir = Path(outdir).resolve()
@@ -419,22 +425,42 @@ def read_dep(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     return data[:, :2], data[:, 2]
 
 
-def read_obc(path: str | Path) -> np.ndarray:
+def read_obc(path: str | Path, with_types: bool = False):
     """Read ``casename_obc.dat``; returns the 0-indexed node ids in file order.
 
     File order is along-boundary order for every file this project writes or
     consumes, and the refinement driver relies on it: it splits the outer
     boundary loop at the arc's two ends.
+
+    ``with_types`` also returns the FVCOM boundary type of each row.  The type
+    is part of the model input -- odd is elevation only, even adds nonlinear
+    flux (``mod_obcs.F``) -- and dropping it on read means a case written back
+    out gets the writer's default of 1.  A base declaring type 2 came back
+    as type 1 with nothing said (fourth review).
     """
     path = Path(path).resolve()
     with path.open() as f:
         lines = [ln for ln in (x.strip() for x in f) if ln]
     n = _header_count(lines[0], "OBC Node Number")
-    ids = np.array([int(ln.split()[1]) for ln in lines[1:1 + n]],
-                   dtype=np.int64) - 1
-    if ids.size != n:
+    rows = [ln.split() for ln in lines[1:1 + n]]
+    if len(rows) != n:
         raise ValueError(f"{path.name}: expected {n} OBC rows")
-    return ids
+    ids = np.array([int(r[1]) for r in rows], dtype=np.int64) - 1
+    if not with_types:
+        return ids
+    types = np.array([int(r[2]) if len(r) > 2 else 1 for r in rows],
+                     dtype=np.int64)
+    return ids, types
+
+
+def read_obc_types(path: str | Path) -> list[int]:
+    """The distinct FVCOM boundary types in an ``_obc.dat``, in file order."""
+    _, types = read_obc(path, with_types=True)
+    seen: list[int] = []
+    for t in types.tolist():
+        if t not in seen:
+            seen.append(int(t))
+    return seen
 
 
 def boundary_loops(elements: np.ndarray) -> list[np.ndarray]:
@@ -495,17 +521,24 @@ def read_fvcom_case(
         raise ValueError(
             f"{Path(dep).name} has {dep_xy.shape[0]} nodes, "
             f"{Path(grd).name} has {nodes.shape[0]}")
+    if not np.isfinite(dep_xy).all() or not np.isfinite(depths).all():
+        raise ValueError(f"{Path(dep).name} contains non-finite values")
     off = np.linalg.norm(dep_xy - nodes, axis=1)
+    # `off.max() > tol` is False for NaN, so a single NaN coordinate used to
+    # turn this check off entirely rather than fail it (fourth review); the
+    # finiteness test above is what catches that.
     if float(off.max()) > coord_tol_m:
         raise ValueError(
             f"{Path(dep).name} does not sit on {Path(grd).name}: worst node "
             f"offset {off.max():.3g} m")
 
     open_boundaries: list[np.ndarray] = []
+    obc_types: list[int] = []
     if obc is not None:
-        ids = read_obc(obc)
+        ids, types = read_obc(obc, with_types=True)
         if ids.size:
             open_boundaries = [ids]
+            obc_types = sorted(set(types.tolist()))
 
     loops = boundary_loops(elements)
     area = [abs(float(np.dot(nodes[lp, 0], np.roll(nodes[lp, 1], -1))
@@ -528,7 +561,16 @@ def read_fvcom_case(
         land.append((20, np.append(outer, outer[0])))
     land += [(21, lp) for lp in loops if lp is not outer]
 
-    return Fort14Mesh(
+    if len(obc_types) > 1:
+        raise ValueError(
+            f"{Path(obc).name} mixes OBC types {obc_types}; this reader keeps "
+            "one type per segment, and silently collapsing them would change "
+            "the model input")
+    mesh = Fort14Mesh(
         title=title or Path(grd).stem,
         nodes=nodes, depths=depths, elements=elements,
         open_boundaries=open_boundaries, land_boundaries=land)
+    # Fort14Mesh has no field for it, so it rides alongside; the caller passes
+    # it back to export_fvcom_case rather than taking the writer's default.
+    mesh.obc_type = obc_types[0] if obc_types else 1
+    return mesh

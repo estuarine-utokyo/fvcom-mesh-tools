@@ -779,6 +779,38 @@ notice any of them — which is the point. The differences between the three
 are not a ranking: they are three slightly different perturbations, all far
 below anything a tide gauge or a model user would act on.
 
+## 6.6 What the fourth review found
+
+gpt-6-astra's fourth pass ran out of model capacity before it could write a
+report, but not before leaving **twelve failing probes**. All twelve
+reproduced. They are now regressions in the suite, and the one that matters
+most answers the question the review was asked — *what is the single most
+likely way this produces a wrong mesh that everything here reports as
+correct?*
+
+| finding | what was wrong | what it is now |
+|---|---|---|
+| **a failing gate could read as "0 introduced"** | `introduced_violations` walked the offender list, and a check that names **nobody** — `node_index_valid` fails with `offenders=[]` — yielded nothing at all. So QA could fail and the patch be accepted | a failing check that named nobody, or named fewer than it counted, is the patch's. Attribution is a claim, and the absence of one is not a claim of innocence |
+| truncated offender lists | `run_qa` caps the list at `max_offenders`; the unlisted violations were invisible | counted as `unattributed` |
+| an unplaceable offender crashed | an `id` that is a pair (`node_pair`) hit `int(list)` | counted as the patch's |
+| a non-converged r-factor was printed and ignored | the base guarantees r ≤ 0.2 and the patch is supposed to inherit it | the seed is rejected |
+| an unfixable r-factor edge was called converged | `converged` looked only at edges the limiter could move, so a **new** edge between two frozen nodes — new connectivity joining two retained nodes that were never neighbours — passed | `converged` is about every edge; the driver decides whether a frozen-pair violation is in the base or is the patch's |
+| a flat-bottom base raised | `rfactor_limit: base` passes the base's own worst r, which is 0 for constant depth, and `rmax` demanded `> 0` | `0 <= rmax < 1` |
+| OBC types were silently changed | `read_obc` dropped the type and the writer defaulted to 1, so a base declaring **type 2** came back type 1 | the type rides with the mesh and is the writer's default; a file mixing types is refused |
+| a NaN turned off a check | `off.max() > tol` is False for NaN, so one non-finite coordinate in a dep file disabled the "does this dep file sit on this grid" test entirely | finiteness first |
+| `buffer_m` repaired an invalid polygon | `buffer(d)` silently fixes a bow-tie, and the validity check downstream then saw only the repair | the ring is validated before any buffer |
+| a region swallowed by a neighbour's transition | `region_conflicts` looked only at core-to-core overlap, so a 5 m core 200 m away with a 1 km transition swallowed a 90 m core and nothing was said | the test is the field, not the geometry |
+| `field_gradation` was not rotation invariant | it differenced along each axis, so a ramp rising equally in x and y read 0.35 where the gradient is 0.495 | the gradient magnitude |
+| the ramp moved with the time step | `IRAMP` counts **internal** steps, so a hard-coded 8640 was 5 days at DTE = 5 s and 1.5 days at 1.5 s, while the manifest said 86,400 s throughout | `RAMP_SECONDS` is declared and `IRAMP` derived |
+
+All three recipes still reach QA 21/21 with 0 introduced afterwards.
+
+The ramp change alters the absolute M2 numbers in §6.2 and §6.5 slightly —
+those runs used the 129,600 s ramp the bug produced. Both cases in each
+comparison shared it, and the spin-up is 15 days against a ramp of one or
+one and a half, so the differences reported there stand; the absolute
+constants would move in the third decimal.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as

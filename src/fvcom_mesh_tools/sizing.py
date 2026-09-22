@@ -131,6 +131,16 @@ def _geometry_from_file(spec):
     if not isinstance(geom, Polygon):
         raise ValueError(f"{path.name}: the feature is a {geom.geom_type}, "
                          "and a region must be a polygon")
+    # Before any buffer. `buffer(0)` and `buffer(d)` both repair a
+    # self-intersecting ring, so a bow-tie declared as a fishery came back a
+    # valid polygon of whichever lobe shapely preferred, and the validity
+    # check downstream saw only the repair (fourth review).
+    if not geom.is_valid or geom.is_empty or geom.area <= 0:
+        from shapely.validation import explain_validity
+
+        raise ValueError(f"{path.name}: the feature is not a valid polygon "
+                         f"({explain_validity(geom)}); fix it at the source "
+                         "rather than letting a buffer repair it")
     if "buffer_m" in spec:
         from shapely.affinity import scale
 

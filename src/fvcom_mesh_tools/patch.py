@@ -881,6 +881,27 @@ def patch_sizing(
     return h
 
 
+def _region_size(region, over) -> float:
+    """The smallest size one region asks for anywhere in ``over``.
+
+    Its own target inside its core, and its ramp where ``over`` lies in its
+    transition -- the ramp's value at the closest approach, which is the
+    finest the region asks for there.  Used to decide whether a region is
+    finer than it declared because of somebody else.
+    """
+    import shapely
+
+    geom, target, width, _ = region
+    d = float(shapely.distance(geom, over)) if not shapely.intersects(geom, over) \
+        else 0.0
+    if d <= 0:
+        return float(target)
+    if width <= 0:
+        return float("inf")
+    u = min(d / width, 1.0)
+    return float("inf") if u >= 1.0 else float(target / (1.0 - u))
+
+
 def _region4(region):
     """``(geom, target, width[, priority])`` -> a four-tuple."""
     if len(region) == 4:
@@ -926,11 +947,13 @@ def field_gradation(h, footprint, spacing: float | None = None,
     size = np.asarray(h(np.column_stack([gx.ravel(), gy.ravel()]))
                       ).reshape(gx.shape)
     size = np.where(inside, size, np.nan)
-    slopes = []
-    for axis in (0, 1):
-        d = np.abs(np.diff(size, axis=axis)) / spacing
-        slopes.append(d[np.isfinite(d)])
-    allslopes = np.concatenate(slopes) if slopes else np.zeros(0)
+    # The MAGNITUDE of the gradient, not the difference along each axis
+    # separately: a field rising equally in x and y has a slope of
+    # sqrt(2) * 0.35 = 0.495 and axis differences report 0.35, so a diagonal
+    # ramp reads a factor sqrt(2) gentler than it is (fourth review).
+    gy, gx = np.gradient(size, spacing, spacing)
+    allslopes = np.hypot(gx, gy)
+    allslopes = allslopes[np.isfinite(allslopes)]
     limit = 1.0 / np.sqrt(1.0 - max_area_change) - 1.0
     return {
         "spacing_m": float(spacing),
@@ -978,24 +1001,31 @@ def region_conflicts(regions, names=None) -> dict[str, Any]:
                 "targets_h_m": {names[a]: r4[a][1], names[b]: r4[b][1]},
                 "effective_target_h_m": min(r4[a][1], r4[b][1]),
             })
+    # A region comes out finer than it declared for two reasons, and only one
+    # of them is an overlap of CORES: a neighbour's TRANSITION can reach it
+    # and be finer there than its own target.  A 5 m core 200 m away with a
+    # 1 km transition swallows a 90 m core whole, and looking only at core
+    # intersections reported nothing at all (fourth review).  So the test is
+    # the field: what this region would get alone, against what it gets.
     for i, name in enumerate(names):
-        others = [j for j in range(len(r4)) if j != i and r4[j][1] < r4[i][1]]
-        if not others:
+        alone = _region_size(r4[i], r4[i][0])
+        joint = min(_region_size(r4[j], r4[i][0]) for j in range(len(r4)))
+        if joint >= alone - 1e-9:
             continue
+        others = [names[j] for j in range(len(r4)) if j != i
+                  and _region_size(r4[j], r4[i][0]) < alone - 1e-9]
+        cores = [j for j in range(len(r4)) if j != i
+                 and not shapely.intersection(r4[i][0], r4[j][0]).is_empty]
         taken = shapely.intersection(
-            r4[i][0], shapely.union_all([r4[j][0] for j in others]))
-        if taken.is_empty or taken.area <= 0:
-            continue
+            r4[i][0], shapely.union_all([r4[j][0] for j in cores])) \
+            if cores else shapely.Polygon()
         finer[name] = {
             "area_m2": float(taken.area),
             "fraction": float(taken.area / r4[i][0].area),
             "own_target_h_m": r4[i][1],
-            "gets_h_m": min(r4[j][1] for j in others
-                            if not shapely.intersection(r4[i][0],
-                                                        r4[j][0]).is_empty),
-            "because_of": sorted({names[j] for j in others
-                                  if not shapely.intersection(
-                                      r4[i][0], r4[j][0]).is_empty}),
+            "gets_h_m": float(joint),
+            "because_of": sorted(others),
+            "by_core_overlap": bool(cores),
         }
     return {
         "overlapping_pairs": pairs,
@@ -1219,8 +1249,12 @@ def introduced_violations(qa_checks, n_retained_elements: int,
     element, a frozen node whose fan now contains a patch face -- is the
     patch's, and is what this returns.
 
-    ``qa_checks`` are ``QAReport.checks``. Run QA with a ``max_offenders``
-    large enough to list them all, or this undercounts. ``elements`` is the
+    ``qa_checks`` are ``QAReport.checks``.  An offender this cannot place is
+    counted as the patch's, and so is every violation a check counted but did
+    not name: attribution is a claim, and the absence of one is not a claim
+    of innocence.  Run QA with a ``max_offenders`` large enough to list them
+    all, or the report fills with ``unattributed`` entries that are true but
+    unhelpful. ``elements`` is the
     patched connectivity, needed to attribute a node offender (C5 valence):
     a frozen node is inherited only while every face around it is retained.
     Without it a node offender is always counted as the patch's, which errs
@@ -1231,21 +1265,41 @@ def introduced_violations(qa_checks, n_retained_elements: int,
     for check in qa_checks:
         if getattr(check, "status", "") != "fail":
             continue
-        for off in getattr(check, "offenders", []):
+        offenders = list(getattr(check, "offenders", []) or [])
+        for off in offenders:
             kind = off.get("kind")
+            ident = off.get("id")
             if kind == "element":
-                elems = [off.get("id")]
+                elems = [ident]
             elif kind == "edge":
                 elems = list(off.get("elements", []))
-            elif tri is not None and off.get("id") is not None:
-                elems = np.flatnonzero((tri == int(off["id"])).any(axis=1)).tolist()
+            elif tri is not None and isinstance(ident, (int, np.integer)):
+                elems = np.flatnonzero((tri == int(ident)).any(axis=1)).tolist()
             else:
-                elems = None      # unattributable without the connectivity
+                # An offender this cannot place -- a kind it does not know, an
+                # id that is a pair, or no connectivity to look it up in --
+                # is the patch's. Attribution is a claim, and the absence of
+                # one is not a claim of innocence.
+                elems = None
             if elems is not None and elems and all(
                     e is not None and e < n_retained_elements for e in elems):
                 continue
             out.append({"check": check.check_id, "requirement": check.requirement,
                         "observed": check.observed, **off})
+        # A failing check that named nobody, or named fewer than it counted,
+        # cannot be shown to be the base's. run_qa truncates its offender
+        # list at max_offenders and some checks report none at all --
+        # node_index_valid fails with `offenders=[]` -- and the loop above
+        # then yields nothing, which reads as "0 introduced" and accepts a
+        # mesh with a failing gate (fourth review).
+        counted = int(getattr(check, "n_violations", 0) or 0)
+        unlisted = max(0, counted - len(offenders)) or (0 if offenders else 1)
+        if unlisted:
+            out.append({"check": check.check_id, "requirement": check.requirement,
+                        "observed": check.observed, "kind": "unattributed",
+                        "n_unattributed": unlisted,
+                        "note": "the check named fewer offenders than it counted, "
+                                "so they cannot be shown to be the base's"})
     return out
 
 

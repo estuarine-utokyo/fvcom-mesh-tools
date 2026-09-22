@@ -576,8 +576,11 @@ def limit_rfactor(elements, depths, movable, rmax: float, *,
     h = np.array(depths, dtype=float)
     h0 = h.copy()
     free = np.asarray(movable, dtype=bool)
-    if rmax <= 0 or rmax >= 1:
-        raise ValueError("rmax must be in (0, 1)")
+    if not 0.0 <= rmax < 1.0:
+        raise ValueError("rmax must be in [0, 1)")
+    # rmax = 0 is what a constant-depth base asks for -- "no jump at all" --
+    # and `rfactor_limit: base` passes the base's own worst r, so a flat
+    # bottom reached this with 0 and raised (fourth review).
     ratio = (1.0 + rmax) / (1.0 - rmax)
     lo = float(depth_min) if depth_min is not None else -np.inf
     hi_cap = float(depth_max) if depth_max is not None else np.inf
@@ -605,12 +608,23 @@ def limit_rfactor(elements, depths, movable, rmax: float, *,
                 h[j] = np.clip(h[i] / ratio, lo, hi_cap)
     r = np.abs(h[e[:, 0]] - h[e[:, 1]]) / (h[e[:, 0]] + h[e[:, 1]])
     touched = free[e].any(axis=1)
+    over = r > rmax + 1e-9
     moved = np.abs(h - h0)
+    # `converged` is about EVERY edge, not only the ones this could move. An
+    # edge between two frozen nodes is unfixable here, and a patch can create
+    # one that the base never had -- new connectivity joining two retained
+    # nodes that were not neighbours. Reporting that as converged because
+    # nothing could be done about it is how it would reach a mesh unnoticed
+    # (fourth review). The caller decides whether a frozen-pair violation is
+    # inherited; it has the base to compare against and this does not.
     return h, {
         "rmax": float(rmax),
         "rounds": int(n_rounds),
-        "converged": bool(not (r[touched] > rmax + 1e-9).any()),
-        "n_edges_over_rmax": int((r[touched] > rmax + 1e-9).sum()),
+        "converged": bool(not over.any()),
+        "n_edges_over_rmax": int(over.sum()),
+        "n_over_rmax_movable": int((over & touched).sum()),
+        "n_over_rmax_frozen_pair": int((over & ~touched).sum()),
+        "frozen_pair_edges_over_rmax": e[over & ~touched].tolist(),
         "max_r_on_new_edges": float(r[touched].max()) if touched.any() else 0.0,
         "max_r_frozen": float(r[~touched].max()) if (~touched).any() else 0.0,
         "n_depths_changed": int((moved > 1e-9).sum()),
