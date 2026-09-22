@@ -343,8 +343,11 @@ def analyze(run_root, output, figure):
         json.dumps(clean(report), indent=2, allow_nan=False) + "\n"
     )
     print(json.dumps(clean(health), indent=2, allow_nan=False), flush=True)
-    if len(maps) != 3:
-        raise RuntimeError("Incomplete or unhealthy run(s); see comparison.json and FVCOM logs")
+    if len(maps) != len(LABELS):
+        missing = [x for x in LABELS if x not in maps]
+        raise RuntimeError(
+            f"Incomplete or unhealthy run(s): {', '.join(missing)}; "
+            "see comparison.json and FVCOM logs")
     # A gauge that sits OUTSIDE the mesh gets the nearest wet node instead, and
     # two meshes put that node in different places -- so at those stations the
     # A/B difference is partly the difference between two sampling points, not
@@ -443,11 +446,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=DEFAULT_RUN_ROOT)
     parser.add_argument("--output", type=Path, default=ROOT / "outputs/m2_383")
-    parser.add_argument(
-        "--figure", type=Path, default=ROOT / "outputs/figures/383_m2_comparison.png"
-    )
+    # The figure goes next to its own results by default. A fixed
+    # outputs/figures/383_*.png meant a second experiment silently overwrote
+    # the first one's figure while writing its tables somewhere else.
+    parser.add_argument("--figure", type=Path, default=None)
     args = parser.parse_args()
-    analyze(args.root.resolve(), args.output.resolve(), args.figure.resolve())
+    out = args.output.resolve()
+    figure = args.figure.resolve() if args.figure else out / f"{out.name}.png"
+    analyze(args.root.resolve(), out, figure)
 
 
 if __name__ == "__main__":

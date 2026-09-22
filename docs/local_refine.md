@@ -572,6 +572,56 @@ Three things the pair shows that one alone does not:
   coastlines — goto2023's and this project's OSM-derived one — and neither
   refinement changes its own by a single square metre.
 
+### 6.2 The M2 test: does the refined mesh run, and does it stay local?
+
+`jobs/octopus/415_refine_m2_chain.sh` submits the base and the refined mesh
+as two M2 integrations that differ in **one** thing. They share the open
+boundary node list, the tide, the sponge, the sigma levels, the depths
+outside the patch (bit-identical) and the external step -- 1.5 s, which is
+the *refined* mesh's allowance. At each mesh's own step the comparison would
+be of two time steps as well as two meshes.
+
+Run 2026-09-22, jobs 115337-115341, 20 days from 2021-01-01, 15-day spin-up,
+harmonics over the last 5 days, 64 ranks each.
+
+| | base | refined |
+|---|---|---|
+| elements | 8,252 | 10,496 |
+| records written | 961 / 961 | 961 / 961 |
+| non-finite values | none | none |
+| nodes wet throughout | 4,734 (all) | 5,861 (all) |
+| max abs elevation | 0.49866 m | 0.49871 m |
+| max horizontal speed | 0.96335 m/s | 0.96327 m/s |
+| volume drift | −9.5e−9 /day | −8.3e−9 /day |
+| half-window amplitude change | 0.01 mm | 0.00 mm |
+| wall time on 64 cores | 6 min | 7 min |
+
+**It runs.** Twenty days at 1.5 s with no divergence, no drying and no
+non-finite value anywhere.
+
+**And it stays local.** The M2 constants at the five gauges:
+
+| gauge | Δ amplitude (refined − base) | Δ phase |
+|---|---|---|
+| TOKYO-SIBAURA | +0.086 mm | −0.0029° |
+| HARUMI | +0.087 mm | −0.0030° |
+| TIBA-TIBA LIGHT | +0.087 mm | −0.0031° |
+| SINKO | +0.075 mm | −0.0033° |
+| YOKOSUKA | +0.053 mm | −0.0024° |
+
+0.05–0.09 mm on amplitudes of 0.43–0.49 m is a relative change of 2e−4, and
+0.003° of M2 phase is about a tenth of a second. That is the result a local
+refinement should give: a 300 m fishery resolved at 30 m, several kilometres
+from the nearest gauge, has no business changing the bay's tide. The frozen
+contract is a statement about the mesh; this is the same statement about the
+model's answer.
+
+Three of the five gauges (TOKYO-SIBAURA, SINKO, YOKOSUKA) lie outside this
+coastline and are sampled at the nearest wet node, 493–1,062 m away. That is
+inherited from the base and identical in both cases, so it does not affect
+the difference -- but it does mean the model-minus-observed columns in
+`stations.csv` are not a skill statement for those three.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as
