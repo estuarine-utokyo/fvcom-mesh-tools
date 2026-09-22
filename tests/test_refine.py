@@ -697,3 +697,25 @@ def test_the_limiter_refuses_bounds_that_destroy_the_depths(bad):
     with pytest.raises(ValueError):
         limit_rfactor(np.array([[0, 1, 2]]), np.array([1.0, 10.0, 1.0]),
                       np.ones(3, dtype=bool), 0.2, **bad)
+
+
+def test_the_preflight_brackets_the_step_a_real_fill_delivers():
+    """The equilateral bound is optimistic and somebody pays for it.
+
+    Measured on the finished meshes: Futtsu achieved 2.49 s against a 4.07 s
+    prediction, Banzu 2.19 s against 4.13. A cell that only just passes C1
+    and C2 -- 30-30-120 -- has 1/sqrt(3) of an equilateral cell's altitude,
+    and a real fill contains such cells, so the pessimistic end of that
+    bracket is what a run should be sized on.
+    """
+    from fvcom_mesh_tools.refine import RefineRegion, preflight
+
+    region = RefineRegion({"name": "r", "target_h_m": 40.0,
+                           "geometry": {"circle": {"center": [139.8, 35.4],
+                                                   "radius_m": 300}}})
+    rep = preflight(region, gradation=0.165, dt_expected_s=4.5,
+                    ambient_h_m=500.0, depth_of=lambda lon, lat: np.full(len(lon), 7.2))
+    assert rep["dt_worst_legal_cell_s"] == pytest.approx(rep["dt_s"] / np.sqrt(3.0))
+    assert rep["dt_worst_legal_cell_s"] < 2.49 < rep["dt_s"], (
+        "the bracket must contain what Futtsu actually delivered")
+    assert "dt_worst_legal_cell_s" in rep["dt_alert"]

@@ -871,6 +871,54 @@ lattice that is now refined; the slope it was testing is still exactly 1.
 The delivered meshes were re-measured under the new gate and pass it:
 this is what calibrated it.
 
+## 6.9 A second fishery, and what building it taught
+
+Five reviews is enough reviewing; the remaining holes are likelier to come
+out of a second operational case than a sixth reading. So: **Banzu**, the
+Obitsu river flat off Kisarazu, on the opposite shore, in
+`recipes/refine/banzu_nori.yaml`. Nothing about it resembles Futtsu:
+
+| | Futtsu | Banzu |
+|---|---|---|
+| shape | a 300 m circle | a 3,000 x 400 m strip |
+| transition against its own width | 4.2x | **7.7x** |
+| distance to land | 654 m | **48 m** |
+| rim that is coastline | 19 of 52 edges | **36 of 54** |
+| core | 0.283 km2 | **1.200 km2** |
+| what the patch does to the base | +26 % of its elements | **+78 %** |
+
+It works, and it needed eight seeds. Seeds 0-4 each left one to four QA
+violations the base did not have; seed 7 came back clean. The delivered
+mesh is 5,409 nodes and 10,022 elements against the base's 3,210 and 5,645,
+with 99.9 % of the requested water inside 1.25x the 40 m target, the
+coastline moved 0.0 m, the frozen zone bit-identical, and r <= 0.2
+preserved on every edge.
+
+Three things the case taught that no probe had:
+
+1. **A valence-9 node can be unfixable by flips.** Four of the first five
+   seeds ended with one node carrying nine incident elements, and the
+   dedicated valence pass fixed none of them. Checked by hand on the best
+   of them: all nine incident edges were flippable by convexity and by the
+   valence of the far nodes, and **every one of the nine took the local
+   minimum angle below the 30 degree gate** -- the best from 40.5 to 29.5.
+   The pass was right to refuse. What would fix such a node is an edge
+   collapse or a local retriangulation, which the repair does not have; the
+   cheap answer is another seed, and that is what was used.
+2. **The C5 gate is a convention, not an FVCOM limit, in this build.**
+   `tge.F:240-264` computes `MX_NBR_ELEM` at run time and allocates `NBVE`
+   from it: there is no compile-time cap of 8. The production base tops out
+   at exactly 8, so `max_valence: 8` keeps a patch no worse than its base,
+   which is a defensible policy -- but an operator who knows the build can
+   raise it rather than spend seeds.
+3. **The preflight's time step was optimistic by a factor of 1.9.** Banzu
+   predicted 4.13 s and delivered 2.19 s; Futtsu predicted 4.07 and
+   delivered 2.49. The equilateral bound is an upper bound and says so, but
+   nobody can size a run from a number that is twice the truth. A cell that
+   only just passes C1 and C2 has 1/sqrt(3) of an equilateral cell's
+   altitude, and `dt_worst_legal_cell_s` now reports that: 2.38 s for
+   Banzu, 2.35 for Futtsu, either side of what both actually delivered.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as

@@ -356,7 +356,8 @@ def preflight(
             "bound at Cr = 1 with no velocity allowance, and it is sampled over the "
             "CORE only: a legal 30-30-120 cell of the same side has 1/sqrt(3) of the "
             "altitude, and the transition can be deeper than anything sampled here. "
-            "Measure the achieved step on the finished mesh.")
+            f"Size the run on dt_worst_legal_cell_s = {dt / np.sqrt(3.0):.2f} s "
+            "instead, and measure the achieved step on the finished mesh.")
 
     area = _to_metres(geom, lat0).area
     outer = _to_metres(geom.buffer(width / 111000.0), lat0).area
@@ -383,6 +384,14 @@ def preflight(
         "core_depth_max_m": float(depth.max()),
         "dt_s": float(dt),
         "dt_by_shortest_edge_s": float(dt_edge),
+        # The equilateral bound is optimistic and the caller pays for the
+        # difference in wall clock. A cell of the same side that only just
+        # passes the C1 and C2 gates -- 30-30-120 -- has 1/sqrt(3) of the
+        # altitude, and a real fill contains such cells: measured on the
+        # finished meshes, Futtsu achieved 2.49 s against 4.07 predicted and
+        # Banzu 2.19 s against 4.13. Both sit inside this bracket, so the
+        # pessimistic end is what a run should be sized on.
+        "dt_worst_legal_cell_s": float(dt / np.sqrt(3.0)),
         "dt_measure": "minimum altitude of an equilateral cell / sqrt(g*Hmax)",
         "dt_expected_s": float(dt_expected_s),
         "dt_alert": alert,

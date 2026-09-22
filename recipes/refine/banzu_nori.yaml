@@ -1,0 +1,41 @@
+# A second fishery, on the other side of the bay from Futtsu.
+#
+# Banzu (the Obitsu river tidal flat off Kisarazu) is one of Tokyo Bay's nori
+# grounds, and nori is grown on rafts laid in long strips parallel to the
+# shore. So this request is nothing like the Futtsu circle, deliberately:
+#
+#   * it is a STRIP, 3,000 x 400 m. Its transition, 3,077 m at the declared
+#     gradation, is 7.7 times its own width -- the ramp runs far further
+#     across the region than the region is wide.
+#   * it sits 48 m off the mainland, so the cut takes several kilometres of
+#     coastline with it and `coastline: preserve` has to give all of it back.
+#   * it is 1.200 km2 against Futtsu's 0.283, on a base that is COARSER here
+#     (548 m ambient against 445), so the patch roughly doubles the mesh.
+#
+# Measured from the base before writing this: the whole strip is in water,
+# 4.6 m deep, 33 km from the open boundary. The outline in
+# geometry/banzu_nori_demo.geojson is a DEMONSTRATION rectangle placed on the
+# grounds' position and orientation. It is not a fishery-right boundary.
+#
+# The base is the production case, as in futtsu_nori.yaml: the `current`
+# hydro baseline's own grid and its m7001tp_rfac0p2_cap300 depths, inherited
+# node for node.
+base_mesh: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
+base_depth: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
+base_obc: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
+
+dt_expected_s: 4.5            # advisory: an alert, not a veto
+gradation: 0.165
+
+coastline: preserve
+coastline_tolerance_m: 50
+
+rfactor_limit: base
+
+refine:
+  - name: banzu_nori
+    geometry:
+      file: geometry/banzu_nori_demo.geojson
+      where: {NAME: banzu_nori}
+    target_h_m: 40            # achieved edge length; 5.4 s by minimum altitude
+    priority: 0

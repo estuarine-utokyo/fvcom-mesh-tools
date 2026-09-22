@@ -1,0 +1,46 @@
+{
+ "type": "FeatureCollection",
+ "name": "banzu_nori_demo",
+ "crs": {
+  "type": "name",
+  "properties": {
+   "name": "urn:ogc:def:crs:OGC:1.3/CRS84"
+  }
+ },
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "NAME": "banzu_nori",
+    "NOTE": "DEMONSTRATION outline, not a fishery-right boundary"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       139.88343,
+       35.385224
+      ],
+      [
+       139.879409,
+       35.386694
+      ],
+      [
+       139.892874,
+       35.411392
+      ],
+      [
+       139.896896,
+       35.409922
+      ],
+      [
+       139.88343,
+       35.385224
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}
