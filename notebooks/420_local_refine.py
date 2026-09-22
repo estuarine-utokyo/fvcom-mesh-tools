@@ -148,6 +148,10 @@ def region_in_metres(region):
 
 
 regions_m = [(region_in_metres(r), r) for r in cfg["refine"]]
+for _g, _r in regions_m:
+    say(f"region {_r.name}: {_r.kind}, {_g.area / 1e6:.4f} km2, "
+        f"{len(_g.exterior.coords)} vertices"
+        + (f", from {Path(_r.source['file']).name}" if _r.source else ""))
 
 # The ambient size is MEASURED on the base mesh around the site, not taken
 # from the sizing recipe: what the transition has to reach is the mesh that
@@ -178,7 +182,16 @@ def depth_of(lon, lat):
     return np.ma.filled(_di(x, y), np.nan)
 
 
+# The declared regions in the mesh CRS, so a figure can outline what was
+# asked for without re-deriving it from a centre and a radius that only a
+# circle has.
+regions_report = [
+    {"name": r.name, "kind": r.kind, "target_h_m": r.target_h_m,
+     "source": r.source, "area_m2": float(g.area),
+     "xy": np.asarray(g.exterior.coords).round(3).tolist()}
+    for g, r in regions_m]
 reports = {"recipe": str(recipe), "base_mesh": str(cfg["base_mesh"]),
+           "regions": regions_report,
            "base_depth": str(cfg["base_depth"]) if cfg["base_depth"] else None,
            "base_obc": str(cfg["base_obc"]) if cfg["base_obc"] else None,
            "base_rmax": base_rmax, "preflight": [],

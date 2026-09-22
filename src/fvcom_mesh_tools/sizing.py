@@ -14,7 +14,16 @@ YAML schema (unknown keys are errors)::
         transition_m: 500     # optional linear blend outside geometry
         priority: 0           # higher wins; ties choose smaller target
 
-Geometry also accepts a GeoJSON Polygon, including holes. Coordinates are
+Geometry also accepts a GeoJSON Polygon, including holes, or a polygon read
+from a file::
+
+    geometry:
+      file: data/fishery.geojson   # or .shp; any CRS, reprojected to 4326
+      where: {NAME: "futtsu nori"} # optional attribute filter
+      index: 0                     # optional row of what remains
+      buffer_m: 25                 # optional outward buffer, metres
+
+which must resolve to exactly one polygon. Coordinates are
 EPSG:4326; sizes are never converted from degrees here. Distances/areas use a
 local equirectangular projection (111000 m/degree, cosine of mean latitude).
 Targets replace the ambient field within their footprint, including coarsening.
@@ -58,12 +67,97 @@ def shapely_affine(geom, sx, sy, centre):
     return affine_transform(geom, [sx, 0.0, 0.0, sy, float(centre[0]), float(centre[1])])
 
 
+def _geometry_from_file(spec):
+    """One polygon read from a GeoJSON or shapefile, in lon/lat.
+
+    A real fishery boundary arrives as a file, not as typed coordinates, and
+    transcribing it by hand is both tedious and a place to put a typo nobody
+    will find.  The file is reprojected to EPSG:4326 because that is the
+    vocabulary every other geometry form speaks.
+
+    It must resolve to **exactly one** polygon.  Several disjoint parts are
+    several regions and should be declared as several: a single
+    MultiPolygon would make the transition width, the cut and the report all
+    ambiguous, and silently taking the largest part would be worse.  When the
+    selection is not unique the error lists what was found.
+
+    Returns ``(geometry, provenance)``.
+    """
+    import geopandas as gpd
+    from shapely.geometry import MultiPolygon, Polygon
+
+    _keys(spec, ["file"], ["layer", "where", "index", "buffer_m"])
+    path = Path(str(spec["file"])).expanduser()
+    if not path.is_absolute():
+        path = path.resolve()
+    if not path.exists():
+        raise ValueError(f"geometry file not found: {path}")
+    gdf = gpd.read_file(path, layer=spec["layer"]) if "layer" in spec \
+        else gpd.read_file(path)
+    if gdf.crs is None:
+        raise ValueError(f"{path.name} has no CRS; a fishery boundary without "
+                         "one cannot be placed")
+    gdf = gdf.to_crs(4326)
+
+    where = spec.get("where") or {}
+    if not isinstance(where, dict):
+        raise ValueError("where must be a mapping of column -> value")
+    for column, value in where.items():
+        if column not in gdf.columns:
+            raise ValueError(f"{path.name} has no column {column!r}; "
+                             f"columns are {list(gdf.columns)}")
+        gdf = gdf[gdf[column] == value]
+    if "index" in spec:
+        idx = spec["index"]
+        if isinstance(idx, bool) or not isinstance(idx, int):
+            raise ValueError("index must be an integer row number")
+        if not 0 <= idx < len(gdf):
+            raise ValueError(f"index {idx} is outside the {len(gdf)} selected "
+                             f"feature(s) of {path.name}")
+        gdf = gdf.iloc[[idx]]
+    if len(gdf) != 1:
+        raise ValueError(
+            f"{path.name}: the selection is {len(gdf)} features, not one. "
+            "Narrow it with where:/index:, or declare one region per feature")
+
+    geom = gdf.geometry.iloc[0]
+    if isinstance(geom, MultiPolygon):
+        if len(geom.geoms) != 1:
+            raise ValueError(
+                f"{path.name}: the feature is a MultiPolygon of "
+                f"{len(geom.geoms)} parts. Disjoint parts are separate "
+                "regions; declare one each")
+        geom = geom.geoms[0]
+    if not isinstance(geom, Polygon):
+        raise ValueError(f"{path.name}: the feature is a {geom.geom_type}, "
+                         "and a region must be a polygon")
+    if "buffer_m" in spec:
+        from shapely.affinity import scale
+
+        metres = _positive(spec["buffer_m"], "buffer_m")
+        cos = float(np.cos(np.radians(geom.centroid.y)))
+        # Buffered in metres on the same equirectangular scale the circle
+        # form uses: a fishery boundary is buffered by tens of metres, which
+        # is not a projection problem.
+        local = scale(geom, 111000.0 * cos, 111000.0, origin=(0.0, 0.0))
+        geom = scale(local.buffer(metres), 1 / (111000.0 * cos), 1 / 111000.0,
+                     origin=(0.0, 0.0))
+    provenance = {"file": str(path), "layer": spec.get("layer"),
+                  "where": where or None, "index": spec.get("index"),
+                  "buffer_m": spec.get("buffer_m"),
+                  "n_vertices": int(len(geom.exterior.coords)),
+                  "n_holes": int(len(geom.interiors))}
+    return geom, provenance
+
+
 def _geometry(spec):
     from shapely.geometry import box, shape
 
     if not isinstance(spec, dict):
         raise ValueError("geometry must be a mapping")
-    if "circle" in spec:
+    if "file" in spec:
+        geom, _ = _geometry_from_file(spec)
+    elif "circle" in spec:
         # A centre and a radius is the most direct way to say "this fishery,
         # roughly here"; it is turned into a polygon so everything downstream
         # sees one geometry type.  The radius is metres, the centre lon/lat,

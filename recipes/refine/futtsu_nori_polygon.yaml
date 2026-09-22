@@ -1,0 +1,27 @@
+# The Futtsu nori area declared as a POLYGON read from a file, which is how a
+# real fishery-right boundary arrives. The circle recipe
+# (futtsu_nori_tool.yaml) refines the same water; this one exercises the
+# geometry a fishery actually has.
+#
+# recipes/refine/geometry/futtsu_nori_demo.geojson is a DEMONSTRATION outline
+# -- a 900 x 320 m rectangle rotated 35 deg to lie along the Futtsu shore,
+# 0.288 km2 -- not a fishery-right boundary. Replace it with the real one and
+# nothing else here changes.
+base_mesh: ../../outputs/base_tool/TokyoBayTool_grd.dat
+base_depth: ../../outputs/base_tool/TokyoBayTool_dep.dat
+base_obc: ../../outputs/base_tool/TokyoBayTool_obc.dat
+
+dt_expected_s: 4.5            # advisory: an alert, not a veto
+gradation: 0.165
+
+coastline: preserve
+coastline_tolerance_m: 50
+rfactor_limit: base
+
+refine:
+  - name: futtsu_nori
+    geometry:
+      file: geometry/futtsu_nori_demo.geojson
+      where: {NAME: futtsu_nori}
+    target_h_m: 30            # achieved edge length inside the polygon
+    priority: 0

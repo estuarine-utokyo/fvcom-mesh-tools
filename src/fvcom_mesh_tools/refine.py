@@ -123,12 +123,22 @@ class RefineRegion:
         # disc (review finding 14, 2026-09-22).
         geom_spec = spec["geometry"]
         self.kind = ("circle" if "circle" in geom_spec
-                     else "bbox" if "bbox" in geom_spec else "polygon")
+                     else "bbox" if "bbox" in geom_spec
+                     else "file" if "file" in geom_spec else "polygon")
         self.circle = (
             (float(geom_spec["circle"]["center"][0]),
              float(geom_spec["circle"]["center"][1]),
              float(geom_spec["circle"]["radius_m"]))
             if self.kind == "circle" else None)
+        # Where a polygon came from, so the report can say it. A fishery
+        # boundary read from a file is the case this exists for: "region
+        # futtsu_nori" is not enough to reproduce a run, and the file, the
+        # filter and the row are.
+        self.source = None
+        if self.kind == "file":
+            from fvcom_mesh_tools.sizing import _geometry_from_file
+
+            _, self.source = _geometry_from_file(geom_spec)
         self.target_h_m = _positive(spec["target_h_m"], "target_h_m")
         self.transition_m = (
             _positive(spec["transition_m"], "transition_m") if "transition_m" in spec else None
@@ -161,6 +171,10 @@ def load_refine(path) -> dict[str, Any]:
             geometry: {circle: {center: [139.7881, 35.3228], radius_m: 300}}
             target_h_m: 30
             priority: 0
+
+    ``geometry`` is also a GeoJSON ``Polygon``, a ``bbox``, or a polygon read
+    from a file -- ``{file: fishery.geojson, where: {...}, index: 0,
+    buffer_m: 25}`` -- which is how a real fishery boundary arrives.
     """
     import yaml
 
@@ -233,6 +247,15 @@ def load_refine(path) -> dict[str, Any]:
             raise ValueError("rfactor_limit must be in (0, 1), 'base' or 'off'")
     if not isinstance(cfg["refine"], list) or not cfg["refine"]:
         raise ValueError("refine must be a nonempty list")
+    # A relative geometry file resolves against the RECIPE, like base_mesh,
+    # not against whatever directory the run happens to start in. A recipe
+    # that only works from the repository root is not a recipe.
+    here = Path(path).resolve().parent
+    for r in cfg["refine"]:
+        g = r.get("geometry")
+        if isinstance(g, dict) and "file" in g:
+            q = Path(str(g["file"])).expanduser()
+            g["file"] = str(q if q.is_absolute() else (here / q).resolve())
     regions = [RefineRegion(r) for r in cfg["refine"]]
     if len({r.name for r in regions}) != len(regions):
         raise ValueError("region names must be unique")

@@ -249,12 +249,36 @@ Unknown keys, non-finite values and invalid geometry are errors.
 
 ### Geometry forms
 
-`circle: {center: [lon, lat], radius_m: N}` is the most direct way to say
-"this fishery, roughly here" and is the recommended form for exploration.
-`bbox` and GeoJSON `Polygon` cover the rest. For production work a real
-boundary — a fishery-right polygon read from GeoJSON or a shapefile — is more
-reproducible than typed coordinates; **reading geometry from a file is not yet
-implemented** and is the first extension to make.
+| form | when |
+|---|---|
+| `circle: {center: [lon, lat], radius_m: N}` | "this fishery, roughly here" — the quickest way to explore a site |
+| `bbox: [w, s, e, n]` | an axis-aligned box |
+| GeoJSON `Polygon` inline | a shape small enough to type, holes included |
+| **`file:`** | **a real boundary, which is how one actually arrives** |
+
+```yaml
+geometry:
+  file: geometry/futtsu_nori.geojson  # or .shp; any CRS, reprojected to 4326
+  where: {NAME: futtsu_nori}          # optional attribute filter
+  index: 0                            # optional row of what remains
+  buffer_m: 25                        # optional outward buffer, in metres
+```
+
+A relative `file:` resolves against the **recipe**, like `base_mesh` — a
+recipe that only works from the repository root is not a recipe.
+
+It must resolve to **exactly one polygon**, and says what it found when it
+does not: two matching features, a `MultiPolygon` of several parts, or a
+missing column are all errors naming the alternatives. Disjoint parts are
+several regions and should be declared as several — the transition width, the
+cut and the report are all ambiguous otherwise, and silently taking the
+largest part would be worse. A shapefile with no `.prj` is refused: guessing
+lon/lat would put a UTM polygon in the Gulf of Guinea. (GeoJSON needs no CRS;
+the format is WGS84 by definition.)
+
+`refine.RefineRegion.source` records the file, the filter, the row and the
+vertex count, and the run report carries it: "region futtsu_nori" is not
+enough to reproduce a run, and the file and the filter are.
 
 ### The coastline inside the hole
 
@@ -621,6 +645,34 @@ coastline and are sampled at the nearest wet node, 493–1,062 m away. That is
 inherited from the base and identical in both cases, so it does not affect
 the difference -- but it does mean the model-minus-observed columns in
 `stations.csv` are not a skill statement for those three.
+
+### 6.3 The same fishery as a polygon
+
+`recipes/refine/futtsu_nori_polygon.yaml` declares the region as a polygon
+read from `recipes/refine/geometry/futtsu_nori_demo.geojson` — a 900 × 320 m
+rectangle rotated 35° to lie along the Futtsu shore, 0.288 km², with an
+attribute filter picking it by name. It is a **demonstration outline, not a
+fishery-right boundary**; replacing the file is the only change a real one
+needs.
+
+| | base | refined |
+|---|---|---|
+| elements | 8,252 | 10,753 |
+| edges inside the polygon | 5, median 415 m | **1,132, median 29.2 m** (p90 31.8) |
+| depth range | 3.000–300.000 m | 3.000–300.000 m |
+| r-factor, worst | 0.2000 | 0.2000 |
+| coastline departure | — | 4e−10 m |
+| frozen nodes moved | — | 0 of 4,616 |
+| water area change | — | 0.0 |
+| dt | 11.05 s | 2.39 s |
+| QA | 21/21 | **21/21, 0 introduced** |
+
+**The seed search earned its keep here.** A polygon with corners is harder to
+mesh than a disc: seeds 0–4 introduced 9, 1, 2, 9 and 2 violations
+respectively, and seed 5 introduced none. The circle recipe passed at seed 0.
+Nothing about that is a defect — it is what a greedy repair on a constrained
+fill does — and it is why the driver searches and reports which seed it
+accepted rather than shipping whichever one it tried first.
 
 ## 7. What the review asked for, and where it stands
 

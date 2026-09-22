@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "futtsu_nori_demo",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{"type":"Feature","properties":{"NAME":"futtsu_nori","KIND":"nori aquaculture","NOTE":"demonstration outline, not a fishery-right boundary"},"geometry":{"type":"Polygon","coordinates":[[[139.785107286210916,35.319261061454561],[139.793147106162024,35.323995964232751],[139.791092972295559,35.326338867644218],[139.783053048299934,35.321603827784088],[139.785107286210916,35.319261061454561]]]}}
+]
+}

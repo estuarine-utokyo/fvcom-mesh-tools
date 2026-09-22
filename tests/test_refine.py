@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import shapely
 from shapely.geometry import Polygon
 
 from fvcom_mesh_tools.refine import (
@@ -482,3 +483,149 @@ def test_an_impossible_r_factor_request_is_reported_not_hidden():
                             rounds=50)
     assert not info["converged"]
     assert info["n_edges_over_rmax"] > 0
+
+
+# --------------------------------------------------- a polygon from a file
+#
+# A real fishery boundary arrives as a shapefile or GeoJSON. Typing its
+# coordinates into a recipe is tedious and is a place to put a typo nobody
+# will ever find.
+
+
+def _fishery(tmp_path, rows, crs="EPSG:4326", name="fishery.geojson"):
+    import geopandas as gpd
+    from shapely.geometry import Polygon
+
+    gdf = gpd.GeoDataFrame(
+        {k: [r[k] for r in rows] for k in rows[0] if k != "xy"},
+        geometry=[Polygon(r["xy"]) for r in rows], crs=crs)
+    path = tmp_path / name
+    gdf.to_file(path)
+    return path
+
+
+def _square(lon, lat, half=0.002):
+    return [(lon - half, lat - half), (lon + half, lat - half),
+            (lon + half, lat + half), (lon - half, lat + half),
+            (lon - half, lat - half)]
+
+
+def test_a_polygon_is_read_from_a_file(tmp_path):
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    path = _fishery(tmp_path, [{"NAME": "nori", "xy": _square(139.788, 35.323)}])
+    r = RefineRegion({"name": "futtsu", "target_h_m": 30,
+                      "geometry": {"file": str(path)}})
+    assert r.kind == "file"
+    assert r.geometry.geom_type == "Polygon"
+    assert r.geometry.contains(shapely.Point(139.788, 35.323))
+    assert r.source["file"] == str(path)
+    assert r.source["n_vertices"] == 5
+
+
+def test_a_file_polygon_is_reprojected_to_lon_lat(tmp_path):
+    """A boundary in UTM is still a boundary; the vocabulary is lon/lat."""
+    from pyproj import Transformer
+
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    to_m = Transformer.from_crs(4326, 32654, always_xy=True)
+    xy = [to_m.transform(x, y) for x, y in _square(139.788, 35.323)]
+    path = _fishery(tmp_path, [{"NAME": "nori", "xy": xy}], crs="EPSG:32654",
+                    name="utm.geojson")
+    r = RefineRegion({"name": "futtsu", "target_h_m": 30,
+                      "geometry": {"file": str(path)}})
+    assert r.geometry.contains(shapely.Point(139.788, 35.323))
+
+
+def test_an_attribute_filter_picks_the_feature(tmp_path):
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    path = _fishery(tmp_path, [
+        {"NAME": "nori", "xy": _square(139.788, 35.323)},
+        {"NAME": "kaki", "xy": _square(139.900, 35.500)}])
+    with pytest.raises(ValueError, match="selection is 2 features"):
+        RefineRegion({"name": "x", "target_h_m": 30,
+                      "geometry": {"file": str(path)}})
+    r = RefineRegion({"name": "x", "target_h_m": 30,
+                      "geometry": {"file": str(path), "where": {"NAME": "kaki"}}})
+    assert r.geometry.contains(shapely.Point(139.900, 35.500))
+    assert r.source["where"] == {"NAME": "kaki"}
+
+
+def test_a_row_index_picks_the_feature(tmp_path):
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    path = _fishery(tmp_path, [
+        {"NAME": "a", "xy": _square(139.788, 35.323)},
+        {"NAME": "b", "xy": _square(139.900, 35.500)}])
+    r = RefineRegion({"name": "x", "target_h_m": 30,
+                      "geometry": {"file": str(path), "index": 1}})
+    assert r.geometry.contains(shapely.Point(139.900, 35.500))
+    with pytest.raises(ValueError, match="outside the 2 selected"):
+        RefineRegion({"name": "x", "target_h_m": 30,
+                      "geometry": {"file": str(path), "index": 5}})
+
+
+def test_an_unknown_column_says_which_columns_there_are(tmp_path):
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    path = _fishery(tmp_path, [{"NAME": "nori", "xy": _square(139.788, 35.323)}])
+    with pytest.raises(ValueError, match="no column 'FISHERY'"):
+        RefineRegion({"name": "x", "target_h_m": 30,
+                      "geometry": {"file": str(path), "where": {"FISHERY": "n"}}})
+
+
+def test_a_shapefile_without_a_prj_is_refused(tmp_path):
+    """GeoJSON is WGS84 by definition; a shapefile is whatever its .prj says.
+
+    A boundary whose projection nobody recorded cannot be placed, and
+    guessing lon/lat would put a UTM polygon in the Gulf of Guinea.
+    """
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    path = _fishery(tmp_path, [{"NAME": "n", "xy": _square(139.788, 35.323)}],
+                    name="nocrs.shp")
+    path.with_suffix(".prj").unlink()
+    with pytest.raises(ValueError, match="no CRS"):
+        RefineRegion({"name": "x", "target_h_m": 30,
+                      "geometry": {"file": str(path)}})
+
+
+def test_several_disjoint_parts_are_several_regions(tmp_path):
+    """Taking the largest silently would be worse than refusing."""
+    import geopandas as gpd
+    from shapely.geometry import MultiPolygon, Polygon
+
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    path = tmp_path / "multi.geojson"
+    gpd.GeoDataFrame(
+        {"NAME": ["both"]},
+        geometry=[MultiPolygon([Polygon(_square(139.788, 35.323)),
+                                Polygon(_square(139.900, 35.500))])],
+        crs="EPSG:4326").to_file(path)
+    with pytest.raises(ValueError, match="MultiPolygon of 2 parts"):
+        RefineRegion({"name": "x", "target_h_m": 30,
+                      "geometry": {"file": str(path)}})
+
+
+def test_a_buffer_grows_the_polygon_by_metres(tmp_path):
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    path = _fishery(tmp_path, [{"NAME": "n", "xy": _square(139.788, 35.323)}])
+    plain = RefineRegion({"name": "x", "target_h_m": 30,
+                          "geometry": {"file": str(path)}}).geometry
+    grown = RefineRegion({"name": "x", "target_h_m": 30,
+                          "geometry": {"file": str(path), "buffer_m": 100}}).geometry
+    assert grown.contains(plain)
+    # a 100 m buffer on a ~360 x 440 m square roughly doubles its area
+    assert 1.8 < grown.area / plain.area < 2.6
+
+
+def test_a_missing_geometry_file_says_so(tmp_path):
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    with pytest.raises(ValueError, match="geometry file not found"):
+        RefineRegion({"name": "x", "target_h_m": 30,
+                      "geometry": {"file": str(tmp_path / "nope.geojson")}})

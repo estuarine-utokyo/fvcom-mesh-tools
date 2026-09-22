@@ -42,10 +42,20 @@ patched = read_fort14(rep["mesh"])
 ner = rep["selection"]["n_elements_retained"]
 pf = rep["preflight"][0]
 
-to_m = Transformer.from_crs("EPSG:4326", "EPSG:32654", always_xy=True)
-cx, cy = to_m.transform(*json.loads(os.environ.get("LR_CENTRE", "[139.7881, 35.3228]")))
-radius = float(os.environ.get("LR_RADIUS", 300.0))
-core_xy = np.asarray(shapely.Point(cx, cy).buffer(radius, quad_segs=128).exterior.coords)
+# The declared regions come from the report, in the mesh CRS. A centre and a
+# radius only describe a circle, and a fishery boundary read from a file is a
+# polygon with corners.
+if rep.get("regions"):
+    outlines = [np.asarray(r["xy"], dtype=float) for r in rep["regions"]]
+else:  # a report from before the regions were recorded
+    to_m = Transformer.from_crs("EPSG:4326", "EPSG:32654", always_xy=True)
+    c = to_m.transform(*json.loads(os.environ.get("LR_CENTRE",
+                                                  "[139.7881, 35.3228]")))
+    outlines = [np.asarray(shapely.Point(c).buffer(
+        float(os.environ.get("LR_RADIUS", 300.0)), quad_segs=128).exterior.coords)]
+allxy = np.vstack(outlines)
+cx, cy = allxy.mean(axis=0)
+radius = float(np.linalg.norm(allxy - [cx, cy], axis=1).max())
 
 # Retained elements come first and in base order, so the split is exact.
 kept = Triangulation(patched.nodes[:, 0], patched.nodes[:, 1],
@@ -71,11 +81,12 @@ W = float(pf["transition_m"]) + radius + 900.0
 for cell, title, zoom, lw in [
         (gs[0, 1], "the patch", W, 0.45),
         (gs[0, 2], "the seam", 0.45 * W, 0.6),
-        (gs[1, 1], "the core at the target size", 3.0 * radius, 0.7)]:
+        (gs[1, 1], "the core at the target size", 2.2 * radius, 0.7)]:
     ax = fig.add_subplot(cell)
     ax.triplot(kept, color=KEPT, lw=lw)
     ax.triplot(changed, color=CHANGED, lw=lw)
-    ax.plot(core_xy[:, 0], core_xy[:, 1], color="k", lw=1.0, ls="--")
+    for outline in outlines:
+        ax.plot(outline[:, 0], outline[:, 1], color="k", lw=1.0, ls="--")
     ax.set_xlim(cx - zoom, cx + zoom)
     ax.set_ylim(cy - zoom, cy + zoom)
     ax.set_aspect(1)
@@ -106,7 +117,7 @@ ax.plot(r[keep & ~is_new], length[keep & ~is_new], ".", ms=2, color=KEPT,
         label="unchanged")
 ax.plot(r[keep & is_new], length[keep & is_new], ".", ms=2, color=CHANGED,
         label="replaced")
-ax.axvline(radius, color="k", lw=1.0, ls="--")
+ax.axvline(radius, color="k", lw=1.0, ls="--")  # the region's outer reach
 ax.axvline(radius + pf["transition_m"], color="k", lw=0.8, ls=":")
 ax.axhline(pf["target_h_m"], color="k", lw=0.8, ls=":")
 ax.set_xlabel("distance from the core centre (m)", fontsize=8)
