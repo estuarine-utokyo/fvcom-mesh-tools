@@ -674,6 +674,31 @@ Nothing about that is a defect — it is what a greedy repair on a constrained
 fill does — and it is why the driver searches and reports which seed it
 accepted rather than shipping whichever one it tried first.
 
+It runs, too. Jobs 115343–115346, the same protocol as §6.2 and the same
+external step of 1.5 s:
+
+| | base | circle-refined | polygon-refined |
+|---|---|---|---|
+| elements | 8,252 | 10,496 | 10,753 |
+| shortest-edge CFL | 14.39 s | 3.34 s | 3.54 s |
+| records | 961 / 961 | 961 / 961 | 961 / 961 |
+| non-finite values | none | none | none |
+| nodes wet throughout | 4,734 (all) | 5,861 (all) | 5,990 (all) |
+| max abs elevation | 0.498655 m | 0.498705 m | 0.498558 m |
+| volume drift | −9.5e−9 /day | −8.3e−9 /day | −3.6e−9 /day |
+| Δ M2 amplitude at the gauges | — | +0.053 … +0.087 mm | **+0.024 … +0.034 mm** |
+| Δ M2 phase | — | −0.0024 … −0.0033° | **−0.0042 … −0.0063°** |
+
+The polygon case moves the gauges *less* in amplitude than the circle case,
+which is what its footprint says it should: the same 30 m target over 0.288
+km² of fishery instead of a 0.283 km² disc, but reached over a transition
+that is the same width, so the far field sees a very slightly different
+perturbation and both are a relative 1e−4 or smaller.
+
+The base run reproduced exactly across the two submissions — max elevation
+0.498655 m, max speed 0.963349 m/s, drift −9.54e−9 /day in both — which is a
+reproducibility check that came for free.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as
