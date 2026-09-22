@@ -26,6 +26,13 @@ itself at run time (``setup_domain.F`` -> ``DOMDEC`` -> METIS), so this does
 not change the partition. It changes the order inside each rank, because
 ``genmap.F`` builds local numbering by walking the global ids in order and
 keeping the ones that belong to the rank.
+
+**Check the nodes per rank before using this.** Measured on the Banzu mesh
+(5,409 nodes): at one rank, renumbering is 15 % faster; at sixty-four, where
+each rank holds about 99 nodes and its whole working set fits in L1, it is
+9.6 % SLOWER, reproducibly and for reasons nothing measurable from outside
+the model explains. See docs/renumbering.md. Renumber when each rank holds
+enough of the mesh for the layout to decide what stays in cache.
 """
 
 from __future__ import annotations

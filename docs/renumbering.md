@@ -129,9 +129,57 @@ the mean edge span, 32.6 to 27.8, while taking the 99th percentile from 74 to
 eight times further away has not been improved. `--force` overrides; the base
 is left alone by default, which is the correct answer for it.
 
-## 6. Does it make FVCOM faster?
+## 6. Does it make FVCOM faster? Yes at one rank, no at sixty-four
 
-Open, and honestly so. The first attempt did not answer it: the two cases ran
+Measured with `jobs/octopus/416_renumber_benchmark.sh`: both cases in one
+job, run sequentially with the order alternating between repeats, three
+repeats, two simulated days, on the Banzu mesh (5,409 nodes).
+
+| ranks | as written | RCM | change |
+|---:|---:|---:|---|
+| 1 | 991.6 / 967.2 / 959.7 s | 821.9 / 836.7 / 817.5 s | **-15.1 %** |
+| 64 | 53.1 / 53.0 / 54.2 s | 58.9 / 58.0 / 58.8 s | **+9.6 %** |
+
+Both are reproducible -- the three repeats of each never overlap -- and both
+matter, because they say opposite things.
+
+**At one rank the request's claim holds, and by the amount the literature
+reports.** The working set is about 2.6 MB against a 2 MB L2, so the layout
+decides how much of it is resident, and 15 % is inside the 5-30 % that
+renumbering papers on unstructured CFD describe.
+
+**At sixty-four ranks it costs 9.6 %, and the cause is not known.** Each rank
+holds about 99 nodes and 157 elements -- some 40 KB, which fits the 48 KB L1
+whatever order it is in -- so there is nothing for the layout to improve.
+That explains why there is no gain. It does not explain the loss, and five
+candidates were measured and ruled out:
+
+| candidate | as written | RCM |
+|---|---|---|
+| METIS edge cut (dual, ncommon 2, 64 parts) | 852 | 866 |
+| elements per rank | 152-161 | 152-161 |
+| communicating rank pairs / shared nodes | 152 / 1,007 | 143 / 1,012 |
+| socket-crossing pairs | 6 % | 6 % |
+| startup cost (from runs of 0.25 and 2 days) | 6.12 s | 6.08 s |
+| global-id runs per rank (gather cost) | 56.8 | 27.8 |
+
+The last two are the interesting ones. Startup is identical, so the 5.1 s is
+in the time loop: fitting `time = a + b * days` to the two durations gives
+23.66 s/day as written against 26.25 s/day renumbered. And the renumbered
+mesh is *better* on every structural measure, including the one that would
+explain a slower gather. So the loss is real, repeatable, and unexplained by
+anything measurable from outside the model. Finding it would need FVCOM's own
+timers or hardware counters, which is a bigger job than this request.
+
+**The recommendation is therefore conditional**, and the condition is
+arithmetic anybody can do before running: divide the node count by the rank
+count. If each rank holds a few hundred nodes, its working set is in L1 and
+renumbering cannot help -- and here it hurt. If each rank holds tens of
+thousands, the layout is what decides cache residency, and 15 % is available.
+
+### How the first attempt got it wrong
+
+The first attempt did not answer it: the two cases ran
 concurrently on one shared node, once each, and the renumbered mesh came back
 **14 % slower** (545 s against 477 s). Two things were wrong with that as an
 experiment, one of which should have been obvious beforehand:
@@ -142,10 +190,8 @@ experiment, one of which should have been obvious beforehand:
   layout *and* whatever decomposition METIS happened to choose. It is not a
   controlled experiment for the claim in the request.
 
-`jobs/octopus/416_renumber_benchmark.sh` is the controlled one: the cases run
-sequentially inside one job, alternating order, repeated, at **1 rank** --
-where `setup_domain.F` skips `EL_PID` entirely and there is no partition, so
-only the layout differs -- and at 64, which is what production would see.
-
-Physics agreed in the uncontrolled run, for what that is worth: 961 records
-each, and the five gauges matched to 3 micrometres in amplitude.
+The second of those turned out not to matter -- the partitions are nearly
+identical, as the table above shows -- but it was not knowable in advance,
+and the concurrency certainly did. Physics agreed in that run, for what it
+is worth: 961 records each, the five gauges matching to 3 micrometres in
+amplitude.
