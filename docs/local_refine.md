@@ -532,6 +532,46 @@ elements: about 6.8× the external-mode work. **The site cannot move** — a
 fishery is given — so if that has to come down, the levers are a coarser
 target (35 m would hold 4.5 s) or a steeper gradation.
 
+### 6.1 The same fishery on a base built by this project
+
+`recipes/refine/futtsu_nori_tool.yaml`, with the base from
+`notebooks/422_tool_base.py`: the mesh is notebook 325 -> 331's coast-fitted
+result, and its depths are **rebuilt by the same recipe** the baseline names
+(`dem.m7001.production_depths` = M7001 on the T.P. datum, 3 m floor, r-factor
+to 0.2, 300 m cap). The SRTM15 depths the mesh was generated with are
+discarded; they were a means of getting a mesh, not a bathymetry to run.
+
+So the two bases differ in the **mesh** and in nothing else about how the
+bathymetry was made — which is the comparison worth having.
+
+| | goto2023 base | + refined | tool base | + refined |
+|---|---|---|---|---|
+| nodes / elements | 3,210 / 5,645 | 4,413 / 8,039 | 4,734 / 8,252 | 5,861 / 10,496 |
+| depth range (m) | 3.000–300.000 | 3.000–300.000 | 3.000–300.000 | 3.000–300.000 |
+| r-factor, worst | 0.2000 | 0.2000 | 0.2000 | 0.2000 |
+| water area (km²) | 1,346.044918 | 1,346.044918 | 1,354.417069 | 1,354.417069 |
+| edges in the core / median | 3 / 566 m | 1,166 / 28.5 m | 4 / 436 m | 1,086 / 29.9 m |
+| dt (min altitude) | 11.92 s | 2.49 s | 11.05 s | 2.85 s |
+| QA | 20/21 | 20/21, **0 introduced** | 21/21 | **21/21**, 0 introduced |
+| coastline departure | — | 0.0 m | — | 0.0 m |
+| frozen nodes moved | — | 0 of 3,098 | — | 0 of 4,619 |
+| r-factor step | — | 12 depths, worst 1.61 m | — | 2 depths, worst 0.00 m |
+
+Three things the pair shows that one alone does not:
+
+- **The r-factor repair is a property of the base, not of the method.** On
+  goto2023 the patch's new edges needed 12 depths pulled by up to 1.61 m to
+  get back under 0.2; on the finer tool base, two by nothing. Interpolation
+  breaks the r-factor when it has to cross a coarse element, and the tool
+  base does not have coarse elements there.
+- **The QA difference is inherited, not caused.** goto2023 fails C1 at
+  element 2101, 18 km from the site, and its refinement inherits exactly that
+  one failure; the tool base has none and its refinement has none. Both
+  introduce zero.
+- **The water areas differ by 8.4 km² and always will.** These are different
+  coastlines — goto2023's and this project's OSM-derived one — and neither
+  refinement changes its own by a single square metre.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as

@@ -1,0 +1,28 @@
+# The same fishery as recipes/refine/futtsu_nori.yaml, on a base built by this
+# project instead of goto2023's.
+#
+# The mesh is notebook 325 -> 331's coast-fitted result; the depths are NOT
+# the SRTM15 ones it was generated with. They are rebuilt by the recipe the
+# `current` hydro baseline names -- m7001tp_rfac0p2_cap300 -- so the two
+# bases differ in the MESH and in nothing else about how the bathymetry was
+# made. notebooks/422_tool_base.py writes this case; the result is
+# 4,734 nodes, 8,252 elements, depths 3.000-300.000 m, r-factor <= 0.2000,
+# QA 21/21.
+base_mesh: ../../outputs/base_tool/TokyoBayTool_grd.dat
+base_depth: ../../outputs/base_tool/TokyoBayTool_dep.dat
+base_obc: ../../outputs/base_tool/TokyoBayTool_obc.dat
+
+dt_expected_s: 4.5            # advisory: an alert, not a veto
+gradation: 0.165
+
+coastline: preserve
+coastline_tolerance_m: 50
+
+rfactor_limit: base
+
+refine:
+  - name: futtsu_nori
+    geometry:
+      circle: {center: [139.7881, 35.3228], radius_m: 300}
+    target_h_m: 30            # achieved edge length
+    priority: 0
