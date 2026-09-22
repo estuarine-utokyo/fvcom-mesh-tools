@@ -115,3 +115,27 @@ def test_node_count_mismatch_raises(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError):
         read_fort14(bad)
+
+
+def test_a_computed_depth_round_trips(tmp_path: Path) -> None:
+    """Eleven significant figures is not a double.
+
+    Depths read from a fort.14 already fit the old ``.10e`` and round-tripped
+    by luck; an interpolated one does not. 5.12345678912345 m came back
+    2.3e-11 m different, which is physically nothing and is still a broken
+    promise -- and the local-refinement contract is checked on the written
+    file (gpt-6-astra review, 2026-09-22).
+    """
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14, write_fort14
+
+    nodes = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    depths = np.array([5.12345678912345, 3.14159265358979,
+                       1.0 / 3.0, 2.0 ** -20 + 7.0])
+    mesh = Fort14Mesh(title="precision", nodes=nodes, depths=depths,
+                      elements=np.array([[0, 1, 3], [0, 3, 2]]),
+                      open_boundaries=[], land_boundaries=[])
+    path = tmp_path / "precision.14"
+    write_fort14(mesh, path)
+    assert np.array_equal(read_fort14(path).depths, depths)

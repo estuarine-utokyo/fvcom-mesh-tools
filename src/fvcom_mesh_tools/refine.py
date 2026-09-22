@@ -115,6 +115,19 @@ class RefineRegion:
             raise ValueError("region name must be a nonempty string")
         self.name = name
         self.geometry = _geometry(spec["geometry"])
+        # What the recipe DECLARED, kept alongside the polygon.  A consumer
+        # that has to project the region needs this: a bbox's four corners
+        # are all about equidistant from its centre, so guessing "circle"
+        # from the spread of vertex radii turns every near-square box into a
+        # disc (review finding 14, 2026-09-22).
+        geom_spec = spec["geometry"]
+        self.kind = ("circle" if "circle" in geom_spec
+                     else "bbox" if "bbox" in geom_spec else "polygon")
+        self.circle = (
+            (float(geom_spec["circle"]["center"][0]),
+             float(geom_spec["circle"]["center"][1]),
+             float(geom_spec["circle"]["radius_m"]))
+            if self.kind == "circle" else None)
         self.target_h_m = _positive(spec["target_h_m"], "target_h_m")
         self.transition_m = (
             _positive(spec["transition_m"], "transition_m") if "transition_m" in spec else None
@@ -275,8 +288,11 @@ def preflight(
             f"water allows dt = {dt:.2f} s by minimum altitude ({dt_edge:.2f} s by "
             f"shortest edge), against the {dt_expected_s:g} s expected -- the run will "
             f"cost {dt_expected_s / dt:.1f}x the external steps. Keeping {dt_expected_s:g} s "
-            f"would need a {would_need:.0f} m target. This is an equilateral upper bound: "
-            "a legal 30-30-120 cell halves the altitude and halves the step again.")
+            f"would need a {would_need:.0f} m target. This is an equilateral upper "
+            "bound at Cr = 1 with no velocity allowance, and it is sampled over the "
+            "CORE only: a legal 30-30-120 cell of the same side has 1/sqrt(3) of the "
+            "altitude, and the transition can be deeper than anything sampled here. "
+            "Measure the achieved step on the finished mesh.")
 
     area = _to_metres(geom, lat0).area
     outer = _to_metres(geom.buffer(width / 111000.0), lat0).area
@@ -360,7 +376,13 @@ def depths_from_base(base_nodes, base_elements, base_depths, new_nodes):
     if outside.any():
         out = np.array(out, dtype=float)
         out[outside] = dep[cKDTree(xy).query(new[outside])[1]]
-    return np.asarray(out, dtype=float), int(outside.sum())
+    # Interpolation cannot leave the convex hull of its inputs, so anything
+    # outside the base range is rounding, and rounding below the base minimum
+    # is not harmless: the base mesh sits exactly on the 2 m depth floor, so
+    # 1.9999999999999998 is a QA failure that used to be hidden by an
+    # 11-digit write format.
+    return np.clip(np.asarray(out, dtype=float), dep.min(), dep.max()), \
+        int(outside.sum())
 
 
 def hole_clearance(nodes, elements, region, *, transition_m, open_boundaries=()):

@@ -150,6 +150,12 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
     float64's ~15-17 significant figures at coordinates ~140 deg) so that
     every writable double round-trips exactly and triangles with very small
     but positive signed area survive without being pancaked to zero.
+
+    Depths carry ``.17g``, not the ``.10e`` this used to write. Eleven
+    significant figures is enough for a depth that was itself read from a
+    fort.14 and is not enough for one that was computed: 5.12345678912345 m
+    came back 2.3e-11 m different, which is physically nothing and is still a
+    round trip this docstring promises and did not deliver.
     """
     path = Path(path).resolve()
     n_nodes = mesh.n_nodes
@@ -165,7 +171,7 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
 
         for i in range(n_nodes):
             x, y = mesh.nodes[i]
-            f.write(f"{i + 1:>10d}  {x:.15f}  {y:.15f}  {mesh.depths[i]:.10e}\n")
+            f.write(f"{i + 1:>10d}  {x:.15f}  {y:.15f}  {mesh.depths[i]:.17g}\n")
 
         for i in range(n_elements):
             n0, n1, n2 = mesh.elements[i]

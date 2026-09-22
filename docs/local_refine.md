@@ -1,19 +1,22 @@
 # Local refinement of an existing mesh — design
 
-**Status: implemented and passing, end to end.** The Futtsu recipe builds a
-30 m fishery into `sample_repro_final.14` with **QA 21/21**, 4,619 frozen
-nodes of which **none moved**, no retained face lost, no interface segment
-split, and the open boundary untouched. Both `coastline: preserve` and
-`coastline: resample` reach 21/21. This document is revised as the design
-moves, and records the decisions and their reasons so that a later change is
-made knowingly rather than by accident.
+**Status: implemented, reviewed, and passing end to end.** The Futtsu recipe
+builds a 30 m fishery into `sample_repro_final.14` with **QA 21/21**, 4,619
+frozen nodes of which **none moved**, no retained face lost, no interface
+segment split, and the open boundary untouched — and the generator now
+*checks* all of that on the written file and refuses to report success
+otherwise. This document is revised as the design moves, and records the
+decisions and their reasons so that a later change is made knowingly rather
+than by accident.
 
 Revision history is the git history of this file.
 `docs/local_refine_review.md` is an adversarial review of revision 1
 (gpt-6-astra, 2026-09-22); every blocker it raised was reproduced
-independently before revision 2 was written. Revision 4 replaces the design
-of the generator with what was built, and §5.1 records the six things the
-implementation found that the design had wrong.
+independently before revision 2 was written. Revision 4 replaced the design of
+the generator with what was built. `docs/local_refine_implementation_review.md`
+is an adversarial review of that implementation (gpt-6-astra, 2026-09-22):
+sixteen findings and nine executable tests, **all nine of which reproduced**.
+Revision 5 is what those fixed; §5.3 lists them.
 
 ### What revision 1 got wrong
 
@@ -349,9 +352,75 @@ Interface survival is the one a plausible-looking mesh passes without it: a
 fill may insert a vertex on a constrained edge, and on the coastline that is
 harmless — the chord is where it was — but on an interface segment it leaves
 a hanging node while every face and every coordinate still checks out.
-`area_change_fraction` is reported rather than gated (−0.007 % here): it moves
+`area_change_fraction` is reported rather than gated (+0.001 % here): it moves
 legitimately when the coastline is resampled, and it is the one number that
-notices a face quietly dropped.
+notices a face quietly dropped. Every one of these is checked twice — once in
+memory and once by re-reading the written fort.14, because the file is what
+the model runs.
+
+### 5.3 What the adversarial review changed
+
+gpt-6-astra reviewed the implementation and supplied nine executable tests.
+All nine reproduced before anything was changed; all nine are now regressions
+in `tests/test_patch.py` (and one in `tests/test_fort14.py`). The findings
+that changed behaviour:
+
+| finding | what was wrong | what it is now |
+|---|---|---|
+| connectivity | `_require_connected` built a graph over NODES, so two triangles meeting at a single point counted as connected — the opposite of the edge connectivity the docstring promised | a graph over faces joined by shared edges. It immediately caught a real case: a cut at (400, 200) on the test grid leaves one triangle attached by its vertices alone, which the cut now absorbs |
+| nested rings | `hole_polygon` unioned every face `polygonize` returned, filling the exclusions: four nested squares plus a disjoint one came back as area 101 where the domain is 57. An island inside the cut would have been handed to the filler as water | rings assembled by nesting parity, each shell carrying the holes whose immediate parent it is |
+| a physical island | an island taken whole kept its base node ids, and stitching reads a non-negative base id as "frozen" and looks it up in a map of survivors, so an ordinary circle round a small island could not be stitched at all | those nodes are emitted as new points with their base coordinates |
+| frozen means exact | a 5e-7 m change in a frozen coordinate or depth passed, because the check used a 1e-6 m tolerance | exact equality. The tolerance remains where it belongs, on matching a fill vertex to its fixed point |
+| a face counted once | retained faces were compared as SETS, so a duplicated element — a second face laid on the first — passed every check | multisets, plus a gate on any edge carrying three faces |
+| the written file | nothing re-read it, and `write_fort14` wrote depths at `.10e`, eleven significant figures: an interpolated 5.12345678912345 m came back 2.3e-11 m different | depths at `.17g`, and the frozen zone is verified again on the file that was written |
+| flips | incidence and adjacency were computed once per sweep and only the two rewritten faces marked stale, so a later flip scored against a mesh that no longer existed; and valence was counted over the candidate's own fan, reading [5,5,7,7] where the mesh had [5,5,7,9] | both rebuilt after every accepted flip; valence tracked over the whole mesh. It is a cost rather than a veto, because forbidding every intermediate excess also blocks the sequences that end below the limit — and C5 is gated on the finished mesh |
+| a zero-width transition | ambient already at the target gives width 0, and `d / 0` made the whole sizing field NaN — which DistMesh accepts | defined: target inside, base outside |
+| a bbox | the driver guessed "circle" from the spread of vertex radii, and a square's corners are all equidistant from its centre, so a near-square bbox became a 257-point disc | the recipe's declared kind is carried on `RefineRegion`; polygon interiors are projected too |
+| depths | `improve_patch` moved nodes after `stitch_patch` had evaluated the base field, and nobody re-evaluated it: a node moved from (0.2, 0.3) to (1, 1) on a 5 + x field kept 5.2 where 6.0 is right | `refresh_depths` after the repair |
+| one shoreline for every stretch | the driver chose one ring by closest-pair distance to the whole free rim, contradicting the docstring that said the caller picks per stretch | every ring within 3 km is offered and the nearest to EACH stretch is used |
+| QA | the driver wrote the mesh and stopped. That the worked case passed 21/21 was a fact about someone running QA afterwards, not about the generator | the 21 gates run on the written file and a failure ends the run |
+
+And one the review noted in passing that was simply wrong in this document: a
+30-30-120 cell's minimum altitude is **1/sqrt(3)** of an equilateral cell's
+with the same side, not a half.
+
+Two of the review's points stand unfixed and are listed in §7: there is no
+caller-declared maximum for how far the cut may grow, and `effective_gradation`
+measures the ramp term only, not the ambient term, so it is a diagnostic
+rather than a C4 certificate.
+
+### 5.4 The seed search, and why there is one
+
+`improve_patch` is greedy: it accepts only moves that do not worsen the worst
+gate in a neighbourhood, so it stops at a local optimum, and which one depends
+on where the fill started. That is not a small effect. On this patch,
+neighbouring configurations finished at 22.96°, 25.6°, 27.5° and 30.01°
+against a 30° gate.
+
+So the driver **searches**: for each seed it fills, repairs, stitches,
+verifies, writes and runs the 21 gates, and it stops at the first mesh that
+passes. Which seed was accepted is in the report. If none passes, the run
+fails with the best attempt's failures named, and the right response is to
+widen the transition or coarsen the target — not to lower the gate.
+
+Two further things were needed before any seed passed:
+
+- **The strict pass runs first, the soft pass only if it stalls.** The soft
+  rule accepts a move that holds the worst margin and improves the saturated
+  rest. It rescued a run stuck at 22.96°, and it cost a run that the strict
+  rule took to 30.01°: wandering laterally changes which basin you end in.
+- **A flip may never breach the valence gate, not even in passing.**
+  Allowing an intermediate excess does buy reach, and it leaves nodes at 9
+  that no later flip can bring down: with it, `preserve` failed C5 at every
+  seed. A guarantee beats a heuristic. DistMesh can still hand over a
+  valence-9 node of its own, and that is what the seed search is for.
+- **The source shoreline is simplified to a quarter of the local element
+  size before it is walked.** A coastline digitised at metres cannot be
+  represented by 400 m elements; walking it at 400 m gives chords that turn
+  sharply against each other, and every surviving QA failure was a coastal
+  element 1.8–2.3 km out, where the transition is coarse and the coast is
+  not. This is not detail thrown away — there is no room for it at that size
+  — and what remains is still bounded by `coastline_tolerance_m`.
 
 ### Where the code goes
 
@@ -373,33 +442,36 @@ and the declared centre lies 654 m north of its edge.
 | quantity | value |
 |---|---|
 | centre / radius | (139.7881, 35.3228) / 300 m |
-| target | 30 m, **achieved 29.6 m** (median of 1,098 core edges; p90 31.3 m) |
+| target | 30 m, **achieved 30.2 m** (median of 1,069 core edges; p90 31.2 m) |
 | measured ambient around the site | 445 m |
 | transition | 2,512 m |
 | effective gradation | 0.290, against the 0.414 C4 allows |
 | core depth (from the base mesh) | 2.5 – 6.16 m |
-| **dt by minimum altitude** | preflight 3.34 s, **achieved 2.53 s** |
-| elements | 8,252 → 10,419 (+2,167); nodes 4,734 → 5,815 |
+| **dt by minimum altitude** | preflight 3.34 s, **achieved 2.61 s** (base 11.86 s) |
+| elements | 8,252 → 10,436 (+2,184); nodes 4,734 → 5,826 |
 | elements removed / retained | 244 / 8,008 |
 | rim: interface / coastline edges | 33 / 19; lengths 180 / 445 / 886 m |
 | selection reach vs requested | 3,183 m vs 2,812 m |
 | coastline nodes replaced / new | 18 / 12, on the source shoreline |
-| coastline departure from that source | nodes 0 m, chords 135 m (tolerance 200 m) |
+| coastline departure from that source | nodes 64 m, chords 118 m (tolerance 200 m) |
 | **QA** | **21/21**, angles 30.01–119.26° — the base mesh's own range |
 | frozen zone | 4,619 nodes, 0 moved, 0 depth change, 0 faces lost, 0 splits |
-| water area | −0.007 % (the resampled coastline, not a lost face) |
+| water area | +0.001 % (the resampled coastline, not a lost or gained face) |
+| DistMesh seed | **2**; seeds 0 and 1 failed 3 and 2 gates and were rejected. `preserve` passes at seed 0 |
 
-`coastline: preserve` reaches 21/21 as well, at 5,862 nodes / 10,498 elements,
-with the coastline geometrically identical. The two differ in what they buy:
-`resample` follows the source shoreline up to 143 m closer than the base
-polyline, which is the point of it.
+`coastline: preserve` reaches 21/21 as well, with the coastline geometrically
+identical. The two differ in what they buy: `resample` follows the source
+shoreline up to 143 m closer than the base polyline, which is the point of
+it, and pays for it with a harder mesh — it is the mode that needed the seed
+search and the shoreline simplification.
 
 **The cost is the time step, and it is real.** The base mesh allows 11.86 s by
-minimum altitude; the patched mesh allows 2.53 s, and the binding element is
-inside the core, 274 m from its centre. The pre-flight alert predicted 3.34 s
-from an equilateral cell over the deepest core sample; the achieved 2.53 s is
+minimum altitude; the patched mesh allows 2.61 s, and the binding element is
+inside the core. The pre-flight alert predicted 3.34 s
+from an equilateral cell over the deepest core sample; the achieved 2.61 s is
 lower because real cells are not equilateral — which is exactly what the
-alert's last sentence says. **The site cannot move** — a fishery is given — so
+alert says, though the factor it quotes for a 30-30-120 cell should be
+1/sqrt(3), not a half. **The site cannot move** — a fishery is given — so
 if the cost has to come down, the levers are a coarser target (40 m would hold
 4.5 s) or a steeper gradation. Neither was needed to build this one.
 
@@ -410,11 +482,11 @@ failures during a run rather than as refusals before it.
 
 | asked for | state |
 |---|---|
-| **a feasibility and rejection contract** | done for what is decidable before filling. `select_patch` refuses a cut that reaches the open boundary or its guard band, empties the mesh, severs it, or pinches irreparably, and reports the removable face set and its real reach before anything is meshed. There is still no repair-or-reject policy for a fill that comes back poor — today it is `improve_patch` and then the QA verdict |
+| **a feasibility and rejection contract** | done. `select_patch` refuses a cut that reaches the open boundary or its guard band, empties the mesh, severs it (by face adjacency), or pinches irreparably, and reports the removable face set and its real reach before anything is meshed. A fill that comes back poor is now rejected rather than written: the driver runs the 21 gates on the written file, tries the next seed, and fails the run when none passes |
 | **interface segment survival** | done and gated. `verify_patch` checks every interface segment is an edge shared by two faces in the finished mesh, after every cleanup stage, not just after triangulation |
-| **non-simple cuts** | partly. Several components, nesting and pinch points are handled: rings are walked from the rim graph, nesting parity is resolved against the immediate parent, and a pinch grows the cut until the rim is a manifold. A cut that would leave a retained island inside the hole is detected (`ring_is_hole`) but has not been exercised |
+| **non-simple cuts** | done for the cases that arise. Several components, nesting and pinch points are handled: rings are walked from the rim graph, nesting parity decides both `ring_is_hole` and the polygon handed to the filler, a pinch grows the cut until the rim is a manifold, and a spike joined only at its vertices is absorbed. A physical island taken whole inside the cut now stitches, with a test |
 | **seam quality as a whole-mesh property** | done. The repair scores C1, C2 and C4 over the fan **and everything it shares an edge with**, so a patch element is measured against its retained neighbour; valence counts incident faces exactly as the C5 gate does; the OBC has a guard band (500 m by default), not just non-intersection |
-| **a named dt convention** | not done. `dt_s` is still an equilateral upper bound at Cr = 1 with no velocity allowance. It is now possible to say how far off that is: the alert predicted 3.34 s and the built mesh achieves 2.53 s, a factor 1.3 |
+| **a named dt convention** | partly. `dt_s` is still an equilateral upper bound at Cr = 1 with no velocity allowance, but the alert now says so, the 30-30-120 factor is stated correctly as 1/sqrt(3), and the driver measures the **achieved** minimum-altitude step on the finished mesh and reports both: predicted 3.34 s, achieved 2.61 s |
 
 ## 8. Open questions
 
@@ -458,10 +530,19 @@ failures during a run rather than as refusals before it.
    operation avoids: the ports and channels elsewhere come out subtly
    different, so a comparison against the base run cannot separate the
    fishery from everything else.
-7. **The repair is greedy.** `improve_patch` accepts only strictly improving
-   moves, so it stops at a local optimum, and which one depends on the order
-   it visits nodes: on one run the same mesh finished at 29.75° with a narrow
-   candidate set and at 30.01° with a denser one. It reached the gates here;
-   it carries no guarantee that it will elsewhere, and when it does not, the
-   honest response is to widen the transition or coarsen the target rather
-   than to lower the gate.
+7. **The repair is greedy, and the driver searches around it.** See §5.4.
+   Seeds 0 and 1 of the Futtsu recipe fail the gates and seed 2 passes; the
+   run reports which it used. The search makes success checkable, not
+   certain: when no seed passes, the honest response is to widen the
+   transition or coarsen the target, never to lower the gate.
+8. **The cut has no declared maximum.** `select_patch` reports how far it
+   grew and how far it reached, and nothing compares that against a limit
+   the caller stated, because there is no recipe key for one. The OBC guard
+   is also node-to-node, so a long OBC segment can pass closer to the cut
+   than the guard suggests (review finding 8).
+9. **`effective_gradation` is a diagnostic, not a certificate.** The field is
+   `target + (B(x) - target) * d(x) / W`, whose gradient has an ambient term
+   that the reported number omits, and the `1 - 1/(1+g)^2` threshold assumes
+   similar neighbouring triangles where C4 is an area ratio across an edge
+   (review finding 13). C4 itself is gated on the finished mesh, which is
+   where it belongs.

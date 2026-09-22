@@ -292,7 +292,7 @@ def test_hole_polygon_closes_and_matches_the_cut_area():
 
 
 def test_unclosed_rim_is_refused():
-    with pytest.raises(ValueError, match="do not close"):
+    with pytest.raises(ValueError, match="exactly two rim edges|do not close"):
         hole_polygon(np.array([[0.0, 0.0], [1.0, 0.0]]), np.array([[0, 1]]))
 
 
@@ -559,3 +559,185 @@ def test_sliding_stays_on_the_boundary_chain():
     assert not moved[~on_b].any()
     if moved.any():
         assert float(shapely.distance(shapely.points(out[moved]), ring).max()) < 1e-6
+
+
+# ------------------------------------------ what the adversarial review found
+#
+# gpt-6-astra reviewed the first implementation (2026-09-22,
+# docs/local_refine_implementation_review.md) and supplied nine failing tests.
+# All nine reproduced. These are the regressions for the fixes; each one
+# failed before the fix and the review's own wording is kept where it is
+# sharper than mine.
+
+
+def test_a_duplicated_retained_face_is_rejected():
+    """A set comparison is happy to see the same face twice."""
+    nodes, elements = grid_mesh()
+    depths = np.full(len(nodes), 8.0)
+    sel, rc, pn, pt = replay_patch(nodes, elements,
+                                   shapely.Point(400, 400).buffer(150.0))
+    out, oute, outd, nm, _ = stitch_patch(nodes, elements, depths, sel, pn, pt,
+                                          rc["pfix"], rc["pfix_base"])
+    doubled = np.vstack([oute, oute[0]])
+    ver = verify_patch(nodes, depths, elements, sel, out, doubled, outd, nm)
+    assert not ver["ok"]
+    assert ver["n_extra_faces"] == 1
+    assert ver["n_nonmanifold_edges"] > 0
+
+
+def test_frozen_means_exact_not_within_a_micrometre():
+    nodes, elements = grid_mesh()
+    depths = np.full(len(nodes), 8.0)
+    sel, rc, pn, pt = replay_patch(nodes, elements,
+                                   shapely.Point(400, 400).buffer(150.0))
+    out, oute, outd, nm, _ = stitch_patch(nodes, elements, depths, sel, pn, pt,
+                                          rc["pfix"], rc["pfix_base"])
+    v = nm[sel.frozen_nodes[0]]
+    out = out.copy()
+    outd = outd.copy()
+    out[v, 0] += 5e-7
+    outd[v] += 5e-7
+    ver = verify_patch(nodes, depths, elements, sel, out, oute, outd, nm)
+    assert not ver["ok"]
+    assert not ver["frozen_exact"]
+
+
+def test_nested_rings_are_not_filled_in():
+    """Four nested squares plus a disjoint one: area 57, not 101."""
+    xy = np.vstack([np.array([[a, a], [b, a], [b, b], [a, b]], float)
+                    for a, b in [(0, 10), (1, 9), (2, 8), (3, 7), (20, 21)]])
+    edges = np.array([[i, i // 4 * 4 + (i + 1) % 4] for i in range(len(xy))])
+    assert boundary_rings(xy, edges)[1] == [False, True, False, True, False]
+    assert hole_polygon(xy, edges).area == pytest.approx(57.0)
+
+
+def test_a_physical_island_inside_the_cut_stitches():
+    """Its rim nodes are free, and calling them frozen made the stitch raise."""
+    nodes, elements = grid_mesh()
+    cen = nodes[elements].mean(axis=1)
+    land = ((cen[:, 0] > 300) & (cen[:, 0] < 400)
+            & (cen[:, 1] > 300) & (cen[:, 1] < 400))
+    elements = elements[~land]
+    sel = select_patch(nodes, elements, shapely.Point(350, 350).buffer(220.0))
+    assert sum(sel.ring_is_hole) == 1
+    rc = rim_constraints(nodes, sel, size=1e9, coastline="preserve")
+    taken = np.unique(elements[sel.removed])
+    local = np.full(len(nodes), -1, dtype=np.int64)
+    local[taken] = np.arange(len(taken))
+    out, oute, outd, nm, _ = stitch_patch(
+        nodes, elements, np.ones(len(nodes)), sel, nodes[taken, :2],
+        local[elements[sel.removed]], rc["pfix"], rc["pfix_base"])
+    assert verify_patch(nodes, np.ones(len(nodes)), elements, sel,
+                        out, oute, outd, nm)["ok"]
+
+
+def test_a_zero_width_transition_stays_finite():
+    """Ambient already at the target is legitimate, and 0/0 is not."""
+    nodes, elements = grid_mesh()
+    fh = patch_sizing(nodes, elements,
+                      [(shapely.Point(400, 400).buffer(100.0), 200.0, 0.0)],
+                      distmesh_scale=1.0)
+    q = np.array([[400.0, 400.0], [700.0, 700.0]])
+    assert np.isfinite(fh(q)).all()
+
+
+def test_the_repaired_mesh_stays_inside_the_valence_gate():
+    """The guard counted incident faces over a subset, not over the mesh, and
+    read [5,5,7,7] where the mesh had [5,5,7,9].  Valence is now tracked
+    globally; it is a cost on a flip rather than a veto, because forbidding
+    every intermediate excess also blocks the sequences that end below the
+    limit, so what is asserted is the finished mesh."""
+    nodes, elements, inner = perturbed_patch()
+    for rounds in (1, 30):
+        _, out_t, _ = improve_patch(nodes, elements, inner,
+                                    np.ones(len(elements), dtype=bool),
+                                    rounds=rounds, max_valence=8)
+        assert np.bincount(out_t.ravel(), minlength=len(nodes)).max() <= 8
+
+
+def test_a_vertex_pinch_in_the_retained_mesh_is_not_accepted():
+    """Four faces round one vertex, middle two cut: the rest meet at a point."""
+    xy = np.array([[0, 0], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]], float)
+    tri = np.array([[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 5]])
+    with pytest.raises(ValueError, match="splits the retained mesh|entire mesh"):
+        select_patch(xy, tri, shapely.Point(0, 2 / 3).buffer(0.4))
+
+
+def test_an_isolated_retained_face_is_absorbed_into_the_cut():
+    """A spike joined only at its vertices; the cut takes it rather than refuse."""
+    nodes, elements = grid_mesh()
+    sel = select_patch(nodes, elements, shapely.Point(400, 200).buffer(150.0))
+    # every retained face now shares an edge with another retained face
+    sub = elements[~sel.removed]
+    e = np.sort(np.vstack([sub[:, [0, 1]], sub[:, [1, 2]], sub[:, [2, 0]]]), axis=1)
+    _, counts = np.unique(e, axis=0, return_counts=True)
+    owner = np.tile(np.arange(len(sub)), 3)
+    order = np.lexsort((e[:, 1], e[:, 0]))
+    e2, owner = e[order], owner[order]
+    k = np.flatnonzero(np.all(e2[:-1] == e2[1:], axis=1))
+    has = np.zeros(len(sub), dtype=bool)
+    has[owner[k]] = True
+    has[owner[k + 1]] = True
+    assert has.all()
+    assert sel.report["n_grown_by_repair"] > 0
+
+
+def test_a_declared_bbox_stays_a_bbox():
+    """A square's corners are all equidistant from its centre."""
+    from fvcom_mesh_tools.refine import RefineRegion
+
+    box = RefineRegion({"name": "square", "target_h_m": 30,
+                        "geometry": {"bbox": [139.78, 35.32, 139.79, 35.32816]}})
+    circle = RefineRegion({"name": "disc", "target_h_m": 30,
+                           "geometry": {"circle": {"center": [139.78, 35.32],
+                                                   "radius_m": 300}}})
+    assert box.kind == "bbox" and box.circle is None
+    assert circle.kind == "circle"
+    assert circle.circle == (139.78, 35.32, 300.0)
+
+
+def test_depths_follow_a_node_the_repair_moved():
+    from fvcom_mesh_tools.patch import refresh_depths
+
+    nodes, elements = grid_mesh(5, 5)
+    depths = 5.0 + nodes[:, 0] / 100.0
+    moved = np.zeros(len(nodes), dtype=bool)
+    moved[12] = True
+    after = nodes.copy()
+    after[12] = [250.0, 250.0]
+    out, n_outside = refresh_depths(nodes, elements, depths, after, moved, depths)
+    assert n_outside == 0
+    assert out[12] == pytest.approx(7.5)
+    assert np.array_equal(out[~moved], depths[~moved])
+
+
+def test_sliding_really_slides_and_stays_on_the_given_curve():
+    """The first version of this test never passed slide_on, so it proved
+    nothing: improve_patch disables sliding when no curve is supplied."""
+    nodes, elements = grid_mesh(11, 11)
+    nodes = nodes.copy()
+    _u, _c = np.unique(np.sort(np.vstack([elements[:, [0, 1]], elements[:, [1, 2]],
+                                          elements[:, [2, 0]]]), axis=1),
+                       axis=0, return_counts=True)
+    b = _u[_c == 1]
+    # Bunch the boundary nodes up ALONG the rectangle, leaving the outline
+    # exactly where it was: that is a spacing a slide can improve and a move
+    # off the curve cannot.
+    rng = np.random.default_rng(11)
+    lo, hi = 0.0, nodes.max()
+    for v in np.unique(b):
+        for ax in (0, 1):
+            if lo < nodes[v, ax] < hi:
+                nodes[v, ax] += rng.uniform(-35.0, 35.0)
+    rings, _ = boundary_rings(nodes, b)
+    curves = [shapely.LineString(nodes[np.append(r, r[0])]) for r in rings]
+    on_b = np.zeros(len(nodes), dtype=bool)
+    on_b[np.unique(b)] = True
+    out, _, info = improve_patch(nodes, elements, np.zeros(len(nodes), dtype=bool),
+                                 np.ones(len(elements), dtype=bool),
+                                 slidable=on_b, slide_on=curves)
+    moved = np.linalg.norm(out - nodes, axis=1) > 1e-9
+    assert not moved[~on_b].any()
+    assert moved.any(), "no node slid, so this test would prove nothing"
+    every = shapely.MultiLineString([np.asarray(c.coords) for c in curves])
+    assert float(shapely.distance(shapely.points(out[moved]), every).max()) < 1e-6

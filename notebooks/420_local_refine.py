@@ -36,12 +36,18 @@ from fvcom_mesh_tools.patch import (
     hole_polygon,
     improve_patch,
     patch_sizing,
+    refresh_depths,
     rim_constraints,
     select_patch,
     stitch_patch,
     verify_patch,
 )
-from fvcom_mesh_tools.refine import load_refine, preflight, transition_width_m
+from fvcom_mesh_tools.qa import run_qa
+from fvcom_mesh_tools.refine import (
+    load_refine,
+    preflight,
+    transition_width_m,
+)
 
 MESH_EPSG = 32654
 # DistMesh returns bars about this much larger than the sizing field
@@ -86,17 +92,27 @@ def region_in_metres(region):
 
     A circle is re-struck about the projected centre rather than projected
     vertex by vertex: the recipe's radius is a distance on the ground, and a
-    300 m disc drawn in degrees and then projected is an ellipse.
+    300 m disc drawn in degrees and then projected is an ellipse.  Which
+    regions are circles comes from what the recipe DECLARED, not from the
+    spread of vertex radii -- a square's corners are all equidistant from its
+    centre, so that guess turned a bbox into a 257-point disc.
+
+    Every ring is projected, interiors included: a fishery boundary read from
+    GeoJSON may have holes, and the parser already accepts them.
     """
+    if region.kind == "circle":
+        lon, lat, radius_m = region.circle
+        cx, cy = to_m.transform(lon, lat)
+        return shapely.Point(cx, cy).buffer(radius_m, quad_segs=64)
+
+    def ring(coords):
+        arr = np.asarray(coords)
+        x, y = to_m.transform(arr[:, 0], arr[:, 1])
+        return np.column_stack([x, y])
+
     g = region.geometry
-    c = g.centroid
-    cx, cy = to_m.transform(c.x, c.y)
-    ring = np.asarray(g.exterior.coords)
-    x, y = to_m.transform(ring[:, 0], ring[:, 1])
-    r = np.hypot(x - cx, y - cy)
-    if float(r.std() / r.mean()) < 0.02:
-        return shapely.Point(cx, cy).buffer(float(r.mean()), quad_segs=64)
-    return shapely.Polygon(np.column_stack([x, y]))
+    return shapely.Polygon(ring(g.exterior.coords),
+                           [ring(h.coords) for h in g.interiors])
 
 
 regions_m = [(region_in_metres(r), r) for r in cfg["refine"]]
@@ -173,12 +189,22 @@ say("cut: " + json.dumps(sel.report))
 free = np.setdiff1d(np.unique(sel.rim_edges), sel.frozen_nodes)
 shore = None
 if cfg["coastline"] == "resample" and free.size:
+    # Every land ring within reach is offered, and rim_constraints picks the
+    # one nearest EACH stretch.  Offering a single nearest ring for the whole
+    # free rim is a closest-pair distance, and two stretches on opposite
+    # banks of a strait would both be resampled onto whichever bank won.
     pts = shapely.MultiPoint(base.nodes[free, :2])
-    ringlist = [g.exterior for g in getattr(land_m, "geoms", [land_m])]
-    shore = min(ringlist, key=lambda r: shapely.distance(pts, r))
-    shore = shapely.LineString(np.asarray(shore.coords))
-    say(f"source shoreline: ring of {len(shore.coords):,} points, "
-        f"{shapely.distance(pts, shore):.1f} m from the free rim")
+    reach = pts.buffer(3000.0)
+    shore = []
+    for g in getattr(land_m, "geoms", [land_m]):
+        for r in [g.exterior, *g.interiors]:
+            if shapely.intersects(reach, r):
+                shore.append(shapely.LineString(np.asarray(r.coords)))
+    if not shore:
+        raise SystemExit("coastline: resample found no source shoreline within "
+                         "3 km of the free rim")
+    say(f"source shoreline: {len(shore)} ring(s) within 3 km, nearest "
+        f"{min(shapely.distance(pts, ln) for ln in shore):.1f} m from the free rim")
 
 target = min(r.target_h_m for _, r in regions_m)
 # The coastline inside the hole is cut at the LOCAL size, not at the target.
@@ -222,167 +248,317 @@ hmin = target / DISTMESH_SCALE
 say(f"fill: bbox {bbox[1] - bbox[0]:.0f} x {bbox[3] - bbox[2]:.0f} m, "
     f"hmin {hmin:.1f} m, pfix {rc['n_pfix']}, egfix {rc['n_egfix']}")
 
-# cleanup='none', and the safe stages run by hand below.  The default clean
-# ends in make_mesh_boundaries_traversable, which is the one stage that takes
-# no pfix and no egfix: on this patch it deleted 121 of the 235 constrained
-# rim points (probe, 2026-09-22).  That is defensible for a mesh whose
-# boundary is an output and fatal for one whose boundary is the contract.
-p, t = om.generate_mesh(
-    fd, fh, bbox=bbox, min_edge_length=hmin,
-    max_iter=int(os.environ.get("LR_MAX_ITER", 100)),
-    seed=int(os.environ.get("LR_SEED", 0)),
-    pfix=rc["pfix"], egfix=rc["egfix"], cleanup="none")
-say(f"filled: NP={len(p):,} NE={len(t):,}")
-
 from oceanmesh.mesh_improve import (  # noqa: E402
     collapse_thin_triangles,
     direct_smoother_lur,
 )
 
-p, t = collapse_thin_triangles(p, t, min_qual=0.25, pfix=rc["pfix"])
-p, t = direct_smoother_lur(p, t, pfix=rc["pfix"])
-say(f"cleaned (pfix-protected): NP={len(p):,} NE={len(t):,}")
-# bound_connectivity is NOT run: its valence flips are blind to the sizing
-# field and on this patch they coarsened the 28.6 m core to 98.7 m.
 
-# Faces whose centroid is outside the hole are the CDT's convex-hull fill;
-# they are not part of the patch.  Everything the rim constrains survives
-# because stitch_patch checks each fixed point individually afterwards.
-cen = p[t].mean(axis=1)
-keep = np.asarray(shapely.contains(hole, shapely.points(cen[:, 0], cen[:, 1])))
-say(f"outside-hole faces dropped: {int((~keep).sum()):,}")
-t = t[keep]
-used = np.unique(t)
-remap = np.full(len(p), -1, dtype=np.int64)
-remap[used] = np.arange(len(used))
-p, t = p[used], remap[t]
+def attempt(seed):
+    """One fill-repair-stitch-verify pass at a given DistMesh seed.
 
-# ---------------------------------------------------------------- stitch
-nodes, elements, depths, node_map, st = stitch_patch(
-    base.nodes, base.elements, base.depths, sel, p, t,
-    rc["pfix"], rc["pfix_base"])
-reports["stitch"] = st
-say("stitch: " + json.dumps(st))
+    Returns ``(candidate, report)``; ``candidate`` is None when this seed did
+    not produce a mesh that keeps the contract.  The seed is a real knob and
+    not a cosmetic one: the repair is greedy, so it stops at a local optimum
+    whose quality depends on where the fill started.  Measured on this patch,
+    neighbouring configurations finished at 27.5 deg and at 30.01 deg.  The
+    driver therefore searches seeds and reports which one it used, rather
+    than reporting whichever one it happened to try.
+    """
+    out = {"seed": seed}
+    # cleanup='none', and the safe stages run by hand below.  The default clean
+    # ends in make_mesh_boundaries_traversable, which is the one stage that takes
+    # no pfix and no egfix: on this patch it deleted 121 of the 235 constrained
+    # rim points (probe, 2026-09-22).  That is defensible for a mesh whose
+    # boundary is an output and fatal for one whose boundary is the contract.
+    p, t = om.generate_mesh(
+        fd, fh, bbox=bbox, min_edge_length=hmin,
+        max_iter=int(os.environ.get("LR_MAX_ITER", 100)),
+        seed=seed,
+        pfix=rc["pfix"], egfix=rc["egfix"], cleanup="none")
+    say(f"filled: NP={len(p):,} NE={len(t):,}")
 
-# Orientation: fort.14 wants counter-clockwise.  The retained faces already
-# are, so only the patch can be wrong, and flipping the whole array would
-# break the frozen-connectivity check that runs next.
-a = nodes[elements[:, 1]] - nodes[elements[:, 0]]
-b = nodes[elements[:, 2]] - nodes[elements[:, 0]]
-cw = (a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]) <= 0
-if cw.any():
-    elements[cw] = elements[cw][:, [0, 2, 1]]
-    say(f"reoriented {int(cw.sum()):,} clockwise elements")
+    p, t = collapse_thin_triangles(p, t, min_qual=0.25, pfix=rc["pfix"])
+    p, t = direct_smoother_lur(p, t, pfix=rc["pfix"])
+    say(f"cleaned (pfix-protected): NP={len(p):,} NE={len(t):,}")
+    # bound_connectivity is NOT run: its valence flips are blind to the sizing
+    # field and on this patch they coarsened the 28.6 m core to 98.7 m.
 
-# ------------------------------------------------------------ seam repair
-# The base mesh was finished to sit exactly on its gates -- min angle 30.01
-# deg, area change 0.500 -- so it has no margin to absorb a new neighbour,
-# and the raw stitch came out at 26.1 deg with seven area jumps over the
-# limit.  Every offender was a PATCH element, so they are repairable in
-# place: improve_patch may flip only patch faces and move only new interior
-# nodes, which is what keeps the frozen zone frozen through the repair.
-_u, _c = np.unique(np.sort(np.vstack([elements[:, [0, 1]], elements[:, [1, 2]],
-                                      elements[:, [2, 0]]]), axis=1),
-                   axis=0, return_counts=True)
-on_boundary = np.zeros(len(nodes), dtype=bool)
-on_boundary[np.unique(_u[_c == 1])] = True
-is_new = np.arange(len(nodes)) >= st["n_nodes_retained"]
-movable = is_new & ~on_boundary
-slidable = is_new & on_boundary
-mutable_faces = np.arange(len(elements)) >= len(sel.retained)
-_before_repair = nodes.copy()
-# The curves new boundary nodes may slide along are the ones rim_constraints
-# cut them from -- one per replaced stretch -- and nothing else.  The base
-# mesh's own land_boundaries list will not do: only 820 of its 939
-# consecutive pairs are boundary edges and it jumps up to 2,867 m, so a line
-# built from it runs through open water and a node projected onto it lands
-# in the sea.
-slide_on = [shapely.LineString(c) for c in rc["curves"] if len(c) > 1]
-nodes, elements, imp = improve_patch(
-    nodes, elements, movable, mutable_faces, slidable=slidable,
-    slide_on=slide_on, only_below=float(os.environ.get("LR_ONLY_BELOW", 1.15)))
-# How faithful the patch's coastline is, measured against the curve it was
-# cut from rather than against itself.  Both the nodes and the line between
-# them are checked: a node is kept on the curve by construction, but the
-# chords between nodes are the coastline the model will actually see, and
-# that is what coastline_tolerance_m is a statement about.
-_u2, _c2 = np.unique(np.sort(np.vstack([elements[:, [0, 1]], elements[:, [1, 2]],
-                                        elements[:, [2, 0]]]), axis=1),
-                     axis=0, return_counts=True)
-_bnd = _u2[_c2 == 1]
-_new_bnd = _bnd[is_new[_bnd].any(axis=1)]
-if len(_new_bnd):
-    _a, _b = nodes[_new_bnd[:, 0]], nodes[_new_bnd[:, 1]]
-    _f = np.linspace(0.0, 1.0, 9)[:, None, None]
-    _samp = (_a[None] + _f * (_b - _a)[None]).reshape(-1, 2)
-    _curve = shapely.MultiLineString([np.asarray(ln.coords) for ln in slide_on]) \
-        if slide_on else None
-    imp["coastline_departure_m"] = float(shapely.distance(
-        shapely.points(_samp), _curve).max()) if _curve else 0.0
-    # NEW nodes only: the frozen anchors at each end of a stretch sit on the
-    # base polyline, which is exactly what `resample` departs from, so
-    # including them would report the improvement as an error.
-    _nb = np.unique(_new_bnd)
-    _nb = _nb[is_new[_nb]]
-    imp["coastline_node_departure_m"] = float(shapely.distance(
-        shapely.points(nodes[_nb]), _curve).max()) if _curve and len(_nb) else 0.0
-else:
-    imp["coastline_departure_m"] = 0.0
-    imp["coastline_node_departure_m"] = 0.0
-reports["improve"] = imp
-if imp["coastline_departure_m"] > cfg["coastline_tolerance_m"]:
-    raise SystemExit(
-        f"the repair moved the coastline {imp['coastline_departure_m']:.0f} m "
-        f"from the curve it was cut from, past the "
-        f"{cfg['coastline_tolerance_m']:g} m tolerance; a slide may cross an "
-        "original vertex and chord off the bend behind it")
-say(f"seam repair: {imp['n_flips']} flips, {imp['n_moves']} moves, "
-    f"coastline departure {imp['coastline_departure_m']:.1f} m "
-    f"(nodes {imp['coastline_node_departure_m']:.2f} m), "
-    f"angles {imp['min_angle_deg']:.2f}-{imp['max_angle_deg']:.2f} deg "
-    f"({int(movable.sum()):,} movable, {int(slidable.sum()):,} slidable nodes, "
-    f"{int(mutable_faces.sum()):,} mutable faces)")
+    # Faces whose centroid is outside the hole are the CDT's convex-hull fill;
+    # they are not part of the patch.  Everything the rim constrains survives
+    # because stitch_patch checks each fixed point individually afterwards.
+    cen = p[t].mean(axis=1)
+    keep = np.asarray(shapely.contains(hole, shapely.points(cen[:, 0], cen[:, 1])))
+    say(f"outside-hole faces dropped: {int((~keep).sum()):,}")
+    t = t[keep]
+    used = np.unique(t)
+    remap = np.full(len(p), -1, dtype=np.int64)
+    remap[used] = np.arange(len(used))
+    p, t = p[used], remap[t]
 
-# ---------------------------------------------------------------- verify
-ver = verify_patch(base.nodes, base.depths, base.elements, sel,
-                   nodes, elements, depths, node_map,
-                   open_boundaries=base.open_boundaries)
-reports["verify"] = ver
-say("verify: " + json.dumps(ver))
-if not ver["ok"]:
-    raise SystemExit("the frozen zone is not frozen; see verify in the report")
+    # ---------------------------------------------------------------- stitch
+    nodes, elements, depths, node_map, st = stitch_patch(
+        base.nodes, base.elements, base.depths, sel, p, t,
+        rc["pfix"], rc["pfix_base"])
+    out["stitch"] = st
+    say("stitch: " + json.dumps(st))
 
-# ------------------------------------------------------------- boundaries
-# Rebuilt rather than carried over: the patch changes the boundary node list
-# wherever the coastline was re-cut.  The OBC is the exception -- it is an
-# input, the cut is forbidden to touch it, and verify_patch has just checked
-# that every one of its nodes is where it was -- so it is mapped, not found.
-obc = [node_map[np.asarray(s, dtype=np.int64)] for s in base.open_boundaries]
-loops = om.boundary_loops(elements)
-obc_set = set(np.concatenate(obc).tolist()) if obc else set()
-outer = max(loops, key=lambda lp: abs(shapely.Polygon(nodes[lp]).area))
-if not obc_set.issubset(set(outer.tolist())):
-    raise SystemExit("the open boundary is no longer on the outer loop")
-# Split the outer loop at the OBC's two ends: the run between them that stays
-# on the OBC is the open string, the complement is the mainland coast.
-ring = np.roll(outer, -int(np.where(outer == obc[0][0])[0][0]))
-if ring[1] not in obc_set:
-    ring = np.roll(ring[::-1], 1)
-stop = int(np.where(ring == obc[0][-1])[0][0])
-if set(ring[:stop + 1].tolist()) != obc_set:
-    raise SystemExit("the outer loop between the OBC ends is not the OBC")
-land_bounds = [(20, np.append(ring[stop:], ring[0]))]
-land_bounds += [(21, lp) for lp in loops if lp is not outer]
-say(f"boundaries: open {len(obc[0])}, mainland {len(land_bounds[0][1])}, "
-    f"islands {len(land_bounds) - 1}")
-mesh = Fort14Mesh(
-    title=f"{base.title} + {recipe.stem}",
-    nodes=nodes, depths=depths, elements=elements,
-    open_boundaries=[ring[:stop + 1]],
-    land_boundaries=land_bounds)
+    # Orientation: fort.14 wants counter-clockwise.  The retained faces already
+    # are, so only the patch can be wrong, and flipping the whole array would
+    # break the frozen-connectivity check that runs next.
+    a = nodes[elements[:, 1]] - nodes[elements[:, 0]]
+    b = nodes[elements[:, 2]] - nodes[elements[:, 0]]
+    cw = (a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]) <= 0
+    if cw.any():
+        elements[cw] = elements[cw][:, [0, 2, 1]]
+        say(f"reoriented {int(cw.sum()):,} clockwise elements")
+
+    # ------------------------------------------------------------ seam repair
+    # The base mesh was finished to sit exactly on its gates -- min angle 30.01
+    # deg, area change 0.500 -- so it has no margin to absorb a new neighbour,
+    # and the raw stitch came out at 26.1 deg with seven area jumps over the
+    # limit.  Every offender was a PATCH element, so they are repairable in
+    # place: improve_patch may flip only patch faces and move only new interior
+    # nodes, which is what keeps the frozen zone frozen through the repair.
+    _u, _c = np.unique(np.sort(np.vstack([elements[:, [0, 1]], elements[:, [1, 2]],
+                                          elements[:, [2, 0]]]), axis=1),
+                       axis=0, return_counts=True)
+    on_boundary = np.zeros(len(nodes), dtype=bool)
+    on_boundary[np.unique(_u[_c == 1])] = True
+    is_new = np.arange(len(nodes)) >= st["n_nodes_retained"]
+    movable = is_new & ~on_boundary
+    slidable = is_new & on_boundary
+    mutable_faces = np.arange(len(elements)) >= len(sel.retained)
+    _before_repair = nodes.copy()
+    # The curves new boundary nodes may slide along are the ones rim_constraints
+    # cut them from -- one per replaced stretch -- and nothing else.  The base
+    # mesh's own land_boundaries list will not do: only 820 of its 939
+    # consecutive pairs are boundary edges and it jumps up to 2,867 m, so a line
+    # built from it runs through open water and a node projected onto it lands
+    # in the sea.
+    slide_on = [shapely.LineString(c) for c in rc["curves"] if len(c) > 1]
+
+    # Depths follow the nodes.  stitch_patch evaluated the base field at the
+    # positions the fill produced; improve_patch then moved some of those nodes,
+    # and a depth left behind at the old position is not the base field at the
+    # delivered coordinate -- on a 5+x field a node moved from (0.2,0.3) to (1,1)
+    # kept 5.2 where 6.0 is right (review finding 9, 2026-09-22).  The frozen
+    # depths are untouched because frozen nodes do not move.
+    only_below = float(os.environ.get("LR_ONLY_BELOW", 1.15))
+    nodes, elements, imp = improve_patch(
+        nodes, elements, movable, mutable_faces, slidable=slidable,
+        slide_on=slide_on, only_below=only_below)
+    if imp["min_angle_deg"] < 30.0 or imp["max_angle_deg"] > 130.0:
+        # Strict improvement has stalled.  The soft pass allows a move that
+        # holds the worst margin and improves the rest, which is how a run
+        # stuck at 22.96 deg got to 27.46; it is tried second because when
+        # strict succeeds it succeeds better.
+        nodes, elements, imp2 = improve_patch(
+            nodes, elements, movable, mutable_faces, slidable=slidable,
+            slide_on=slide_on, only_below=only_below, soft=True)
+        imp = {**imp2, "n_flips": imp["n_flips"] + imp2["n_flips"],
+               "n_moves": imp["n_moves"] + imp2["n_moves"], "soft_pass": True}
+    _shifted = is_new & (np.linalg.norm(nodes - _before_repair, axis=1) > 0)
+    depths, _n_out = refresh_depths(base.nodes, base.elements, base.depths,
+                                    nodes, _shifted, depths)
+    imp["n_depths_recomputed"] = int(_shifted.sum())
+    imp["n_recomputed_outside_base"] = int(_n_out)
+    # How faithful the patch's coastline is, measured against the curve it was
+    # cut from rather than against itself.  Both the nodes and the line between
+    # them are checked: a node is kept on the curve by construction, but the
+    # chords between nodes are the coastline the model will actually see, and
+    # that is what coastline_tolerance_m is a statement about.
+    _u2, _c2 = np.unique(np.sort(np.vstack([elements[:, [0, 1]], elements[:, [1, 2]],
+                                            elements[:, [2, 0]]]), axis=1),
+                         axis=0, return_counts=True)
+    _bnd = _u2[_c2 == 1]
+    _new_bnd = _bnd[is_new[_bnd].any(axis=1)]
+    if len(_new_bnd):
+        _a, _b = nodes[_new_bnd[:, 0]], nodes[_new_bnd[:, 1]]
+        _f = np.linspace(0.0, 1.0, 9)[:, None, None]
+        _samp = (_a[None] + _f * (_b - _a)[None]).reshape(-1, 2)
+        _curve = shapely.MultiLineString([np.asarray(ln.coords) for ln in slide_on]) \
+            if slide_on else None
+        imp["coastline_departure_m"] = float(shapely.distance(
+            shapely.points(_samp), _curve).max()) if _curve else 0.0
+        # NEW nodes only: the frozen anchors at each end of a stretch sit on the
+        # base polyline, which is exactly what `resample` departs from, so
+        # including them would report the improvement as an error.
+        _nb = np.unique(_new_bnd)
+        _nb = _nb[is_new[_nb]]
+        imp["coastline_node_departure_m"] = float(shapely.distance(
+            shapely.points(nodes[_nb]), _curve).max()) if _curve and len(_nb) else 0.0
+    else:
+        imp["coastline_departure_m"] = 0.0
+        imp["coastline_node_departure_m"] = 0.0
+    out["improve"] = imp
+    if imp["coastline_departure_m"] > cfg["coastline_tolerance_m"]:
+        say(f"  seed {seed}: the repair moved the coastline "
+            f"{imp['coastline_departure_m']:.0f} m from the curve it was cut "
+            f"from, past the {cfg['coastline_tolerance_m']:g} m tolerance")
+        return None, out
+    say(f"seam repair: {imp['n_flips']} flips, {imp['n_moves']} moves, "
+        f"coastline departure {imp['coastline_departure_m']:.1f} m "
+        f"(nodes {imp['coastline_node_departure_m']:.2f} m), "
+        f"angles {imp['min_angle_deg']:.2f}-{imp['max_angle_deg']:.2f} deg "
+        f"({int(movable.sum()):,} movable, {int(slidable.sum()):,} slidable nodes, "
+        f"{int(mutable_faces.sum()):,} mutable faces)")
+
+    # ---------------------------------------------------------------- verify
+    ver = verify_patch(base.nodes, base.depths, base.elements, sel,
+                       nodes, elements, depths, node_map,
+                       open_boundaries=base.open_boundaries)
+    out["verify"] = ver
+    say("verify: " + json.dumps(ver))
+    if not ver["ok"]:
+        return None, out
+    return (nodes, elements, depths, node_map), out
+
+
+def serialise(candidate, out, path):
+    """Build the boundary lists, write the fort.14, and read it back.
+
+    Everything before this checked objects in memory.  What the model runs is
+    the file, so the file is what is verified: the frozen zone again, through
+    the map, and then the whole 21-gate battery by the caller.
+    """
+    nodes, elements, depths, node_map = candidate
+    # ------------------------------------------------------------- boundaries
+    # Rebuilt rather than carried over: the patch changes the boundary node list
+    # wherever the coastline was re-cut.  The OBC is the exception -- it is an
+    # input, the cut is forbidden to touch it, and verify_patch has just checked
+    # that every one of its nodes is where it was -- so it is mapped, not found.
+    if len(base.open_boundaries) != 1:
+        # The split below assumes one open arc on the outer loop: it indexes
+        # obc[0] and tests a set.  Two disjoint arcs would silently merge and
+        # none would raise an IndexError instead.  Refuse rather than guess.
+        raise SystemExit(
+            f"this generator handles exactly one open boundary; the base mesh has "
+            f"{len(base.open_boundaries)}")
+    obc = [node_map[np.asarray(s, dtype=np.int64)] for s in base.open_boundaries]
+    loops = om.boundary_loops(elements)
+    obc_set = set(np.concatenate(obc).tolist()) if obc else set()
+    outer = max(loops, key=lambda lp: abs(shapely.Polygon(nodes[lp]).area))
+    if not obc_set.issubset(set(outer.tolist())):
+        raise SystemExit("the open boundary is no longer on the outer loop")
+    # Split the outer loop at the OBC's two ends: the run between them that stays
+    # on the OBC is the open string, the complement is the mainland coast.
+    ring = np.roll(outer, -int(np.where(outer == obc[0][0])[0][0]))
+    if ring[1] not in obc_set:
+        ring = np.roll(ring[::-1], 1)
+    stop = int(np.where(ring == obc[0][-1])[0][0])
+    if set(ring[:stop + 1].tolist()) != obc_set:
+        raise SystemExit("the outer loop between the OBC ends is not the OBC")
+    land_bounds = [(20, np.append(ring[stop:], ring[0]))]
+    land_bounds += [(21, lp) for lp in loops if lp is not outer]
+    say(f"boundaries: open {len(obc[0])}, mainland {len(land_bounds[0][1])}, "
+        f"islands {len(land_bounds) - 1}")
+    mesh = Fort14Mesh(
+        title=f"{base.title} + {recipe.stem}",
+        nodes=nodes, depths=depths, elements=elements,
+        open_boundaries=[ring[:stop + 1]],
+        land_boundaries=land_bounds)
+    write_fort14(mesh, path)
+    say(f"wrote {path.name}: NP={mesh.n_nodes:,} NE={mesh.n_elements:,}")
+
+    # --------------------------------------------------- the delivered artefact
+    # Everything above checked objects in memory.  What the model runs is the
+    # file, so the file is what is checked: read it back, verify the frozen zone
+    # through the map again, and run the whole 21-gate battery.  A generator
+    # whose quality claim rests on someone remembering to run QA afterwards does
+    # not have a quality claim (review findings 3 and 15, 2026-09-22).
+    written = read_fort14(out14)
+    out["verify_on_disk"] = verify_patch(
+        base.nodes, base.depths, base.elements, sel,
+        written.nodes, written.elements, written.depths, node_map,
+        open_boundaries=base.open_boundaries)
+    if not out["verify_on_disk"]["ok"]:
+        return None, None
+    if not np.array_equal(written.open_boundaries[0], mesh.open_boundaries[0]) or \
+            len(written.land_boundaries) != len(mesh.land_boundaries):
+        raise SystemExit("the written boundary lists differ from the ones built")
+    return written, mesh
+
+
+# --------------------------------------------------------- the seed search
 out14 = OUT / f"{Path(cfg['base_mesh']).stem}_{recipe.stem}.14"
-write_fort14(mesh, out14)
-say(f"wrote {out14.name}: NP={mesh.n_nodes:,} NE={mesh.n_elements:,}")
+seeds = [int(x) for x in os.environ.get("LR_SEEDS", "0,1,2,3,4").split(",")]
+best = None
+reports["attempts"] = []
+for seed in seeds:
+    say(f"--- seed {seed}")
+    candidate, out = attempt(seed)
+    if candidate is None:
+        reports["attempts"].append(out)
+        continue
+    written, mesh = serialise(candidate, out, out14)
+    if written is None:
+        reports["attempts"].append(out)
+        continue
+    qa = run_qa(written, name=out14.stem, path=out14)
+    out["qa"] = {"n_gate_total": qa.n_gate_total,
+                 "n_gate_failed": qa.n_gate_failed,
+                 "failed": [{"check": c.check_id, "requirement": c.requirement,
+                             "observed": c.observed} for c in qa.checks
+                            if c.status == "fail"]}
+    reports["attempts"].append(out)
+    say(f"    seed {seed}: QA {qa.n_gate_total - qa.n_gate_failed}/"
+        f"{qa.n_gate_total}"
+        + ("" if not qa.n_gate_failed else "  "
+           + "; ".join(f"{c['check']} {c['observed']}"
+                       for c in out["qa"]["failed"])))
+    if best is None or qa.n_gate_failed < best[0]:
+        best = (qa.n_gate_failed, seed, candidate, out, written, qa)
+    if not qa.n_gate_failed:
+        break
+
+if best is None:
+    raise SystemExit("no seed produced a mesh that keeps the frozen-zone "
+                     "contract; see attempts in the report")
+_, seed, candidate, out, written, qa = best
+nodes, elements, depths, node_map = candidate
+reports.update({k: v for k, v in out.items() if k != "seed"})
+reports["seed"] = seed
 np.save(OUT / "node_map.npy", node_map)
+if seed != seeds[0]:
+    # The accepted mesh is not the last one written; write it again.
+    serialise(candidate, out, out14)
+    written = read_fort14(out14)
+    qa = run_qa(written, name=out14.stem, path=out14)
+say(f"accepted seed {seed}")
+
+reports["qa"] = {"n_gate_total": qa.n_gate_total,
+                 "n_gate_failed": qa.n_gate_failed,
+                 "failed": [{"check": c.check_id, "requirement": c.requirement,
+                             "observed": c.observed} for c in qa.checks
+                            if c.status == "fail"]}
+(OUT / f"{out14.stem}_qa.json").write_text(json.dumps(qa.to_dict(), indent=1,
+                                                      default=float))
+
+# Achieved, not predicted: the dt the finished mesh allows, by the minimum
+# altitude of a triangle over sqrt(g*H), which is the measure notebook 392
+# and coast_fit both use.
+_u3 = written.nodes[written.elements[:, 1]] - written.nodes[written.elements[:, 0]]
+_v3 = written.nodes[written.elements[:, 2]] - written.nodes[written.elements[:, 0]]
+_area = 0.5 * np.abs(_u3[:, 0] * _v3[:, 1] - _u3[:, 1] * _v3[:, 0])
+_side = np.stack([
+    np.linalg.norm(written.nodes[written.elements[:, (i + 1) % 3]]
+                   - written.nodes[written.elements[:, i]], axis=1)
+    for i in range(3)], axis=1)
+_dt = (2 * _area / _side.max(axis=1)) / np.sqrt(
+    9.81 * written.depths[written.elements].max(axis=1))
+reports["achieved"] = {
+    "dt_min_s": float(_dt.min()),
+    "dt_min_element": int(_dt.argmin()),
+    "n_nodes": int(written.n_nodes),
+    "n_elements": int(written.n_elements),
+}
+say(f"QA {qa.n_gate_total - qa.n_gate_failed}/{qa.n_gate_total}, achieved "
+    f"dt {_dt.min():.2f} s (predicted {reports['preflight'][0]['dt_s']:.2f} s)")
 (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
+if qa.n_gate_failed:
+    raise SystemExit(
+        f"the patched mesh fails {qa.n_gate_failed} QA gate(s): "
+        + "; ".join(f"{c['check']} {c['observed']}"
+                    for c in reports["qa"]["failed"]))
 say("done")
