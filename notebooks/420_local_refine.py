@@ -172,9 +172,10 @@ footprint = unary_union([geom.buffer(widths[region.name])
 grad = effective_gradation(base.nodes, base.elements,
                            [(g, r.target_h_m, widths[r.name]) for g, r in regions_m])
 reports["gradation"] = grad
-say(f"effective gradation: max {grad['max_effective_gradation']:.3f} against the "
-    f"{grad['c4_limit_gradation']:.3f} that C4 allows "
-    f"({'within' if grad['within_c4'] else 'OVER'})")
+say(f"effective gradation: max {grad['max_effective_gradation']:.3f} against a "
+    f"{grad['c4_reference_gradation']:.3f} reference "
+    f"({'below' if grad['ramp_below_reference'] else 'ABOVE'}); C4 itself is "
+    "gated on the finished mesh")
 obc_nodes = np.concatenate([np.asarray(s) for s in base.open_boundaries]) \
     if base.open_boundaries else np.empty(0, dtype=np.int64)
 sel = select_patch(base.nodes, base.elements, footprint,
@@ -301,13 +302,14 @@ def attempt(seed):
     nodes, elements, depths, node_map, st = stitch_patch(
         base.nodes, base.elements, base.depths, sel, p, t,
         rc["pfix"], rc["pfix_base"])
-    out["stitch"] = st
-    say("stitch: " + json.dumps(st))
+    out["stitch"] = {k: v for k, v in st.items() if k != "pfix_new"}
+    say("stitch: " + json.dumps(out["stitch"]))
     # Before the repair, while a fixed point is still exactly where it was
     # put: the repair slides boundary nodes along their curve, so matching
     # pfix by coordinate afterwards fails.  Node ids do not change in the
     # repair, so the edge set built here stays valid.
-    want_boundary = boundary_after_patch(base.elements, sel, rc, nodes, node_map)
+    want_boundary = boundary_after_patch(base.elements, sel, rc, node_map,
+                                         st["pfix_new"])
     out["want_boundary"] = want_boundary
 
     # Orientation: fort.14 wants counter-clockwise.  The retained faces already

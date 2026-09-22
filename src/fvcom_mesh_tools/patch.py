@@ -886,8 +886,13 @@ def effective_gradation(nodes, elements, regions) -> dict[str, Any]:
         worst = max(worst, g)
     return {
         "max_effective_gradation": worst,
-        "c4_limit_gradation": float(1.0 / np.sqrt(1.0 - 0.5) - 1.0),
-        "within_c4": bool(worst <= 1.0 / np.sqrt(1.0 - 0.5) - 1.0),
+        # A reference number, not a verdict.  The implemented field is
+        # target + (B(x) - target) * d(x) / W, whose gradient also has an
+        # ambient term this does not measure, and the 1 - 1/(1+g)^2 relation
+        # assumes similar neighbouring triangles where C4 is an area ratio
+        # across a shared edge.  C4 itself is gated on the finished mesh.
+        "c4_reference_gradation": float(1.0 / np.sqrt(1.0 - 0.5) - 1.0),
+        "ramp_below_reference": bool(worst <= 1.0 / np.sqrt(1.0 - 0.5) - 1.0),
         "per_region": per_region,
     }
 
@@ -978,6 +983,12 @@ def stitch_patch(
     depths = np.concatenate([dep[keep], new_dep])
 
     report = {
+        # Where every constrained rim point ended up.  boundary_after_patch
+        # used to recover this by looking the coordinates up in the finished
+        # mesh, which made it callable only BEFORE the repair slid anything.
+        # A precondition nobody can see is a defect waiting for a refactor
+        # (third review, finding 1).
+        "pfix_new": patch_map[idx],
         "n_nodes": int(len(nodes)),
         "n_elements": int(len(elements)),
         "n_nodes_retained": int(len(keep)),
@@ -1010,18 +1021,17 @@ def refresh_depths(base_nodes, base_elements, base_depths, nodes, moved, depths)
     return depths, int(n_outside)
 
 
-def boundary_after_patch(base_elements, selection, rc, nodes, node_map,
-                         tol_m: float = 1e-6):
+def boundary_after_patch(base_elements, selection, rc, node_map, pfix_new):
     """The boundary edge set the patched mesh must have, in final node ids.
 
     Two parts and nothing else: the base mesh's boundary edges that the cut
     did not take, and the rim segments that are supposed to BE boundary --
-    the coastline chains, not the interface ones.  Comparing the finished
+    the coastline chains, not the interface ones.  ``pfix_new`` is
+    ``stitch_patch``'s report entry of the same name: where each constrained
+    rim point landed, by node id, which the repair does not change.  Comparing the finished
     mesh against this is what notices a face that is simply gone: every other
     invariant survives a missing patch triangle intact.
     """
-    from scipy.spatial import cKDTree
-
     tri = np.asarray(base_elements, dtype=np.int64)
     nm = np.asarray(node_map, dtype=np.int64)
     u, c = _edge_table(tri)
@@ -1033,11 +1043,10 @@ def boundary_after_patch(base_elements, selection, rc, nodes, node_map,
     if any(v < 0 for e in kept for v in e):
         raise ValueError("a retained boundary edge lost a node in the patch")
 
-    pfix = np.asarray(rc["pfix"], dtype=float)[:, :2]
     base_id = np.asarray(rc["pfix_base"], dtype=np.int64)
-    d, row = cKDTree(np.asarray(nodes, dtype=float)[:, :2]).query(pfix)
-    if (d > tol_m).any():
-        raise ValueError("a constrained rim point is not in the patched mesh")
+    row = np.asarray(pfix_new, dtype=np.int64)
+    if row.shape[0] != base_id.shape[0]:
+        raise ValueError("pfix_new must give one output node per pfix row")
     interface = {tuple(sorted(e)) for e, phys
                  in zip(selection.rim_edges.tolist(), selection.physical_rim)
                  if not phys}
@@ -1193,7 +1202,12 @@ def verify_patch(
         "open_boundary_unchanged": bool(obc_ok),
         "area_change_fraction": float((new_area - base_area) / base_area)
         if base_area > 0 else 0.0,
-        "ok": bool(frozen_exact and not missing and (area2 > 0).all()
+        # An unchecked claim is not a satisfied one.  Without
+        # expected_boundary the coverage question was never asked, and a
+        # Boolean success that means "everything I was asked to look at was
+        # fine" is too easy to read as a certificate (third review).
+        "ok": bool(expected_boundary is not None
+                   and frozen_exact and not missing and (area2 > 0).all()
                    and extra == 0 and nonmanifold == 0 and not unexpected
                    and not absent
                    and dup == 0 and orphan == 0 and obc_ok and not split),

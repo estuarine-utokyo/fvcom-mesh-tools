@@ -19,7 +19,9 @@ sixteen findings and nine executable tests, **all nine of which reproduced**.
 Revision 5 is what those fixed; §5.3 lists them. A **second** review of the
 result (`docs/local_refine_implementation_review_2.md`) found eight more,
 nine assertions, all nine reproduced; §5.5 lists what those changed and what
-is deliberately left open.
+is deliberately left open. A **third** review
+(`docs/local_refine_implementation_review_3.md`) asked whether this is
+finished; §9 is its answer and mine.
 
 ### What revision 1 got wrong
 
@@ -566,3 +568,55 @@ failures during a run rather than as refusals before it.
    similar neighbouring triangles where C4 is an area ratio across an edge
    (review finding 13). C4 itself is gated on the finished mesh, which is
    where it belongs.
+
+
+## 9. Is this finished?
+
+**The Futtsu case is. A general-purpose generator is not**, and the third
+review (gpt-6-astra, 2026-09-22) is worth reading for the ranked reasons. It
+raised one P1 and it was right: `verify_patch` returned `ok=True` while
+`boundary_checked=False`, so a success could mean "everything I was asked to
+look at was fine" rather than "the contract holds". Missing evidence now makes
+`ok` False, and `stitch_patch` hands the evidence out (`pfix_new`) instead of
+`boundary_after_patch` recovering it by coordinate — which had made that
+function callable only *before* the repair, a precondition nobody could see.
+
+What it measured independently on the delivered mesh, and I had not: every one
+of the 1,230 boundary edges is listed exactly once, zero triangle pairs overlap
+by more than 1e-6 m², the minimum element area is 232 m², the open-boundary
+list is exactly the mapped base list including order, and **six** new nodes
+fell outside the base triangulation and took the nearest-node depth. It also
+put a number on the cost that is more honest than the step ratio alone: 4.55×
+the steps and 1.27× the elements is about **5.75× the external-mode work**.
+
+Its ranking of what fails first away from this site, which I have not tested:
+several open boundaries (a certain refusal, but only after the expensive part),
+then a narrow channel, then a region touching an island — where a wholly free
+island keeps its original coarse rim and can defeat fine resolution at every
+seed — then two regions with conflicting priorities, then size, then a polygon
+fishery, then depth.
+
+And its judgement on the seed search, which I accept: first-passing-seed is
+defensible for a randomised construction with deterministic acceptance, and
+"best of N" would be worse until acceptance says more than it does — optimising
+dt alone rewards coarsening the fishery. What a passing seed cannot repair is a
+specification error: the wrong bank, an unresolved core, an ignored priority,
+the wrong depth field.
+
+### The order of work it recommends, which I agree with
+
+1. **Decide the baseline and the purpose.** For production, build the M7001
+   depth field globally *before* freezing the base, then re-run the patch. For
+   a refinement-only experiment, keep SRTM15 in both runs and say so. Do not
+   mix them. This costs more than any meshing convenience on the list.
+2. **Close acceptance structurally** — done for the boundary evidence; still
+   open: per-region achieved-size acceptance, and moving the OBC-count and
+   priority refusals into pre-flight where they cost nothing.
+3. A caller-declared maximum cut and a segment-distance OBC guard.
+4. Land-boundary metadata preserved rather than rebuilt.
+5. Geometry from a file, with one real polygon case.
+6. Priority: refuse conflicting overlaps, or state finest-wins as the policy.
+7. `effective_gradation`: label corrected (done); a rigorous bound is not worth
+   it, since C4 is gated on the mesh.
+8. Repeated refinement: a sequential test and provenance first.
+9. A global-rebuild product: defer. The sizing route already exists.

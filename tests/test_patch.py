@@ -347,13 +347,13 @@ def test_distmesh_scale_divides_the_field():
     assert np.allclose(a(q) / 1.2, b(q))
 
 
-def test_effective_gradation_flags_a_ramp_c4_cannot_carry():
+def test_effective_gradation_flags_a_steep_ramp():
     nodes, elements = grid_mesh(15, 15, h=100.0)
     core = shapely.Point(700, 700).buffer(100.0)
     easy = effective_gradation(nodes, elements, [(core, 20.0, 2000.0)])
     hard = effective_gradation(nodes, elements, [(core, 20.0, 150.0)])
-    assert easy["within_c4"]
-    assert not hard["within_c4"]
+    assert easy["ramp_below_reference"]
+    assert not hard["ramp_below_reference"]
     assert hard["max_effective_gradation"] > easy["max_effective_gradation"]
 
 
@@ -395,13 +395,17 @@ def test_identity_fill_reproduces_the_base_mesh():
 
 
 def test_verify_passes_on_the_identity_fill():
+    from fvcom_mesh_tools.patch import boundary_after_patch
+
     nodes, elements = grid_mesh()
     depths = np.full(len(nodes), 8.0)
     sel, rc, pn, pt = replay_patch(nodes, elements,
                                    shapely.Point(400, 400).buffer(150.0))
-    out, oute, outd, nm, _ = stitch_patch(nodes, elements, depths, sel, pn, pt,
-                                          rc["pfix"], rc["pfix_base"])
-    ver = verify_patch(nodes, depths, elements, sel, out, oute, outd, nm)
+    out, oute, outd, nm, st = stitch_patch(nodes, elements, depths, sel, pn, pt,
+                                           rc["pfix"], rc["pfix_base"])
+    ver = verify_patch(nodes, depths, elements, sel, out, oute, outd, nm,
+                       expected_boundary=boundary_after_patch(
+                           elements, sel, rc, nm, st["pfix_new"]))
     assert ver["ok"]
     assert ver["n_frozen_moved"] == 0
     assert ver["n_retained_faces_missing"] == 0
@@ -624,11 +628,15 @@ def test_a_physical_island_inside_the_cut_stitches():
     taken = np.unique(elements[sel.removed])
     local = np.full(len(nodes), -1, dtype=np.int64)
     local[taken] = np.arange(len(taken))
-    out, oute, outd, nm, _ = stitch_patch(
+    out, oute, outd, nm, st = stitch_patch(
         nodes, elements, np.ones(len(nodes)), sel, nodes[taken, :2],
         local[elements[sel.removed]], rc["pfix"], rc["pfix_base"])
+    from fvcom_mesh_tools.patch import boundary_after_patch
+
     assert verify_patch(nodes, np.ones(len(nodes)), elements, sel,
-                        out, oute, outd, nm)["ok"]
+                        out, oute, outd, nm,
+                        expected_boundary=boundary_after_patch(
+                            elements, sel, rc, nm, st["pfix_new"]))["ok"]
 
 
 def test_a_zero_width_transition_stays_finite():
@@ -804,9 +812,9 @@ def test_a_missing_patch_face_is_rejected():
     depths = np.full(len(nodes), 8.0)
     foot = shapely.Point(400, 400).buffer(150.0)
     sel, rc, pn, pt = replay_patch(nodes, elements, foot)
-    out, oute, outd, nm, _ = stitch_patch(nodes, elements, depths, sel, pn, pt,
-                                          rc["pfix"], rc["pfix_base"])
-    want = boundary_after_patch(elements, sel, rc, out, nm)
+    out, oute, outd, nm, st = stitch_patch(nodes, elements, depths, sel, pn, pt,
+                                           rc["pfix"], rc["pfix_base"])
+    want = boundary_after_patch(elements, sel, rc, nm, st["pfix_new"])
     good = verify_patch(nodes, depths, elements, sel, out, oute, outd, nm,
                         expected_boundary=want)
     assert good["ok"] and good["boundary_checked"]
@@ -824,15 +832,16 @@ def test_a_missing_patch_face_is_rejected():
     assert bad["n_unexpected_boundary_edges"] > 0
 
 
-def test_verify_says_when_it_did_not_check_coverage():
+def test_verify_is_not_ok_when_it_did_not_check_coverage():
     nodes, elements = grid_mesh()
     depths = np.full(len(nodes), 8.0)
     sel, rc, pn, pt = replay_patch(nodes, elements,
                                    shapely.Point(400, 400).buffer(150.0))
     out, oute, outd, nm, _ = stitch_patch(nodes, elements, depths, sel, pn, pt,
                                           rc["pfix"], rc["pfix_base"])
-    assert not verify_patch(nodes, depths, elements, sel, out, oute, outd,
-                            nm)["boundary_checked"]
+    blind = verify_patch(nodes, depths, elements, sel, out, oute, outd, nm)
+    assert not blind["boundary_checked"]
+    assert not blind["ok"], "an unchecked claim is not a satisfied one"
 
 
 def test_an_island_taken_whole_carries_its_own_curve():
