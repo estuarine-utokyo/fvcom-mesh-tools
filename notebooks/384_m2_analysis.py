@@ -27,7 +27,11 @@ sys.path.insert(0, str(ROOT / "src"))
 from fvcom_mesh_tools.plotting import add_atlas_grid, use_readable_style  # noqa: E402
 
 DEFAULT_RUN_ROOT = Path("/octfs/work/G16445/v61021/scratch/m2_383").resolve()
-LABELS = ("A", "B_own", "B_m7001")
+# Set from the manifest at run time. The cases are a property of the
+# experiment, not of this script: 383 stages A / B_own / B_m7001, and 414
+# stages base / refined on one base. The first label is the reference every
+# other one is differenced against.
+LABELS: tuple[str, ...] = ("A", "B_own", "B_m7001")
 STATIONS = ("TOKYO-SIBAURA", "HARUMI", "TIBA-TIBA LIGHT", "SINKO", "YOKOSUKA")
 
 
@@ -215,7 +219,11 @@ def read_run(case, manifest):
 
 
 def analyze(run_root, output, figure):
+    global LABELS
+
     manifest = json.loads((run_root / "manifest.json").read_text())
+    LABELS = tuple(manifest["runs"])
+    print(f"[384] cases: {', '.join(LABELS)} (reference = {LABELS[0]})", flush=True)
     output.mkdir(parents=True, exist_ok=True)
     rows, health, maps = {}, {}, {}
     tr = Transformer.from_crs(4326, 32654, always_xy=True)
@@ -309,10 +317,13 @@ def analyze(run_root, output, figure):
             "Trust the constants only where spinup.converged is true.",
         ],
     )
-    if len(maps) == 3:
+    if len(maps) == len(LABELS):
+        ref = LABELS[0]
+        pairs = [(b, ref) for b in LABELS[1:]]
+        pairs += [(LABELS[1], LABELS[2])] if len(LABELS) == 3 else []
         for row in rows.values():
             row["differences"] = {}
-            for b, a in [("B_own", "A"), ("B_m7001", "A"), ("B_own", "B_m7001")]:
+            for b, a in pairs:
                 row["differences"][f"{b}_minus_{a}"] = dict(
                     amplitude_m=row[b]["amplitude_m"] - row[a]["amplitude_m"],
                     phase_deg=float(phase_difference(row[b]["phase_deg"], row[a]["phase_deg"])),
