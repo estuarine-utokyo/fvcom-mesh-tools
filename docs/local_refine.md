@@ -745,6 +745,40 @@ samples the sizing field over the hole and differences it, so a recipe whose
 regions fight each other is flagged *before* meshing rather than diagnosed
 afterwards from eight failed seeds.
 
+### 6.5 All three refinements, run
+
+Jobs 115355–115358 for the multi-region case, on the same base, the same
+1.5 s external step and the same 20-day protocol as §6.2, so the three are
+directly comparable.
+
+| | base | circle | polygon | three regions |
+|---|---|---|---|---|
+| elements | 8,252 | 10,496 | 10,753 | 11,131 |
+| records | 961 | 961 | 961 | 961 |
+| non-finite values | none | none | none | none |
+| nodes wet throughout | all | all | all | all |
+| max abs elevation (m) | 0.498655 | 0.498705 | 0.498558 | 0.498665 |
+| max speed (m/s) | 0.963349 | 0.963274 | 0.963369 | 0.963271 |
+| volume drift (/day) | −9.5e−9 | −8.3e−9 | −3.6e−9 | −1.1e−8 |
+
+M2 at the five gauges, refined minus base:
+
+| gauge | circle | polygon | three regions |
+|---|---|---|---|
+| TOKYO-SIBAURA | +0.086 mm | +0.032 mm | +0.059 mm |
+| HARUMI | +0.087 | +0.034 | +0.060 |
+| TIBA-TIBA LIGHT | +0.087 | +0.034 | +0.059 |
+| SINKO | +0.075 | +0.029 | +0.053 |
+| YOKOSUKA | +0.053 | +0.024 | +0.032 |
+| phase | −0.0024…−0.0033° | −0.0042…−0.0063° | −0.0024…−0.0034° |
+
+Every one is a relative change of 2e−4 or smaller on amplitudes of
+0.40–0.49 m, and a phase shift of at most a quarter of a second of M2. Three
+different footprints, three different element counts, and the bay does not
+notice any of them — which is the point. The differences between the three
+are not a ranking: they are three slightly different perturbations, all far
+below anything a tide gauge or a model user would act on.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as
