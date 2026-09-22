@@ -811,6 +811,32 @@ comparison shared it, and the spin-up is 15 days against a ramp of one or
 one and a half, so the differences reported there stand; the absolute
 constants would move in the third decimal.
 
+## 6.7 What the fourth review's report found
+
+The fourth pass then ran to completion and wrote
+`docs/local_refine_implementation_review_4.md`: **seven findings and thirteen
+failing probes**, all thirteen reproduced here before anything was changed.
+Two are P1. The most important is that **my own fix to §6.6 over-corrected**.
+
+| finding | what was wrong | what it is now |
+|---|---|---|
+| **P1 an unchanged mesh could be rejected** | §6.6 made "a check that named fewer offenders than it counted" the patch's. But the driver is what discards the evidence: `run_qa` caps the list at `max_offenders` for readability. On a 73x73 grid with 10,368 inherited C1 failures and 10,000 named, attribution returned **368 unattributed** violations with every triangle retained — a false positive on a mesh with no patch in it | the display list and the gate are two lists. `QACheck.offender_ids` carries **every** offender's identity whatever the cap, and attribution reads that. Raising the cap would only have moved the failure |
+| **P1 the OBC type was lost on copying** | it rode on the mesh as a plain attribute, and `dataclasses.replace` — which every transformation here uses — drops what is not a field. `apply_obc_depth_control` silently turned a type 2 boundary into type 1 | `obc_type` is a field of `Fort14Mesh` |
+| the conflict report was not the field | `region_conflicts` used `target/(1-d/width)`; `patch_sizing` implements `target + (base-target)*u`. A 12 m region 480 m from a 5 m one keeps its 12 m in the real field and was reported as getting 9.6 m | one expression, `_region_contribution`, is used by both. The report needs the base mesh's own size to evaluate a ramp, so it takes `base_size`; without it, it reports only what a core overlap makes certain and says so in `transitions_evaluated` |
+| a narrow footprint read as flat | `field_gradation` masked outside samples **before** `np.gradient`, so a one-row strip had NaN neighbours, every sample was dropped, and `h = 100 + x` over a 20 m tall box reported a slope of **0** where the truth is 1 | the stencil is trimmed instead of the field: central where both neighbours are in the footprint, one-sided where one is, unknown where neither — and an unmeasurable slope is reported as `None`, never as zero. Differencing the *unmasked* field is not the answer either: it samples outside the MESH, where the ambient interpolator returns its maximum, and the Futtsu hole then read 24.3 against a p99 of 0.37 |
+| malformed offender ids | `"0"` raised TypeError; `0.5` and `-1` compared happily against `n_retained_elements` and **cleared** the patch | an id must be a non-boolean integer inside the mesh to place an offender; anything else is unplaceable, and unplaceable is the patch's |
+| a NaN grid coordinate | the dep file was checked for finiteness and the grd file was not | both are, and `coord_tol_m` must itself be finite and non-negative |
+| the limiter certified undefined r-factors | `|hi-hj|/(hi+hj)` is 0/0 for two zeros and NaN for a NaN, `r > rmax` is False for all of them, and depths of 0, -1, NaN or inf came back **converged** on the first sweep | finite, strictly positive depths are required |
+
+Asked for the single most likely way this produces a wrong mesh that
+everything reports as correct, the reviewer answered: **the achieved
+resolution is reported but never gated**. The per-region statistics were
+computed only after a seed was accepted, and a core too thin to contain an
+edge midpoint yielded `n_edges = 0` with null statistics and still succeeded.
+It is a gate now, inside the seed loop: a region with no edge midpoint inside
+it, or a median edge coarser than its target, rejects that seed, and a run
+where no seed delivers the resolution fails instead of writing a mesh.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as

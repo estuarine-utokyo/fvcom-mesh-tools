@@ -33,6 +33,7 @@ from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14, write_fort14
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case
 from fvcom_mesh_tools.patch import (
     ambient_size_field,
+    base_size_field,
     boundary_after_patch,
     effective_gradation,
     field_gradation,
@@ -223,7 +224,8 @@ sized = [(g, r.target_h_m, widths[r.name], r.priority) for g, r in regions_m]
 grad = effective_gradation(base.nodes, base.elements, sized)
 # Overlapping fisheries are an ordinary input; what is not ordinary is a
 # region silently getting a size it did not ask for, so it is measured.
-conflicts = region_conflicts(sized, [r.name for _, r in regions_m])
+conflicts = region_conflicts(sized, [r.name for _, r in regions_m],
+                             base_size=base_size_field(base.nodes, base.elements))
 reports["conflicts"] = conflicts
 if conflicts["any_overlap"]:
     say("regions overlap; a target is a ceiling, so the shared water takes "
@@ -300,6 +302,11 @@ say(f"hole {hole.area / 1e6:.3f} km2 ({hole.geom_type}, valid={hole.is_valid})")
 # nothing about where two regions meet.
 fslope = field_gradation(h_achieved, hole)
 reports["field_gradation"] = fslope
+if not fslope.get("measured", True):
+    raise SystemExit("the sizing field could not be measured on this hole "
+                     f"({fslope['n_samples']} samples at "
+                     f"{fslope['spacing_m']:.1f} m): an unmeasured slope is "
+                     "not a gentle one")
 say(f"field slope: max {fslope['max_slope']:.3f}, p99 {fslope['p99_slope']:.3f} "
     f"against a {fslope['c4_reference_gradation']:.3f} reference; "
     f"{100 * fslope['fraction_above_reference']:.2f} % of samples above it")
@@ -336,6 +343,57 @@ from oceanmesh.mesh_improve import (  # noqa: E402
     collapse_thin_triangles,
     direct_smoother_lur,
 )
+
+# How far over its target a region's median edge may land and still count as
+# delivered. DistMesh returns bars about DISTMESH_SCALE times the sizing
+# field, a calibration with spread, not a guarantee: the medians measured on
+# the four recipes are 0.97, 0.98, 0.66 and 0.92 of target, and one seed of
+# the polygon recipe came in at 1.003. The failures this gate is for are not
+# near misses -- a region left at the base size is a factor of ten out, and a
+# core too thin to hold an edge midpoint reports nothing at all.
+RESOLUTION_TOLERANCE = 1.05
+
+
+def achieved_per_region(mesh):
+    """What each declared region actually got, and whether that is its target.
+
+    A target is a ceiling on the ACHIEVED edge length, so a patch that passes
+    every gate and left a region coarser than it asked for is not a success:
+    the caller asked for resolution and QA does not know what was asked.
+    Measured on edge midpoints inside the declared geometry -- the same
+    numbers the report quotes, computed early enough to reject a seed rather
+    than late enough only to describe it (fourth review).
+
+    A region with no edge midpoint inside it is a miss, not a pass: it is
+    thinner than the mesh it was given and there is nothing to show for it.
+    """
+    e = np.unique(np.sort(np.vstack([mesh.elements[:, [0, 1]],
+                                     mesh.elements[:, [1, 2]],
+                                     mesh.elements[:, [2, 0]]]), axis=1), axis=0)
+    mid = 0.5 * (mesh.nodes[e[:, 0], :2] + mesh.nodes[e[:, 1], :2])
+    length = np.linalg.norm(mesh.nodes[e[:, 0], :2] - mesh.nodes[e[:, 1], :2],
+                            axis=1)
+    pts = shapely.points(mid[:, 0], mid[:, 1])
+    per_region, missed = {}, []
+    for geom, region in regions_m:
+        inside = np.asarray(shapely.contains(geom, pts))
+        stat = {
+            "target_h_m": region.target_h_m,
+            "n_edges": int(inside.sum()),
+            "median_m": float(np.median(length[inside])) if inside.any() else None,
+            "p90_m": float(np.percentile(length[inside], 90)) if inside.any()
+            else None,
+            "max_m": float(length[inside].max()) if inside.any() else None,
+        }
+        if not inside.any():
+            stat["miss"] = "no edge midpoint inside the region"
+        elif stat["median_m"] > RESOLUTION_TOLERANCE * region.target_h_m:
+            stat["miss"] = (f"median {stat['median_m']:.1f} m is coarser than "
+                            f"the {region.target_h_m:g} m target")
+        if "miss" in stat:
+            missed.append(region.name)
+        per_region[region.name] = stat
+    return per_region, missed
 
 
 def attempt(seed):
@@ -654,6 +712,11 @@ for seed in seeds:
     # at one element 18 km from Futtsu, the contract freezes that element,
     # and an absolute gate blamed every seed for it.
     new_bad = introduced_violations(qa.checks, len(sel.retained), written.elements)
+    per_region, missed = achieved_per_region(written)
+    out["achieved_per_region"] = per_region
+    for _name in missed:
+        say(f"    seed {seed}: {_name} did not get what it asked for -- "
+            f"{per_region[_name]['miss']}")
     out["qa"] = {"n_gate_total": qa.n_gate_total,
                  "n_gate_failed": qa.n_gate_failed,
                  "n_introduced": len(new_bad),
@@ -669,16 +732,23 @@ for seed in seeds:
         + ("" if not new_bad else "  " + "; ".join(
             f"{v['check']} at {v['kind']} {v.get('id', v.get('elements'))}"
             for v in new_bad[:4])))
-    if best is None or len(new_bad) < best[0]:
-        best = (len(new_bad), seed, candidate, out, written, qa)
-    if not new_bad:
+    if best is None or (len(missed), len(new_bad)) < best[:2]:
+        best = (len(missed), len(new_bad), seed, candidate, out, written, qa)
+    if not new_bad and not missed:
         break
 
 if best is None:
     save_report()
     raise SystemExit("no seed produced a mesh that keeps the frozen-zone "
                      f"contract; see attempts in {OUT / 'report.json'}")
-_, seed, candidate, out, written, qa = best
+_n_missed, _, seed, candidate, out, written, qa = best
+if _n_missed:
+    save_report()
+    raise SystemExit(
+        "no seed delivered the resolution that was asked for: "
+        + "; ".join(f"{k}: {v['miss']}" for k, v
+                    in best[4]["achieved_per_region"].items() if "miss" in v)
+        + f"; see attempts in {OUT / 'report.json'}")
 nodes, elements, depths, node_map = candidate
 reports.update({k: v for k, v in out.items()
                 if k not in ("seed", "want_boundary")})
@@ -716,30 +786,17 @@ _side = np.stack([
     for i in range(3)], axis=1)
 _dt = (2 * _area / _side.max(axis=1)) / np.sqrt(
     9.81 * written.depths[written.elements].max(axis=1))
-# Achieved, per region, on the finished mesh. A patch that passes every gate
-# and did not deliver the resolution that was asked for is not a success, and
-# nothing else here would notice (third review, finding 16).
-_e = np.unique(np.sort(np.vstack([written.elements[:, [0, 1]],
-                                  written.elements[:, [1, 2]],
-                                  written.elements[:, [2, 0]]]), axis=1), axis=0)
-_mid = 0.5 * (written.nodes[_e[:, 0], :2] + written.nodes[_e[:, 1], :2])
-_len = np.linalg.norm(written.nodes[_e[:, 0], :2] - written.nodes[_e[:, 1], :2],
-                      axis=1)
-_pts = shapely.points(_mid[:, 0], _mid[:, 1])
-per_region = {}
-for _g, _r in regions_m:
-    _in = np.asarray(shapely.contains(_g, _pts))
-    per_region[_r.name] = {
-        "target_h_m": _r.target_h_m,
-        "n_edges": int(_in.sum()),
-        "median_m": float(np.median(_len[_in])) if _in.any() else None,
-        "p90_m": float(np.percentile(_len[_in], 90)) if _in.any() else None,
-        "max_m": float(_len[_in].max()) if _in.any() else None,
-    }
-    if _in.any():
-        say(f"achieved in {_r.name}: {_in.sum():,} edges, median "
-            f"{np.median(_len[_in]):.1f} m against a {_r.target_h_m:g} m target "
-            f"(p90 {np.percentile(_len[_in], 90):.1f}, max {_len[_in].max():.1f})")
+# Achieved, per region, on the finished mesh -- the same measure the seed
+# loop gated on, recomputed on the file that was actually written.
+per_region, missed = achieved_per_region(written)
+if missed:
+    raise SystemExit("the written mesh does not deliver the resolution that "
+                     "was asked for: "
+                     + "; ".join(f"{k}: {per_region[k]['miss']}" for k in missed))
+for _name, _st in per_region.items():
+    say(f"achieved in {_name}: {_st['n_edges']:,} edges, median "
+        f"{_st['median_m']:.1f} m against a {_st['target_h_m']:g} m target "
+        f"(p90 {_st['p90_m']:.1f}, max {_st['max_m']:.1f})")
 reports["achieved"] = {
     "dt_min_s": float(_dt.min()),
     "dt_min_element": int(_dt.argmin()),

@@ -45,6 +45,7 @@ __all__ = [
     "boundary_after_patch",
     "refresh_depths",
     "ambient_size_field",
+    "base_size_field",
     "boundary_rings",
     "coastline_points",
     "hole_polygon",
@@ -849,7 +850,28 @@ def patch_sizing(
     mode; what varies instead is the LOCAL slope, which the caller should
     check with :func:`effective_gradation` against what C4 allows.
     """
-    import shapely
+    base_size = base_size_field(nodes, elements)
+    geoms = [_region_geometry(r) for r in regions]
+
+    def h(points):
+        p = np.atleast_2d(np.asarray(points, dtype=float))[:, :2]
+        base = base_size(p)
+        out = base.copy()
+        for g in geoms:
+            out = np.minimum(out, _region_contribution(g, p, base))
+        return np.minimum(out, base) / distmesh_scale
+
+    return h
+
+
+def base_size_field(nodes, elements):
+    """``f(points) -> the base mesh's own edge length there``, in metres.
+
+    The ambient field of :func:`ambient_size_field`, interpolated, with the
+    field's maximum outside the mesh.  Shared by :func:`patch_sizing` and
+    :func:`region_conflicts` so that what the report evaluates is the field
+    the mesher is given, not a second formula that resembles it.
+    """
     from matplotlib.tri import LinearTriInterpolator, Triangulation
 
     xy = np.asarray(nodes, dtype=float)[:, :2]
@@ -857,49 +879,60 @@ def patch_sizing(
     amb = ambient_size_field(xy, tri)
     interp = LinearTriInterpolator(Triangulation(xy[:, 0], xy[:, 1], tri), amb)
     amb_max = float(np.nanmax(amb))
-    geoms = [(shapely.boundary(g) if g.geom_type in ("Polygon", "MultiPolygon")
-              else g, g, float(t), float(w), float(pr))
-             for g, t, w, pr in map(_region4, regions)]
-    def h(points):
+
+    def f(points):
         p = np.atleast_2d(np.asarray(points, dtype=float))[:, :2]
-        pt = shapely.points(p[:, 0], p[:, 1])
-        base = np.asarray(interp(p[:, 0], p[:, 1]), dtype=float)
-        base = np.where(np.isfinite(base), base, amb_max)
-        out = base.copy()
-        for edge, poly, target, width, _ in geoms:
-            d = np.where(np.asarray(shapely.contains(poly, pt)), 0.0,
-                         shapely.distance(pt, edge))
-            # A zero width is legitimate -- it means the base mesh is
-            # already at or below the target, so there is nothing to ramp --
-            # and d/0 makes the whole field NaN, which DistMesh accepts and
-            # then produces nothing from.
-            u = np.clip(d / width, 0.0, 1.0) if width > 0 \
-                else (d > 0).astype(float)
-            out = np.minimum(out, target + (base - target) * u)
-        return np.minimum(out, base) / distmesh_scale
+        out = np.asarray(interp(p[:, 0], p[:, 1]), dtype=float)
+        return np.where(np.isfinite(out), out, amb_max)
 
-    return h
+    return f
 
 
-def _region_size(region, over) -> float:
-    """The smallest size one region asks for anywhere in ``over``.
+def _region_geometry(region):
+    """``(boundary, polygon, target, width, priority)`` for one region."""
+    import shapely
 
-    Its own target inside its core, and its ramp where ``over`` lies in its
-    transition -- the ramp's value at the closest approach, which is the
-    finest the region asks for there.  Used to decide whether a region is
-    finer than it declared because of somebody else.
+    g, t, w, pr = _region4(region)
+    edge = shapely.boundary(g) if g.geom_type in ("Polygon", "MultiPolygon") else g
+    return edge, g, t, w, pr
+
+
+def _region_contribution(geom, points, base):
+    """What one region asks for at ``points``, given the base size there.
+
+    Its target in the core, ramping linearly to the base mesh's own size
+    over ``width``.  This is the one expression of the rule; everything that
+    needs to know what a region asks for calls it, so a report cannot drift
+    away from the field (fourth review: the report used ``target/(1-u)`` and
+    named a region finer than the field ever made it).
     """
     import shapely
 
-    geom, target, width, _ = region
-    d = float(shapely.distance(geom, over)) if not shapely.intersects(geom, over) \
-        else 0.0
-    if d <= 0:
-        return float(target)
-    if width <= 0:
-        return float("inf")
-    u = min(d / width, 1.0)
-    return float("inf") if u >= 1.0 else float(target / (1.0 - u))
+    edge, poly, target, width, _pr = geom
+    p = np.atleast_2d(np.asarray(points, dtype=float))[:, :2]
+    pt = shapely.points(p[:, 0], p[:, 1])
+    d = np.where(np.asarray(shapely.contains(poly, pt)), 0.0,
+                 shapely.distance(pt, edge))
+    # A zero width is legitimate -- it means the base mesh is already at or
+    # below the target, so there is nothing to ramp -- and d/0 makes the
+    # whole field NaN, which DistMesh accepts and then produces nothing from.
+    u = np.clip(d / width, 0.0, 1.0) if width > 0 else (d > 0).astype(float)
+    return target + (np.asarray(base, dtype=float) - target) * u
+
+
+def _sample_points(geom, n_target: int = 400) -> np.ndarray:
+    """A lattice of points inside ``geom``, with its interior point as a floor."""
+    import shapely
+
+    xmin, ymin, xmax, ymax = geom.bounds
+    area = float(geom.area)
+    spacing = max(np.sqrt(area / max(n_target, 1)), 1e-12) if area > 0 else 1.0
+    gx, gy = np.meshgrid(np.arange(xmin, xmax + spacing, spacing),
+                         np.arange(ymin, ymax + spacing, spacing))
+    p = np.column_stack([gx.ravel(), gy.ravel()])
+    keep = np.asarray(shapely.contains(geom, shapely.points(p[:, 0], p[:, 1])))
+    rep = shapely.get_coordinates(geom.representative_point())
+    return np.vstack([p[keep], rep]) if keep.any() else rep
 
 
 def _region4(region):
@@ -939,34 +972,80 @@ def field_gradation(h, footprint, spacing: float | None = None,
     xmin, ymin, xmax, ymax = footprint.bounds
     if spacing is None:
         spacing = max(25.0, min(xmax - xmin, ymax - ymin) / 200.0)
+    limit = 1.0 / np.sqrt(1.0 - max_area_change) - 1.0
     gx, gy = np.meshgrid(np.arange(xmin, xmax + spacing, spacing),
                          np.arange(ymin, ymax + spacing, spacing))
     inside = np.asarray(shapely.contains(footprint,
                                          shapely.points(gx.ravel(), gy.ravel()))
                         ).reshape(gx.shape)
-    size = np.asarray(h(np.column_stack([gx.ravel(), gy.ravel()]))
-                      ).reshape(gx.shape)
-    size = np.where(inside, size, np.nan)
-    # The MAGNITUDE of the gradient, not the difference along each axis
-    # separately: a field rising equally in x and y has a slope of
-    # sqrt(2) * 0.35 = 0.495 and axis differences report 0.35, so a diagonal
-    # ramp reads a factor sqrt(2) gentler than it is (fourth review).
-    gy, gx = np.gradient(size, spacing, spacing)
-    allslopes = np.hypot(gx, gy)
-    allslopes = allslopes[np.isfinite(allslopes)]
-    limit = 1.0 / np.sqrt(1.0 - max_area_change) - 1.0
+    unknown = {
+        "spacing_m": float(spacing),
+        "n_samples": int(inside.sum()),
+        "n_partial_samples": 0,
+        "max_slope": None, "p99_slope": None,
+        "c4_reference_gradation": float(limit),
+        "fraction_above_reference": None,
+        "measured": False,
+        "note": "no lattice sample has a neighbour inside the footprint; the "
+                "slope is unknown, not zero -- pass a smaller spacing",
+    }
+    if not inside.any():
+        return unknown
+    size = np.asarray(h(np.column_stack([gx.ravel(), gy.ravel()])),
+                      dtype=float).reshape(gx.shape)
+
+    def derivative(field, ok, axis):
+        """One derivative per sample, from neighbours INSIDE the footprint.
+
+        Both ends of a difference have to be in the footprint. Sampling
+        outside it means sampling outside the MESH, where the ambient
+        interpolator returns its maximum: differencing across that edge
+        reported a slope of 24 on a field whose p99 is 0.37. And masking
+        first is no better -- np.gradient then returns NaN for the whole
+        stencil, every sample is dropped and a 100 + x field over a 20 m
+        tall box read as flat (fourth review). So the stencil is trimmed
+        rather than the field: central where both neighbours are in,
+        one-sided where one is, unknown where neither.
+        """
+        f = np.moveaxis(field, axis, 0)
+        m = np.moveaxis(ok, axis, 0)
+        d = (f[1:] - f[:-1]) / spacing          # between adjacent samples
+        good = m[1:] & m[:-1]
+        tot = np.zeros_like(f)
+        cnt = np.zeros_like(f)
+        for sl_a, sl_b in ((slice(1, None), slice(None)), (slice(0, -1), slice(None))):
+            tot[sl_a] += np.where(good, d, 0.0)[sl_b]
+            cnt[sl_a] += good[sl_b]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out = np.where(cnt > 0, tot / np.maximum(cnt, 1), np.nan)
+        return np.moveaxis(out, 0, axis), np.moveaxis(cnt > 0, 0, axis)
+
+    dy, have_y = derivative(size, inside, 0)
+    dx, have_x = derivative(size, inside, 1)
+    have = (have_x | have_y) & inside
+    if not have.any():
+        return unknown
+    # An axis with no support contributes nothing rather than a NaN: the
+    # result is then a LOWER bound on the slope, and the count of such
+    # samples is reported rather than buried.
+    slopes = np.hypot(np.where(have_x, dx, 0.0), np.where(have_y, dy, 0.0))[have]
+    partial = int((inside & ~(have_x & have_y)).sum())
+    slopes = slopes[np.isfinite(slopes)]
+    if not slopes.size:
+        return unknown
     return {
         "spacing_m": float(spacing),
         "n_samples": int(inside.sum()),
-        "max_slope": float(allslopes.max()) if allslopes.size else 0.0,
-        "p99_slope": float(np.percentile(allslopes, 99)) if allslopes.size else 0.0,
+        "n_partial_samples": partial,
+        "max_slope": float(slopes.max()),
+        "p99_slope": float(np.percentile(slopes, 99)),
         "c4_reference_gradation": float(limit),
-        "fraction_above_reference": float((allslopes > limit).mean())
-        if allslopes.size else 0.0,
+        "fraction_above_reference": float((slopes > limit).mean()),
+        "measured": True,
     }
 
 
-def region_conflicts(regions, names=None) -> dict[str, Any]:
+def region_conflicts(regions, names=None, *, base_size=None) -> dict[str, Any]:
     """Which declared cores overlap, and what the shared water gets.
 
     Overlapping fisheries are an ordinary input -- two rights over the same
@@ -975,6 +1054,13 @@ def region_conflicts(regions, names=None) -> dict[str, Any]:
     least what it asked for.  What is worth reporting is that one region's
     water will be FINER than it declared, because that costs time steps and
     elements somebody has to pay for.
+
+    ``base_size`` is the base mesh's own size as a function of position, from
+    :func:`base_size_field`.  A region's ramp runs from its target to THAT,
+    so without it a transition's value is not a number this function knows:
+    it then reports only what a core overlap makes certain and says as much
+    in ``transitions_evaluated``.  Pass it whenever the base mesh is at hand
+    -- it is what makes the report the field's rather than a formula's.
 
     ``priority_ignored`` is true when the recipe sets different priorities on
     overlapping regions: in a refinement priority cannot change the outcome,
@@ -1005,33 +1091,58 @@ def region_conflicts(regions, names=None) -> dict[str, Any]:
     # of them is an overlap of CORES: a neighbour's TRANSITION can reach it
     # and be finer there than its own target.  A 5 m core 200 m away with a
     # 1 km transition swallows a 90 m core whole, and looking only at core
-    # intersections reported nothing at all (fourth review).  So the test is
-    # the field: what this region would get alone, against what it gets.
+    # intersections reported nothing at all (third review).  So the test is
+    # the field: what this region would get alone, against what it gets --
+    # sampled from the same expression the mesher is handed, because a
+    # second expression that merely resembles it named a 12 m region as
+    # getting 9.6 m in a field that gave it 12 (fourth review).
+    geoms = [_region_geometry(x) for x in regions]
     for i, name in enumerate(names):
-        alone = _region_size(r4[i], r4[i][0])
-        joint = min(_region_size(r4[j], r4[i][0]) for j in range(len(r4)))
-        if joint >= alone - 1e-9:
-            continue
-        others = [names[j] for j in range(len(r4)) if j != i
-                  and _region_size(r4[j], r4[i][0]) < alone - 1e-9]
         cores = [j for j in range(len(r4)) if j != i
                  and not shapely.intersection(r4[i][0], r4[j][0]).is_empty]
-        taken = shapely.intersection(
-            r4[i][0], shapely.union_all([r4[j][0] for j in cores])) \
-            if cores else shapely.Polygon()
+        if base_size is None:
+            # Without the base mesh a ramp's value is unknown, so only a core
+            # overlap by a finer target is certain.
+            smaller = [j for j in cores if r4[j][1] < r4[i][1] - 1e-9]
+            if not smaller:
+                continue
+            taken = shapely.intersection(
+                r4[i][0], shapely.union_all([r4[j][0] for j in smaller]))
+            finer[name] = {
+                "area_m2": float(taken.area),
+                "fraction": float(taken.area / r4[i][0].area),
+                "own_target_h_m": r4[i][1],
+                "gets_h_m": float(min(r4[j][1] for j in smaller)),
+                "because_of": sorted(names[j] for j in smaller),
+                "by_core_overlap": True,
+            }
+            continue
+        p = _sample_points(r4[i][0])
+        base = np.asarray(base_size(p), dtype=float)
+        contrib = np.array([_region_contribution(g, p, base) for g in geoms])
+        alone = np.minimum(contrib[i], base)
+        joint = np.minimum(contrib.min(axis=0), base)
+        hit = joint < alone - 1e-9
+        if not hit.any():
+            continue
+        others = [names[j] for j in range(len(r4)) if j != i
+                  and (contrib[j][hit] < alone[hit] - 1e-9).any()]
+        area_taken = float(r4[i][0].area) * float(hit.mean())
         finer[name] = {
-            "area_m2": float(taken.area),
-            "fraction": float(taken.area / r4[i][0].area),
+            "area_m2": area_taken,
+            "fraction": float(hit.mean()),
             "own_target_h_m": r4[i][1],
-            "gets_h_m": float(joint),
+            "gets_h_m": float(joint[hit].min()),
             "because_of": sorted(others),
             "by_core_overlap": bool(cores),
+            "n_samples": int(p.shape[0]),
         }
     return {
         "overlapping_pairs": pairs,
         "finer_than_declared": finer,
         "any_overlap": bool(pairs),
         "priority_ignored": priority_ignored,
+        "transitions_evaluated": base_size is not None,
     }
 
 
@@ -1249,58 +1360,109 @@ def introduced_violations(qa_checks, n_retained_elements: int,
     element, a frozen node whose fan now contains a patch face -- is the
     patch's, and is what this returns.
 
-    ``qa_checks`` are ``QAReport.checks``.  An offender this cannot place is
-    counted as the patch's, and so is every violation a check counted but did
-    not name: attribution is a claim, and the absence of one is not a claim
-    of innocence.  Run QA with a ``max_offenders`` large enough to list them
-    all, or the report fills with ``unattributed`` entries that are true but
-    unhelpful. ``elements`` is the
+    ``qa_checks`` are ``QAReport.checks``.  Attribution reads
+    ``check.offender_ids`` -- every offender, whatever ``max_offenders`` was
+    -- and not ``check.offenders``, which is the display list and is capped.
+    Reading the capped list made a check that named 10,000 of its 10,368
+    inherited failures produce 368 "unattributed" entries, and so rejected an
+    UNCHANGED mesh (fourth review).  A raised cap only moves that failure;
+    the display list and the gate are two different lists.
+
+    An offender this cannot place is counted as the patch's, and so is every
+    violation a check counted but did not identify: attribution is a claim,
+    and the absence of one is not a claim of innocence.  ``elements`` is the
     patched connectivity, needed to attribute a node offender (C5 valence):
     a frozen node is inherited only while every face around it is retained.
     Without it a node offender is always counted as the patch's, which errs
     towards blaming the patch.
     """
     tri = None if elements is None else np.asarray(elements, dtype=np.int64)
+    n_elements = None if tri is None else int(tri.shape[0])
     out: list[dict] = []
     for check in qa_checks:
         if getattr(check, "status", "") != "fail":
             continue
-        offenders = list(getattr(check, "offenders", []) or [])
-        for off in offenders:
+        # Display first, identities second: the entries reported are the
+        # readable ones, the gate is decided on all of them.
+        shown = list(getattr(check, "offenders", []) or [])
+        identified = list(getattr(check, "offender_ids", None) or shown)
+        detail = {}
+        for off in shown:
+            detail.setdefault(_offender_key(off), off)
+        for off in identified:
             kind = off.get("kind")
             ident = off.get("id")
             if kind == "element":
-                elems = [ident]
-            elif kind == "edge":
-                elems = list(off.get("elements", []))
-            elif tri is not None and isinstance(ident, (int, np.integer)):
-                elems = np.flatnonzero((tri == int(ident)).any(axis=1)).tolist()
+                elems = [_element_id(ident, n_elements)]
+            elif kind == "edge" and "elements" in off:
+                elems = [_element_id(e, n_elements) for e in off["elements"]]
+            elif kind == "node" and tri is not None:
+                node = _element_id(ident, int(tri.max()) + 1 if tri.size else 0)
+                elems = None if node is None else \
+                    np.flatnonzero((tri == node).any(axis=1)).tolist()
             else:
                 # An offender this cannot place -- a kind it does not know, an
-                # id that is a pair, or no connectivity to look it up in --
-                # is the patch's. Attribution is a claim, and the absence of
-                # one is not a claim of innocence.
+                # id that is a pair or not an index at all, or no connectivity
+                # to look it up in -- is the patch's. Attribution is a claim,
+                # and the absence of one is not a claim of innocence.
                 elems = None
             if elems is not None and elems and all(
                     e is not None and e < n_retained_elements for e in elems):
                 continue
+            record = detail.get(_offender_key(off), off)
             out.append({"check": check.check_id, "requirement": check.requirement,
-                        "observed": check.observed, **off})
-        # A failing check that named nobody, or named fewer than it counted,
-        # cannot be shown to be the base's. run_qa truncates its offender
-        # list at max_offenders and some checks report none at all --
-        # node_index_valid fails with `offenders=[]` -- and the loop above
-        # then yields nothing, which reads as "0 introduced" and accepts a
-        # mesh with a failing gate (fourth review).
+                        "observed": check.observed, **record})
+        # A failing check that identified nobody, or fewer than it counted,
+        # cannot be shown to be the base's -- node_index_valid fails with no
+        # offenders at all, and an empty list read as "0 introduced" once
+        # accepted a mesh with a failing gate (fourth review).
         counted = int(getattr(check, "n_violations", 0) or 0)
-        unlisted = max(0, counted - len(offenders)) or (0 if offenders else 1)
+        unlisted = max(0, counted - len(identified)) or (0 if identified else 1)
         if unlisted:
             out.append({"check": check.check_id, "requirement": check.requirement,
                         "observed": check.observed, "kind": "unattributed",
                         "n_unattributed": unlisted,
-                        "note": "the check named fewer offenders than it counted, "
-                                "so they cannot be shown to be the base's"})
+                        "note": "the check identified fewer offenders than it "
+                                "counted, so they cannot be shown to be the "
+                                "base's"})
     return out
+
+
+def _offender_key(off: dict):
+    """What identifies an offender across the two lists.
+
+    The id alone is not enough: a C4 edge offender is identified by the pair
+    of elements it sits between and need not carry an id at all, and keying
+    on the id alone handed every such edge the first one's detail.
+    """
+    return (off.get("kind"), _ident_key(off.get("id")),
+            _ident_key(off.get("elements")))
+
+
+def _ident_key(ident):
+    """A hashable form of an offender id (an index, or a pair of them)."""
+    if ident is None:
+        return None
+    if isinstance(ident, (list, tuple, np.ndarray)):
+        return tuple(np.asarray(ident).ravel().tolist())
+    return ident
+
+
+def _element_id(ident, n: int | None) -> int | None:
+    """``ident`` as an element index, or None when it is not one.
+
+    A non-integer id, a bool, a negative index or one past the end of the
+    mesh is not an element this can place, and a patch is not exonerated by
+    an id nobody can look up: ``0.5`` and ``-1`` both compared happily
+    against ``n_retained_elements`` and cleared the patch (fourth review).
+    """
+    if isinstance(ident, (bool, np.bool_)) or not isinstance(
+            ident, (int, np.integer)):
+        return None
+    i = int(ident)
+    if i < 0 or (n is not None and i >= n):
+        return None
+    return i
 
 
 # --------------------------------------------------------------------------

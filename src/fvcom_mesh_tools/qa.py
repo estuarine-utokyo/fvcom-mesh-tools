@@ -141,9 +141,26 @@ class QACheck:
     observed: str
     n_violations: int = 0
     offenders: list[dict[str, Any]] = field(default_factory=list)
+    # Every offender's identity, untruncated: ``offenders`` is a display
+    # list capped at ``max_offenders``, and attribution needs all of them.
+    # Capping the two together made an unchanged mesh with more failures
+    # than the cap look like the patch's doing (fourth review).
+    offender_ids: list[dict[str, Any]] = field(default_factory=list)
     skipped: bool = False
     note: str = ""
     data: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # A helper that knows every offender hands its complete identity
+        # list along with the display list; a hand-built list has to pass
+        # ``offender_ids`` itself. When neither is given the identities fall
+        # back to what is displayed, which may be short -- and a short list
+        # is not a claim of innocence: ``introduced_violations`` compares it
+        # against ``n_violations`` and counts the difference as unattributed.
+        if not self.offender_ids:
+            self.offender_ids = list(getattr(self.offenders, "ids", None)
+                                     or [{k: o[k] for k in ("kind", "id")
+                                          if k in o} for o in self.offenders])
 
     @property
     def status(self) -> str:
@@ -165,6 +182,7 @@ class QACheck:
             "observed": self.observed,
             "n_violations": int(self.n_violations),
             "offenders": self.offenders,
+            "n_offenders_identified": len(self.offender_ids),
             "note": self.note,
             "data": self.data,
         }
@@ -408,6 +426,18 @@ def fvcom_boundary_element_flags(
 # ---------------------------------------------------------------------------
 
 
+class _Offenders(list):
+    """The display list, carrying every offender's identity in ``ids``.
+
+    ``offenders`` is capped at ``max_offenders`` so a report stays readable.
+    Attribution is not a readability question -- a patch is blamed for
+    exactly the failures it introduced -- so the full identities travel with
+    the short list rather than being lost with it (fourth review).
+    """
+
+    ids: list[dict[str, Any]]
+
+
 def _elem_offenders(
     idx: np.ndarray, mesh: Fort14Mesh, values: np.ndarray | None,
     *, limit: int, value_key: str = "value",
@@ -423,7 +453,7 @@ def _elem_offenders(
         if values is not None:
             rec[value_key] = float(values[i])
         out.append(rec)
-    return out
+    return _with_ids(out, "element", idx)
 
 
 def _node_offenders(
@@ -440,6 +470,14 @@ def _node_offenders(
         if values is not None:
             rec[value_key] = float(values[i])
         out.append(rec)
+    return _with_ids(out, "node", idx)
+
+
+def _with_ids(records: list[dict[str, Any]], kind: str,
+              idx: np.ndarray) -> _Offenders:
+    out = _Offenders(records)
+    out.ids = [{"kind": kind, "id": int(i)}
+               for i in np.asarray(idx, dtype=np.int64).ravel()]
     return out
 
 
@@ -607,6 +645,8 @@ def run_qa(
         "pinch nodes = 0, >2-elem edges = 0",
         f"pinch nodes = {pinch_nodes.size}, over-shared edges = {over_edges.shape[0]}",
         n_manifold_viol, offenders=manifold_off,
+        offender_ids=[{"kind": "node", "id": int(i)} for i in pinch_nodes]
+        + [{"kind": "edge", "id": [int(u), int(v)]} for u, v in over_edges],
     ))
 
     # Duplicate nodes (silent in FVCOM).
@@ -622,6 +662,8 @@ def run_qa(
         "no_duplicate_nodes", "fvcom", True, len(dup_pairs) == 0,
         f"pairs closer than {duplicate_tol_m} m = 0",
         f"coincident pairs = {len(dup_pairs)}", len(dup_pairs), offenders=dup_off,
+        offender_ids=[{"kind": "node_pair", "id": [int(a), int(b)]}
+                      for a, b in dup_pairs],
     ))
 
     # Orphan nodes (silent in FVCOM; degenerate control volumes).
@@ -715,6 +757,7 @@ def run_qa(
         n_break = 0
         n_dup = 0
         order_off: list[dict[str, Any]] = []
+        order_ids: list[dict[str, Any]] = []
         for k, seg in enumerate(mesh.open_boundaries):
             seg = np.asarray(seg, dtype=np.int64)
             n_dup += int(seg.size - np.unique(seg).size)
@@ -725,6 +768,8 @@ def run_qa(
             present = _isin_sorted(a * n_nodes + b, topo.codes_sorted)
             for j in np.where(~present)[0]:
                 n_break += 1
+                order_ids.append({"kind": "obc_pair", "segment": int(k),
+                                  "id": [int(seg[j]), int(seg[j + 1])]})
                 if len(order_off) < max_offenders:
                     order_off.append({
                         "kind": "obc_pair", "segment": int(k),
@@ -736,7 +781,7 @@ def run_qa(
             "obc_ordering", "obc", True, (n_break + n_dup) == 0,
             "consecutive nodes share a mesh edge, no repeats",
             f"non-adjacent pairs = {n_break}, duplicates = {n_dup}",
-            n_break + n_dup, offenders=order_off,
+            n_break + n_dup, offenders=order_off, offender_ids=order_ids,
         ))
 
         # Perpendicularity: best incident edge per OBC node, in metric
@@ -817,6 +862,10 @@ def run_qa(
         area_change = np.empty(0)
     c4 = np.where(area_change > max_area_change)[0]
     c4_worst = float(area_change.max()) if area_change.size else 0.0
+    c4_ids = [{"kind": "edge",
+               "id": [int(topo.internal_uv[j, 0]), int(topo.internal_uv[j, 1])],
+               "elements": [int(topo.internal_pair[j, 0]),
+                            int(topo.internal_pair[j, 1])]} for j in c4]
     c4_off = []
     for j in _sort_desc(c4, area_change)[:max_offenders]:
         u, v = topo.internal_uv[j]
@@ -831,7 +880,8 @@ def run_qa(
         "c4_area_change", "quality", True, c4.size == 0,
         f"<= {max_area_change:g}",
         f"max = {c4_worst:.3f}, violations = {c4.size}", int(c4.size),
-        offenders=c4_off, data={"max_area_change": c4_worst},
+        offenders=c4_off, offender_ids=c4_ids,
+        data={"max_area_change": c4_worst},
     ))
 
     c5 = np.where(valence > max_valence)[0]
@@ -1021,6 +1071,7 @@ def run_qa(
                         "x": float(_cen[v, 0]),
                         "y": float(_cen[v, 1])}
                        for v in _bad[:max_offenders]],
+            offender_ids=[{"kind": "element", "id": int(v)} for v in _bad],
         ))
 
     return _report(coords_resolved)

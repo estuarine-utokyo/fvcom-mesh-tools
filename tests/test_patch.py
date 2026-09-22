@@ -1151,14 +1151,125 @@ def test_field_gradation_measures_the_gradient_not_the_axes():
 
 def test_a_region_swallowed_by_another_s_transition_is_reported():
     """Only core-to-core overlap was looked at, so a 5 m core 200 m away with
-    a 1 km transition swallowed a 90 m core and nothing was said."""
+    a 1 km transition swallowed a 90 m core and nothing was said.
+
+    A ramp runs from its target to the BASE mesh's size, so what the
+    neighbour's transition is worth here is a fact about the base mesh: with
+    it the claim is the field's, and without it there is no claim to make.
+    """
     from fvcom_mesh_tools.patch import region_conflicts
 
     fine = shapely.Point(500, 700).buffer(50.0)
     coarse = shapely.Point(700, 700).buffer(30.0)
-    rep = region_conflicts([(fine, 5.0, 1000.0), (coarse, 90.0, 100.0)],
-                           ["fine", "coarse"])
+    regions = [(fine, 5.0, 1000.0), (coarse, 90.0, 100.0)]
+    rep = region_conflicts(regions, ["fine", "coarse"],
+                           base_size=lambda p: np.full(len(p), 300.0))
     assert not rep["any_overlap"], "their cores do not touch"
+    assert rep["transitions_evaluated"]
     assert "coarse" in rep["finer_than_declared"]
     assert rep["finer_than_declared"]["coarse"]["gets_h_m"] < 90.0
     assert rep["finer_than_declared"]["coarse"]["by_core_overlap"] is False
+    assert rep["finer_than_declared"]["coarse"]["because_of"] == ["fine"]
+
+    blind = region_conflicts(regions, ["fine", "coarse"])
+    assert not blind["transitions_evaluated"]
+    assert blind["finer_than_declared"] == {}, (
+        "without the base mesh a ramp's value is unknown, and an unknown is "
+        "not a claim")
+
+
+def test_the_conflict_report_is_the_field_not_a_formula():
+    """A 12 m region 480 m from a 5 m one keeps its 12 m in the field the
+    mesher is handed; a report with its own ramp formula said 9.6 m."""
+    from fvcom_mesh_tools.patch import (
+        base_size_field,
+        patch_sizing,
+        region_conflicts,
+    )
+
+    nodes, elements = grid_mesh(15, 15)
+    regions = [(shapely.box(490, 690, 510, 710), 5.0, 1000.0),
+               (shapely.box(990, 690, 1010, 710), 12.0, 100.0)]
+    here = np.array([[1000.0, 700.0]])
+    alone = patch_sizing(nodes, elements, [regions[1]], distmesh_scale=1.0)(here)
+    joint = patch_sizing(nodes, elements, regions, distmesh_scale=1.0)(here)
+    assert alone[0] == pytest.approx(12.0) and joint[0] == pytest.approx(12.0)
+    rep = region_conflicts(regions, ["fine", "coarse"],
+                           base_size=base_size_field(nodes, elements))
+    assert "coarse" not in rep["finer_than_declared"]
+
+
+# ------------------------------------------------- attribution, fourth review
+
+
+def test_attribution_is_not_capped_with_the_display_list():
+    """A cap on what is PRINTED is not a cap on what is attributed.
+
+    An unchanged 73x73 mesh of 30-30-120 triangles fails C1 10,368 times.
+    Reading the display list, capped at 10,000, turned the remaining 368 into
+    "unattributed" violations and rejected a mesh with no patch in it at all.
+    Raising the cap only moves the failure, so the two lists are separate.
+    """
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+    from fvcom_mesh_tools.patch import introduced_violations
+    from fvcom_mesh_tools.qa import run_qa
+
+    nodes, elements = grid_mesh(73, 73)
+    nodes[:, 1] *= 0.2                       # thin triangles: C1 fails everywhere
+    mesh = Fort14Mesh(title="flat", nodes=nodes, depths=np.full(len(nodes), 8.0),
+                      elements=elements, open_boundaries=[], land_boundaries=[])
+    qa = run_qa(mesh, max_offenders=10_000)
+    c1 = next(c for c in qa.checks if c.check_id == "c1_min_angle")
+    assert c1.n_violations > len(c1.offenders), "this needs a truncated list"
+    assert len(c1.offender_ids) == c1.n_violations
+    assert introduced_violations([c1], len(elements), elements) == [], (
+        "every element is retained, so the patch introduced nothing")
+
+
+def test_attribution_still_refuses_a_check_that_named_nobody():
+    """The cap fix must not restore the empty-list acceptance hole."""
+    from types import SimpleNamespace
+
+    from fvcom_mesh_tools.patch import introduced_violations
+
+    check = SimpleNamespace(check_id="node_index_valid", status="fail",
+                            requirement="in range", observed="3 bad",
+                            n_violations=3, offenders=[], offender_ids=[])
+    out = introduced_violations([check], 100, np.zeros((100, 3), dtype=int))
+    assert [v["kind"] for v in out] == ["unattributed"]
+    assert out[0]["n_unattributed"] == 3
+
+
+@pytest.mark.parametrize("ident", ["0", 0.5, -1, True, 10_000])
+def test_an_id_that_cannot_be_looked_up_does_not_exonerate(ident):
+    """`0.5 < n_retained` is True and meant nothing; `-1` indexes from the end."""
+    from types import SimpleNamespace
+
+    from fvcom_mesh_tools.patch import introduced_violations
+
+    nodes, elements = grid_mesh(5, 5)
+    check = SimpleNamespace(check_id="c1_min_angle", status="fail",
+                            requirement=">= 30", observed="bad", n_violations=1,
+                            offenders=[{"kind": "element", "id": ident}],
+                            offender_ids=[{"kind": "element", "id": ident}])
+    assert introduced_violations([check], 2, elements), (
+        f"id {ident!r} is not an element of this mesh and cannot clear the patch")
+
+
+def test_a_field_thinner_than_the_lattice_is_unknown_not_flat():
+    """Masking before differencing left one row with NaN neighbours.
+
+    np.gradient across it is NaN, the finite filter dropped every sample, and
+    a field rising 1 m per metre reported a slope of zero.
+    """
+    from fvcom_mesh_tools.patch import field_gradation
+
+    rep = field_gradation(lambda p: 100.0 + np.asarray(p)[:, 0],
+                          shapely.box(0, 0, 100, 20), spacing=10.0)
+    assert rep["n_samples"] == 9
+    assert rep["max_slope"] == pytest.approx(1.0)
+
+    thin = field_gradation(lambda p: 100.0 + np.asarray(p)[:, 0],
+                           shapely.box(0, 0, 100, 1), spacing=10.0)
+    assert thin["measured"] is False
+    assert thin["max_slope"] is None, "an unmeasured slope is not a gentle one"

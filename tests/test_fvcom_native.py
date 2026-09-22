@@ -433,3 +433,47 @@ def test_a_non_finite_depth_coordinate_is_refused(tmp_path: Path) -> None:
     dep.write_text("\n".join(lines))
     with pytest.raises(ValueError, match="non-finite"):
         read_fvcom_case(written["grd"], dep, written["obc"])
+
+
+def test_a_non_finite_grid_coordinate_is_refused(tmp_path: Path) -> None:
+    """The dep file was checked for this and the grd file was not.
+
+    A NaN coordinate reaches FVCOM as a mesh it cannot build, and reaches
+    every geometric test here as a comparison that is quietly False.
+    """
+    from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
+
+    _, written = _case(tmp_path)
+    grd = Path(written["grd"])
+    rows = grd.read_text().splitlines()
+    # the first node row: header lines, then every cell, then the nodes
+    n_cells = _header_int(grd, "Cell Number")
+    fields = rows[2 + n_cells].split()
+    fields[1] = "nan"
+    rows[2 + n_cells] = " ".join(fields)
+    grd.write_text("\n".join(rows) + "\n")
+    with pytest.raises(ValueError, match="non-finite"):
+        read_fvcom_case(grd, written["dep"], written["obc"])
+
+
+def test_the_obc_type_survives_a_dataclass_replace(tmp_path: Path) -> None:
+    """``apply_obc_depth_control`` rebuilds the mesh with ``replace``.
+
+    ``obc_type`` rode alongside as a plain attribute, so the rebuild dropped
+    it and a type 2 boundary was exported as type 1 -- a different model,
+    silently. It is a field now.
+    """
+    import dataclasses
+
+    from fvcom_mesh_tools.io.fvcom_native import (
+        apply_obc_depth_control,
+        read_obc_types,
+    )
+
+    mesh = dataclasses.replace(_mesh(), obc_type=2)
+    controlled, _ = apply_obc_depth_control(mesh)
+    assert controlled.obc_type == 2
+    written = export_fvcom_case(controlled, tmp_path / "kept", "k",
+                                cor=controlled.nodes[:, 1] * 0 + 35.0,
+                                obc_depth_control=False)
+    assert read_obc_types(written["obc"]) == [2]

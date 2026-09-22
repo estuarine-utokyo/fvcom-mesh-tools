@@ -406,6 +406,13 @@ def read_grd(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     rows = lines[2 + n_cells:2 + n_cells + n_nodes]
     nodes = np.array([[float(w) for w in ln.split()[1:3]] for ln in rows],
                      dtype=float)
+    # A NaN coordinate reaches FVCOM as a mesh it cannot build and reaches
+    # every geometric test here as a comparison that is quietly False; the
+    # dep file was checked for this and the grd file was not (fourth review).
+    if not np.isfinite(nodes).all():
+        raise ValueError(
+            f"{path.name}: {int((~np.isfinite(nodes)).any(axis=1).sum())} "
+            "nodes have a non-finite coordinate")
     if elements.min() < 0 or elements.max() >= n_nodes:
         raise ValueError(f"{path.name}: connectivity references a node outside "
                          f"1..{n_nodes}")
@@ -515,6 +522,9 @@ def read_fvcom_case(
     outer loop minus the open-boundary run is ibtype 20, every other loop is
     an island (ibtype 21), matching what :func:`read_fort14` would give.
     """
+    if not np.isfinite(coord_tol_m) or coord_tol_m < 0:
+        raise ValueError("coord_tol_m must be finite and non-negative; a NaN "
+                         "tolerance passes every comparison")
     nodes, elements = read_grd(grd)
     dep_xy, depths = read_dep(dep)
     if dep_xy.shape[0] != nodes.shape[0]:
@@ -566,11 +576,8 @@ def read_fvcom_case(
             f"{Path(obc).name} mixes OBC types {obc_types}; this reader keeps "
             "one type per segment, and silently collapsing them would change "
             "the model input")
-    mesh = Fort14Mesh(
+    return Fort14Mesh(
         title=title or Path(grd).stem,
         nodes=nodes, depths=depths, elements=elements,
-        open_boundaries=open_boundaries, land_boundaries=land)
-    # Fort14Mesh has no field for it, so it rides alongside; the caller passes
-    # it back to export_fvcom_case rather than taking the writer's default.
-    mesh.obc_type = obc_types[0] if obc_types else 1
-    return mesh
+        open_boundaries=open_boundaries, land_boundaries=land,
+        obc_type=obc_types[0] if obc_types else 1)

@@ -83,10 +83,16 @@ def test_serialise_reads_the_path_it_was_given():
     assert seen == [tmp / "candidate.14"]
 
 
-def seed_search_env(tmp_path, attempts, qa_failures):
-    """A stub search: ``attempts`` maps a seed to a candidate or an exception."""
+def seed_search_env(tmp_path, attempts, qa_failures, misses=None):
+    """A stub search: ``attempts`` maps a seed to a candidate or an exception.
+
+    ``misses`` maps a seed to the regions that seed left coarser than their
+    target, which is a rejection of its own: a mesh can pass every gate and
+    still not be the mesh that was asked for.
+    """
     called: list[int] = []
     written: list[int] = []
+    misses = misses or {}
 
     def attempt(seed):
         called.append(seed)
@@ -108,8 +114,15 @@ def seed_search_env(tmp_path, attempts, qa_failures):
             checks=[SimpleNamespace(check_id="c1", requirement=">= 30",
                                     observed="bad", status="fail")] * n)
 
+    def achieved_per_region(written_mesh):
+        names = list(misses.get(written[-1], []))
+        return ({n: {"miss": "median 90.0 m is coarser than the 30 m target",
+                     "target_h_m": 30.0, "n_edges": 4, "median_m": 90.0,
+                     "p90_m": 95.0, "max_m": 99.0} for n in names}, names)
+
     return {
         "np": np, "json": json, "os": SimpleNamespace(environ={}),
+        "achieved_per_region": achieved_per_region,
         "Path": Path, "OUT": tmp_path, "cfg": {"base_mesh": Path("b.14")},
         "recipe": SimpleNamespace(stem="r"), "reports": {},
         "say": lambda *a: None, "attempt": attempt, "serialise": serialise,
@@ -167,6 +180,39 @@ def test_the_report_names_the_mesh_that_is_on_disk():
     run_search(env)
     assert env["reports"]["seed"] == 0
     assert env["_written"][-1] == 0, "the last file written is not the kept one"
+
+
+def test_a_seed_that_misses_the_target_resolution_is_not_accepted():
+    """QA does not know what was asked for.
+
+    Every gate can pass on a mesh that left a region at its base size -- a
+    core too thin to hold an edge midpoint reported nothing at all and the
+    run still succeeded (fourth review). A seed that misses is worse than one
+    that passes, and if every seed misses the run must fail rather than write.
+    """
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp())
+    env = seed_search_env(
+        tmp,
+        attempts={0: (np.array([0]), None, None, np.arange(1)),
+                  1: (np.array([1]), None, None, np.arange(1))},
+        qa_failures={0: 0, 1: 1},
+        misses={0: ["futtsu_nori"]})
+    env["os"].environ = {"LR_SEEDS": "0,1"}
+    run_search(env)
+    assert env["_called"] == [0, 1], "a resolution miss must not end the search"
+    assert env["reports"]["seed"] == 1, (
+        "seed 0 passed every gate but did not deliver the target; seed 1 did")
+
+    tmp2 = Path(tempfile.mkdtemp())
+    env = seed_search_env(
+        tmp2,
+        attempts={0: (np.array([0]), None, None, np.arange(1))},
+        qa_failures={0: 0}, misses={0: ["futtsu_nori"]})
+    env["os"].environ = {"LR_SEEDS": "0"}
+    with pytest.raises(SystemExit, match="resolution"):
+        run_search(env)
 
 
 def test_no_candidate_at_all_still_leaves_a_report():

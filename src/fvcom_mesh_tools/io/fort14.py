@@ -37,6 +37,13 @@ class Fort14Mesh:
         where ``ibtype`` is the integer boundary-type code (0 = normal
         coast in the ADCIRC convention) and ``ids`` is a 0-indexed int
         array of node indices.
+    obc_type:
+        FVCOM's open-boundary condition type for the open boundary (1 in the
+        goto2023 production case, 3 in others). fort.14 has no such column;
+        it is carried here because ``dataclasses.replace`` -- which every
+        transformation in this package uses -- drops an attribute that is not
+        a field, and a depth-control pass silently turned a type 3 boundary
+        back into type 1 (fourth review).
     """
 
     title: str
@@ -45,6 +52,7 @@ class Fort14Mesh:
     elements: np.ndarray
     open_boundaries: list[np.ndarray]
     land_boundaries: list[tuple[int, np.ndarray]]
+    obc_type: int = 1
 
     @property
     def n_nodes(self) -> int:

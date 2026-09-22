@@ -571,6 +571,12 @@ def limit_rfactor(elements, depths, movable, rmax: float, *,
     sweep, not a solve, and it can fail -- a movable node between two frozen
     depths more than ``R`` apart has an empty feasible set, and the report
     says so instead of pretending otherwise.
+
+    Every depth must be finite and strictly positive, which is what the
+    r-factor is defined on: ``|hi-hj|/(hi+hj)`` is 0/0 for two zeros, NaN for
+    a NaN and NaN for two infinities, so a mesh with no usable bathymetry at
+    all came back "converged" on the first sweep (fourth review). FVCOM
+    would not run it either.
     """
     tri = np.asarray(elements, dtype=np.int64)
     h = np.array(depths, dtype=float)
@@ -578,6 +584,12 @@ def limit_rfactor(elements, depths, movable, rmax: float, *,
     free = np.asarray(movable, dtype=bool)
     if not 0.0 <= rmax < 1.0:
         raise ValueError("rmax must be in [0, 1)")
+    used = np.unique(tri)
+    if not np.isfinite(h[used]).all() or (h[used] <= 0.0).any():
+        raise ValueError(
+            "the r-factor needs finite, strictly positive depths: "
+            f"{int((~np.isfinite(h[used])).sum())} non-finite, "
+            f"{int((h[used] <= 0.0).sum())} at or below zero")
     # rmax = 0 is what a constant-depth base asks for -- "no jump at all" --
     # and `rfactor_limit: base` passes the base's own worst r, so a flat
     # bottom reached this with 0 and raised (fourth review).

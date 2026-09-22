@@ -665,3 +665,18 @@ def test_the_ramp_is_declared_in_seconds_not_internal_steps(tmp_path):
         iramp = int(re.search(r"(?m)^\s*IRAMP\s*=\s*(\d+)", text).group(1))
         assert iramp * dte * env["ISPLIT"] == pytest.approx(
             env["RAMP_SECONDS"], rel=1e-3)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, np.nan, np.inf])
+def test_the_limiter_refuses_depths_the_r_factor_is_not_defined_on(bad):
+    """`|hi-hj|/(hi+hj)` is 0/0 for two zeros and NaN for a NaN.
+
+    The comparison `r > rmax` is False for all of them, so the first sweep
+    found nothing to do and the report certified a mesh with no usable
+    bathymetry as converged.
+    """
+    from fvcom_mesh_tools.refine import limit_rfactor
+
+    with pytest.raises(ValueError, match="positive depths"):
+        limit_rfactor(np.array([[0, 1, 2]]), np.full(3, bad),
+                      np.ones(3, dtype=bool), 0.2)
