@@ -1297,13 +1297,34 @@ def improve_patch(
                  and lines else np.zeros(len(xy), dtype=bool))
     slide = _boundary_neighbours(xy, tri, len(xy), can_slide) \
         if can_slide.any() else {}
-    movable = np.flatnonzero(np.asarray(movable, dtype=bool) | can_slide)
     # Each sliding node is bound to ONE curve, here and for good.  Choosing it
     # per candidate would let a node hop between curves, and locating along a
     # MultiLineString measures the concatenation, so a projection can land on
-    # another island with nothing raised.
-    curve_of = {v: min(lines, key=lambda ln, q=xy[v]: ln.distance(shapely_point(q)))
-                for v in slide}
+    # another island with nothing raised.  A node is also bound to the SPAN
+    # between the two curve vertices that bracket it, and a node sitting on a
+    # curve vertex does not slide at all: staying on the curve is not the same
+    # as leaving it where it was.  A node slid past a corner is still exactly
+    # on the curve and the polyline has lost the corner -- measured on a
+    # single perturbed grid node, 0 m off the curve and 52.5 m of Hausdorff
+    # movement in the boundary itself (review finding 10, reconfirmed
+    # 2026-09-22).  Since `preserve` keeps every original vertex as a node,
+    # pinning the vertices and confining the rest to their own span makes the
+    # polyline exactly invariant.
+    curve_of = {}
+    for v in slide:
+        ln = min(lines, key=lambda c, q=xy[v]: c.distance(shapely_point(q)))
+        span = _vertex_span(ln, xy[v])
+        if span is not None:
+            curve_of[v] = (ln, *span)
+    slide = {v: w for v, w in slide.items() if v in curve_of}
+    # A pinned node is not merely un-slidable, it is immovable: leaving it in
+    # `movable` sends it down the free-ring branch of _candidates and off the
+    # coastline altogether, which is worse than the corner-cutting this pins
+    # it to prevent.
+    allowed = np.zeros(len(xy), dtype=bool)
+    allowed[list(slide)] = True
+    movable = np.flatnonzero((np.asarray(movable, dtype=bool) & ~can_slide)
+                             | allowed)
     n_flip = n_move = 0
 
     for _ in range(rounds):
@@ -1468,6 +1489,28 @@ def improve_patch(
     }
 
 
+def _vertex_span(line, q, eps: float = 1e-6):
+    """The arc-length window a point may slide in without crossing a vertex.
+
+    ``None`` when the point IS a vertex of the curve, which is the case that
+    must not move: every corner of a `preserve` coastline is a mesh node, so
+    pinning them is what keeps the polyline identical rather than merely
+    keeping each node on it.
+    """
+    import shapely
+
+    coords = np.asarray(line.coords, dtype=float)[:, :2]
+    stations = np.concatenate(
+        [[0.0], np.cumsum(np.linalg.norm(np.diff(coords, axis=0), axis=1))])
+    s0 = float(shapely.line_locate_point(line, shapely_point(q)))
+    tol = max(eps, 1e-9 * stations[-1])
+    if np.abs(stations - s0).min() <= tol:
+        return None
+    lo = float(stations[stations < s0].max())
+    hi = float(stations[stations > s0].min())
+    return lo, hi
+
+
 def shapely_point(q):
     import shapely
 
@@ -1496,12 +1539,17 @@ def _candidates(xy, tri, faces, v, keep, scale, slide_pair, curve):
     if slide_pair is not None and curve is not None:
         import shapely
 
+        line, lo, hi = curve
         a, b = slide_pair
         for other in (a, b):
             for f in (0.05, 0.12, 0.25, 0.4):
                 q = shapely_point(keep + f * (xy[other] - keep))
+                station = float(shapely.line_locate_point(line, q))
+                # Clamped inside its own span: a slide re-spaces the
+                # coastline, it does not reshape it.
+                station = min(max(station, lo), hi)
                 yield np.asarray(shapely.line_interpolate_point(
-                    curve, shapely.line_locate_point(curve, q)).coords[0])
+                    line, station).coords[0])
         return
     ring = tri[faces].ravel()
     yield xy[ring[ring != v]].mean(axis=0)

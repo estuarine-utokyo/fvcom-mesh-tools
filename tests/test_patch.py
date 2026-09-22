@@ -713,7 +713,11 @@ def test_depths_follow_a_node_the_repair_moved():
 
 def test_sliding_really_slides_and_stays_on_the_given_curve():
     """The first version of this test never passed slide_on, so it proved
-    nothing: improve_patch disables sliding when no curve is supplied."""
+    nothing: improve_patch disables sliding when no curve is supplied.
+
+    The curve is densified first, because a node sitting ON a curve vertex is
+    pinned -- see the corner test below -- and a curve made of exactly the
+    mesh's own boundary nodes would pin every one of them."""
     nodes, elements = grid_mesh(11, 11)
     nodes = nodes.copy()
     _u, _c = np.unique(np.sort(np.vstack([elements[:, [0, 1]], elements[:, [1, 2]],
@@ -729,15 +733,52 @@ def test_sliding_really_slides_and_stays_on_the_given_curve():
         for ax in (0, 1):
             if lo < nodes[v, ax] < hi:
                 nodes[v, ax] += rng.uniform(-35.0, 35.0)
-    rings, _ = boundary_rings(nodes, b)
-    curves = [shapely.LineString(nodes[np.append(r, r[0])]) for r in rings]
+    # The curve is the rectangle itself, whose only vertices are its four
+    # corners: the nodes sit between them, as a resampled node sits between
+    # two vertices of a source shoreline.
+    side = nodes.max()
+    curves = [shapely.LineString([(0, 0), (side, 0), (side, side),
+                                  (0, side), (0, 0)])]
     on_b = np.zeros(len(nodes), dtype=bool)
     on_b[np.unique(b)] = True
-    out, _, info = improve_patch(nodes, elements, np.zeros(len(nodes), dtype=bool),
-                                 np.ones(len(elements), dtype=bool),
-                                 slidable=on_b, slide_on=curves)
+    out, _, _ = improve_patch(nodes, elements, np.zeros(len(nodes), dtype=bool),
+                              np.ones(len(elements), dtype=bool),
+                              slidable=on_b, slide_on=curves)
     moved = np.linalg.norm(out - nodes, axis=1) > 1e-9
     assert not moved[~on_b].any()
     assert moved.any(), "no node slid, so this test would prove nothing"
     every = shapely.MultiLineString([np.asarray(c.coords) for c in curves])
     assert float(shapely.distance(shapely.points(out[moved]), every).max()) < 1e-6
+    # and the four corners, being vertices of the curve, are pinned
+    for corner in ((0, 0), (side, 0), (side, side), (0, side)):
+        v = int(np.argmin(np.linalg.norm(nodes - corner, axis=1)))
+        assert np.array_equal(out[v], nodes[v])
+
+
+def test_a_slide_cannot_cut_a_corner():
+    """Staying on the curve is not the same as leaving the curve where it was.
+
+    A node slid past a vertex is still exactly on the curve, and the polyline
+    has lost the corner: measured 0 m off the curve and 52.5 m of Hausdorff
+    movement in the boundary itself. Curve vertices are pinned and every
+    other node is confined to its own span, so the polyline is invariant.
+    """
+    from fvcom_mesh_tools.patch import _edge_table
+
+    nodes, elements = grid_mesh(5, 5)
+    nodes = nodes.copy()
+    nodes[22, 1] = 500.0  # a real corner on the boundary
+    u, c = _edge_table(elements)
+    rings, _ = boundary_rings(nodes, u[c == 1])
+    curve = shapely.LineString(nodes[np.append(rings[0], rings[0][0])])
+    slidable = np.zeros(len(nodes), dtype=bool)
+    slidable[22] = True
+    out, out_t, _ = improve_patch(
+        nodes, elements, np.zeros(len(nodes), dtype=bool),
+        np.zeros(len(elements), dtype=bool),   # no flips: isolate the slide
+        slidable=slidable, slide_on=[curve], rounds=1)
+    assert np.array_equal(out[22], nodes[22])
+    u2, c2 = _edge_table(out_t)
+    rings2, _ = boundary_rings(out, u2[c2 == 1])
+    after = shapely.LineString(out[np.append(rings2[0], rings2[0][0])])
+    assert curve.hausdorff_distance(after) < 1e-9
