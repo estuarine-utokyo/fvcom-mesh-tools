@@ -30,12 +30,14 @@ import shapely
 from shapely.ops import unary_union
 
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14, write_fort14
+from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case
 from fvcom_mesh_tools.patch import (
     ambient_size_field,
     boundary_after_patch,
     effective_gradation,
     hole_polygon,
     improve_patch,
+    introduced_violations,
     patch_sizing,
     refresh_depths,
     rim_constraints,
@@ -45,11 +47,15 @@ from fvcom_mesh_tools.patch import (
 )
 from fvcom_mesh_tools.qa import run_qa
 from fvcom_mesh_tools.refine import (
+    limit_rfactor,
     load_refine,
     preflight,
     transition_width_m,
 )
 
+# The base's CRS. fort.14 and FVCOM's _grd.dat both carry bare numbers, so
+# this is an assumption, not something read from the file; goto2023 is UTM
+# 54N and so is everything downstream of it here.
 MESH_EPSG = 32654
 # DistMesh returns bars about this much larger than the sizing field
 # (mesh_generator.py L0mult; measured 1.19-1.25 by notebook 394).  target_h_m
@@ -65,17 +71,42 @@ LAND = Path(os.environ.get("FMESH_LAND",
                            "outputs/sample_repro/land_channel_adj.shp")).resolve()
 
 
+
 def say(msg):
     print(f"[lr] {msg} +{time.time() - t0:.0f}s", flush=True)
 
 
 cfg = load_refine(recipe)
-base = read_fort14(cfg["base_mesh"])
-say(f"recipe {recipe.name}: base {cfg['base_mesh'].name} "
-    f"NP={base.n_nodes:,} NE={base.n_elements:,}")
+# The base is a FINISHED case: an FVCOM `_grd.dat` with the depth file the
+# baseline names, or a fort.14 that carries its own. Either way nothing here
+# rebuilds it -- the depths are the model's and the refinement inherits them
+# (owner, 2026-09-22).
+if cfg["base_mesh"].suffix == ".dat":
+    base = read_fvcom_case(cfg["base_mesh"], cfg["base_depth"], cfg["base_obc"])
+    say(f"recipe {recipe.name}: base {cfg['base_mesh'].name} + "
+        f"{cfg['base_depth'].name}")
+else:
+    base = read_fort14(cfg["base_mesh"])
+    say(f"recipe {recipe.name}: base {cfg['base_mesh'].name}")
+_be = np.unique(np.sort(np.vstack([base.elements[:, [0, 1]], base.elements[:, [1, 2]],
+                                   base.elements[:, [2, 0]]]), axis=1), axis=0)
+base_rmax = float((np.abs(base.depths[_be[:, 0]] - base.depths[_be[:, 1]])
+                   / (base.depths[_be[:, 0]] + base.depths[_be[:, 1]])).max())
+say(f"  NP={base.n_nodes:,} NE={base.n_elements:,}, depth "
+    f"{base.depths.min():.3f}-{base.depths.max():.3f} m, r-factor <= "
+    f"{base_rmax:.4f}, {len(base.open_boundaries)} open boundary")
 
-land_m = unary_union(list(gpd.read_file(LAND).to_crs(MESH_EPSG).geometry))
-say(f"land {LAND.name}: {len(getattr(land_m, 'geoms', [land_m]))} polygons")
+# The land polygon is optional and only two things use it: the pre-flight's
+# "is the core dry" report, and `coastline: resample`. `preserve` needs
+# neither, and the base mesh is a better dryness test anyway -- a sample
+# outside it has no depth to inherit, which pre-flight already refuses.
+land_m = None
+if LAND.exists():
+    land_m = unary_union(list(gpd.read_file(LAND).to_crs(MESH_EPSG).geometry))
+    say(f"land {LAND.name}: {len(getattr(land_m, 'geoms', [land_m]))} polygons")
+elif cfg["coastline"] == "resample":
+    raise SystemExit(f"coastline: resample needs a source shoreline; "
+                     f"FMESH_LAND={LAND} does not exist")
 
 # ---------------------------------------------------------------- geometry
 # The recipe declares the region in lon/lat; everything below is in the mesh
@@ -131,7 +162,8 @@ for geom, region in regions_m:
         f"(p90 {np.percentile(amb_node[near], 90):.0f} m)")
 
 # ------------------------------------------------------------- pre-flight
-land_ll = unary_union(list(gpd.read_file(LAND).to_crs(4326).geometry))
+land_ll = (unary_union(list(gpd.read_file(LAND).to_crs(4326).geometry))
+           if land_m is not None else None)
 from matplotlib.tri import LinearTriInterpolator, Triangulation  # noqa: E402
 
 _mt = Triangulation(base.nodes[:, 0], base.nodes[:, 1], base.elements)
@@ -147,7 +179,10 @@ def depth_of(lon, lat):
 
 
 reports = {"recipe": str(recipe), "base_mesh": str(cfg["base_mesh"]),
-           "preflight": [], "land": str(LAND)}
+           "base_depth": str(cfg["base_depth"]) if cfg["base_depth"] else None,
+           "base_obc": str(cfg["base_obc"]) if cfg["base_obc"] else None,
+           "base_rmax": base_rmax, "preflight": [],
+           "land": str(LAND) if land_m is not None else None}
 for geom, region in regions_m:
     pf = preflight(region, gradation=cfg["gradation"],
                    dt_expected_s=cfg["dt_expected_s"],
@@ -372,6 +407,25 @@ def attempt(seed):
                                     nodes, _shifted, depths)
     imp["n_depths_recomputed"] = int(_shifted.sum())
     imp["n_recomputed_outside_base"] = int(_n_out)
+
+    # Inherit the base's r-factor property, not just its values. The base is
+    # m7001tp_rfac0p2_cap300: every one of its edges satisfies r <= 0.2, and
+    # interpolation does not carry that across a new edge joining different
+    # base elements -- ten new edges came out above it, the worst at 0.3075.
+    # Only new nodes' depths move; every base depth is untouched, and the
+    # report says how far a new one was pulled.
+    if cfg["rfactor_limit"] != "off":
+        rmax = base_rmax if cfg["rfactor_limit"] == "base" \
+            else float(cfg["rfactor_limit"])
+        depths, rinfo = limit_rfactor(
+            elements, depths, is_new, rmax,
+            depth_min=float(base.depths.min()), depth_max=float(base.depths.max()))
+        out["rfactor"] = rinfo
+        say(f"r-factor <= {rmax:.4f}: {rinfo['n_depths_changed']} new depths "
+            f"moved, worst {rinfo['max_depth_change_m']:.2f} m, "
+            f"{'converged' if rinfo['converged'] else 'NOT CONVERGED'} in "
+            f"{rinfo['rounds']} rounds (base depths moved "
+            f"{rinfo['max_frozen_depth_change_m']:.3g} m)")
     # How faithful the patch's coastline is, measured against the curve it was
     # cut from rather than against itself.  Both the nodes and the line between
     # them are checked: a node is kept on the curve by construction, but the
@@ -525,9 +579,16 @@ for seed in seeds:
                                     if k != "want_boundary"})
         save_report()
         continue
-    qa = run_qa(written, name=out14.stem, path=out14)
+    qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000)
+    # What the patch is answerable for. A refinement may not be held to a
+    # standard its base does not meet: the goto2023 production mesh fails C1
+    # at one element 18 km from Futtsu, the contract freezes that element,
+    # and an absolute gate blamed every seed for it.
+    new_bad = introduced_violations(qa.checks, len(sel.retained), written.elements)
     out["qa"] = {"n_gate_total": qa.n_gate_total,
                  "n_gate_failed": qa.n_gate_failed,
+                 "n_introduced": len(new_bad),
+                 "introduced": new_bad[:20],
                  "failed": [{"check": c.check_id, "requirement": c.requirement,
                              "observed": c.observed} for c in qa.checks
                             if c.status == "fail"]}
@@ -535,13 +596,13 @@ for seed in seeds:
                                 if k != "want_boundary"})
     save_report()
     say(f"    seed {seed}: QA {qa.n_gate_total - qa.n_gate_failed}/"
-        f"{qa.n_gate_total}"
-        + ("" if not qa.n_gate_failed else "  "
-           + "; ".join(f"{c['check']} {c['observed']}"
-                       for c in out["qa"]["failed"])))
-    if best is None or qa.n_gate_failed < best[0]:
-        best = (qa.n_gate_failed, seed, candidate, out, written, qa)
-    if not qa.n_gate_failed:
+        f"{qa.n_gate_total}, {len(new_bad)} introduced by the patch"
+        + ("" if not new_bad else "  " + "; ".join(
+            f"{v['check']} at {v['kind']} {v.get('id', v.get('elements'))}"
+            for v in new_bad[:4])))
+    if best is None or len(new_bad) < best[0]:
+        best = (len(new_bad), seed, candidate, out, written, qa)
+    if not new_bad:
         break
 
 if best is None:
@@ -554,16 +615,20 @@ reports.update({k: v for k, v in out.items()
                 if k not in ("seed", "want_boundary")})
 reports["seed"] = seed
 np.save(OUT / "node_map.npy", node_map)
+reports["mesh"] = str(out14)
 # Always, not only when the accepted seed is not the first one tried: the
 # file on disk is whichever attempt ran last, and when none passed that is
 # not the best one.  A failed artefact investigated with another attempt's
 # node map and QA is worse than no artefact (second review, finding 4).
 written, mesh = serialise(candidate, out, out14)
-qa = run_qa(written, name=out14.stem, path=out14)
+qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000)
 say(f"accepted seed {seed}")
 
+_new_bad = introduced_violations(qa.checks, len(sel.retained), written.elements)
 reports["qa"] = {"n_gate_total": qa.n_gate_total,
                  "n_gate_failed": qa.n_gate_failed,
+                 "n_introduced": len(_new_bad),
+                 "introduced": _new_bad[:20],
                  "failed": [{"check": c.check_id, "requirement": c.requirement,
                              "observed": c.observed} for c in qa.checks
                             if c.status == "fail"]}
@@ -588,12 +653,31 @@ reports["achieved"] = {
     "n_nodes": int(written.n_nodes),
     "n_elements": int(written.n_elements),
 }
-say(f"QA {qa.n_gate_total - qa.n_gate_failed}/{qa.n_gate_total}, achieved "
+# The operational product is an FVCOM case, not a fort.14. Depth control at
+# the open boundary is NOT applied: it rewrites OBC depths, and those nodes
+# are frozen. The cor column is the node's latitude, which is what the base's
+# own TokyoBay_cor.dat holds (checked: worst difference 7e-10 deg).
+_lon, _lat = Transformer.from_crs(f"EPSG:{MESH_EPSG}", "EPSG:4326",
+                                  always_xy=True).transform(
+    written.nodes[:, 0], written.nodes[:, 1])
+_case = export_fvcom_case(written, OUT / "fvcom", recipe.stem,
+                          cor=_lat, obc_depth_control=False)
+reports["fvcom_case"] = {k: str(v) for k, v in _case.items()}
+_check = read_fvcom_case(_case["grd"], _case["dep"], _case["obc"])
+if not np.array_equal(_check.depths[node_map[node_map >= 0]],
+                      base.depths[node_map >= 0]):
+    raise SystemExit("the written FVCOM case does not carry the base depths")
+say(f"wrote the FVCOM case: {', '.join(sorted(_case))} in {OUT / 'fvcom'}")
+
+say(f"QA {qa.n_gate_total - qa.n_gate_failed}/{qa.n_gate_total} "
+    f"({reports['qa']['n_introduced']} introduced by the patch), achieved "
     f"dt {_dt.min():.2f} s (predicted {reports['preflight'][0]['dt_s']:.2f} s)")
 (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
-if qa.n_gate_failed:
+if reports["qa"]["n_introduced"]:
     raise SystemExit(
-        f"the patched mesh fails {qa.n_gate_failed} QA gate(s): "
-        + "; ".join(f"{c['check']} {c['observed']}"
-                    for c in reports["qa"]["failed"]))
+        f"the patch introduces {reports['qa']['n_introduced']} QA violation(s) "
+        "the base did not have: "
+        + "; ".join(f"{v['check']} at {v['kind']} "
+                    f"{v.get('id', v.get('elements'))}"
+                    for v in reports["qa"]["introduced"][:6]))
 say("done")

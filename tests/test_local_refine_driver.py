@@ -114,6 +114,10 @@ def seed_search_env(tmp_path, attempts, qa_failures):
         "recipe": SimpleNamespace(stem="r"), "reports": {},
         "say": lambda *a: None, "attempt": attempt, "serialise": serialise,
         "run_qa": run_qa, "read_fort14": lambda p: None,
+        "sel": SimpleNamespace(retained=np.zeros((1, 3), dtype=int)),
+        "introduced_violations": lambda checks, n, elements=None: [
+            {"check": c.check_id, "kind": "element", "id": 0}
+            for c in checks if c.status == "fail"],
         "_called": called, "_written": written,
     }
 

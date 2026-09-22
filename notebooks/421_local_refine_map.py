@@ -20,13 +20,20 @@ from matplotlib.tri import Triangulation
 from pyproj import Transformer
 
 from fvcom_mesh_tools.io.fort14 import read_fort14
+from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
 from fvcom_mesh_tools.qa import run_qa
 
 OUT = Path(sys.argv[1] if len(sys.argv) > 1
            else "outputs/refine_futtsu_nori").resolve()
 rep = json.loads((OUT / "report.json").read_text())
-base = read_fort14(rep["base_mesh"])
-patched = read_fort14(next(OUT.glob("*.14")))
+if Path(rep["base_mesh"]).suffix == ".dat":
+    base = read_fvcom_case(rep["base_mesh"], rep["base_depth"], rep.get("base_obc"))
+else:
+    base = read_fort14(rep["base_mesh"])
+# By name from the report, not by globbing: an output directory reused for a
+# different base keeps the old .14 beside the new one, and a figure drawn
+# from the wrong mesh looks entirely plausible.
+patched = read_fort14(rep["mesh"])
 nr = rep["stitch"]["n_nodes_retained"]
 ner = rep["selection"]["n_elements_retained"]
 pf = rep["preflight"][0]
@@ -104,12 +111,12 @@ qa = run_qa(patched, name="patched")
 ver = rep["verify"]
 fig.suptitle(
     f"{OUT.name}: {pf['name']} target {pf['target_h_m']:g} m, transition "
-    f"{pf['transition_m']:.0f} m  |  QA "
-    f"{qa.n_gate_total - qa.n_gate_failed}/{qa.n_gate_total}  |  frozen nodes "
+    f"{pf['transition_m']:.0f} m  |  frozen nodes "
     f"{ver['n_frozen_nodes']:,}, moved {ver['n_frozen_moved']}, retained faces "
     f"missing {ver['n_retained_faces_missing']}, interface splits "
-    f"{ver['n_interface_segments_split']}  |  dt {pf['dt_s']:.2f} s "
-    f"(expected {pf['dt_expected_s']:g} s)", fontsize=10)
+    f"{ver['n_interface_segments_split']}  |  dt {rep['achieved']['dt_min_s']:.2f} s "
+    f"achieved  |  QA {qa.n_gate_total - qa.n_gate_failed}/{qa.n_gate_total}, "
+    f"{rep['qa']['n_introduced']} introduced by the patch", fontsize=10)
 fig.tight_layout(rect=(0, 0, 1, 0.96))
 png = OUT / f"421_{OUT.name}.png"
 fig.savefig(png, dpi=130)

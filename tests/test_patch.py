@@ -921,3 +921,49 @@ def _edge_table_for_test(elements):
     from fvcom_mesh_tools.patch import _edge_table
 
     return _edge_table(elements)
+
+
+def test_a_patch_is_not_blamed_for_the_base_mesh_s_own_failures():
+    """The goto2023 production mesh fails C1 at one element 18 km from Futtsu.
+
+    The contract freezes that element, so an absolute gate made every seed
+    report "QA 20/21" for a defect the patch is forbidden to touch. What the
+    patch is answerable for is a violation involving something it made.
+    """
+    from types import SimpleNamespace
+
+    from fvcom_mesh_tools.patch import introduced_violations
+
+    n_ret = 100
+    elements = np.arange(3 * 150).reshape(150, 3) % 90
+    checks = [
+        SimpleNamespace(check_id="c1_min_angle", status="fail",
+                        requirement=">= 30 deg", observed="min = 28.99",
+                        offenders=[{"kind": "element", "id": 7},      # retained
+                                   {"kind": "element", "id": 120}]),  # patch
+        SimpleNamespace(check_id="c4_area_change", status="fail",
+                        requirement="<= 0.5", observed="max = 0.6",
+                        offenders=[{"kind": "edge", "elements": [3, 9]},
+                                   {"kind": "edge", "elements": [9, 130]}]),
+        SimpleNamespace(check_id="c2_max_angle", status="pass",
+                        requirement="", observed="", offenders=[]),
+    ]
+    new = introduced_violations(checks, n_ret, elements)
+    assert [v["check"] for v in new] == ["c1_min_angle", "c4_area_change"]
+    assert new[0]["id"] == 120
+    assert new[1]["elements"] == [9, 130]
+
+
+def test_a_node_offender_needs_the_connectivity_to_be_attributed():
+    from types import SimpleNamespace
+
+    from fvcom_mesh_tools.patch import introduced_violations
+
+    elements = np.array([[0, 1, 2], [1, 2, 3], [2, 3, 4]])
+    checks = [SimpleNamespace(check_id="c5_valence", status="fail",
+                              requirement="<= 8", observed="max = 9",
+                              offenders=[{"kind": "node", "id": 0}])]
+    # node 0 is only in element 0, which is retained -> inherited
+    assert introduced_violations(checks, 1, elements) == []
+    # without the connectivity it cannot be attributed, and is the patch's
+    assert len(introduced_violations(checks, 1)) == 1

@@ -41,6 +41,7 @@ import numpy as np
 
 __all__ = [
     "PatchSelection",
+    "introduced_violations",
     "boundary_after_patch",
     "refresh_depths",
     "ambient_size_field",
@@ -1057,6 +1058,53 @@ def boundary_after_patch(base_elements, selection, rc, node_map, pfix_new):
             continue
         coast.append(tuple(sorted((int(row[i]), int(row[j])))))
     return set(kept) | set(coast)
+
+
+def introduced_violations(qa_checks, n_retained_elements: int,
+                          elements=None) -> list[dict]:
+    """The QA failures this patch is answerable for.
+
+    A refinement may not be held to a standard its base does not meet. The
+    goto2023 production mesh -- the `current` hydro baseline's own grid --
+    fails C1 at element 2101 with a 28.99 degree angle, 18 km from Futtsu.
+    The contract says that element is frozen, so the patch keeps the failure
+    and would be blamed for it by an absolute gate: every seed came back
+    "QA 20/21" for a defect it is forbidden to touch.
+
+    An offender is INHERITED when every element it involves is a retained
+    one, because a retained element is bit-identical to the base. Everything
+    else -- a patch element, a seam edge between a patch and a retained
+    element, a frozen node whose fan now contains a patch face -- is the
+    patch's, and is what this returns.
+
+    ``qa_checks`` are ``QAReport.checks``. Run QA with a ``max_offenders``
+    large enough to list them all, or this undercounts. ``elements`` is the
+    patched connectivity, needed to attribute a node offender (C5 valence):
+    a frozen node is inherited only while every face around it is retained.
+    Without it a node offender is always counted as the patch's, which errs
+    towards blaming the patch.
+    """
+    tri = None if elements is None else np.asarray(elements, dtype=np.int64)
+    out: list[dict] = []
+    for check in qa_checks:
+        if getattr(check, "status", "") != "fail":
+            continue
+        for off in getattr(check, "offenders", []):
+            kind = off.get("kind")
+            if kind == "element":
+                elems = [off.get("id")]
+            elif kind == "edge":
+                elems = list(off.get("elements", []))
+            elif tri is not None and off.get("id") is not None:
+                elems = np.flatnonzero((tri == int(off["id"])).any(axis=1)).tolist()
+            else:
+                elems = None      # unattributable without the connectivity
+            if elems is not None and elems and all(
+                    e is not None and e < n_retained_elements for e in elems):
+                continue
+            out.append({"check": check.check_id, "requirement": check.requirement,
+                        "observed": check.observed, **off})
+    return out
 
 
 # --------------------------------------------------------------------------

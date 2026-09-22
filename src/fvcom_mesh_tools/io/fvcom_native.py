@@ -351,3 +351,184 @@ __all__ = [
     "write_obc",
     "write_spg",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Readers
+# ---------------------------------------------------------------------------
+#
+# Added because local refinement takes a FINISHED FVCOM case as its base: the
+# mesh and the depth file are inputs, not something to rebuild (owner,
+# 2026-09-22).  The production case is `_grd.dat` + `_dep.dat` + `_obc.dat`,
+# so those have to be readable, and the two files disagree on purpose -- the
+# grd carries a depth column from whenever it was made, and the dep file is
+# the one the baseline's bathymetry tag names.  On goto2023 node 1 that is
+# 4.312072 m in the grd and 7.161207 m in
+# `TokyoBay_dep_m7001tp_rfac0p2_cap300.dat`.  The dep file wins; the grd's
+# column is read only to be ignored.
+
+
+def _header_count(line: str, label: str) -> int:
+    if "=" not in line:
+        raise ValueError(f"expected a '{label} = N' header, got {line!r}")
+    key, value = line.split("=", 1)
+    if key.strip().lower() != label.lower():
+        raise ValueError(f"expected header {label!r}, got {key.strip()!r}")
+    return int(value.strip().split()[0])
+
+
+def read_grd(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read ``casename_grd.dat``; returns ``(nodes (N,2), elements (M,3))``.
+
+    Element rows are ``CELL# N1 N2 N3`` with any trailing columns ignored
+    (OceanMesh2D writes the cell number again), node rows ``NODE# X Y`` with
+    an optional depth column that is NOT returned.  Node ids are 1-indexed in
+    the file and 0-indexed here.
+    """
+    path = Path(path).resolve()
+    with path.open() as f:
+        lines = [ln for ln in (x.strip() for x in f) if ln]
+    n_nodes = _header_count(lines[0], "Node Number")
+    n_cells = _header_count(lines[1], "Cell Number")
+    if len(lines) < 2 + n_cells + n_nodes:
+        raise ValueError(
+            f"{path.name}: {len(lines) - 2} rows for {n_cells} cells + "
+            f"{n_nodes} nodes")
+    elements = np.array(
+        [[int(w) for w in ln.split()[1:4]] for ln in lines[2:2 + n_cells]],
+        dtype=np.int64) - 1
+    rows = lines[2 + n_cells:2 + n_cells + n_nodes]
+    nodes = np.array([[float(w) for w in ln.split()[1:3]] for ln in rows],
+                     dtype=float)
+    if elements.min() < 0 or elements.max() >= n_nodes:
+        raise ValueError(f"{path.name}: connectivity references a node outside "
+                         f"1..{n_nodes}")
+    return nodes, elements
+
+
+def read_dep(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read ``casename_dep.dat``; returns ``(xy (N,2), depths (N,))``."""
+    path = Path(path).resolve()
+    with path.open() as f:
+        lines = [ln for ln in (x.strip() for x in f) if ln]
+    n_nodes = _header_count(lines[0], "Node Number")
+    data = np.array([[float(w) for w in ln.split()[:3]]
+                     for ln in lines[1:1 + n_nodes]], dtype=float)
+    if data.shape != (n_nodes, 3):
+        raise ValueError(f"{path.name}: expected {n_nodes} rows of 'X Y H'")
+    return data[:, :2], data[:, 2]
+
+
+def read_obc(path: str | Path) -> np.ndarray:
+    """Read ``casename_obc.dat``; returns the 0-indexed node ids in file order.
+
+    File order is along-boundary order for every file this project writes or
+    consumes, and the refinement driver relies on it: it splits the outer
+    boundary loop at the arc's two ends.
+    """
+    path = Path(path).resolve()
+    with path.open() as f:
+        lines = [ln for ln in (x.strip() for x in f) if ln]
+    n = _header_count(lines[0], "OBC Node Number")
+    ids = np.array([int(ln.split()[1]) for ln in lines[1:1 + n]],
+                   dtype=np.int64) - 1
+    if ids.size != n:
+        raise ValueError(f"{path.name}: expected {n} OBC rows")
+    return ids
+
+
+def boundary_loops(elements: np.ndarray) -> list[np.ndarray]:
+    """Ordered closed walks of the mesh boundary, one per loop."""
+    tri = np.asarray(elements, dtype=np.int64)
+    e = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]), axis=1)
+    u, c = np.unique(e, axis=0, return_counts=True)
+    b = u[c == 1]
+    nbr: dict[int, list[int]] = {}
+    for x, y in b.tolist():
+        nbr.setdefault(x, []).append(y)
+        nbr.setdefault(y, []).append(x)
+    bad = [v for v, w in nbr.items() if len(w) != 2]
+    if bad:
+        raise ValueError(f"{len(bad)} boundary nodes are not on exactly two "
+                         "boundary edges; the mesh boundary is not a set of loops")
+    seen: set[int] = set()
+    loops: list[np.ndarray] = []
+    for start in nbr:
+        if start in seen:
+            continue
+        walk, prev, cur = [start], None, start
+        seen.add(start)
+        while True:
+            a, b2 = nbr[cur]
+            nxt = a if a != prev else b2
+            if nxt == start:
+                break
+            walk.append(nxt)
+            seen.add(nxt)
+            prev, cur = cur, nxt
+        loops.append(np.asarray(walk, dtype=np.int64))
+    return loops
+
+
+def read_fvcom_case(
+    grd: str | Path,
+    dep: str | Path,
+    obc: str | Path | None = None,
+    *,
+    title: str | None = None,
+    coord_tol_m: float = 1e-3,
+) -> Fort14Mesh:
+    """Read a finished FVCOM case into a :class:`Fort14Mesh`.
+
+    The depths come from ``dep``, never from the grd's own column. The node
+    coordinates in the two files are checked against each other: a dep file
+    built for a different mesh is otherwise silently accepted, and the
+    refinement contract is about keeping those depths on those nodes.
+
+    Land boundaries are derived, because FVCOM has no land-boundary file: the
+    outer loop minus the open-boundary run is ibtype 20, every other loop is
+    an island (ibtype 21), matching what :func:`read_fort14` would give.
+    """
+    nodes, elements = read_grd(grd)
+    dep_xy, depths = read_dep(dep)
+    if dep_xy.shape[0] != nodes.shape[0]:
+        raise ValueError(
+            f"{Path(dep).name} has {dep_xy.shape[0]} nodes, "
+            f"{Path(grd).name} has {nodes.shape[0]}")
+    off = np.linalg.norm(dep_xy - nodes, axis=1)
+    if float(off.max()) > coord_tol_m:
+        raise ValueError(
+            f"{Path(dep).name} does not sit on {Path(grd).name}: worst node "
+            f"offset {off.max():.3g} m")
+
+    open_boundaries: list[np.ndarray] = []
+    if obc is not None:
+        ids = read_obc(obc)
+        if ids.size:
+            open_boundaries = [ids]
+
+    loops = boundary_loops(elements)
+    area = [abs(float(np.dot(nodes[lp, 0], np.roll(nodes[lp, 1], -1))
+                      - np.dot(nodes[lp, 1], np.roll(nodes[lp, 0], -1))) / 2)
+            for lp in loops]
+    outer = loops[int(np.argmax(area))]
+    land: list[tuple[int, np.ndarray]] = []
+    if open_boundaries:
+        arc = set(open_boundaries[0].tolist())
+        if not arc.issubset(set(outer.tolist())):
+            raise ValueError("the open boundary is not on the outer loop")
+        ring = np.roll(outer, -int(np.where(outer == open_boundaries[0][0])[0][0]))
+        if ring[1] not in arc:
+            ring = np.roll(ring[::-1], 1)
+        stop = int(np.where(ring == open_boundaries[0][-1])[0][0])
+        if set(ring[:stop + 1].tolist()) != arc:
+            raise ValueError("the outer loop between the OBC ends is not the OBC")
+        land.append((20, np.append(ring[stop:], ring[0])))
+    else:
+        land.append((20, np.append(outer, outer[0])))
+    land += [(21, lp) for lp in loops if lp is not outer]
+
+    return Fort14Mesh(
+        title=title or Path(grd).stem,
+        nodes=nodes, depths=depths, elements=elements,
+        open_boundaries=open_boundaries, land_boundaries=land)

@@ -9,6 +9,8 @@ the swapped connectivity must be CW for every element).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -313,3 +315,89 @@ def test_export_applies_obc_depth_control_by_default(tmp_path):
     dep_off = np.array([float(r[2]) for r in _data_rows(off["dep"])])
     assert dep_on[obc].tolist() == [m.depths[_nid(1, 1)], m.depths[_nid(1, 2)]]
     assert np.allclose(dep_off, m.depths)
+
+
+# --------------------------------------------------------------- readers
+#
+# Added because local refinement takes a finished FVCOM case as its base: the
+# mesh and the depth file are inputs, not something to rebuild.
+
+
+def _case(tmp_path):
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
+
+    nodes = np.array([[0.0, 0.0], [100.0, 0.0], [200.0, 0.0],
+                      [0.0, 100.0], [100.0, 100.0], [200.0, 100.0]])
+    elements = np.array([[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]])
+    mesh = Fort14Mesh(title="case", nodes=nodes,
+                      depths=np.array([5.0, 6.0, 7.0, 8.0, 9.0, 10.0]),
+                      elements=elements,
+                      open_boundaries=[np.array([0, 1, 2])],
+                      land_boundaries=[(20, np.array([2, 5, 4, 3, 0]))])
+    written = export_fvcom_case(mesh, tmp_path, "c", cor=nodes[:, 1] * 0 + 35.0,
+                                obc_depth_control=False)
+    return mesh, written
+
+
+def test_a_written_case_reads_back_the_same(tmp_path: Path) -> None:
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
+
+    mesh, written = _case(tmp_path)
+    back = read_fvcom_case(written["grd"], written["dep"], written["obc"])
+    assert np.array_equal(back.nodes, mesh.nodes)
+    assert np.array_equal(back.depths, mesh.depths)
+    assert np.array_equal(np.sort(back.elements, axis=1),
+                          np.sort(mesh.elements, axis=1))
+    assert np.array_equal(back.open_boundaries[0], mesh.open_boundaries[0])
+
+
+def test_the_depth_file_wins_over_the_grd_column(tmp_path: Path) -> None:
+    """The two disagree on purpose.
+
+    goto2023's `_grd.dat` carries a depth column from whenever it was made --
+    4.312072 m at node 1 -- while the b12 baseline names
+    `TokyoBay_dep_m7001tp_rfac0p2_cap300.dat`, which says 7.161207 m there.
+    Reading the grd's column would silently run the wrong bathymetry.
+    """
+
+    from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
+
+    _, written = _case(tmp_path)
+    grd = Path(written["grd"])
+    lines = grd.read_text().split("\n")
+    out = []
+    for ln in lines:
+        parts = ln.split()
+        out.append(ln if len(parts) != 3 or not ln[0].isdigit()
+                   else f"{parts[0]} {parts[1]} {parts[2]} 999.0")
+    grd.write_text("\n".join(out))
+    back = read_fvcom_case(grd, written["dep"], written["obc"])
+    assert back.depths.max() < 100.0
+
+
+def test_a_depth_file_for_another_mesh_is_refused(tmp_path: Path) -> None:
+    from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
+
+    _, written = _case(tmp_path)
+    dep = Path(written["dep"])
+    lines = dep.read_text().split("\n")
+    lines[1] = "9999.0 9999.0 5.0"
+    dep.write_text("\n".join(lines))
+    with pytest.raises(ValueError, match="does not sit on"):
+        read_fvcom_case(written["grd"], dep, written["obc"])
+
+
+def test_land_boundaries_are_derived_around_the_open_arc(tmp_path: Path) -> None:
+    from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
+
+    _, written = _case(tmp_path)
+    back = read_fvcom_case(written["grd"], written["dep"], written["obc"])
+    assert [b for b, _ in back.land_boundaries] == [20]
+    # the land string runs from the arc's far end back round to its start
+    land = back.land_boundaries[0][1].tolist()
+    assert land[0] == 2 and land[-1] == 0
+    assert 1 not in land[1:-1], "the interior of the open arc is not land"

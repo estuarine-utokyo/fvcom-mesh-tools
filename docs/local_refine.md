@@ -1,11 +1,13 @@
 # Local refinement of an existing mesh — design
 
-**Status: implemented, reviewed, and passing end to end.** The Futtsu recipe
-builds a 30 m fishery into `sample_repro_final.14` with **QA 21/21**, 4,619
-frozen nodes of which **none moved**, no retained face lost, no interface
-segment split, and the open boundary untouched — and the generator now
-*checks* all of that on the written file and refuses to report success
-otherwise. This document is revised as the design moves, and records the
+**Status: implemented, reviewed, and running on the production base.** The
+Futtsu recipe builds a 30 m fishery into the `current` hydro baseline's own
+grid — `TokyoBay_grd.dat` with `TokyoBay_dep_m7001tp_rfac0p2_cap300.dat`,
+the bathymetry tag b12 names — with **0 QA violations introduced**, 3,098
+frozen nodes of which **none moved**, their depths bit-identical, no retained
+face lost, no interface segment split, the open boundary untouched and the
+water area unchanged to the last digit. The generator *checks* all of that on
+the written file and refuses to report success otherwise. This document is revised as the design moves, and records the
 decisions and their reasons so that a later change is made knowingly rather
 than by accident.
 
@@ -32,6 +34,40 @@ finished; §9 is its answer and mine.
 | the base mesh carries production depths | it does not: min 2.00 m (not the 3 m floor), max 735.3 m (not the 300 m cap), 2,258 edges above r = 0.2 |
 | `pfix` constrains the rim | `pfix` fixes positions only. Segments need `egfix`, which is what drives the CDT (`mesh_generator.py:1077`) |
 | the rim "already equals the ambient size" | measured rim edges are **180 / 467 / 819 m**, not 350 m. The claim was tautological and the compatibility it asserted is false |
+
+## 0. The operational model
+
+**The base is given.** In use, the caller hands over a finished FVCOM case —
+the mesh and the depth file the model actually runs — and asks for one part of
+it to be finer. Nothing here rebuilds it (owner, 2026-09-22):
+
+- **The depths are not changed.** Every base node keeps its exact value; a new
+  node takes the base field interpolated at its position. The only exception
+  is the r-factor step below, which moves **new** nodes' depths only, to
+  restore a property the base itself has.
+- **The coastline is kept.** `coastline: preserve` is the default: original
+  vertices are kept, only interior points are added, so the polyline is
+  geometrically identical. `resample` exists for a base whose polyline is
+  known to be a poor rendering of a source shoreline that is available, and it
+  trades that guarantee for fidelity.
+- **The base's properties are inherited, not just its numbers.** The b12
+  baseline's bathymetry is `m7001tp_rfac0p2_cap300`: depths 3.000–300.000 m
+  and every edge at r ≤ 0.2. Interpolation delivers the values and not the
+  r-factor — a new edge joins points from different base elements, and ten of
+  them came out above 0.2, the worst at 0.3075. `rfactor_limit: base` pulls
+  them back, moving 12 new depths by at most 1.61 m and no base depth at all.
+
+Which files: the `current` symlink under `TB-FVCOM/hydro/baselines` points at
+`2026-09_b12_rivonly`, whose manifest names bathymetry tag
+`m7001tp_rfac0p2_cap300`. That is the depth file; `TokyoBay_grd.dat` and
+`TokyoBay_obc.dat` are the mesh and the open boundary.
+
+**The patch is not held to a standard the base does not meet.** The goto2023
+production mesh fails C1 at element 2101 — 28.99°, 18 km from Futtsu — and the
+contract freezes that element. An absolute QA gate blamed the patch for it at
+every seed. What is gated is the violations the patch *introduces*: an
+offender every one of whose elements is retained is inherited, because a
+retained element is bit-identical to the base.
 
 ## 1. What problem this solves
 
@@ -454,48 +490,47 @@ The package is Apache-2.0 and **must not import oceanmesh (GPL)**. The split:
 - `notebooks/420_local_refine.py` — the DistMesh call, as notebook 325 does.
 - `notebooks/421_local_refine_map.py` — the figures.
 
-## 6. Worked case: Futtsu nori area — built
+## 6. Worked case: Futtsu nori area — built on the production base
 
 `recipes/refine/futtsu_nori.yaml`. The centre came from the data, not by eye:
 the Futtsu tidal flat is the largest connected patch of water shallower than
 1.5 m (T.P.) off Futtsu — 4.02 km², lon 139.768–139.821, lat 35.304–35.331 —
 and the declared centre lies 654 m north of its edge.
 
-| quantity | value |
+| quantity | base | refined |
+|---|---|---|
+| mesh | `TokyoBay_grd.dat` | |
+| depths | `TokyoBay_dep_m7001tp_rfac0p2_cap300.dat` (b12's tag) | inherited |
+| nodes / elements | 3,210 / 5,645 | 4,413 / 8,039 |
+| depth range | 3.000 – 300.000 m | **3.000 – 300.000 m** |
+| r-factor, worst edge | 0.2000 | **0.2000** |
+| water area | 1,346.044918 km² | **1,346.044918 km²** |
+| edges within the 300 m core | 3, median 566 m | **1,166, median 28.5 m** |
+| dt by minimum altitude | 11.92 s | 2.49 s |
+| QA | 20/21 (C1 at element 2101, 18 km away) | 20/21, **0 introduced** |
+
+| the patch | |
 |---|---|
-| centre / radius | (139.7881, 35.3228) / 300 m |
-| target | 30 m, **achieved 30.2 m** (median of 1,069 core edges; p90 31.2 m) |
-| measured ambient around the site | 445 m |
-| transition | 2,512 m |
-| effective gradation | 0.290, against the 0.414 C4 allows |
-| core depth (from the base mesh) | 2.5 – 6.16 m |
-| **dt by minimum altitude** | preflight 3.34 s, **achieved 2.61 s** (base 11.86 s) |
-| elements | 8,252 → 10,436 (+2,184); nodes 4,734 → 5,826 |
-| elements removed / retained | 244 / 8,008 |
-| rim: interface / coastline edges | 33 / 19; lengths 180 / 445 / 886 m |
-| selection reach vs requested | 3,183 m vs 2,812 m |
-| coastline nodes replaced / new | 18 / 12, on the source shoreline |
-| coastline departure from that source | nodes 64 m, chords 118 m (tolerance 200 m) |
-| **QA** | **21/21**, angles 30.01–119.26° — the base mesh's own range |
-| frozen zone | 4,619 nodes, 0 moved, 0 depth change, 0 faces lost, 0 splits |
-| water area | +0.001 % (the resampled coastline, not a lost or gained face) |
-| DistMesh seed | **2**; seeds 0 and 1 failed 3 and 2 gates and were rejected. `preserve` passes at seed 0 |
+| measured ambient around the site | 556 m |
+| transition | 3,190 m |
+| elements removed / retained | 247 / 5,398 |
+| rim: interface / coastline edges | 41 / 18; lengths 320 / 519 / 1,292 m |
+| coastline nodes replaced / new | 17 / 29, on the base polyline |
+| coastline departure from the base | **0.0 m**, nodes and chords |
+| frozen zone | 3,098 nodes, 0 moved, 0 depth change, 0 faces lost, 0 splits |
+| r-factor step | 12 new depths moved, worst 1.61 m; base depths moved 0 m |
+| DistMesh seed | 0 |
 
-`coastline: preserve` reaches 21/21 as well, with the coastline geometrically
-identical. The two differ in what they buy: `resample` follows the source
-shoreline up to 143 m closer than the base polyline, which is the point of
-it, and pays for it with a harder mesh — it is the mode that needed the seed
-search and the shoreline simplification.
+The product is an FVCOM case, not a fort.14: `outputs/refine_futtsu_nori/fvcom/`
+holds `futtsu_nori_grd.dat`, `_dep.dat`, `_obc.dat`, `_cor.dat` and `.2dm`,
+and the driver reads them back and checks that the base depths survived
+serialisation. Open-boundary depth control is **not** applied on write —
+it rewrites OBC depths, and those nodes are frozen.
 
-**The cost is the time step, and it is real.** The base mesh allows 11.86 s by
-minimum altitude; the patched mesh allows 2.61 s, and the binding element is
-inside the core. The pre-flight alert predicted 3.34 s
-from an equilateral cell over the deepest core sample; the achieved 2.61 s is
-lower because real cells are not equilateral — which is exactly what the
-alert says, though the factor it quotes for a 30-30-120 cell should be
-1/sqrt(3), not a half. **The site cannot move** — a fishery is given — so
-if the cost has to come down, the levers are a coarser target (40 m would hold
-4.5 s) or a steeper gradation. Neither was needed to build this one.
+**The cost is the time step.** 11.92 → 2.49 s, a factor 4.8, on 1.42× the
+elements: about 6.8× the external-mode work. **The site cannot move** — a
+fishery is given — so if that has to come down, the levers are a coarser
+target (35 m would hold 4.5 s) or a steeper gradation.
 
 ## 7. What the review asked for, and where it stands
 
@@ -517,27 +552,15 @@ failures during a run rather than as refusals before it.
 2. **Several regions at once.** `priority` is specified and validated but the
    generator's overlap handling is not designed. Overlapping cores with
    different targets need a single combined sizing field before cutting.
-3. **Bathymetry inside the patch — and the base mesh does not have the
-   depths this assumed.** Measured on `sample_repro_final.14`: min 2.00 m
-   (the production floor is 3 m), max 735.3 m (the cap is 300 m), 1,160 nodes
-   below 3 m, 2,258 edges above r = 0.2, worst 0.907. These are the SRTM15
-   depths from notebook 325, not the M7001 production field. Inserting an
-   M7001 patch here produces a **mixed-bathymetry** model. Either rebuild the
-   baseline's depths once, globally, before freezing it, or declare the mixed
-   operation deliberately. The default QA passing 21/21 does not contradict
-   this: its depth floor is 2 m and it gates neither the cap nor the r-factor.
+3. **~~Bathymetry inside the patch~~ — settled by the operational model.**
+   Earlier revisions of this document said the base mesh's depths were not
+   the production field and recommended rebuilding them globally. That was a
+   misreading: the base is **given**, and for this project it is the b12
+   baseline's own grid and depth file, which already carry the 3 m floor, the
+   300 m cap and r ≤ 0.2. Nothing is rebuilt. What remained real is that
+   interpolation does not inherit the r-factor across a new edge, and
+   `rfactor_limit` handles that by moving new nodes' depths only (§0).
 
-   The smoothing itself is a **constrained feasibility problem**, not a
-   limiter run on a slice. With `rmax = 0.2`, `|h_i − h_j|/(h_i + h_j) ≤ 0.2`
-   is exactly `2/3 ≤ h_i/h_j ≤ 3/2`, so a mutable node next to a frozen depth
-   `H` must lie in `[H/1.5, 1.5H]`; a node adjacent to frozen 3 m and 12 m has
-   an empty feasible set, and a k-edge path between frozen depths needs
-   `H_max/H_min ≤ 1.5^k`. `rfactor_smooth()` moves both endpoints and has no
-   fixed mask, so running it on the patch and restoring the rim afterwards
-   re-introduces violations (3 and 12 become 6 and 9; restoring 3 gives
-   r = 0.5). Five rim nodes in this selection are at 2 m, which conflicts with
-   applying a 3 m floor to the rim at all. This needs a constrained solve with
-   an explicit feasibility check, not a masked limiter.
 4. **Repeated refinement.** Applying a second region to an already-patched
    mesh should work, but the frozen check then compares against the patched
    mesh, not the original. Whether to track a chain of base meshes is open.
@@ -572,7 +595,8 @@ failures during a run rather than as refusals before it.
 
 ## 9. Is this finished?
 
-**The Futtsu case is. A general-purpose generator is not**, and the third
+**The Futtsu case is, now on the production base. A general-purpose generator
+is not**, and the third
 review (gpt-6-astra, 2026-09-22) is worth reading for the ranked reasons. It
 raised one P1 and it was right: `verify_patch` returned `ok=True` while
 `boundary_checked=False`, so a success could mean "everything I was asked to
@@ -605,10 +629,14 @@ the wrong depth field.
 
 ### The order of work it recommends, which I agree with
 
-1. **Decide the baseline and the purpose.** For production, build the M7001
-   depth field globally *before* freezing the base, then re-run the patch. For
-   a refinement-only experiment, keep SRTM15 in both runs and say so. Do not
-   mix them. This costs more than any meshing convenience on the list.
+1. ~~**Decide the baseline and the purpose.**~~ **Done, and the premise was
+   wrong.** Both the third review and I had assumed the base needed its
+   bathymetry rebuilt. It does not: the base is an input, and the right one is
+   the `current` hydro baseline's own mesh and depth file (§0). The recipe now
+   names them, the driver reads an FVCOM case, and the worked result carries
+   the production depths unchanged — 3.000–300.000 m, r ≤ 0.2, water area
+   identical to the last digit. What the switch did surface is real and is
+   handled: interpolation does not inherit the r-factor across a new edge.
 2. **Close acceptance structurally** — done for the boundary evidence; still
    open: per-region achieved-size acceptance, and moving the OBC-count and
    priority refusals into pre-flight where they cost nothing.

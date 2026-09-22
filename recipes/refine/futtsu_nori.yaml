@@ -1,29 +1,36 @@
 # Nori aquaculture area north of the Futtsu tidal flat.
 #
-# The centre was chosen from the data, not by eye: the tidal flat is the
+# The base is the production case, not a mesh made for this exercise: the
+# `current` hydro baseline is b12 (`2026-09_b12_rivonly`) and its manifest
+# names bathymetry tag `m7001tp_rfac0p2_cap300`, so these three files are the
+# mesh that is actually being run. Its depths are 3.000-300.000 m -- the
+# production floor and cap exactly -- and its worst r-factor is 0.2000.
+# Nothing here rebuilds them: the depths are inherited node for node, and a
+# new node takes the base field interpolated at its position.
+#
+# The centre came from the data, not by eye: the Futtsu tidal flat is the
 # largest connected patch of water shallower than 1.5 m (T.P.) off Futtsu --
 # 4.02 km2, lon 139.768-139.821, lat 35.304-35.331 -- and this point lies
-# 654 m north of its edge, in 3.0-4.11 m of water, with the whole 300 m core
-# clear of land.  The transition does reach the coast -- it overlaps it by
-# 1,225 m -- which is normal: the coastline there is meshed at the target size
-# under `coastline: resample`, and the coastline outside the hole is untouched.
-# At 30 m this water allows dt = 4.07 s by minimum altitude against the 4.5 s
-# expected, which raises an alert and does not stop the run.
-base_mesh: ../../outputs/verify_409.115302/fit/sample_repro_final.14
+# 654 m north of its edge, with the whole 300 m core clear of land.
+base_mesh: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
+base_depth: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
+base_obc: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
+
 dt_expected_s: 4.5            # advisory: an alert, not a veto
 gradation: 0.165
-coastline: resample           # follow the source shoreline at the target size
-# Max departure from the base polyline.  200 m, not the 100 m first written:
-# the source shoreline genuinely leaves the base polyline by up to 152 m over
-# this stretch -- 280 m of a 6.3 km walk, median 7 m -- at one inlet the base
-# mesh's 300-600 m spacing chords straight across.  Resampling at the local
-# size is how that inlet gets into the mesh; refusing it at 100 m would only
-# throw the detail away.
-coastline_tolerance_m: 200
+
+# The coastline stays where the base put it. Only interior points are added
+# to its segments, so the polyline is geometrically identical; the tolerance
+# is a backstop, not a licence.
+coastline: preserve
+coastline_tolerance_m: 50
+
+# Inherit the base's r-factor property, not only its values.
+rfactor_limit: base
 
 refine:
   - name: futtsu_nori
     geometry:
       circle: {center: [139.7881, 35.3228], radius_m: 300}
-    target_h_m: 30            # achieved edge length, as elsewhere in the chain
+    target_h_m: 30            # achieved edge length
     priority: 0

@@ -216,7 +216,7 @@ def test_preflight_refuses_a_core_entirely_on_land():
                   ambient_h_m=AMBIENT, depth_of=_flat_depth(2.0), land=land)
 
 
-def test_coastline_mode_defaults_to_resample(tmp_path):
+def test_coastline_mode_defaults_to_preserve(tmp_path):
     mesh = tmp_path / "base.14"
     mesh.write_text("stub\n")
     p = tmp_path / "r.yaml"
@@ -227,7 +227,7 @@ def test_coastline_mode_defaults_to_resample(tmp_path):
         "    target_h_m: 30\n"
     )
     cfg = load_refine(p)
-    assert cfg["coastline"] == "resample"
+    assert cfg["coastline"] == "preserve"
     assert cfg["coastline_tolerance_m"] == 100.0
 
 
@@ -424,3 +424,61 @@ def test_base_depths_must_be_finite():
     nodes, tri = _one_element()
     with pytest.raises(ValueError, match="finite"):
         depths_from_base(nodes, tri, np.array([1.0, np.nan, 3.0]), nodes)
+
+
+def test_the_base_r_factor_property_is_inherited_not_just_its_values():
+    """A product's guarantee is part of what is inherited.
+
+    `m7001tp_rfac0p2_cap300` means every base edge satisfies r <= 0.2.
+    Interpolation does not carry that across a new edge joining different
+    base elements: on the Futtsu patch ten new edges came out above it, the
+    worst at 0.3075, while every wholly frozen edge stayed at 0.2.
+    """
+    import numpy as np
+
+    from fvcom_mesh_tools.refine import limit_rfactor
+
+    # a 3-node chain: the two ends are frozen at 3 and 6 m (r = 1/3), the
+    # middle is new and interpolation put it at 3.2
+    elements = np.array([[0, 1, 2], [1, 3, 2]])
+    depths = np.array([3.0, 3.2, 6.0, 5.5])
+    movable = np.array([False, True, False, False])
+    out, info = limit_rfactor(elements, depths, movable, 0.2,
+                              depth_min=3.0, depth_max=300.0)
+    assert np.array_equal(out[~movable], depths[~movable]), "a base depth moved"
+    assert info["n_depths_changed"] == 1
+    e = np.array([[0, 1], [1, 2], [1, 3]])
+    r = np.abs(out[e[:, 0]] - out[e[:, 1]]) / (out[e[:, 0]] + out[e[:, 1]])
+    # the edge between the two FROZEN nodes cannot be fixed and is not counted
+    assert info["max_r_on_new_edges"] <= 0.2 + 1e-9
+    assert r.max() <= 0.2 + 1e-9
+
+
+def test_limit_rfactor_never_moves_a_frozen_depth():
+    import numpy as np
+
+    from fvcom_mesh_tools.refine import limit_rfactor
+
+    rng = np.random.default_rng(0)
+    n = 30
+    elements = np.array([[i, (i + 1) % n, (i + 2) % n] for i in range(n)])
+    depths = 3.0 + 40.0 * rng.random(n)
+    movable = rng.random(n) < 0.5
+    out, info = limit_rfactor(elements, depths, movable, 0.2, depth_min=3.0)
+    assert np.array_equal(out[~movable], depths[~movable])
+    assert info["max_frozen_depth_change_m"] == 0.0
+
+
+def test_an_impossible_r_factor_request_is_reported_not_hidden():
+    """A movable node between two frozen depths too far apart has no answer."""
+    import numpy as np
+
+    from fvcom_mesh_tools.refine import limit_rfactor
+
+    elements = np.array([[0, 1, 2]])
+    depths = np.array([3.0, 6.0, 30.0])
+    movable = np.array([False, True, False])
+    _, info = limit_rfactor(elements, depths, movable, 0.2, depth_min=3.0,
+                            rounds=50)
+    assert not info["converged"]
+    assert info["n_edges_over_rmax"] > 0

@@ -57,6 +57,7 @@ __all__ = [
     "GRAVITY_M_S2",
     "ALTITUDE_OVER_EDGE",
     "depths_from_base",
+    "limit_rfactor",
     "RefineRegion",
     "frozen_changes",
     "hole_clearance",
@@ -147,10 +148,13 @@ def load_refine(path) -> dict[str, Any]:
 
     Schema (unknown keys are errors)::
 
-        base_mesh: outputs/.../sample_repro_final.14
+        base_mesh: .../TokyoBay_grd.dat    # or a fort.14
+        base_depth: .../TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
+        base_obc: .../TokyoBay_obc.dat
         dt_expected_s: 4.5            # advisory: an alert, not a veto
         gradation: 0.165
-        coastline: resample           # preserve | resample | spline
+        coastline: preserve           # preserve | resample | spline
+        rfactor_limit: base           # base | off | a number in (0, 1)
         coastline_tolerance_m: 100    # max departure from the base polyline
         refine:
           - name: futtsu_nori
@@ -176,20 +180,57 @@ def load_refine(path) -> dict[str, Any]:
     with Path(path).resolve().open() as stream:
         cfg = yaml.load(stream, Loader=UniqueLoader)
     _keys(cfg, ["base_mesh", "dt_expected_s", "gradation", "refine"],
-          ["coastline", "coastline_tolerance_m"])
-    base = Path(cfg["base_mesh"])
-    if not base.is_absolute():
-        base = (Path(path).resolve().parent / base).resolve()
-    if not base.exists():
-        raise ValueError(f"base_mesh not found: {base}")
+          ["base_depth", "base_obc", "coastline", "coastline_tolerance_m",
+           "rfactor_limit"])
+
+    def _resolve(key, required=True):
+        if key not in cfg or cfg[key] is None:
+            if required:
+                raise ValueError(f"{key} is required")
+            return None
+        # `~` is how a recipe names a file in the user's checkout of the model
+        # repository, which is where a production base lives.
+        q = Path(cfg[key]).expanduser()
+        if not q.is_absolute():
+            q = (Path(path).resolve().parent / q).resolve()
+        if not q.exists():
+            raise ValueError(f"{key} not found: {q}")
+        return q
+
+    base = _resolve("base_mesh")
     cfg["base_mesh"] = base
+    # A finished FVCOM case is three files, and the depth file is the one that
+    # matters: `_grd.dat` carries a depth column from whenever it was made,
+    # and the baseline names a different one by tag.  On goto2023 node 1 that
+    # is 4.31 m in the grd against 7.16 m in the b12 baseline's
+    # `TokyoBay_dep_m7001tp_rfac0p2_cap300.dat`.  So a .dat base must say
+    # which depths it means; a fort.14 carries its own and must not.
+    cfg["base_depth"] = _resolve("base_depth", required=base.suffix == ".dat")
+    cfg["base_obc"] = _resolve("base_obc", required=False)
+    if base.suffix != ".dat" and cfg["base_depth"] is not None:
+        raise ValueError("base_depth applies to an FVCOM _grd.dat base; a "
+                         "fort.14 carries its own depths")
     cfg["dt_expected_s"] = _positive(cfg["dt_expected_s"], "dt_expected_s")
     cfg["gradation"] = _positive(cfg["gradation"], "gradation")
-    mode = cfg.setdefault("coastline", "resample")
+    # `preserve` is the default: the operation refines an existing mesh and
+    # leaves its coastline where it is (owner, 2026-09-22).  `resample` is
+    # for the case where the base polyline is known to be a poor rendering of
+    # a source shoreline that is available -- it buys fidelity and costs the
+    # guarantee that the coastline did not move.
+    mode = cfg.setdefault("coastline", "preserve")
     if mode not in COASTLINE_MODES:
         raise ValueError(f"coastline must be one of {COASTLINE_MODES}, got {mode!r}")
     cfg["coastline_tolerance_m"] = _positive(
         cfg.get("coastline_tolerance_m", 100.0), "coastline_tolerance_m")
+    # The base is a product with a property -- m7001tp_rfac0p2_cap300 means
+    # r <= 0.2 on every edge -- and interpolation does not inherit it. `base`
+    # asks for whatever the base itself achieves, a number asks for that, and
+    # `off` accepts the new edges as interpolation leaves them.
+    rl = cfg.setdefault("rfactor_limit", "base")
+    if rl not in ("base", "off"):
+        cfg["rfactor_limit"] = _positive(rl, "rfactor_limit")
+        if not 0.0 < cfg["rfactor_limit"] < 1.0:
+            raise ValueError("rfactor_limit must be in (0, 1), 'base' or 'off'")
     if not isinstance(cfg["refine"], list) or not cfg["refine"]:
         raise ValueError("refine must be a nonempty list")
     regions = [RefineRegion(r) for r in cfg["refine"]]
@@ -479,4 +520,78 @@ def frozen_changes(base_nodes, new_nodes, affected_mask, tol_m: float = 1e-6) ->
         "n_moved_in_frozen": int(bad.sum()),
         "max_move_in_frozen_m": float(moved[frozen].max()) if frozen.any() else 0.0,
         "ok": bool(not bad.any()),
+    }
+
+
+def limit_rfactor(elements, depths, movable, rmax: float, *,
+                  depth_min: float | None = None, depth_max: float | None = None,
+                  rounds: int = 200):
+    """Bring new nodes' depths inside the base mesh's own r-factor limit.
+
+    The base is a product with a property: ``m7001tp_rfac0p2_cap300`` means
+    every edge of the goto2023 mesh satisfies ``|hi-hj|/(hi+hj) <= 0.2``, and
+    inheriting its bathymetry ought to inherit that too. Interpolation does
+    not deliver it. The bound proved in :func:`depths_from_base` holds between
+    two points of the SAME base element, and refinement changes the
+    connectivity: measured on the Futtsu patch, ten new edges exceed 0.2 and
+    the worst reaches 0.3075, while every wholly frozen edge stays at 0.2.
+
+    Only ``movable`` depths change, so **no base depth moves**: a frozen node
+    keeps the value the model runs with. What moves is the value this code
+    chose for a node the base never had, and the report says by how much --
+    that number is the price of the property, and the caller should look at
+    it rather than trust it.
+
+    ``r <= rmax`` is exactly ``max/min <= (1+rmax)/(1-rmax)``. Each violating
+    edge is pulled to that ratio: the one movable end onto the bound, or both
+    ends symmetrically about their geometric mean. That is a Gauss-Seidel
+    sweep, not a solve, and it can fail -- a movable node between two frozen
+    depths more than ``R`` apart has an empty feasible set, and the report
+    says so instead of pretending otherwise.
+    """
+    tri = np.asarray(elements, dtype=np.int64)
+    h = np.array(depths, dtype=float)
+    h0 = h.copy()
+    free = np.asarray(movable, dtype=bool)
+    if rmax <= 0 or rmax >= 1:
+        raise ValueError("rmax must be in (0, 1)")
+    ratio = (1.0 + rmax) / (1.0 - rmax)
+    lo = float(depth_min) if depth_min is not None else -np.inf
+    hi_cap = float(depth_max) if depth_max is not None else np.inf
+
+    e = np.unique(np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]],
+                                     tri[:, [2, 0]]]), axis=1), axis=0)
+    n_rounds = 0
+    for n_rounds in range(1, rounds + 1):
+        r = np.abs(h[e[:, 0]] - h[e[:, 1]]) / (h[e[:, 0]] + h[e[:, 1]])
+        bad = np.flatnonzero(r > rmax + 1e-12)
+        bad = bad[free[e[bad]].any(axis=1)]
+        if not bad.size:
+            break
+        for k in bad:
+            i, j = int(e[k, 0]), int(e[k, 1])
+            if h[i] < h[j]:
+                i, j = j, i                      # i is the deeper end
+            if free[i] and free[j]:
+                g = float(np.sqrt(h[i] * h[j]))
+                h[i] = np.clip(g * np.sqrt(ratio), lo, hi_cap)
+                h[j] = np.clip(g / np.sqrt(ratio), lo, hi_cap)
+            elif free[i]:
+                h[i] = np.clip(h[j] * ratio, lo, hi_cap)
+            elif free[j]:
+                h[j] = np.clip(h[i] / ratio, lo, hi_cap)
+    r = np.abs(h[e[:, 0]] - h[e[:, 1]]) / (h[e[:, 0]] + h[e[:, 1]])
+    touched = free[e].any(axis=1)
+    moved = np.abs(h - h0)
+    return h, {
+        "rmax": float(rmax),
+        "rounds": int(n_rounds),
+        "converged": bool(not (r[touched] > rmax + 1e-9).any()),
+        "n_edges_over_rmax": int((r[touched] > rmax + 1e-9).sum()),
+        "max_r_on_new_edges": float(r[touched].max()) if touched.any() else 0.0,
+        "max_r_frozen": float(r[~touched].max()) if (~touched).any() else 0.0,
+        "n_depths_changed": int((moved > 1e-9).sum()),
+        "max_depth_change_m": float(moved.max()),
+        "max_frozen_depth_change_m": float(moved[~free].max())
+        if (~free).any() else 0.0,
     }
