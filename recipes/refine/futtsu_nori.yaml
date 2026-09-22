@@ -13,7 +13,13 @@ base_mesh: ../../outputs/verify_409.115302/fit/sample_repro_final.14
 dt_expected_s: 4.5            # advisory: an alert, not a veto
 gradation: 0.165
 coastline: resample           # follow the source shoreline at the target size
-coastline_tolerance_m: 100    # max departure from the base polyline
+# Max departure from the base polyline.  200 m, not the 100 m first written:
+# the source shoreline genuinely leaves the base polyline by up to 152 m over
+# this stretch -- 280 m of a 6.3 km walk, median 7 m -- at one inlet the base
+# mesh's 300-600 m spacing chords straight across.  Resampling at the local
+# size is how that inlet gets into the mesh; refusing it at 100 m would only
+# throw the detail away.
+coastline_tolerance_m: 200
 
 refine:
   - name: futtsu_nori

@@ -1,15 +1,19 @@
 # Local refinement of an existing mesh — design
 
-**Status: specification implemented and the first worked example buildable;
-the generator is designed but not written.** This document is
-revised as the design moves, and records the decisions and their reasons so
-that a later change is made knowingly rather than by accident.
+**Status: implemented and passing, end to end.** The Futtsu recipe builds a
+30 m fishery into `sample_repro_final.14` with **QA 21/21**, 4,619 frozen
+nodes of which **none moved**, no retained face lost, no interface segment
+split, and the open boundary untouched. Both `coastline: preserve` and
+`coastline: resample` reach 21/21. This document is revised as the design
+moves, and records the decisions and their reasons so that a later change is
+made knowingly rather than by accident.
 
 Revision history is the git history of this file.
 `docs/local_refine_review.md` is an adversarial review of revision 1
 (gpt-6-astra, 2026-09-22); every blocker it raised was reproduced
-independently before this revision was written. Revision 2 corrects four
-factual errors and records what the review showed is still missing.
+independently before revision 2 was written. Revision 4 replaces the design
+of the generator with what was built, and §5.1 records the six things the
+implementation found that the design had wrong.
 
 ### What revision 1 got wrong
 
@@ -228,8 +232,9 @@ the coarse boundary row would break C4 against the fine cells behind it.
 | **`resample`** (default) | along the **source** shoreline at the target size | follows the data | **improves** |
 | `spline` | on a smooth curve through the base polyline | eased | unchanged |
 
-`preserve` keeps the polyline geometrically identical — subdividing a segment
-does not move it — and is the strictest option. `resample` is the default
+`preserve` keeps the polyline geometrically identical — every original vertex
+is kept and only interior points are added, so subdividing a segment cannot
+move it — and is the strictest option. `resample` is the default
 because it is the only one that *adds* information: the base polyline runs
 300–600 m between nodes and sits up to **68.5 m** from the source shoreline at
 its segment midpoints (median 5.1 m), and a 30 m resample recovers that for
@@ -244,7 +249,11 @@ for `resample` over `preserve` — the source data says whether the coast is
 really that sharp or whether 300 m sampling made it so.
 
 Every mode is bounded by `coastline_tolerance_m` (default 100 m) against the
-base polyline and verified against it. **No mode touches the coastline outside
+base polyline and verified against it — the Futtsu recipe raises it to 200 m,
+because the source shoreline genuinely leaves the base polyline by up to
+152 m over this stretch (280 m of a 6.3 km walk, median 7 m) where the base
+mesh's 300–600 m spacing chords straight across an inlet. Refusing that at
+100 m would only throw the detail away. **No mode touches the coastline outside
 the hole**, and the two endpoints where the hole's coastline chain meets the
 frozen coastline are fixed, so the polyline joins exactly.
 
@@ -252,130 +261,160 @@ Re-cutting the coastline from the original OSM data — as opposed to resampling
 the shoreline polygon the generator was already given — is **not** part of
 this operation.
 
-## 5. The patch generator (designed, not yet written)
+## 5. The patch generator
 
-1. **Select.** Build `core ⊕ transition` in the mesh CRS (EPSG:32654). Mark
-   every element whose centroid falls inside it.
-2. **Cut.** Delete those elements. What remains is the base mesh with a hole;
-   the hole's rim is a closed chain of **existing** nodes.
-3. **Fill.** Generate a triangulation inside the hole with
-   `h(r) = target + g · (r − r_core)`, clipped above by the ambient field, with
-   the rim nodes as fixed points (`pfix`) **and every rim segment as a
-   constrained edge (`egfix`)**. `pfix` fixes positions only; the segments
-   between them are forced into the triangulation by the CDT, and only `egfix`
-   builds those constraints (`mesh_generator.py:1077`). Without them an
-   unconstrained Delaunay can bridge a concave rim, and centroid rejection
-   does not prove the survivors lie inside the hole.
+`src/fvcom_mesh_tools/patch.py` (Apache-clean) and
+`notebooks/420_local_refine.py` (the DistMesh call). Run it with
 
-   The rim does **not** match the ambient size. Measured on the Futtsu
-   selection, rim edges run 180 / 467 / 819 m against a 350 m ambient target.
-   An 819 m immutable edge cannot carry an approximately equilateral 350 m
-   cell: for all angles ≥ 30° its opposite vertex must be ≥ 236 m away and
-   another side ≥ 473 m. The sizing field is soft enough to allow this, but
-   nothing about the rim is "matched by construction".
-4. **Stitch.** Concatenate, deduplicate the rim nodes, renumber.
-5. **Verify.** `fmesh-mesh-qa` (21 gates), `frozen_changes()` = 0, the 342
-   connectivity comparator, the 364 width gate, and the implied dt against
-   `dt_floor_s`.
+```bash
+python notebooks/420_local_refine.py recipes/refine/futtsu_nori.yaml
+python notebooks/421_local_refine_map.py outputs/refine_futtsu_nori
+```
 
-### Constraints the generator must respect (revision 2)
+1. **Measure the ambient.** `ambient_size_field` is the base mesh's own edge
+   length at each node, smoothed. Around Futtsu that is 445 m, not the 350 m
+   the sizing recipe nominally asks for, and the transition has to reach what
+   is actually there.
+2. **Pre-flight.** `refine.preflight` on the core: depth, dry fraction, the
+   dt alert. Refusal is reserved for the impossible.
+3. **Select** (`select_patch`). Elements whose centroid is inside
+   core ⊕ transition. The cut is **not** the footprint — whole triangles go,
+   so it reaches 3,183 m against a requested 2,812 m, and the report says so.
+   A vertex where the removed faces form two fans has four rim edges and no
+   closed walk exists, so the cut grows until every rim node has exactly two.
+   Refusals: reaching the open boundary or its guard band, emptying the mesh,
+   severing the retained mesh.
+4. **Rim** (`rim_constraints`). Walk each ring; keep every frozen node; replace
+   each maximal run of free nodes with a re-cut coastline stretch. That every
+   free rim node is on the physical boundary is structural, not lucky: an
+   interface edge is shared with a retained face, so both its endpoints are
+   frozen. Returns `pfix`, one `egfix` segment per rim edge, the base node id
+   behind each fixed point, and the curve each new coastline point was cut
+   from.
+5. **Fill** (notebook). `om.generate_mesh(fd, fh, bbox, pfix=, egfix=,
+   cleanup="none")` in **mesh CRS metres** — which is also what disables
+   generate_mesh's internal tmerc sandwich, since it only engages for a bbox
+   that looks like degrees. Then `collapse_thin_triangles` and
+   `direct_smoother_lur`, both pfix-protected, by hand.
+6. **Stitch** (`stitch_patch`). Retained nodes first and in base order, then
+   the new ones; each fixed point matched to its patch vertex **exactly**, so
+   a lost one is an error rather than a silent snap; depths from the base
+   field (`depths_from_base`) over the **full** base triangulation.
+7. **Repair the seam** (`improve_patch`). Flips restricted to patch faces,
+   moves restricted to new interior nodes, slides restricted to the coastline
+   curve the node was cut from. Every candidate scored and accepted only when
+   it strictly improves the worst gate in its neighbourhood.
+8. **Verify** (`verify_patch`) and the 21 QA gates.
 
-- The hole must not reach the **open boundary**: OBC nodes are an input.
-  Refuse if `core ⊕ transition` intersects the OBC arc.
-- With `touch_coast: false` the hole must not reach the coastline either, so
-  the land boundary is untouched.
-- Every rim node must survive as a distinct vertex. The fork's named error
-  (`generate_mesh`, commit `529a462`) fires when the nearest-vertex map is not
-  injective after pruning; that is a symptom, and proximity to the target size
-  is not the only cause (lost points and topology changes do it too). Requiring
-  a small correspondence distance as well is what proves the surviving vertex
-  is the right one.
-- **The selection is not the analytic footprint.** Whole triangles are taken,
-  so the cut reaches past the envelope — measured on Futtsu, 2,615 m against a
-  requested 2,239 m, with 22 selected vertices outside the disc. The footprint
-  the contract talks about must be the actual set of removed faces, reported
-  before filling, not the circle in the recipe.
-- **The cut need not be one simply connected hole.** It can have several
-  components, pinch at a vertex, or enclose retained islands; a coast-reaching
-  cut has an interface chain joined to a physical boundary chain, not a closed
-  water-only loop. Each case needs its own handling or an explicit refusal.
-- **Seam quality is a whole-mesh property.** A seam vertex's valence counts
-  retained neighbours too, so a patch-only valence ≤ 8 is not enough; a corner
-  of total angle θ admits k new triangles only if `30k ≤ θ ≤ 130k`. An element
-  merely *incident* to an OBC node can change its orthogonality even when every
-  OBC coordinate is fixed, so the OBC needs a guard band, not just
-  non-intersection.
+### 5.1 Six things the implementation found
+
+Each of these was a failure first and a fix second; each is measured.
+
+| what looked right | what happened | the fix |
+|---|---|---|
+| use oceanmesh's default clean | `make_mesh_boundaries_traversable` takes neither `pfix` nor `egfix` and deleted **121 of 235** constrained rim points | `cleanup="none"`, then the pfix-protected stages by hand |
+| also run `bound_connectivity` | its valence flips are blind to the sizing field and coarsened the 28.6 m core to **98.7 m** | not run |
+| cut the coastline at `target_h_m` | a 30 m coastline 2.4 km out sat in a field asking for 400 m: min angle **0.8°**, quality **0.002** | cut it at the LOCAL size |
+| size the patch as `min(target + g·d, ambient)` | the ramp reached 422 m at a rim whose base mesh is 811 m: C4 **0.649** against a 0.5 gate. Widening until the ramp catches up is not available — at 3.7 km the cut severs the mesh at the Futtsu spit | ramp from the target to the **local** base size over the declared width; the local slope then varies, and `effective_gradation` checks it against the 0.414 that C4 allows (Futtsu: 0.290) |
+| the raw per-node ambient field | slope to **0.686**, above what C4 allows between neighbours; 26 % of edges above the recipe's own 0.165 | 20 Jacobi passes: p90 slope 0.243 → 0.094, median size 421 → 439 m |
+| repair by Laplacian smoothing | the fill's own smoother has already put every interior node there — the offending node was **0.000 m** from its centroid — so the pass did nothing | search a ring of directions; 15 m off that centroid raised the neighbourhood health 0.664 → 0.705 |
+
+Two more, both about what a check actually covers:
+
+- **C4 is measured across an edge, and the far face need not touch the moved
+  node.** Scoring only the moved node's own fan left two failures standing,
+  each a patch element beside a retained element twice its area. The
+  neighbourhood has to include everything the fan shares an edge with.
+- **`preserve` was dropping vertices.** Re-walking a stretch by arc length
+  replaced 18 base nodes with 13 and moved the coastline **74.5 m** — the
+  opposite of the promise. Subdividing each original segment keeps every
+  original vertex, and the departure went to 0.00 m.
+
+### 5.2 What the contract is checked by
+
+`verify_patch` reports, and gates on, seven separate things, because "the mesh
+outside is unchanged" is seven claims wearing one coat:
+
+| claim | Futtsu |
+|---|---|
+| frozen nodes did not move | 4,619 frozen, **0 moved**, max 0.0 m |
+| frozen depths did not change | max 0.0 m |
+| every retained face survives with the same vertices | 0 missing |
+| nothing inverted | 0 |
+| **interface segments are still shared, not split** | 0 split |
+| the open boundary is the same list in the same order | unchanged |
+| no duplicate or orphan nodes | 0 / 0 |
+
+Interface survival is the one a plausible-looking mesh passes without it: a
+fill may insert a vertex on a constrained edge, and on the coastline that is
+harmless — the chord is where it was — but on an interface segment it leaves
+a hanging node while every face and every coordinate still checks out.
+`area_change_fraction` is reported rather than gated (−0.007 % here): it moves
+legitimately when the coastline is resampled, and it is the one number that
+notices a face quietly dropped.
 
 ### Where the code goes
 
 The package is Apache-2.0 and **must not import oceanmesh (GPL)**. The split:
 
-- `src/fvcom_mesh_tools/refine.py` — specification, pre-flight, selection,
-  stitching, verification. License-clean.
-- `notebooks/4xx_local_refine.py` — the DistMesh call, as notebook 325 already
-  does. Notebooks are not part of the distributed package.
+- `src/fvcom_mesh_tools/refine.py` — the recipe, and the pre-flight refusals.
+- `src/fvcom_mesh_tools/patch.py` — selection, rings, the coastline modes,
+  sizing, stitching, seam repair, verification. License-clean, 47 tests.
+- `notebooks/420_local_refine.py` — the DistMesh call, as notebook 325 does.
+- `notebooks/421_local_refine_map.py` — the figures.
 
-## 6. Worked case: Futtsu nori area — REJECTED as declared
+## 6. Worked case: Futtsu nori area — built
 
 `recipes/refine/futtsu_nori.yaml`. The centre came from the data, not by eye:
 the Futtsu tidal flat is the largest connected patch of water shallower than
 1.5 m (T.P.) off Futtsu — 4.02 km², lon 139.768–139.821, lat 35.304–35.331 —
 and the declared centre lies 654 m north of its edge.
 
-| quantity | value | verdict |
-|---|---|---|
-| centre / radius | (139.7881, 35.3228) / 300 m | |
-| target | 30 m | |
-| core depth | 3.00 – 4.15 m | |
-| dt by shortest edge | 4.70 s | flattering |
-| **dt by minimum altitude** | **4.07 s** | **alert: 1.1x the expected steps** |
-| target that would hold 4.5 s | 33 m | |
-| transition | 1,939 m | |
-| core clears the coastline by | 714 m | the fishery itself is offshore |
-| transition overlaps the coastline by | 1,225 m | normal; meshed at the target size |
-| coastline edges on the rim | 12 (4,236 m) | `coastline: resample` |
-| selected elements / rim edges | 173 / 47 | |
-| rim edge min / median / max | 180 / 467 / 819 m | not 350 m |
-| selection reach vs requested | 2,615 m vs 2,239 m | |
+| quantity | value |
+|---|---|
+| centre / radius | (139.7881, 35.3228) / 300 m |
+| target | 30 m, **achieved 29.6 m** (median of 1,098 core edges; p90 31.3 m) |
+| measured ambient around the site | 445 m |
+| transition | 2,512 m |
+| effective gradation | 0.290, against the 0.414 C4 allows |
+| core depth (from the base mesh) | 2.5 – 6.16 m |
+| **dt by minimum altitude** | preflight 3.34 s, **achieved 2.53 s** |
+| elements | 8,252 → 10,419 (+2,167); nodes 4,734 → 5,815 |
+| elements removed / retained | 244 / 8,008 |
+| rim: interface / coastline edges | 33 / 19; lengths 180 / 445 / 886 m |
+| selection reach vs requested | 3,183 m vs 2,812 m |
+| coastline nodes replaced / new | 18 / 12, on the source shoreline |
+| coastline departure from that source | nodes 0 m, chords 135 m (tolerance 200 m) |
+| **QA** | **21/21**, angles 30.01–119.26° — the base mesh's own range |
+| frozen zone | 4,619 nodes, 0 moved, 0 depth change, 0 faces lost, 0 splits |
+| water area | −0.007 % (the resampled coastline, not a lost face) |
 
-Of 1,200 candidate cells 650–750 m north of the flat with the **core** clear of
-land, 112 met a 4.5 s floor **computed from the shortest edge**. Both filters
-were wrong: the core is the wrong body to test for land, and the edge is the
-wrong length for dt. Under the corrected rules **this recipe is buildable as declared**. The dt
-raises an alert, which is the intended behaviour for a given region, and the
-transition reaching the coast is ordinary work rather than an obstacle: the
-12 coastline edges on the rim are resampled at 30 m along the source
-shoreline, and the coastline outside the hole is untouched.
+`coastline: preserve` reaches 21/21 as well, at 5,862 nodes / 10,498 elements,
+with the coastline geometrically identical. The two differ in what they buy:
+`resample` follows the source shoreline up to 143 m closer than the base
+polyline, which is the point of it.
 
-**The site cannot move** — a fishery is given — so if the cost ever has to
-come down, the levers are a coarser target (33 m would hold 4.5 s) or a
-steeper gradation (shortening the 1,939 m transition, with the C4 cost
-measured). Neither is needed to build this one.
+**The cost is the time step, and it is real.** The base mesh allows 11.86 s by
+minimum altitude; the patched mesh allows 2.53 s, and the binding element is
+inside the core, 274 m from its centre. The pre-flight alert predicted 3.34 s
+from an equilateral cell over the deepest core sample; the achieved 2.53 s is
+lower because real cells are not equilateral — which is exactly what the
+alert's last sentence says. **The site cannot move** — a fishery is given — so
+if the cost has to come down, the levers are a coarser target (40 m would hold
+4.5 s) or a steeper gradation. Neither was needed to build this one.
 
-## 7. What is still missing before this can be built
+## 7. What the review asked for, and where it stands
 
-The review of revision 1 showed the generator is under-specified in ways that
-would surface as failures during a run rather than as refusals before it.
+The review of revision 1 listed five things that would otherwise surface as
+failures during a run rather than as refusals before it.
 
-1. **A feasibility and rejection contract.** Success must be conditional and
-   the footprint explicit: a set of removable faces with immutable shared
-   interface vertices, reported before filling. A failed QA run at the end is
-   a diagnostic, not an algorithm; without a declared repair-or-reject policy
-   there is no path from "it failed" to "a usable mesh".
-2. **Interface segment survival.** `egfix` for every rim segment, verified
-   after each cleanup stage — not only immediately after triangulation. No new
-   vertex may split a frozen interface segment unless the retained element
-   changes too, which enlarges the authorized footprint.
-3. **Non-simple cuts.** Several components, pinch points, retained or physical
-   islands, and coast-reaching cuts each need explicit handling or refusal.
-4. **Seam quality as a whole-mesh property.** Valence and corner-angle budgets
-   at seam vertices count retained neighbours; an OBC guard band is needed
-   because an element incident to an OBC node can change orthogonality without
-   any OBC coordinate moving.
-5. **A named dt convention.** The recipe should state the metric and the
-   Courant/safety convention. The present figure is an equilateral upper bound
-   at Cr = 1 with no velocity allowance: a mesh diagnostic, not an operational
-   time step.
+| asked for | state |
+|---|---|
+| **a feasibility and rejection contract** | done for what is decidable before filling. `select_patch` refuses a cut that reaches the open boundary or its guard band, empties the mesh, severs it, or pinches irreparably, and reports the removable face set and its real reach before anything is meshed. There is still no repair-or-reject policy for a fill that comes back poor — today it is `improve_patch` and then the QA verdict |
+| **interface segment survival** | done and gated. `verify_patch` checks every interface segment is an edge shared by two faces in the finished mesh, after every cleanup stage, not just after triangulation |
+| **non-simple cuts** | partly. Several components, nesting and pinch points are handled: rings are walked from the rim graph, nesting parity is resolved against the immediate parent, and a pinch grows the cut until the rim is a manifold. A cut that would leave a retained island inside the hole is detected (`ring_is_hole`) but has not been exercised |
+| **seam quality as a whole-mesh property** | done. The repair scores C1, C2 and C4 over the fan **and everything it shares an edge with**, so a patch element is measured against its retained neighbour; valence counts incident faces exactly as the C5 gate does; the OBC has a guard band (500 m by default), not just non-intersection |
+| **a named dt convention** | not done. `dt_s` is still an equilateral upper bound at Cr = 1 with no velocity allowance. It is now possible to say how far off that is: the alert predicted 3.34 s and the built mesh achieves 2.53 s, a factor 1.3 |
 
 ## 8. Open questions
 
@@ -410,3 +449,19 @@ would surface as failures during a run rather than as refusals before it.
    mesh, not the original. Whether to track a chain of base meshes is open.
 5. **Does the fit pass re-run?** `coast_fit` moves boundary nodes; over a
    patch that touches the coast it should run again, but only on the patch.
+   With `coastline: resample` the question largely dissolves — the new nodes
+   are placed on the source shoreline to begin with — but the frozen
+   coastline outside the hole keeps whatever offset the base fit left it.
+6. **A global-rebuild option.** Asked for alongside the exterior-preserving
+   patch and not yet written. It is the `sizing.py` route — add the region to
+   the sizing recipe and rebuild — and its cost is precisely the thing this
+   operation avoids: the ports and channels elsewhere come out subtly
+   different, so a comparison against the base run cannot separate the
+   fishery from everything else.
+7. **The repair is greedy.** `improve_patch` accepts only strictly improving
+   moves, so it stops at a local optimum, and which one depends on the order
+   it visits nodes: on one run the same mesh finished at 29.75° with a narrow
+   candidate set and at 30.01° with a denser one. It reached the gates here;
+   it carries no guarantee that it will elsewhere, and when it does not, the
+   honest response is to widen the transition or coarsen the target rather
+   than to lower the gate.
