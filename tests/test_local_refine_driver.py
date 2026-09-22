@@ -225,3 +225,27 @@ def test_no_candidate_at_all_still_leaves_a_report():
     with pytest.raises(SystemExit, match="no seed produced"):
         run_search(env)
     assert len(json.loads((tmp / "report.json").read_text())["attempts"]) == 2
+
+
+def test_the_m2_step_is_one_the_output_interval_divides():
+    """FVCOM aborts before its first step otherwise.
+
+    `NC_OUT_INTERVAL must be an integer number of internal time steps` --
+    every rank, on both cases. The CFL allowance was 1.7276 s, rounding to
+    three significant figures gave 1.72, an internal step of 17.2 s, and
+    1800 / 17.2 = 104.65. The earlier experiments used 1.5 s and passed by
+    luck rather than by rule.
+    """
+    import runpy
+
+    root = Path(__file__).resolve().parents[1]
+    env = runpy.run_path(str(root / "notebooks/414_refine_m2_prep.py"))
+    dividing_step = env["dividing_step"]
+    isplit, interval = 10, 1800.0
+    for allowance in (1.7276, 8.221, 5.0, 0.83, 3.1, 0.257):
+        dte = dividing_step(interval, isplit, allowance)
+        assert dte <= allowance, "a step may not exceed what the mesh allows"
+        steps = interval / (dte * isplit)
+        assert abs(steps - round(steps)) < 1e-9, (
+            f"{dte} s leaves {steps} steps per output, which FVCOM refuses")
+    assert dividing_step(interval, isplit, 1.7276) == 1.5

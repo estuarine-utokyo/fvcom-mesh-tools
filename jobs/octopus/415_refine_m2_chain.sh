@@ -17,7 +17,10 @@ cd "$(dirname "$0")/../.."
 REPO=$(pwd)
 BASE=${1:-$REPO/outputs/base_tool/TokyoBayTool}
 REFINED=${2:-$REPO/outputs/refine_futtsu_nori_tool/fvcom/futtsu_nori_tool}
-DTE=${3:-1.5}
+# Empty by default: 414 works the step out from the finer mesh and rounds it
+# DOWN. A hard-coded 1.5 s belonged to one experiment and is wrong for the
+# next mesh in either direction.
+DTE=${3:-}
 for p in "${BASE}_grd.dat" "${BASE}_dep.dat" "${BASE}_obc.dat" \
          "${REFINED}_grd.dat" "${REFINED}_dep.dat" "${REFINED}_obc.dat"; do
     [ -f "$p" ] || { echo "not found: $p"; exit 2; }
@@ -30,6 +33,9 @@ echo "base    : $BASE"
 echo "refined : $REFINED"
 echo "DTE     : $DTE s"
 
+# `--after` starts a dependent when its predecessor TERMINATES, not when it
+# succeeds -- this NQSV has no afterok -- so every dependent checks its own
+# input and exits 2 rather than burning a 64-core slot on a failed prep.
 prep=$(qsub -v "FMESH_RUN_ROOT=$RUN_ROOT,FMESH_BASE=$BASE,FMESH_REFINED=$REFINED,FMESH_DTE=$DTE" \
     jobs/octopus/414_refine_m2_prep.sh)
 prep=$(grep -oE '[0-9]+\.[a-z]+' <<<"$prep" | head -1)

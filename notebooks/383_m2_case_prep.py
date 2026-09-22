@@ -49,6 +49,10 @@ START = "2021-01-01 00:00:00"
 END = "2021-01-21 00:00:00"
 DTE = 5.0  # TB-FVCOM production EXTSTEP_SECONDS; implied dt >= 15.4 s for all meshes
 ISPLIT = 10
+# The output interval, in SECONDS, declared rather than written into the
+# namelist by hand: FVCOM refuses a run whose NC_OUT_INTERVAL is not a whole
+# number of internal steps, so whoever chooses the step has to know it.
+NC_OUT_INTERVAL_SECONDS = 1800.0
 # The tanh ramp, in SECONDS. FVCOM's IRAMP counts INTERNAL steps
 # (DTI = DTE * ISPLIT), so a hard-coded IRAMP means the ramp changes whenever
 # the external step does: 8640 was 5 days at DTE = 5 and would be 1.5 days at
@@ -147,7 +151,7 @@ def namelist(input_dir, output_dir):
         IRAMP=str(max(1, round(RAMP_SECONDS / (DTE * ISPLIT)))),
         MIN_DEPTH="0.1",
         IREPORT="360",
-        NC_OUT_INTERVAL="'seconds = 1800.0'",
+        NC_OUT_INTERVAL=f"'seconds = {NC_OUT_INTERVAL_SECONDS:.1f}'",
         NC_EVAP_PRECIP="F",
         PRECIPITATION_ON="F",
         PRECIPITATION_PRC="0.0",

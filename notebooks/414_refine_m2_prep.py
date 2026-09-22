@@ -55,6 +55,36 @@ def case_paths(prefix: Path) -> tuple[Path, Path, Path]:
             Path(f"{prefix}_obc.dat"))
 
 
+def dividing_step(interval_s: float, isplit: int, allowance: float,
+                  digits: int = 6, tries: int = 100_000) -> float:
+    """The largest external step the mesh allows that the output interval
+    divides exactly.
+
+    FVCOM refuses a run whose ``NC_OUT_INTERVAL`` is not a whole number of
+    internal steps (``mod_ncdio.F``), and an internal step is
+    ``EXTSTEP_SECONDS * ISPLIT``. Rounding the CFL allowance to three
+    significant figures ignored that: 1.7276 s became 1.72, an internal step
+    of 17.2 s, and 1800 / 17.2 = 104.65 -- the model aborted on every rank
+    before the first step. The earlier experiments used 1.5 s and passed by
+    luck, not by rule.
+
+    The step also has to survive being written into a namelist and read
+    back, so a candidate is taken only when its decimal form still divides
+    the interval exactly. That is what rules out 1800/105 = 17.142857...
+    and lands on 15 s here.
+    """
+    import math
+
+    n = max(1, math.ceil(interval_s / (isplit * allowance)))
+    for k in range(n, n + tries):
+        dte = round(interval_s / (k * isplit), digits)
+        if dte <= allowance and abs(dte * k * isplit - interval_s) < 1e-9:
+            return dte
+    raise ValueError(
+        f"no external step under {allowance} s divides {interval_s} s at "
+        f"ISPLIT {isplit}")
+
+
 def external_step(mesh, safety: float = 2.0) -> float:
     """The largest external step this mesh allows, by the shortest edge.
 
@@ -92,8 +122,23 @@ def prepare(run_root: Path, cases: dict[str, Path], dte: float | None) -> dict:
                          "the comparison would confound the patch with the forcing")
 
     # One step for both, and it is the refined mesh's.
-    M383.DTE = float(dte) if dte else min(external_step(m) for m in meshes.values())
-    M383.DTE = float(f"{M383.DTE:.3g}")
+    allowed = min(external_step(m) for m in meshes.values())
+    out_interval = float(M383.NC_OUT_INTERVAL_SECONDS)
+    M383.DTE = (float(dte) if dte
+                else dividing_step(out_interval, M383.ISPLIT, allowed))
+    if abs(M383.DTE * M383.ISPLIT
+           * round(out_interval / (M383.DTE * M383.ISPLIT))
+           - out_interval) > 1e-9:
+        raise SystemExit(
+            f"--dte {M383.DTE} s gives an internal step of "
+            f"{M383.DTE * M383.ISPLIT} s, which does not divide the "
+            f"{out_interval:g} s output interval; FVCOM refuses that before "
+            "its first step")
+    if M383.DTE > allowed:
+        raise SystemExit(
+            f"--dte {M383.DTE} s exceeds what the finer mesh allows "
+            f"({allowed:.4f} s at safety 2); the comparison would be a "
+            "comparison of two time steps as well as two meshes")
     print(f"[414] EXTSTEP_SECONDS = {M383.DTE} for both cases "
           f"(ISPLIT {M383.ISPLIT}, DTI {M383.DTE * M383.ISPLIT:g} s)", flush=True)
 

@@ -919,6 +919,35 @@ Three things the case taught that no probe had:
    altitude, and `dt_worst_legal_cell_s` now reports that: 2.38 s for
    Banzu, 2.35 for Futtsu, either side of what both actually delivered.
 
+### 6.9.1 The M2 run, and two things the harness got wrong
+
+Banzu runs. Base and refined, 64 ranks each, one external step for both,
+961 records apiece, every node wet throughout, no non-finite value anywhere,
+and the gauges agree to **3 micrometres in amplitude and 0.0008 degrees in
+phase** -- the patch is 20 km from the nearest gauge and the tide does not
+notice it, which is what "local" is supposed to mean.
+
+Getting there took three submissions, and the two failures were both in the
+harness rather than the mesh:
+
+1. **The step was rounded the wrong way.** The finer mesh allowed 1.7276 s
+   and the prep rounded to three significant figures, giving 1.73 -- above
+   the allowance, so 383's own CFL guard refused the case it had just been
+   handed. A step is a ceiling; it is rounded DOWN now.
+2. **A step has to divide the output interval.** With 1.72 s the internal
+   step is 17.2 s and `1800 / 17.2 = 104.65`, so FVCOM aborted on every rank
+   with `NC_OUT_INTERVAL must be an integer number of internal time steps`
+   before it took a single step. The earlier experiments used 1.5 s and
+   passed by luck, not by rule. `dividing_step` now picks the largest step
+   the mesh allows that the output interval divides exactly -- and it has to
+   still divide it after being written into a namelist and read back, which
+   is what rules out 1800/105 = 17.142857... and lands on 15 s here.
+
+A third, smaller thing: NQSV's `--after` starts a dependent when its
+predecessor **terminates**, not when it succeeds, and this build has no
+`afterok`. A failed prep therefore launched two 64-core integrations that
+had nothing to integrate. Each dependent checks its own input now.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as
