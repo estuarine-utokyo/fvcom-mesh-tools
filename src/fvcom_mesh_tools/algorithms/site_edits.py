@@ -124,6 +124,7 @@ def insert_node_on_line(
     ])
     out = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=nodes2,
         depths=depths2,
         elements=elements2,
@@ -334,6 +335,7 @@ def extrude_boundary_strip(
 
     out = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=np.vstack([nodes, np.asarray(new_nodes)]),
         depths=np.concatenate([mesh.depths, np.asarray(new_depths)]),
         elements=np.vstack([elements, np.asarray(new_tris)]),
@@ -454,7 +456,8 @@ def collapse_edge(
         return s[keep_m]
 
     out = Fort14Mesh(
-        title=mesh.title, nodes=nodes2, depths=mesh.depths,
+        title=mesh.title, obc_type=mesh.obc_type,
+        nodes=nodes2, depths=mesh.depths,
         elements=elements2,
         open_boundaries=[_remap(s) for s in mesh.open_boundaries],
         land_boundaries=[(ib, _remap(s))
@@ -588,7 +591,8 @@ def split_edge_pair(
         mesh.depths, [0.5 * (mesh.depths[u] + mesh.depths[v])],
     ])
     out = Fort14Mesh(
-        title=mesh.title, nodes=nodes2, depths=depths2,
+        title=mesh.title, obc_type=mesh.obc_type,
+        nodes=nodes2, depths=depths2,
         elements=elements2,
         open_boundaries=[s.copy() for s in mesh.open_boundaries],
         land_boundaries=[(ib, s.copy())
@@ -647,7 +651,8 @@ def grade_region(
 
     init_bad = _global_bad(mesh, max_area_change=max_area_change)
     work = Fort14Mesh(
-        title=mesh.title, nodes=mesh.nodes.copy(),
+        title=mesh.title, obc_type=mesh.obc_type,
+        nodes=mesh.nodes.copy(),
         depths=mesh.depths.copy(), elements=mesh.elements.copy(),
         open_boundaries=[s.copy() for s in mesh.open_boundaries],
         land_boundaries=[(ib, s.copy())
@@ -675,7 +680,8 @@ def grade_region(
         if bad_now < best_bad:
             best_bad = bad_now
             best_state = Fort14Mesh(
-                title=work.title, nodes=work.nodes.copy(),
+                title=work.title, obc_type=work.obc_type,
+                nodes=work.nodes.copy(),
                 depths=work.depths.copy(),
                 elements=work.elements.copy(),
                 open_boundaries=[s.copy()
@@ -829,7 +835,8 @@ def equalize_pair(
     ac, n_bad, s_b, s_s, pb, ps = best
     nodes2[w_big], nodes2[w_small] = pb, ps
     out = Fort14Mesh(
-        title=mesh.title, nodes=nodes2, depths=mesh.depths,
+        title=mesh.title, obc_type=mesh.obc_type,
+        nodes=nodes2, depths=mesh.depths,
         elements=mesh.elements,
         open_boundaries=[s.copy() for s in mesh.open_boundaries],
         land_boundaries=[(ib, s.copy())

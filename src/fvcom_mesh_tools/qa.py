@@ -158,9 +158,14 @@ class QACheck:
         # is not a claim of innocence: ``introduced_violations`` compares it
         # against ``n_violations`` and counts the difference as unattributed.
         if not self.offender_ids:
+            # "kind" and "id" are not enough to place an offender: a C4 edge
+            # is placed by the two elements it sits between, and an OBC pair
+            # by its segment. Dropping them turned a wholly inherited edge
+            # into an introduced violation (fifth review).
+            keys = ("kind", "id", "elements", "segment")
             self.offender_ids = list(getattr(self.offenders, "ids", None)
-                                     or [{k: o[k] for k in ("kind", "id")
-                                          if k in o} for o in self.offenders])
+                                     or [{k: o[k] for k in keys if k in o}
+                                         for o in self.offenders])
 
     @property
     def status(self) -> str:
@@ -761,6 +766,12 @@ def run_qa(
         for k, seg in enumerate(mesh.open_boundaries):
             seg = np.asarray(seg, dtype=np.int64)
             n_dup += int(seg.size - np.unique(seg).size)
+            # A duplicate was counted and never named, so it came back as an
+            # unattributed violation -- true, and no help at all.
+            _, _first = np.unique(seg, return_index=True)
+            for j in sorted(set(range(seg.size)) - set(_first.tolist())):
+                order_ids.append({"kind": "obc_node", "segment": int(k),
+                                  "id": int(seg[j])})
             if seg.size < 2:
                 continue
             a = np.minimum(seg[:-1], seg[1:])

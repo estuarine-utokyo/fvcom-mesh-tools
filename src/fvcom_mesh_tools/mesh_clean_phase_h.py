@@ -521,6 +521,7 @@ def _apply_smooth_node(
 
     new_mesh = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=nodes_proposed,
         depths=mesh.depths.copy(),
         elements=mesh.elements.copy(),
@@ -605,6 +606,7 @@ def _apply_edge_swap(
     new_elements[buddy_id] = block_after[1]
     new_mesh = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=mesh.nodes.copy(),
         depths=mesh.depths.copy(),
         elements=new_elements,
@@ -731,6 +733,7 @@ def _apply_edge_split_interior(
     new_depths = np.concatenate([mesh.depths, [mid_depth]])
     new_mesh = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=nodes_proposed,
         depths=new_depths,
         elements=new_elements,
@@ -855,6 +858,7 @@ def _apply_edge_split_boundary(
     new_depths = np.concatenate([mesh.depths, [mid_depth]])
     new_mesh = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=nodes_proposed,
         depths=new_depths,
         elements=new_elements,
@@ -969,6 +973,7 @@ def _apply_vertex_remove(
     ])
     new_mesh = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=mesh.nodes.copy(),
         depths=mesh.depths.copy(),
         elements=new_elements,
@@ -1909,6 +1914,7 @@ def _attempt_patch_recdt(
     new_elements = np.vstack([mesh.elements[keep_mask], new_block])
     new_mesh = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=mesh.nodes.copy(),
         depths=mesh.depths.copy(),
         elements=new_elements,
@@ -2186,6 +2192,7 @@ def _apply_pass_e_swap(
     new_elements[buddy_id] = block_after[1]
     new_mesh = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=mesh.nodes.copy(),
         depths=mesh.depths.copy(),
         elements=new_elements,
@@ -3234,6 +3241,7 @@ def phase_h_optimize(
     """
     cur = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=mesh.nodes.copy(),
         depths=mesh.depths.copy(),
         elements=mesh.elements.copy(),
@@ -3544,6 +3552,7 @@ def _finish_clone(mesh: Fort14Mesh) -> Fort14Mesh:
     without mutating the input."""
     return Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=mesh.nodes.copy(),
         depths=mesh.depths.copy(),
         elements=mesh.elements.copy(),

@@ -277,6 +277,7 @@ def align_open_boundary_local(
 
     out = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=nodes,
         depths=mesh.depths.copy(),
         elements=mesh.elements.copy(),

@@ -132,6 +132,7 @@ def remove_elements(
     if new_elements.size == 0:
         return Fort14Mesh(
             title=mesh.title,
+            obc_type=mesh.obc_type,
             nodes=np.empty((0, 2), dtype=mesh.nodes.dtype),
             depths=np.empty((0,), dtype=mesh.depths.dtype),
             elements=np.empty((0, 3), dtype=mesh.elements.dtype),
@@ -144,6 +145,7 @@ def remove_elements(
     new_elements = remap[new_elements].astype(mesh.elements.dtype)
     return Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=mesh.nodes[used].copy(),
         depths=mesh.depths[used].copy(),
         elements=new_elements,
@@ -191,6 +193,7 @@ def compact_nodes(mesh: Fort14Mesh) -> tuple[Fort14Mesh, dict[str, Any]]:
 
     out = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=mesh.nodes[used].copy(),
         depths=mesh.depths[used].copy(),
         elements=remap[mesh.elements].astype(mesh.elements.dtype),
@@ -255,6 +258,7 @@ def weld_close_nodes(
 
     welded = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=mesh.nodes,
         depths=mesh.depths,
         elements=elements,
@@ -291,6 +295,7 @@ def rebuild_boundaries(
     )
     return Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=mesh.nodes,
         depths=mesh.depths,
         elements=mesh.elements,
@@ -510,6 +515,7 @@ def widen_thin_elements_at_centroid(
 
     return Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=new_nodes,
         depths=new_depths,
         elements=new_elements,
@@ -1335,6 +1341,7 @@ def _repair_under_resolved_channels_medial(
     if bbox is not None and tol_deg is not None:
         new_mesh = Fort14Mesh(
             title=mesh.title,
+            obc_type=mesh.obc_type,
             nodes=new_nodes,
             depths=new_depths,
             elements=new_elements,
@@ -1349,6 +1356,7 @@ def _repair_under_resolved_channels_medial(
     else:
         new_mesh = Fort14Mesh(
             title=mesh.title,
+            obc_type=mesh.obc_type,
             nodes=new_nodes,
             depths=new_depths,
             elements=new_elements,
@@ -1443,6 +1451,7 @@ def repair_skewed_elements(
         info["skipped"] = True
         return Fort14Mesh(
             title=mesh.title,
+            obc_type=mesh.obc_type,
             nodes=cleaned.nodes,
             depths=cleaned.depths,
             elements=cleaned.elements,
@@ -1701,6 +1710,7 @@ def smooth_mesh_laplacian(
 
     out = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=new_vertices,
         depths=mesh.depths.copy(),
         elements=mesh.elements.copy(),

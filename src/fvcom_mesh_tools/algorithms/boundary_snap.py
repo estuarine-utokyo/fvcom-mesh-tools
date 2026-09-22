@@ -230,7 +230,8 @@ def snap_boundary_to_polylines(
     d_after = shapely.distance(pts_after, geoms[tree.nearest(pts_after)])
 
     out = Fort14Mesh(
-        title=mesh.title, nodes=nodes, depths=mesh.depths.copy(),
+        title=mesh.title, obc_type=mesh.obc_type,
+        nodes=nodes, depths=mesh.depths.copy(),
         elements=mesh.elements.copy(),
         open_boundaries=[np.asarray(s).copy() for s in mesh.open_boundaries],
         land_boundaries=[(ib, np.asarray(s).copy())
@@ -473,7 +474,8 @@ def snap_boundary_chains(
         _attempt([int(v) for v in chain])
 
     out = Fort14Mesh(
-        title=mesh.title, nodes=nodes, depths=mesh.depths,
+        title=mesh.title, obc_type=mesh.obc_type,
+        nodes=nodes, depths=mesh.depths,
         elements=mesh.elements,
         open_boundaries=[s.copy() for s in mesh.open_boundaries],
         land_boundaries=[(ib, s.copy())
@@ -534,7 +536,8 @@ def snap_nodes_to_segment(
         else:
             n_flip += 1
     out = Fort14Mesh(
-        title=mesh.title, nodes=nodes, depths=mesh.depths.copy(),
+        title=mesh.title, obc_type=mesh.obc_type,
+        nodes=nodes, depths=mesh.depths.copy(),
         elements=mesh.elements.copy(),
         open_boundaries=[np.asarray(s).copy() for s in mesh.open_boundaries],
         land_boundaries=[(ib, np.asarray(s).copy())

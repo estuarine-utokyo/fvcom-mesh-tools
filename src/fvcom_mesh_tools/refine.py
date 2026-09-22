@@ -596,6 +596,19 @@ def limit_rfactor(elements, depths, movable, rmax: float, *,
     ratio = (1.0 + rmax) / (1.0 - rmax)
     lo = float(depth_min) if depth_min is not None else -np.inf
     hi_cap = float(depth_max) if depth_max is not None else np.inf
+    # The bounds are clipped onto every movable depth, so a bound the
+    # r-factor is not defined on is as bad as a depth: depth_max = 0 turned
+    # [1, 10, 1] into [0, 0, 0] and reported convergence, because every
+    # ratio it then computed was NaN and NaN is not greater than rmax
+    # (fifth review).
+    if not (np.isfinite(lo) or depth_min is None) or \
+            not (np.isfinite(hi_cap) or depth_max is None):
+        raise ValueError("depth_min and depth_max must be finite")
+    if (depth_min is not None and lo <= 0.0) or \
+            (depth_max is not None and hi_cap <= 0.0):
+        raise ValueError("depth_min and depth_max must be strictly positive")
+    if lo > hi_cap:
+        raise ValueError(f"depth_min {lo} is deeper than depth_max {hi_cap}")
 
     e = np.unique(np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]],
                                      tri[:, [2, 0]]]), axis=1), axis=0)
@@ -622,6 +635,15 @@ def limit_rfactor(elements, depths, movable, rmax: float, *,
     touched = free[e].any(axis=1)
     over = r > rmax + 1e-9
     moved = np.abs(h - h0)
+    # And the state it finishes in has to be one the r-factor is defined on
+    # as well: `r > rmax` is False for a NaN, so a sweep that destroyed the
+    # depths would otherwise certify itself.
+    if not np.isfinite(h[used]).all() or (h[used] <= 0.0).any() or \
+            not np.isfinite(r).all():
+        raise ValueError(
+            "the limiter finished on depths the r-factor is not defined on: "
+            f"{int((~np.isfinite(h[used])).sum())} non-finite, "
+            f"{int((h[used] <= 0.0).sum())} at or below zero")
     # `converged` is about EVERY edge, not only the ones this could move. An
     # edge between two frozen nodes is unfixable here, and a patch can create
     # one that the base never had -- new connectivity joining two retained

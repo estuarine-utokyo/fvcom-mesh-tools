@@ -337,7 +337,8 @@ def assign_west_south_obc(
         islands2 = [lp[:-1].copy() for lp in loops2
                     if lp is not outer2]
         return Fort14Mesh(
-            title=mesh_in.title, nodes=mesh_in.nodes,
+            title=mesh_in.title, obc_type=mesh_in.obc_type,
+            nodes=mesh_in.nodes,
             depths=mesh_in.depths, elements=mesh_in.elements,
             open_boundaries=[open_seg2],
             land_boundaries=[(land_ibtype, land_seg2)]

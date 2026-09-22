@@ -477,3 +477,31 @@ def test_the_obc_type_survives_a_dataclass_replace(tmp_path: Path) -> None:
                                 cor=controlled.nodes[:, 1] * 0 + 35.0,
                                 obc_depth_control=False)
     assert read_obc_types(written["obc"]) == [2]
+
+
+def test_the_obc_type_survives_a_rebuild_not_only_a_replace(tmp_path: Path) -> None:
+    """`compact_nodes` builds a new mesh instead of replacing one.
+
+    Making `obc_type` a field fixed `dataclasses.replace`, but the cleanup
+    helpers construct `Fort14Mesh(...)` directly and did not pass it, so a
+    type 3 boundary came back as type 1 from an ordinary compaction (fifth
+    review). Every rebuild carries the metadata now.
+    """
+    import dataclasses
+
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fvcom_native import read_obc_types
+    from fvcom_mesh_tools.mesh_clean import compact_nodes
+
+    mesh = dataclasses.replace(_mesh(), obc_type=3)
+    # one unused node, which is what compaction is for
+    mesh = dataclasses.replace(
+        mesh, nodes=np.vstack([mesh.nodes, [[9e4, 9e4]]]),
+        depths=np.append(mesh.depths, 5.0))
+    out, _ = compact_nodes(mesh)
+    assert out.obc_type == 3
+    written = export_fvcom_case(out, tmp_path / "compacted", "c",
+                                cor=out.nodes[:, 1] * 0 + 35.0,
+                                obc_depth_control=False)
+    assert read_obc_types(written["obc"]) == [3]

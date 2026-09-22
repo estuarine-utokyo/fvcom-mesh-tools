@@ -837,6 +837,40 @@ It is a gate now, inside the seed loop: a region with no edge midpoint inside
 it, or a median edge coarser than its target, rejects that seed, and a run
 where no seed delivers the resolution fails instead of writing a mesh.
 
+## 6.8 What the fifth review found, and what "delivered" now means
+
+The fifth pass checked the fourth's own fixes at `95538f5`, with
+41 probes: **9 defects and 32 controls**, all nine reproduced here before
+anything changed. Its verdict on the seven fixes was that they are
+substantive -- the cap is genuinely gone from attribution, type 3 survives
+`replace`, the conflict arithmetic now agrees with `patch_sizing`, the
+production slope spike is gone, malformed scalar ids block, grid NaN is
+refused, and the limiter's input check is real -- and that **the resolution
+gate still accepts requests that were never delivered**.
+
+That last one is the important one, and it is the answer to the question
+this review was asked.
+
+| finding | what was wrong | what it is now |
+|---|---|---|
+| **P1 a request half delivered reads as delivered** | the gate was the median EDGE inside the region. Edges are counted per edge, so the refined half owns them: on the delivered circle mesh, a request made of the existing core plus a second lobe 5 km away -- 46 % of the area, containing **zero** edge midpoints -- passed with a median of 28.5 m against a 30 m target. So did the same core buffered by 300 m | the question is asked of the WATER. `region_resolution` samples the region's area, finds the element covering each sample and measures its **equivalent edge** (the edge of the equilateral triangle of the same area, which is what a target means as a resolution). A region is delivered when the area-weighted median is within 1.05x its target **and 95 % of its water sits in cells within 1.25x**. Measured: the five delivered regions score 0.74-0.98 and 0.970-0.998; the two counterexamples 14.87/0.449 and 1.69/0.330 |
+| **P1 the OBC type survived `replace` but not a rebuild** | `compact_nodes` and two dozen other helpers construct `Fort14Mesh(...)` directly. An ordinary compaction turned a type 3 boundary into type 1 | every mesh derived from another carries it, in all seven modules that rebuild one |
+| a 1 % overlap reported as 0 % or 100 % | `_sample_points` sized its lattice by area, so a 10 km x 10 m region got a 15.8 m lattice, no row landed inside, and the single representative point was weighted as the whole polygon | the lattice is halved until it resolves the shape; the exact core overlap is reported as geometry, the transition part as an estimate that says it is one |
+| a transverse ramp read as flat | a 40 m channel at the default 25 m spacing has no transverse neighbour anywhere, so every sample was one-sided and the magnitude of what it could see was zero | the lattice is refined until both directions are supported -- but only when the partial samples are more than 1 % of them, because every real footprint has a few slivers on its boundary and refining for those took the Futtsu hole from 27 thousand samples to 27 million |
+| the fallback identity dropped `elements` | `kind` and `id` cannot place a C4 edge; its two elements can. A wholly inherited edge came back as introduced, with no truncation involved | the fallback keeps `elements` and `segment` |
+| a bound could destroy the depths and certify it | `depth_max = 0` turned `[1, 10, 1]` into `[0, 0, 0]` and reported convergence, because every ratio it then computed was NaN | the bounds must be finite and positive, and the state it finishes in is checked as well as the state it started from |
+| an unhashable id crashed | a dict id raised `TypeError` before it could be refused | unplaceable, like every other malformed id |
+
+Two of the reviewer's 32 controls now fail, and both record the weaker
+behaviour it recommended changing: a duplicate OBC node is now **identified**
+rather than counted as unattributed, and two OBC segments carrying the same
+invalid pair are now decorated as segments 0 and 1 rather than 0 and 0. Both
+still block. One fourth-review probe also asserts a sample count of nine on a
+lattice that is now refined; the slope it was testing is still exactly 1.
+
+The delivered meshes were re-measured under the new gate and pass it:
+this is what calibrated it.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as

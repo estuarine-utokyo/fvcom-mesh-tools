@@ -680,3 +680,20 @@ def test_the_limiter_refuses_depths_the_r_factor_is_not_defined_on(bad):
     with pytest.raises(ValueError, match="positive depths"):
         limit_rfactor(np.array([[0, 1, 2]]), np.full(3, bad),
                       np.ones(3, dtype=bool), 0.2)
+
+
+@pytest.mark.parametrize("bad", [{"depth_max": 0.0}, {"depth_min": -1.0},
+                                 {"depth_max": np.nan},
+                                 {"depth_min": 10.0, "depth_max": 1.0}])
+def test_the_limiter_refuses_bounds_that_destroy_the_depths(bad):
+    """`depth_max=0` turned [1, 10, 1] into [0, 0, 0] and reported success.
+
+    The bounds are clipped onto every movable depth, so a bound the r-factor
+    is not defined on is as bad as a depth: every ratio afterwards is NaN,
+    and NaN is not greater than rmax (fifth review).
+    """
+    from fvcom_mesh_tools.refine import limit_rfactor
+
+    with pytest.raises(ValueError):
+        limit_rfactor(np.array([[0, 1, 2]]), np.array([1.0, 10.0, 1.0]),
+                      np.ones(3, dtype=bool), 0.2, **bad)

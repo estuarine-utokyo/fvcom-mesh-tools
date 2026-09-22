@@ -1266,10 +1266,172 @@ def test_a_field_thinner_than_the_lattice_is_unknown_not_flat():
 
     rep = field_gradation(lambda p: 100.0 + np.asarray(p)[:, 0],
                           shapely.box(0, 0, 100, 20), spacing=10.0)
-    assert rep["n_samples"] == 9
     assert rep["max_slope"] == pytest.approx(1.0)
+    # One row of samples has no neighbour across the box, so the lattice is
+    # refined until it has one rather than reporting a lower bound as the
+    # gradient (fifth review). At the requested spacing there were nine.
+    assert rep["spacing_m"] < 10.0 and rep["n_samples"] > 9
+    coarse = field_gradation(lambda p: 100.0 + np.asarray(p)[:, 0],
+                             shapely.box(0, 0, 100, 20), spacing=10.0,
+                             refine=0)
+    assert coarse["n_samples"] == 9
+    assert coarse["max_slope"] == pytest.approx(1.0), (
+        "even without refinement the one-sided bound must not read as zero")
 
+    # A footprint thinner than the lattice is now refined until it fits
+    # (fifth review); what must never happen is a confident zero.
     thin = field_gradation(lambda p: 100.0 + np.asarray(p)[:, 0],
                            shapely.box(0, 0, 100, 1), spacing=10.0)
-    assert thin["measured"] is False
-    assert thin["max_slope"] is None, "an unmeasured slope is not a gentle one"
+    assert thin["measured"] and thin["spacing_m"] < 10.0
+    assert thin["max_slope"] == pytest.approx(1.0)
+
+    blind = field_gradation(lambda p: 100.0 + np.asarray(p)[:, 0],
+                            shapely.box(0, 0, 100, 1), spacing=10.0, refine=0)
+    assert blind["measured"] is False
+    assert blind["max_slope"] is None, "an unmeasured slope is not a gentle one"
+
+
+# ------------------------------------------------- resolution, fifth review
+
+
+def _wedge_mesh(fine_h=30.0, coarse_h=300.0, n=40):
+    """Two square patches side by side: the left fine, the right coarse."""
+    left, _ = grid_mesh(n, n, fine_h)
+    right, _ = grid_mesh(5, 5, coarse_h)
+    right = right + np.array([fine_h * (n - 1) + coarse_h, 0.0])
+    nodes = np.vstack([left, right])
+    tri = []
+    for block, start, nx, ny in ((left, 0, n, n),
+                                 (right, len(left), 5, 5)):
+        for j in range(ny - 1):
+            for i in range(nx - 1):
+                a = start + j * nx + i
+                tri += [[a, a + 1, a + nx + 1], [a, a + nx + 1, a + nx]]
+    return nodes, np.asarray(tri, dtype=np.int64)
+
+
+def test_resolution_is_measured_over_the_area_not_over_the_edges():
+    """A request half refined and half untouched passed the edge median.
+
+    The fine half owns almost every edge inside the region, so the median
+    edge length is the fine half's. On the delivered Futtsu mesh a request
+    with 46 % of its water at the base size read as delivered (fifth
+    review). Asking the water instead of the edges sees it.
+    """
+    from fvcom_mesh_tools.patch import region_resolution
+
+    nodes, elements = _wedge_mesh()
+    fine = shapely.box(100.0, 100.0, 1000.0, 1000.0)
+    both = shapely.box(100.0, 100.0, 2000.0, 1000.0)
+
+    good = region_resolution(nodes, elements, fine, 30.0)
+    # A right-triangulated square of side h has the area of half a square,
+    # so its equivalent edge is 1.07 h: this grid is not an equilateral fill.
+    assert good["median_ratio"] == pytest.approx(1.07, abs=0.02)
+    assert good["covered_fraction"] == pytest.approx(1.0)
+
+    half = region_resolution(nodes, elements, both, 30.0)
+    assert half["covered_fraction"] < 0.95, (
+        "half of this request is at the base size and must not read as covered")
+
+    # The edge statistic is the one that was fooled, and it still is: it is
+    # reported beside the area measure rather than gated on.
+    e = np.unique(np.sort(np.vstack([elements[:, [0, 1]], elements[:, [1, 2]],
+                                     elements[:, [2, 0]]]), axis=1), axis=0)
+    mid = 0.5 * (nodes[e[:, 0]] + nodes[e[:, 1]])
+    length = np.linalg.norm(nodes[e[:, 0]] - nodes[e[:, 1]], axis=1)
+    inside = np.asarray(shapely.contains(both, shapely.points(mid[:, 0],
+                                                              mid[:, 1])))
+    assert np.median(length[inside]) < 1.05 * 30.0
+
+
+def test_a_region_outside_the_mesh_is_reported_and_is_a_miss():
+    from fvcom_mesh_tools.patch import region_resolution
+
+    nodes, elements = grid_mesh(9, 9, 30.0)
+    away = shapely.box(10_000.0, 10_000.0, 10_500.0, 10_500.0)
+    rep = region_resolution(nodes, elements, away, 30.0)
+    assert rep["outside_mesh_fraction"] == pytest.approx(1.0)
+    assert rep["covered_fraction"] == 0.0
+    assert rep["median_ratio"] is None, "water that does not exist has no size"
+
+    half_out = shapely.box(100.0, 100.0, 400.0, 10_000.0)
+    rep = region_resolution(nodes, elements, half_out, 30.0)
+    assert 0.0 < rep["outside_mesh_fraction"] < 1.0
+    assert rep["median_ratio"] is not None
+
+
+def test_the_conflict_area_of_a_thin_region_is_not_a_single_point():
+    """One representative point was weighted as the whole polygon.
+
+    A 100 x 10 m rectangle inside a 10 km x 10 m one is 1 % of it; the
+    area-derived lattice missed the shape entirely and the answer came back
+    as 0 % or 100 % depending on where the thin part sat (fifth review).
+    """
+    from fvcom_mesh_tools.patch import region_conflicts
+
+    long_thin = shapely.box(0.0, 0.0, 10_000.0, 10.0)
+    for x in (0.0, 4950.0):
+        fine = shapely.box(x, 0.0, x + 100.0, 10.0)
+        rep = region_conflicts([(long_thin, 30.0, 0.0), (fine, 5.0, 0.0)],
+                               ["coarse", "fine"],
+                               base_size=lambda p: np.full(len(p), 300.0))
+        got = rep["finer_than_declared"]["coarse"]
+        assert got["fraction"] == pytest.approx(0.01, abs=0.005), (
+            f"the fine region covers 1 % of the coarse one, not "
+            f"{got['fraction']}")
+        assert got["area_is_estimated"] and got["area_sampled"]
+
+
+def test_a_transverse_ramp_in_a_narrow_channel_is_not_flat():
+    """Neither axis had support across a 40 m channel at 25 m spacing, so a
+    field rising 1 m per metre across it measured as zero (fifth review)."""
+    from fvcom_mesh_tools.patch import field_gradation
+
+    channel = shapely.box(0.0, 0.0, 1000.0, 40.0)
+    rep = field_gradation(lambda p: 100.0 + np.asarray(p)[:, 1], channel)
+    assert rep["measured"]
+    assert rep["max_slope"] == pytest.approx(1.0, rel=1e-6)
+    assert rep["spacing_m"] < 25.0, "the lattice has to be refined to see it"
+
+
+def test_an_offender_that_cannot_be_hashed_is_unplaceable_not_a_crash():
+    """A dict id raised TypeError before it could be refused."""
+    from types import SimpleNamespace
+
+    from fvcom_mesh_tools.patch import introduced_violations
+
+    _, elements = grid_mesh(5, 5)
+    off = {"kind": "element", "id": {"index": 0}}
+    check = SimpleNamespace(check_id="c1_min_angle", status="fail",
+                            requirement=">= 30", observed="bad",
+                            n_violations=1, offenders=[off],
+                            offender_ids=[off])
+    assert introduced_violations([check], 2, elements)
+
+
+def test_a_fallback_identity_keeps_what_places_the_offender():
+    """`kind` and `id` alone cannot place a C4 edge; its elements can.
+
+    The fallback dropped them and turned a wholly inherited edge into an
+    introduced violation, with no truncation involved (fifth review).
+    """
+    from fvcom_mesh_tools.patch import introduced_violations
+    from fvcom_mesh_tools.qa import QACheck
+
+    _, elements = grid_mesh(5, 5)
+    check = QACheck("c4_area_change", "quality", True, False, "<= 0.5",
+                    "max = 0.6", 1,
+                    offenders=[{"kind": "edge", "id": [0, 2],
+                                "elements": [0, 1]}])
+    assert check.offender_ids[0]["elements"] == [0, 1]
+    assert introduced_violations([check], len(elements), elements) == []
+
+
+def test_two_obc_segments_with_the_same_pair_do_not_collide():
+    """The decoration key omitted the segment, so both records named one."""
+    from fvcom_mesh_tools.patch import _offender_key
+
+    a = {"kind": "obc_pair", "id": [1, 3], "segment": 0}
+    b = {"kind": "obc_pair", "id": [1, 3], "segment": 1}
+    assert _offender_key(a) != _offender_key(b)

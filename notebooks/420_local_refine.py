@@ -344,29 +344,52 @@ from oceanmesh.mesh_improve import (  # noqa: E402
     direct_smoother_lur,
 )
 
-# How far over its target a region's median edge may land and still count as
-# delivered. DistMesh returns bars about DISTMESH_SCALE times the sizing
-# field, a calibration with spread, not a guarantee: the medians measured on
-# the four recipes are 0.97, 0.98, 0.66 and 0.92 of target, and one seed of
-# the polygon recipe came in at 1.003. The failures this gate is for are not
-# near misses -- a region left at the base size is a factor of ten out, and a
-# core too thin to hold an edge midpoint reports nothing at all.
-RESOLUTION_TOLERANCE = 1.05
+# What "delivered" means, and it is a statement about WATER, not about edges.
+# Edge statistics are counted per edge, so a request whose northern half is
+# refined and whose southern half was never touched still shows a median at
+# the target: the fine half owns 1,100 edges and the coarse half owns eight.
+# On the delivered circle mesh a request with 46 % of its area left at the
+# base size passed the edge-median gate (fifth review).
+#
+# So the region's area is sampled and each sample is asked how big the
+# element covering it is, as an equivalent edge. Measured on the five
+# delivered regions, against their own targets:
+#
+#   region            median ratio   area within 1.25x
+#   circle                    0.95               0.970
+#   polygon                   0.95               0.978
+#   two beds, north           0.98               0.998
+#   two beds, east            0.74               0.997
+#   two beds, channel         0.98               0.980
+#
+# and on the two requests the fifth review showed were not delivered:
+# the two-lobe region 14.87 / 0.449, the request buffered by 300 m
+# 1.69 / 0.330. The thresholds below sit in that gap. COVERAGE_TOLERANCE is
+# not 1.05: a DistMesh fill leaves individual cells above the target -- the
+# channel has 69 % of its area within 1.05 -- and a mesh that delivers the
+# resolution must not be rejected for that.
+RESOLUTION_TOLERANCE = 1.05        # on the area-weighted median
 
 
 def achieved_per_region(mesh):
     """What each declared region actually got, and whether that is its target.
 
-    A target is a ceiling on the ACHIEVED edge length, so a patch that passes
-    every gate and left a region coarser than it asked for is not a success:
-    the caller asked for resolution and QA does not know what was asked.
-    Measured on edge midpoints inside the declared geometry -- the same
-    numbers the report quotes, computed early enough to reject a seed rather
-    than late enough only to describe it (fourth review).
+    Reports both measures: the area-weighted resolution, which is what the
+    gate is, and the edge statistics inside the region, which is what the
+    earlier reports quoted and what a reader compares against them.
 
-    A region with no edge midpoint inside it is a miss, not a pass: it is
-    thinner than the mesh it was given and there is nothing to show for it.
+    A region with no water in it at all -- every sample outside the mesh --
+    is a miss, not a pass. A region that reaches over land is not: the
+    fraction outside the mesh is reported so it can be seen.
+
+    The two coverage numbers and the import are local so that this function
+    can be lifted out and exercised on its own, which is how both reviews
+    tested the gate rather than a restatement of it.
     """
+    from fvcom_mesh_tools.patch import region_resolution
+
+    coverage_tolerance = 1.25   # a cell this much over target still counts
+    coverage_fraction = 0.95    # of the requested water, at least
     e = np.unique(np.sort(np.vstack([mesh.elements[:, [0, 1]],
                                      mesh.elements[:, [1, 2]],
                                      mesh.elements[:, [2, 0]]]), axis=1), axis=0)
@@ -377,19 +400,25 @@ def achieved_per_region(mesh):
     per_region, missed = {}, []
     for geom, region in regions_m:
         inside = np.asarray(shapely.contains(geom, pts))
-        stat = {
-            "target_h_m": region.target_h_m,
-            "n_edges": int(inside.sum()),
-            "median_m": float(np.median(length[inside])) if inside.any() else None,
-            "p90_m": float(np.percentile(length[inside], 90)) if inside.any()
-            else None,
-            "max_m": float(length[inside].max()) if inside.any() else None,
-        }
-        if not inside.any():
-            stat["miss"] = "no edge midpoint inside the region"
-        elif stat["median_m"] > RESOLUTION_TOLERANCE * region.target_h_m:
-            stat["miss"] = (f"median {stat['median_m']:.1f} m is coarser than "
-                            f"the {region.target_h_m:g} m target")
+        stat = region_resolution(mesh.nodes, mesh.elements, geom,
+                                 region.target_h_m,
+                                 coverage_tolerance=coverage_tolerance)
+        stat["n_edges"] = int(inside.sum())
+        stat["edge_median_m"] = float(np.median(length[inside])) \
+            if inside.any() else None
+        stat["edge_p90_m"] = float(np.percentile(length[inside], 90)) \
+            if inside.any() else None
+        stat["edge_max_m"] = float(length[inside].max()) if inside.any() else None
+        if stat["median_ratio"] is None:
+            stat["miss"] = "none of the region is inside the mesh"
+        elif stat["median_ratio"] > RESOLUTION_TOLERANCE:
+            stat["miss"] = (f"the median cell is {stat['median_m']:.1f} m "
+                            f"against a {region.target_h_m:g} m target")
+        elif stat["covered_fraction"] < coverage_fraction:
+            stat["miss"] = (
+                f"only {100 * stat['covered_fraction']:.1f} % of the water is "
+                f"within {coverage_tolerance:g}x the {region.target_h_m:g} m "
+                f"target ({100 * coverage_fraction:.0f} % required)")
         if "miss" in stat:
             missed.append(region.name)
         per_region[region.name] = stat
@@ -794,9 +823,12 @@ if missed:
                      "was asked for: "
                      + "; ".join(f"{k}: {per_region[k]['miss']}" for k in missed))
 for _name, _st in per_region.items():
-    say(f"achieved in {_name}: {_st['n_edges']:,} edges, median "
-        f"{_st['median_m']:.1f} m against a {_st['target_h_m']:g} m target "
-        f"(p90 {_st['p90_m']:.1f}, max {_st['max_m']:.1f})")
+    say(f"achieved in {_name}: median cell {_st['median_m']:.1f} m against a "
+        f"{_st['target_h_m']:g} m target, {100 * _st['covered_fraction']:.1f} % "
+        f"of the water within {_st['coverage_tolerance']:g}x "
+        f"({_st['n_samples']:,} area samples at {_st['spacing_m']:.1f} m; "
+        f"edges: {_st['n_edges']:,}, median {_st['edge_median_m']:.1f} m, "
+        f"p90 {_st['edge_p90_m']:.1f}, max {_st['edge_max_m']:.1f})")
 reports["achieved"] = {
     "dt_min_s": float(_dt.min()),
     "dt_min_element": int(_dt.argmin()),

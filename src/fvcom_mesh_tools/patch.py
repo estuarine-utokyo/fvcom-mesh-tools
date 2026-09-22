@@ -54,6 +54,7 @@ __all__ = [
     "field_gradation",
     "patch_sizing",
     "region_conflicts",
+    "region_resolution",
     "rim_constraints",
     "select_patch",
     "stitch_patch",
@@ -920,19 +921,33 @@ def _region_contribution(geom, points, base):
     return target + (np.asarray(base, dtype=float) - target) * u
 
 
-def _sample_points(geom, n_target: int = 400) -> np.ndarray:
-    """A lattice of points inside ``geom``, with its interior point as a floor."""
+def _sample_points(geom, n_target: int = 400,
+                   rounds: int = 12) -> tuple[np.ndarray, bool]:
+    """A lattice of points inside ``geom``, and whether it is an area sample.
+
+    The spacing follows the area, which is wrong for a shape that is thin:
+    a 100 x 10 m rectangle got a 15.8 m lattice, no row of it landed inside,
+    and the single representative point was then weighted as the whole
+    polygon -- reporting 1 % of the water as 100 % of it (fifth review).
+    So the lattice is halved until it actually resolves the shape, and when
+    even that fails the caller is told the answer is one point, not an area.
+    """
     import shapely
 
     xmin, ymin, xmax, ymax = geom.bounds
     area = float(geom.area)
     spacing = max(np.sqrt(area / max(n_target, 1)), 1e-12) if area > 0 else 1.0
-    gx, gy = np.meshgrid(np.arange(xmin, xmax + spacing, spacing),
-                         np.arange(ymin, ymax + spacing, spacing))
-    p = np.column_stack([gx.ravel(), gy.ravel()])
-    keep = np.asarray(shapely.contains(geom, shapely.points(p[:, 0], p[:, 1])))
+    for _ in range(rounds):
+        gx, gy = np.meshgrid(np.arange(xmin, xmax + spacing, spacing),
+                             np.arange(ymin, ymax + spacing, spacing))
+        p = np.column_stack([gx.ravel(), gy.ravel()])
+        keep = np.asarray(shapely.contains(geom,
+                                           shapely.points(p[:, 0], p[:, 1])))
+        if keep.sum() >= n_target // 4:
+            return p[keep], True
+        spacing *= 0.5
     rep = shapely.get_coordinates(geom.representative_point())
-    return np.vstack([p[keep], rep]) if keep.any() else rep
+    return (np.vstack([p[keep], rep]) if keep.any() else rep), False
 
 
 def _region4(region):
@@ -948,7 +963,9 @@ def _region4(region):
 
 
 def field_gradation(h, footprint, spacing: float | None = None,
-                    max_area_change: float = 0.5) -> dict[str, Any]:
+                    max_area_change: float = 0.5, *,
+                    refine: int = 6, max_samples: int = 2_000_000,
+                    ) -> dict[str, Any]:
     """The slope the sizing field ACTUALLY has, measured, not derived.
 
     :func:`effective_gradation` reports ``(ambient - target) / width`` for
@@ -990,6 +1007,12 @@ def field_gradation(h, footprint, spacing: float | None = None,
                 "slope is unknown, not zero -- pass a smaller spacing",
     }
     if not inside.any():
+        # Nothing of the footprint is on the lattice: refine before giving
+        # up, for the same reason a one-sided sample is refined below.
+        if refine > 0:
+            return field_gradation(h, footprint, spacing / 2.0,
+                                   max_area_change, refine=refine - 1,
+                                   max_samples=max_samples)
         return unknown
     size = np.asarray(h(np.column_stack([gx.ravel(), gy.ravel()])),
                       dtype=float).reshape(gx.shape)
@@ -1022,14 +1045,35 @@ def field_gradation(h, footprint, spacing: float | None = None,
 
     dy, have_y = derivative(size, inside, 0)
     dx, have_x = derivative(size, inside, 1)
+    partial = int((inside & ~(have_x & have_y)).sum())
     have = (have_x | have_y) & inside
     if not have.any():
+        if refine > 0:
+            return field_gradation(h, footprint, spacing / 2.0,
+                                   max_area_change, refine=refine - 1,
+                                   max_samples=max_samples)
         return unknown
+    partial_fraction = float(partial) / max(int(inside.sum()), 1)
+    # Refine for a shape the lattice cannot see across, not for the handful
+    # of slivers every real footprint has along its boundary: the Futtsu
+    # hole has 7 partial samples out of 27,035, and refining for those takes
+    # the lattice from 27 thousand points to 27 million.
+    if partial_fraction > 0.01 and refine > 0 and 4 * gx.size <= max_samples:
+        # A sample with support on one axis only reports the magnitude of
+        # what it can see, which is a LOWER bound: a 40 m wide channel at
+        # the default 25 m spacing has no transverse neighbour anywhere, and
+        # a field rising 1 m per metre across it measured as flat (fifth
+        # review). Halving the lattice is what makes the missing direction
+        # visible, so it is halved rather than qualified in a footnote.
+        finer = field_gradation(h, footprint, spacing / 2.0,
+                                max_area_change, refine=refine - 1,
+                                max_samples=max_samples)
+        if finer.get("measured") and not finer.get("n_partial_samples"):
+            return finer
     # An axis with no support contributes nothing rather than a NaN: the
     # result is then a LOWER bound on the slope, and the count of such
     # samples is reported rather than buried.
     slopes = np.hypot(np.where(have_x, dx, 0.0), np.where(have_y, dy, 0.0))[have]
-    partial = int((inside & ~(have_x & have_y)).sum())
     slopes = slopes[np.isfinite(slopes)]
     if not slopes.size:
         return unknown
@@ -1042,7 +1086,90 @@ def field_gradation(h, footprint, spacing: float | None = None,
         "c4_reference_gradation": float(limit),
         "fraction_above_reference": float((slopes > limit).mean()),
         "measured": True,
+        "partial_support": bool(partial),
     }
+
+
+def region_resolution(nodes, elements, geometry, target_h_m: float, *,
+                      spacing: float | None = None,
+                      coverage_tolerance: float = 1.25,
+                      max_samples: int = 200_000) -> dict[str, Any]:
+    """What a declared region actually got, measured over its AREA.
+
+    Edge statistics inside a region are counted per edge, so the finely
+    meshed water contributes most of them: a request whose northern half is
+    at 30 m and whose southern half was never refined at all still shows a
+    median of 28.5 m, because the fine half owns 1,100 of the edges and the
+    coarse half owns eight. A patch that leaves 46 % of the requested water
+    at the base size passed the edge-median gate on the delivered Futtsu mesh
+    (fifth review). So the question is asked of the WATER, not of the edges:
+    sample the region on a lattice, find the element covering each sample,
+    and ask how big that element is.
+
+    The size of an element is its **equivalent edge**, the edge of the
+    equilateral triangle with the same area, which is what ``target_h_m``
+    means as a resolution. The longest edge would be a different and
+    stricter contract: it runs about 1.2 times the equivalent edge on a
+    DistMesh fill, so gating on it would reject meshes that deliver the
+    requested resolution.
+
+    Samples that fall outside the mesh are reported, not counted: a fishery
+    boundary may legitimately run onto land, and water that does not exist
+    cannot be refined.
+    """
+    import shapely
+    from matplotlib.tri import Triangulation
+
+    xy = np.asarray(nodes, dtype=float)[:, :2]
+    tri = np.asarray(elements, dtype=np.int64)
+    target = float(target_h_m)
+    xmin, ymin, xmax, ymax = geometry.bounds
+    if spacing is None:
+        spacing = max(target / 3.0, 1e-6)
+    # A big region at a fine target would otherwise ask for a lattice nobody
+    # can afford; the coarser spacing is reported with the result.
+    span = max(xmax - xmin, 1e-9) * max(ymax - ymin, 1e-9)
+    if span / (spacing * spacing) > max_samples:
+        spacing = float(np.sqrt(span / max_samples))
+    gx, gy = np.meshgrid(np.arange(xmin, xmax + spacing, spacing),
+                         np.arange(ymin, ymax + spacing, spacing))
+    p = np.column_stack([gx.ravel(), gy.ravel()])
+    keep = np.asarray(shapely.contains(geometry,
+                                       shapely.points(p[:, 0], p[:, 1])))
+    p = p[keep]
+    if not p.shape[0]:
+        # A region thinner than the lattice: its representative point is the
+        # one place it certainly covers, and one sample is better than a
+        # claim of nothing.
+        p = shapely.get_coordinates(geometry.representative_point())
+    finder = Triangulation(xy[:, 0], xy[:, 1], tri).get_trifinder()
+    found = finder(p[:, 0], p[:, 1])
+    inside = found >= 0
+    u = xy[tri[:, 1]] - xy[tri[:, 0]]
+    v = xy[tri[:, 2]] - xy[tri[:, 0]]
+    area = 0.5 * np.abs(u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0])
+    h_eq = np.sqrt(4.0 * area / np.sqrt(3.0))
+    out: dict[str, Any] = {
+        "target_h_m": target,
+        "spacing_m": float(spacing),
+        "n_samples": int(p.shape[0]),
+        "n_outside_mesh": int((~inside).sum()),
+        "outside_mesh_fraction": float((~inside).mean()),
+        "coverage_tolerance": float(coverage_tolerance),
+    }
+    if not inside.any():
+        out.update(median_m=None, p90_m=None, max_m=None, median_ratio=None,
+                   p90_ratio=None, max_ratio=None, covered_fraction=0.0)
+        return out
+    h = h_eq[found[inside]]
+    r = h / target
+    out.update(
+        median_m=float(np.median(h)), p90_m=float(np.percentile(h, 90)),
+        max_m=float(h.max()), median_ratio=float(np.median(r)),
+        p90_ratio=float(np.percentile(r, 90)), max_ratio=float(r.max()),
+        covered_fraction=float((r <= coverage_tolerance).mean()),
+    )
+    return out
 
 
 def region_conflicts(regions, names=None, *, base_size=None) -> dict[str, Any]:
@@ -1109,15 +1236,18 @@ def region_conflicts(regions, names=None, *, base_size=None) -> dict[str, Any]:
             taken = shapely.intersection(
                 r4[i][0], shapely.union_all([r4[j][0] for j in smaller]))
             finer[name] = {
+                "core_overlap_area_m2": float(taken.area),
                 "area_m2": float(taken.area),
                 "fraction": float(taken.area / r4[i][0].area),
                 "own_target_h_m": r4[i][1],
                 "gets_h_m": float(min(r4[j][1] for j in smaller)),
                 "because_of": sorted(names[j] for j in smaller),
                 "by_core_overlap": True,
+                "area_is_estimated": False,
+                "area_sampled": True,
             }
             continue
-        p = _sample_points(r4[i][0])
+        p, is_area_sample = _sample_points(r4[i][0])
         base = np.asarray(base_size(p), dtype=float)
         contrib = np.array([_region_contribution(g, p, base) for g in geoms])
         alone = np.minimum(contrib[i], base)
@@ -1127,15 +1257,25 @@ def region_conflicts(regions, names=None, *, base_size=None) -> dict[str, Any]:
             continue
         others = [names[j] for j in range(len(r4)) if j != i
                   and (contrib[j][hit] < alone[hit] - 1e-9).any()]
-        area_taken = float(r4[i][0].area) * float(hit.mean())
+        # The exact core overlap is geometry and is reported as such; the
+        # part a neighbour's transition reaches is an estimate from the
+        # samples, and says so rather than dressing one point as an area.
+        exact = shapely.intersection(
+            r4[i][0], shapely.union_all([r4[j][0] for j in cores])) \
+            if cores else shapely.Polygon()
+        fraction = float(hit.mean()) if is_area_sample else None
         finer[name] = {
-            "area_m2": area_taken,
-            "fraction": float(hit.mean()),
+            "core_overlap_area_m2": float(exact.area),
+            "area_m2": (float(r4[i][0].area) * fraction
+                        if fraction is not None else float(exact.area)),
+            "fraction": fraction,
             "own_target_h_m": r4[i][1],
             "gets_h_m": float(joint[hit].min()),
             "because_of": sorted(others),
             "by_core_overlap": bool(cores),
             "n_samples": int(p.shape[0]),
+            "area_is_estimated": True,
+            "area_sampled": bool(is_area_sample),
         }
     return {
         "overlapping_pairs": pairs,
@@ -1436,7 +1576,7 @@ def _offender_key(off: dict):
     on the id alone handed every such edge the first one's detail.
     """
     return (off.get("kind"), _ident_key(off.get("id")),
-            _ident_key(off.get("elements")))
+            _ident_key(off.get("elements")), _ident_key(off.get("segment")))
 
 
 def _ident_key(ident):
@@ -1445,6 +1585,13 @@ def _ident_key(ident):
         return None
     if isinstance(ident, (list, tuple, np.ndarray)):
         return tuple(np.asarray(ident).ravel().tolist())
+    try:
+        hash(ident)
+    except TypeError:
+        # A malformed id this cannot hash is still an offender to report;
+        # a dict one raised TypeError before it could be refused (fifth
+        # review). Unplaceable is the answer, not an exception.
+        return ("unhashable", repr(ident))
     return ident
 
 

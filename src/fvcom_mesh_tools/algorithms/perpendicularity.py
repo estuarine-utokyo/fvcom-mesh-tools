@@ -316,6 +316,7 @@ def align_open_boundary_first_ring(
 
     out = Fort14Mesh(
         title=mesh.title,
+        obc_type=mesh.obc_type,
         nodes=nodes,
         depths=mesh.depths.copy(),
         elements=mesh.elements.copy(),
