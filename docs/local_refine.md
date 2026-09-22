@@ -699,6 +699,52 @@ The base run reproduced exactly across the two submissions — max elevation
 0.498655 m, max speed 0.963349 m/s, drift −9.54e−9 /day in both — which is a
 reproducibility check that came for free.
 
+### 6.4 Several regions, and what happens where they overlap
+
+`recipes/refine/futtsu_two_beds.yaml`: two overlapping polygon fisheries read
+from one file, plus a circle at a third target. All three are DEMONSTRATION
+outlines.
+
+| region | declared | achieved (median) | notes |
+|---|---|---|---|
+| `futtsu_nori` | 30 m polygon, 0.2880 km² | **29.5 m** (1,155 edges) | |
+| `futtsu_nori_east` | 45 m polygon, 0.2640 km² | **29.5 m** (842 edges) | 34 % of it is shared with the 30 m bed |
+| `futtsu_channel` | 60 m circle, 0.1257 km² | **55.3 m** (131 edges) | |
+
+8,252 → 11,131 elements; the cut came out as **two rings with one retained
+island inside the hole**, which the nesting rules handle and no earlier case
+had exercised; QA **21/21, 0 introduced**; dt 11.05 → 2.96 s.
+
+**A target is a ceiling, not an equality.** "Make this fishery 30 m" means
+"no coarser than 30 m here", so where regions overlap the size is the
+*smallest* of them: every region gets at least what it declared, and nobody
+is surprised. The run says what that costs before meshing —
+
+> `futtsu_nori_east: 34.1 % of its area (0.0901 km²) comes out at 30 m rather
+> than its own 45 m, because of futtsu_nori — finer than asked, and somebody
+> pays for it in elements and time step.`
+
+**The other rule was implemented first and was wrong.** Letting a core impose
+its own target, with `priority` deciding overlaps, means a core can disagree
+with the field around it. A 60 m core 600 m from a 30 m core sits where the
+30 m region's ramp wants 129 m: imposing 60 dips the field 129 → 60 → 129
+over 200 m, and imposing 120 steps it the other way. Measured field slopes
+for targets of 60, 90 and 120 m were **0.50, 0.92 and 1.93** against a C4
+reference of 0.414, and ten seeds all left a gate violation. Under the
+ceiling rule the same three targets measure 0.375, 0.389 and 0.387, and the
+recipe passes.
+
+So `priority` has **no effect in a refinement**, and the run says so rather
+than ignoring the key. It coarsens only in a sizing recipe, where the whole
+mesh is rebuilt and coarsening is a thing one can ask for.
+
+**`field_gradation` measures the field that exists.** `effective_gradation`
+is a per-region formula — `(ambient − target) / width` — which omits the
+ambient term and says nothing about where two regions meet. The new function
+samples the sizing field over the hole and differences it, so a recipe whose
+regions fight each other is flagged *before* meshing rather than diagnosed
+afterwards from eight failed seeds.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as

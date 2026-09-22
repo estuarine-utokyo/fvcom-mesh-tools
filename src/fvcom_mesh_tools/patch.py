@@ -50,7 +50,9 @@ __all__ = [
     "hole_polygon",
     "improve_patch",
     "effective_gradation",
+    "field_gradation",
     "patch_sizing",
+    "region_conflicts",
     "rim_constraints",
     "select_patch",
     "stitch_patch",
@@ -814,11 +816,27 @@ def patch_sizing(
 ):
     """A callable ``h(points) -> edge length`` for the hole, in mesh CRS metres.
 
-    ``regions`` is a list of ``(geometry_in_mesh_crs, target_h_m, width_m)``.
-    Inside a region the size is its target; over the next ``width_m`` it ramps
-    linearly to **the base mesh's own size at that point**, and beyond it is
-    the base mesh's size.  It never exceeds the base size, so a refinement can
-    only refine.
+    ``regions`` is a list of ``(geometry_in_mesh_crs, target_h_m, width_m)``
+    or ``(geometry, target, width, priority)``.  Inside a region the size is
+    its target; over the next ``width_m`` it ramps linearly to **the base
+    mesh's own size at that point**, and beyond it is the base mesh's size.
+    It never exceeds the base size, so a refinement can only refine.
+
+    **Overlaps, and why a target is a ceiling.**  In a refinement a target
+    says "no coarser than this here", not "exactly this here", so wherever
+    regions meet the size is the SMALLEST any of them asks for.  Everyone
+    gets at least what they declared and nobody is surprised.
+
+    The other rule -- a core imposing its own target, with ``priority``
+    deciding overlaps -- was implemented first and is wrong, which measuring
+    the field showed.  A 60 m core 600 m from a 30 m core sits where the 30 m
+    region's ramp wants 129 m, and imposing 60 dips the field 129 -> 60 ->
+    129 over 200 m; imposing 120 makes it jump the other way, and the
+    measured slope went 0.50, 0.92, 1.93 for targets of 60, 90 and 120 m
+    against a C4 reference of 0.414.  Coarsening on purpose is a thing a
+    SIZING recipe does, where the whole mesh is rebuilt; a patch is clipped
+    by the base size anyway and can only refine.  ``priority`` therefore has
+    no effect here, and ``region_conflicts`` says so rather than ignoring it.
 
     The obvious rule -- ``min(target + gradation * distance, ambient)`` -- is
     the one that fails, and it fails at the seam.  Around Futtsu the declared
@@ -839,18 +857,18 @@ def patch_sizing(
     amb = ambient_size_field(xy, tri)
     interp = LinearTriInterpolator(Triangulation(xy[:, 0], xy[:, 1], tri), amb)
     amb_max = float(np.nanmax(amb))
-    geoms = [(shapely.boundary(g) if g.geom_type in ("Polygon", "MultiPolygon") else g,
-              g, float(h), float(w)) for g, h, w in regions]
-
+    geoms = [(shapely.boundary(g) if g.geom_type in ("Polygon", "MultiPolygon")
+              else g, g, float(t), float(w), float(pr))
+             for g, t, w, pr in map(_region4, regions)]
     def h(points):
         p = np.atleast_2d(np.asarray(points, dtype=float))[:, :2]
         pt = shapely.points(p[:, 0], p[:, 1])
         base = np.asarray(interp(p[:, 0], p[:, 1]), dtype=float)
         base = np.where(np.isfinite(base), base, amb_max)
         out = base.copy()
-        for edge, poly, target, width in geoms:
-            d = shapely.distance(pt, edge)
-            d = np.where(shapely.contains(poly, pt), 0.0, d)
+        for edge, poly, target, width, _ in geoms:
+            d = np.where(np.asarray(shapely.contains(poly, pt)), 0.0,
+                         shapely.distance(pt, edge))
             # A zero width is legitimate -- it means the base mesh is
             # already at or below the target, so there is nothing to ramp --
             # and d/0 makes the whole field NaN, which DistMesh accepts and
@@ -861,6 +879,130 @@ def patch_sizing(
         return np.minimum(out, base) / distmesh_scale
 
     return h
+
+
+def _region4(region):
+    """``(geom, target, width[, priority])`` -> a four-tuple."""
+    if len(region) == 4:
+        g, t, w, pr = region
+    elif len(region) == 3:
+        g, t, w = region
+        pr = 0.0
+    else:
+        raise ValueError("a region is (geometry, target_h_m, width_m[, priority])")
+    return g, float(t), float(w), float(pr)
+
+
+def field_gradation(h, footprint, spacing: float | None = None,
+                    max_area_change: float = 0.5) -> dict[str, Any]:
+    """The slope the sizing field ACTUALLY has, measured, not derived.
+
+    :func:`effective_gradation` reports ``(ambient - target) / width`` for
+    each region separately.  That is a formula about one region, and the
+    field is not one region: it has an ambient term the formula omits, and
+    where several regions meet it has whatever their minimum has.  A 60 m
+    core 600 m from a 30 m core sits in a place the 30 m region's ramp wants
+    at 129 m, so the field dips 129 -> 60 -> 129 over 200 m -- a slope no
+    per-region number reports, and one that makes the fill hard enough that
+    ten seeds all left a gate violation.
+
+    So this samples ``h`` on a lattice over the footprint and differences it.
+    The comparison number is the same C4 reference: two similar neighbouring
+    triangles one size apart sit exactly on the 0.5 gate at ``g = 0.414``.
+    It is still a diagnostic -- C4 is an area ratio across an edge, and it is
+    gated on the finished mesh -- but it is a diagnostic about the field that
+    exists rather than one that was intended.
+    """
+    import shapely
+
+    xmin, ymin, xmax, ymax = footprint.bounds
+    if spacing is None:
+        spacing = max(25.0, min(xmax - xmin, ymax - ymin) / 200.0)
+    gx, gy = np.meshgrid(np.arange(xmin, xmax + spacing, spacing),
+                         np.arange(ymin, ymax + spacing, spacing))
+    inside = np.asarray(shapely.contains(footprint,
+                                         shapely.points(gx.ravel(), gy.ravel()))
+                        ).reshape(gx.shape)
+    size = np.asarray(h(np.column_stack([gx.ravel(), gy.ravel()]))
+                      ).reshape(gx.shape)
+    size = np.where(inside, size, np.nan)
+    slopes = []
+    for axis in (0, 1):
+        d = np.abs(np.diff(size, axis=axis)) / spacing
+        slopes.append(d[np.isfinite(d)])
+    allslopes = np.concatenate(slopes) if slopes else np.zeros(0)
+    limit = 1.0 / np.sqrt(1.0 - max_area_change) - 1.0
+    return {
+        "spacing_m": float(spacing),
+        "n_samples": int(inside.sum()),
+        "max_slope": float(allslopes.max()) if allslopes.size else 0.0,
+        "p99_slope": float(np.percentile(allslopes, 99)) if allslopes.size else 0.0,
+        "c4_reference_gradation": float(limit),
+        "fraction_above_reference": float((allslopes > limit).mean())
+        if allslopes.size else 0.0,
+    }
+
+
+def region_conflicts(regions, names=None) -> dict[str, Any]:
+    """Which declared cores overlap, and what the shared water gets.
+
+    Overlapping fisheries are an ordinary input -- two rights over the same
+    water -- and in a refinement they do not conflict: a target is a ceiling,
+    so the shared water takes the smallest of them and every region gets at
+    least what it asked for.  What is worth reporting is that one region's
+    water will be FINER than it declared, because that costs time steps and
+    elements somebody has to pay for.
+
+    ``priority_ignored`` is true when the recipe sets different priorities on
+    overlapping regions: in a refinement priority cannot change the outcome,
+    and saying so beats ignoring the key.
+    """
+    import shapely
+
+    r4 = [_region4(x) for x in regions]
+    names = list(names) if names else [f"region_{i}" for i in range(len(r4))]
+    pairs, finer = [], {}
+    priority_ignored = False
+    for a in range(len(r4)):
+        for b in range(a + 1, len(r4)):
+            inter = shapely.intersection(r4[a][0], r4[b][0])
+            if inter.is_empty or inter.area <= 0:
+                continue
+            if r4[a][3] != r4[b][3]:
+                priority_ignored = True
+            pairs.append({
+                "regions": [names[a], names[b]],
+                "overlap_m2": float(inter.area),
+                "fraction_of": {names[a]: float(inter.area / r4[a][0].area),
+                                names[b]: float(inter.area / r4[b][0].area)},
+                "targets_h_m": {names[a]: r4[a][1], names[b]: r4[b][1]},
+                "effective_target_h_m": min(r4[a][1], r4[b][1]),
+            })
+    for i, name in enumerate(names):
+        others = [j for j in range(len(r4)) if j != i and r4[j][1] < r4[i][1]]
+        if not others:
+            continue
+        taken = shapely.intersection(
+            r4[i][0], shapely.union_all([r4[j][0] for j in others]))
+        if taken.is_empty or taken.area <= 0:
+            continue
+        finer[name] = {
+            "area_m2": float(taken.area),
+            "fraction": float(taken.area / r4[i][0].area),
+            "own_target_h_m": r4[i][1],
+            "gets_h_m": min(r4[j][1] for j in others
+                            if not shapely.intersection(r4[i][0],
+                                                        r4[j][0]).is_empty),
+            "because_of": sorted({names[j] for j in others
+                                  if not shapely.intersection(
+                                      r4[i][0], r4[j][0]).is_empty}),
+        }
+    return {
+        "overlapping_pairs": pairs,
+        "finer_than_declared": finer,
+        "any_overlap": bool(pairs),
+        "priority_ignored": priority_ignored,
+    }
 
 
 def effective_gradation(nodes, elements, regions) -> dict[str, Any]:
@@ -877,7 +1019,7 @@ def effective_gradation(nodes, elements, regions) -> dict[str, Any]:
     amb = ambient_size_field(xy, np.asarray(elements, dtype=np.int64))
     worst = 0.0
     per_region = {}
-    for geom, target, width in regions:
+    for geom, target, width, _pr in map(_region4, regions):
         import shapely
 
         d = shapely.distance(shapely.points(xy[:, 0], xy[:, 1]), geom)
@@ -1618,8 +1760,15 @@ def improve_patch(
             keep0, keep1 = tri[f0].copy(), tri[f1].copy()
             tri[f0] = _ccw(xy, np.array([c, d, b]))
             tri[f1] = _ccw(xy, np.array([d, c, a]))
-            if _scores(xy, tri, faces, _face_adjacency(tri), min_angle_deg,
-                       max_angle_deg, max_area_change)[0] >= before[0] - 1e-12:
+            after = _scores(xy, tri, faces, _face_adjacency(tri), min_angle_deg,
+                            max_angle_deg, max_area_change)[0]
+            # Spending margin is allowed here, failing a gate is not. The main
+            # pass may not lose ground anywhere; this one has a gate to
+            # satisfy -- a node above max_valence -- and a flip that takes a
+            # comfortable neighbourhood from 1.5 to 1.2 still passes
+            # everything. Refusing it only to keep the margin is how a C5
+            # violation survived every seed.
+            if after >= min(before[0], 1.0) - 1e-12:
                 n_valence_fixed += 1
                 n_flip += 1
                 fixed_any = True

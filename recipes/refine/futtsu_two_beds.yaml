@@ -1,0 +1,50 @@
+# Three regions, two of which overlap.
+#
+# `futtsu_two_beds_demo.geojson` holds two DEMONSTRATION outlines that share
+# 0.0901 km2 -- 31 % of one and 34 % of the other -- and `futtsu_channel` is
+# a circle over the water west of them, at a third target. They are not
+# fishery-right boundaries.
+#
+# In a refinement a target is a CEILING -- "no coarser than this here" -- so
+# the shared water takes the smallest of the overlapping targets and every
+# region gets at least what it declared. The eastern bed asks for 45 m and
+# the western for 30 m, so their shared 0.0901 km2 comes out at 30 m, and
+# the run says so: finer than the eastern bed asked, and somebody pays for
+# it in elements and time step.
+#
+# `priority` therefore has no effect here and the run says that too. It
+# coarsens only in a SIZING recipe, where the whole mesh is rebuilt. Trying
+# to make it coarsen a patch measured a field slope of 0.50 to 1.93 against
+# a C4 reference of 0.414: a core imposing a size the surrounding ramp
+# disagrees with is a well or a step, and the fill cannot mesh it.
+base_mesh: ../../outputs/base_tool/TokyoBayTool_grd.dat
+base_depth: ../../outputs/base_tool/TokyoBayTool_dep.dat
+base_obc: ../../outputs/base_tool/TokyoBayTool_obc.dat
+
+dt_expected_s: 4.5
+gradation: 0.165
+
+coastline: preserve
+coastline_tolerance_m: 50
+rfactor_limit: base
+
+refine:
+  - name: futtsu_nori
+    geometry:
+      file: geometry/futtsu_two_beds_demo.geojson
+      where: {NAME: futtsu_nori}
+    target_h_m: 30
+    priority: 0
+
+  - name: futtsu_nori_east
+    geometry:
+      file: geometry/futtsu_two_beds_demo.geojson
+      where: {NAME: futtsu_nori_east}
+    target_h_m: 45
+    priority: 1            # declared, and reported as having no effect here
+
+  - name: futtsu_channel
+    geometry:
+      circle: {center: [139.7830, 35.3260], radius_m: 200}
+    target_h_m: 60
+    priority: 0

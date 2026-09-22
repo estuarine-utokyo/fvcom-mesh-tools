@@ -967,3 +967,96 @@ def test_a_node_offender_needs_the_connectivity_to_be_attributed():
     assert introduced_violations(checks, 1, elements) == []
     # without the connectivity it cannot be attributed, and is the patch's
     assert len(introduced_violations(checks, 1)) == 1
+
+
+# ------------------------------------------------- several regions at once
+#
+# Overlapping fisheries are an ordinary input: two rights over the same
+# water. In a refinement they do not conflict, because a target is a ceiling.
+
+
+def test_a_target_is_a_ceiling_where_regions_overlap():
+    """The finest wins, so every region gets at least what it declared."""
+    nodes, elements = grid_mesh(15, 15)
+    fine = shapely.Point(600, 700).buffer(150.0)
+    coarse = shapely.Point(800, 700).buffer(150.0)
+    fh = patch_sizing(nodes, elements,
+                      [(fine, 20.0, 400.0), (coarse, 60.0, 400.0)],
+                      distmesh_scale=1.0)
+    shared = np.array([[700.0, 700.0]])          # inside both
+    assert fine.contains(shapely.Point(shared[0]))
+    assert coarse.contains(shapely.Point(shared[0]))
+    assert fh(shared)[0] == pytest.approx(20.0)
+    # In the coarse region but outside the fine one: no coarser than its own
+    # 60 m ceiling, and finer than that because the fine region's transition
+    # reaches it. A ceiling is satisfied by anything below it.
+    outside_fine = fh(np.array([[850.0, 700.0]]))[0]
+    assert 20.0 < outside_fine <= 60.0
+
+
+def test_priority_does_not_coarsen_a_patch():
+    """It did, and measuring the field is what showed that to be wrong.
+
+    A core imposing a size the surrounding ramp disagrees with is a well or
+    a step: with a coarse core winning by priority the measured field slope
+    ran 0.50 to 1.93 against a C4 reference of 0.414, and the fill could not
+    mesh it.
+    """
+    nodes, elements = grid_mesh(15, 15)
+    fine = shapely.Point(600, 700).buffer(150.0)
+    coarse = shapely.Point(800, 700).buffer(150.0)
+    shared = np.array([[700.0, 700.0]])
+    with_priority = patch_sizing(
+        nodes, elements,
+        [(fine, 20.0, 400.0, 0.0), (coarse, 60.0, 400.0, 99.0)],
+        distmesh_scale=1.0)
+    assert with_priority(shared)[0] == pytest.approx(20.0)
+
+
+def test_region_conflicts_reports_the_shared_water():
+    from fvcom_mesh_tools.patch import region_conflicts
+
+    fine = shapely.Point(600, 700).buffer(150.0)
+    coarse = shapely.Point(800, 700).buffer(150.0)
+    apart = shapely.Point(2000, 2000).buffer(100.0)
+    rep = region_conflicts([(fine, 20.0, 400.0, 0.0),
+                            (coarse, 60.0, 400.0, 1.0),
+                            (apart, 30.0, 400.0, 0.0)],
+                           ["fine", "coarse", "apart"])
+    assert rep["any_overlap"]
+    assert len(rep["overlapping_pairs"]) == 1
+    pair = rep["overlapping_pairs"][0]
+    assert sorted(pair["regions"]) == ["coarse", "fine"]
+    assert pair["effective_target_h_m"] == 20.0
+    assert rep["finer_than_declared"]["coarse"]["gets_h_m"] == 20.0
+    assert "fine" not in rep["finer_than_declared"]
+    assert rep["priority_ignored"], "differing priorities must be called out"
+
+
+def test_regions_that_do_not_touch_do_not_conflict():
+    from fvcom_mesh_tools.patch import region_conflicts
+
+    a = shapely.Point(0, 0).buffer(100.0)
+    b = shapely.Point(1000, 0).buffer(100.0)
+    rep = region_conflicts([(a, 20.0, 400.0), (b, 30.0, 400.0)], ["a", "b"])
+    assert not rep["any_overlap"]
+    assert rep["finer_than_declared"] == {}
+    assert not rep["priority_ignored"]
+
+
+def test_the_field_slope_is_measured_not_derived():
+    """effective_gradation is a per-region formula; this is the field."""
+    from fvcom_mesh_tools.patch import field_gradation
+
+    nodes, elements = grid_mesh(15, 15)
+    core = shapely.Point(700, 700).buffer(120.0)
+    gentle = patch_sizing(nodes, elements, [(core, 30.0, 900.0)],
+                          distmesh_scale=1.0)
+    steep = patch_sizing(nodes, elements, [(core, 30.0, 60.0)],
+                         distmesh_scale=1.0)
+    foot = core.buffer(900.0)
+    g = field_gradation(gentle, foot, spacing=20.0)
+    t = field_gradation(steep, foot, spacing=20.0)
+    assert g["max_slope"] < g["c4_reference_gradation"]
+    assert t["max_slope"] > g["max_slope"]
+    assert t["fraction_above_reference"] > 0

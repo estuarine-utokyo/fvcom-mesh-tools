@@ -35,11 +35,13 @@ from fvcom_mesh_tools.patch import (
     ambient_size_field,
     boundary_after_patch,
     effective_gradation,
+    field_gradation,
     hole_polygon,
     improve_patch,
     introduced_violations,
     patch_sizing,
     refresh_depths,
+    region_conflicts,
     rim_constraints,
     select_patch,
     stitch_patch,
@@ -217,8 +219,30 @@ widths = {region.name: (region.transition_m if region.transition_m is not None
           for _, region in regions_m}
 footprint = unary_union([geom.buffer(widths[region.name])
                          for geom, region in regions_m])
-grad = effective_gradation(base.nodes, base.elements,
-                           [(g, r.target_h_m, widths[r.name]) for g, r in regions_m])
+sized = [(g, r.target_h_m, widths[r.name], r.priority) for g, r in regions_m]
+grad = effective_gradation(base.nodes, base.elements, sized)
+# Overlapping fisheries are an ordinary input; what is not ordinary is a
+# region silently getting a size it did not ask for, so it is measured.
+conflicts = region_conflicts(sized, [r.name for _, r in regions_m])
+reports["conflicts"] = conflicts
+if conflicts["any_overlap"]:
+    say("regions overlap; a target is a ceiling, so the shared water takes "
+        "the smallest of them")
+    for pair in conflicts["overlapping_pairs"]:
+        say(f"  {pair['regions'][0]} & {pair['regions'][1]}: "
+            f"{pair['overlap_m2'] / 1e6:.4f} km2 shared, "
+            f"{pair['effective_target_h_m']:g} m applies")
+    for name, f in conflicts["finer_than_declared"].items():
+        say(f"  {name}: {100 * f['fraction']:.1f} % of its area "
+            f"({f['area_m2'] / 1e6:.4f} km2) comes out at {f['gets_h_m']:g} m "
+            f"rather than its own {f['own_target_h_m']:g} m, because of "
+            f"{', '.join(f['because_of'])} -- finer than asked, and somebody "
+            "pays for it in elements and time step")
+    if conflicts["priority_ignored"]:
+        say("  NOTE priority differs between overlapping regions and has no "
+            "effect here: in a refinement a target is a ceiling, so the "
+            "finest always applies. Priority coarsens only in a sizing "
+            "recipe, where the whole mesh is rebuilt")
 reports["gradation"] = grad
 say(f"effective gradation: max {grad['max_effective_gradation']:.3f} against a "
     f"{grad['c4_reference_gradation']:.3f} reference "
@@ -260,9 +284,7 @@ target = min(r.target_h_m for _, r in regions_m)
 # The coastline inside the hole is cut at the LOCAL size, not at the target.
 # h_achieved is the same field DistMesh gets, without the 1.2 field-to-bar
 # factor, because these are the bar lengths themselves.
-h_achieved = patch_sizing(base.nodes, base.elements,
-                          [(g, r.target_h_m, widths[r.name]) for g, r in regions_m],
-                          distmesh_scale=1.0)
+h_achieved = patch_sizing(base.nodes, base.elements, sized, distmesh_scale=1.0)
 rc = rim_constraints(base.nodes, sel, size=h_achieved,
                      coastline=cfg["coastline"], shoreline=shore,
                      tolerance_m=cfg["coastline_tolerance_m"])
@@ -273,9 +295,21 @@ say("rim: " + json.dumps(reports["rim"]))
 hole = hole_polygon(rc["pfix"], rc["egfix"])
 say(f"hole {hole.area / 1e6:.3f} km2 ({hole.geom_type}, valid={hole.is_valid})")
 
+# The slope the field actually has, measured on the hole it will be meshed
+# in -- not the per-region formula, which omits the ambient term and says
+# nothing about where two regions meet.
+fslope = field_gradation(h_achieved, hole)
+reports["field_gradation"] = fslope
+say(f"field slope: max {fslope['max_slope']:.3f}, p99 {fslope['p99_slope']:.3f} "
+    f"against a {fslope['c4_reference_gradation']:.3f} reference; "
+    f"{100 * fslope['fraction_above_reference']:.2f} % of samples above it")
+if fslope["max_slope"] > fslope["c4_reference_gradation"]:
+    say("  ALERT the field is locally steeper than two similar triangles one "
+        "size apart can be and still pass C4. Expect the fill to be hard: "
+        "widen a transition, move a region, or bring the targets closer")
+
 # ------------------------------------------------------------------ fill
-fh = patch_sizing(base.nodes, base.elements,
-                  [(g, r.target_h_m, widths[r.name]) for g, r in regions_m],
+fh = patch_sizing(base.nodes, base.elements, sized,
                   distmesh_scale=DISTMESH_SCALE)
 shapely.prepare(hole)
 boundary = shapely.boundary(hole)
@@ -660,11 +694,36 @@ _side = np.stack([
     for i in range(3)], axis=1)
 _dt = (2 * _area / _side.max(axis=1)) / np.sqrt(
     9.81 * written.depths[written.elements].max(axis=1))
+# Achieved, per region, on the finished mesh. A patch that passes every gate
+# and did not deliver the resolution that was asked for is not a success, and
+# nothing else here would notice (third review, finding 16).
+_e = np.unique(np.sort(np.vstack([written.elements[:, [0, 1]],
+                                  written.elements[:, [1, 2]],
+                                  written.elements[:, [2, 0]]]), axis=1), axis=0)
+_mid = 0.5 * (written.nodes[_e[:, 0], :2] + written.nodes[_e[:, 1], :2])
+_len = np.linalg.norm(written.nodes[_e[:, 0], :2] - written.nodes[_e[:, 1], :2],
+                      axis=1)
+_pts = shapely.points(_mid[:, 0], _mid[:, 1])
+per_region = {}
+for _g, _r in regions_m:
+    _in = np.asarray(shapely.contains(_g, _pts))
+    per_region[_r.name] = {
+        "target_h_m": _r.target_h_m,
+        "n_edges": int(_in.sum()),
+        "median_m": float(np.median(_len[_in])) if _in.any() else None,
+        "p90_m": float(np.percentile(_len[_in], 90)) if _in.any() else None,
+        "max_m": float(_len[_in].max()) if _in.any() else None,
+    }
+    if _in.any():
+        say(f"achieved in {_r.name}: {_in.sum():,} edges, median "
+            f"{np.median(_len[_in]):.1f} m against a {_r.target_h_m:g} m target "
+            f"(p90 {np.percentile(_len[_in], 90):.1f}, max {_len[_in].max():.1f})")
 reports["achieved"] = {
     "dt_min_s": float(_dt.min()),
     "dt_min_element": int(_dt.argmin()),
     "n_nodes": int(written.n_nodes),
     "n_elements": int(written.n_elements),
+    "per_region": per_region,
 }
 # The operational product is an FVCOM case, not a fort.14. Depth control at
 # the open boundary is NOT applied: it rewrites OBC depths, and those nodes

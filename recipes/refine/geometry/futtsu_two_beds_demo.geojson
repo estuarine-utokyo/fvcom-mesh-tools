@@ -1,0 +1,9 @@
+{
+"type": "FeatureCollection",
+"name": "futtsu_two_beds_demo",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{"type":"Feature","properties":{"NAME":"futtsu_nori","KIND":"nori aquaculture","NOTE":"demonstration outline, not a fishery-right boundary"},"geometry":{"type":"Polygon","coordinates":[[[139.785107286210916,35.319261061454561],[139.793147106162024,35.323995964232751],[139.791092972295559,35.326338867644218],[139.783053048299934,35.321603827784088],[139.785107286210916,35.319261061454561]]]}},
+{"type":"Feature","properties":{"NAME":"futtsu_nori_east","KIND":"nori aquaculture","NOTE":"demonstration outline, not a fishery-right boundary"},"geometry":{"type":"Polygon","coordinates":[[[139.787780358819106,35.324202196695509],[139.794009706476288,35.322414247303286],[139.795609738267927,35.326158116801636],[139.789380133662775,35.327946142527978],[139.787780358819106,35.324202196695509]]]}}
+]
+}
