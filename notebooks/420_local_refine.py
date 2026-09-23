@@ -350,6 +350,16 @@ reports["rim"] = {k: v for k, v in rc.items()
                   if isinstance(v, (int, float, str, bool))}
 say("rim: " + json.dumps(reports["rim"]))
 
+# The curves each replaced stretch was cut from.  Saved because the fidelity
+# question -- how far the delivered coastline is from the source -- can only
+# be answered against THESE, and measuring against "any OSM ring nearby"
+# answers a different and easier question: on this patch the two differ by
+# 821.6 m against 128.2 m.
+if rc["curves"]:
+    np.savez(OUT / "coastline_curves.npz",
+             **{f"c{k}": np.asarray(c, dtype=float)
+                for k, c in enumerate(rc["curves"]) if len(c) > 1})
+
 hole = hole_polygon(rc["pfix"], rc["egfix"])
 say(f"hole {hole.area / 1e6:.3f} km2 ({hole.geom_type}, valid={hole.is_valid})")
 
@@ -479,6 +489,31 @@ def achieved_per_region(mesh):
             missed.append(region.name)
         per_region[region.name] = stat
     return per_region, missed
+
+
+def patch_violations(qa_checks, written):
+    """The QA failures this patch is answerable for, and the one exception.
+
+    ``introduced_violations`` decides what the patch caused rather than what
+    it inherited.  On the hires branch there is a second question: run_qa's
+    floor is 2 m and this branch writes the depths as the source gives them,
+    so a tidal flat fails it.  That is a tidal flat under wetting and drying,
+    not a defect the seed can be blamed for, and gating it would refuse the
+    very field the option exists to deliver.
+
+    It is a function, and both the seed loop and the final gate call it,
+    because the first version of this branch downgraded the check in the loop
+    and not at the end -- so every seed passed and the finished mesh was
+    rejected by a rule the search had not been applying.
+
+    Returns ``(blamed, n_reported)``; the second number is the point, because
+    the absence of the gate must not become the absence of the report.
+    """
+    bad = introduced_violations(qa_checks, len(sel.retained), written.elements)
+    if not _LADDER:
+        return bad, 0
+    shallow = [b for b in bad if b.get("check") == "min_depth_clip"]
+    return [b for b in bad if b.get("check") != "min_depth_clip"], len(shallow)
 
 
 def attempt(seed):
@@ -828,21 +863,11 @@ for seed in seeds:
     # standard its base does not meet: the goto2023 production mesh fails C1
     # at one element 18 km from Futtsu, the contract freezes that element,
     # and an absolute gate blamed every seed for it.
-    new_bad = introduced_violations(qa.checks, len(sel.retained), written.elements)
-    if _LADDER:
-        # run_qa's floor is 2 m and this branch writes the depths as the source
-        # gives them, so a tidal flat fails it.  That is a tidal flat, not a
-        # defect, and gating it would refuse the very field the option exists
-        # to deliver; it is re-gated in the next step, once a floor is
-        # declared.  Reported here, and named, so nobody mistakes the absence
-        # of the gate for the absence of the shallow water.
-        _shallow = [b for b in new_bad if b.get("check") == "min_depth_clip"]
-        if _shallow:
-            new_bad = [b for b in new_bad if b.get("check") != "min_depth_clip"]
-            say(f"    seed {seed}: min-depth is REPORTED not gated on this "
-                f"branch -- {len(_shallow)} offender(s), minimum "
-                f"{written.depths.min():.2f} m")
-        out["min_depth_reported_not_gated"] = len(_shallow)
+    new_bad, _n_shallow = patch_violations(qa.checks, written)
+    out["min_depth_reported_not_gated"] = _n_shallow
+    if _n_shallow:
+        say(f"    seed {seed}: min-depth is REPORTED not gated on this branch "
+            f"-- {_n_shallow} offender(s), minimum {written.depths.min():.2f} m")
     per_region, missed = achieved_per_region(written)
     out["achieved_per_region"] = per_region
     for _name in missed:
@@ -894,9 +919,14 @@ written, mesh = serialise(candidate, out, out14)
 qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000)
 say(f"accepted seed {seed}")
 
-_new_bad = introduced_violations(qa.checks, len(sel.retained), written.elements)
+_new_bad, _n_shallow = patch_violations(qa.checks, written)
+if _n_shallow:
+    say(f"min-depth is REPORTED not gated on this branch -- {_n_shallow} "
+        f"offender(s), minimum {written.depths.min():.2f} m. The depths are "
+        "the source's; the floor and the smoothing are the next step.")
 reports["qa"] = {"n_gate_total": qa.n_gate_total,
                  "n_gate_failed": qa.n_gate_failed,
+                 "min_depth_reported_not_gated": _n_shallow,
                  "n_introduced": len(_new_bad),
                  "introduced": _new_bad[:20],
                  "failed": [{"check": c.check_id, "requirement": c.requirement,

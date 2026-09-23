@@ -139,7 +139,19 @@ def seed_search_env(tmp_path, attempts, qa_failures, misses=None):
     }
 
 
+def with_patch_violations(env: dict) -> dict:
+    """Compile the driver's own attribution helper into a search environment.
+
+    Not a stub: the rule it applies -- that the minimum-depth check is a
+    report and not a gate on the hires branch -- is the thing under test, and
+    a stub of it would test the test.
+    """
+    driver_function("patch_violations", env)
+    return env
+
+
 def run_search(env):
+    with_patch_violations(env)
     return driver_block("# --------------------------------------------------------- the seed",
                         'say(f"accepted seed', env)
 

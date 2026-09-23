@@ -231,8 +231,13 @@ def edge_slopes(nodes, elements, depths, changed) -> dict[str, Any]:
     i, j = e[:, 0], e[:, 1]
     length = np.linalg.norm(xy[i] - xy[j], axis=1)
     slope = np.where(length > 0, np.abs(h[i] - h[j]) / np.where(length > 0, length, 1.0), 0.0)
+    # The classic r is meaningful only between two WET nodes.  `h_i + h_j > 0`
+    # is not enough: depths of -0.16 and 0.50 sum to a positive number and
+    # give r = 1.94, which is not a seabed gradient but a sign error dressed
+    # as one.  Measured on the first hires run, that admitted an r of 2.02 and
+    # reported `n_r_undefined = 0`.
     total = h[i] + h[j]
-    defined = total > 0
+    defined = (h[i] > 0) & (h[j] > 0)
     r = np.where(defined, np.abs(h[i] - h[j]) / np.where(defined, total, 1.0), np.nan)
     seam = new[i] ^ new[j]                  # retained on one side, new on the other
     touched = new[i] | new[j]
