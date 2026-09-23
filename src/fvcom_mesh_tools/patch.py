@@ -845,6 +845,18 @@ def rim_constraints(
                         n_uncrossed += 1
                         kept_because[why] = kept_because.get(why, 0) + 1
                         curves.append(np.asarray(xy[idx], dtype=float))
+                    elif coastline == "resolve":
+                        # The DELIVERED polyline, not the source substring.
+                        # `resolve` is per vertex: a stretch can follow the
+                        # source where the mesh is fine and keep the base
+                        # where it is coarse, and the curve is also what the
+                        # repair may SLIDE these nodes along.  Handing it the
+                        # source would let the repair pull a kept node onto
+                        # the source -- moving the coastline exactly where
+                        # the decision was not to.  Measured on the Kimitsu
+                        # port patch, a kept sub-run sat 157 m from the
+                        # source substring.
+                        curves.append(np.asarray(new, dtype=float))
                     else:
                         curves.append(coastline_curve(xy[idx], coastline, shoreline))
                     if len(new) > 1:

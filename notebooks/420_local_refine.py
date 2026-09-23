@@ -778,6 +778,21 @@ def attempt(seed):
     else:
         imp["coastline_departure_m"] = 0.0
         imp["coastline_node_departure_m"] = 0.0
+    # Against the SOURCE, which on the resolve branch the curve is not: there
+    # the curve is the delivered polyline, so a departure from it is zero by
+    # construction and says nothing.  This is the fidelity number.
+    if len(_new_bnd) and shore:
+        _srcs = shapely.MultiLineString([np.asarray(ln.coords) for ln in shore])
+        _nn = np.unique(_new_bnd)
+        _nn = _nn[is_new[_nn]]
+        imp["coastline_source_departure_m"] = float(shapely.distance(
+            shapely.points(nodes[_nn]), _srcs).max()) if len(_nn) else 0.0
+        imp["coastline_source_departure_median_m"] = float(np.median(
+            shapely.distance(shapely.points(nodes[_nn]), _srcs))) \
+            if len(_nn) else 0.0
+    else:
+        imp["coastline_source_departure_m"] = 0.0
+        imp["coastline_source_departure_median_m"] = 0.0
     imp["n_coastline_chords"] = int(len(_new_bnd))
     imp["n_junction_chords"] = int(len(_junction))
     # The junctions, against the WHOLE source rather than one stretch's
@@ -799,7 +814,9 @@ def attempt(seed):
         return None, out
     say(f"seam repair: {imp['n_flips']} flips, {imp['n_moves']} moves, "
         f"coastline departure {imp['coastline_departure_m']:.1f} m over "
-        f"{imp['n_coastline_chords']} chord(s), junctions "
+        f"{imp['n_coastline_chords']} chord(s) (from OSM: median "
+        f"{imp['coastline_source_departure_median_m']:.1f} m, max "
+        f"{imp['coastline_source_departure_m']:.1f} m), junctions "
         f"{imp['junction_departure_m']:.1f} m over {imp['n_junction_chords']} "
         f"(nodes {imp['coastline_node_departure_m']:.2f} m), "
         f"angles {imp['min_angle_deg']:.2f}-{imp['max_angle_deg']:.2f} deg "
