@@ -30,7 +30,11 @@ RECIPE=${FMESH_RECIPE:?set FMESH_RECIPE}
 export FMESH_LAND=${FMESH_LAND:-"$DATA_DIR/geodata/OSM/coastmask_cache/custom_139.55_34.9_140.3_35.75_minarea1e-05/land.shp"}
 [ -f "$FMESH_LAND" ] || { echo "no shoreline: $FMESH_LAND"; exit 2; }
 export LR_OUT=${LR_OUT:-"outputs/refine_$(basename "${RECIPE%.yaml}")"}
-export LR_SEEDS=${LR_SEEDS:-0,1,2,3,4}
+# Colon-separated on the command line, because `qsub -v` separates VARIABLES
+# with commas and a seed list is full of them: `-v "A=x,LR_SEEDS=0,1"` sets
+# LR_SEEDS=0 and then tries to set a variable called `1`.
+export LR_SEEDS=${LR_SEEDS:-0:1:2:3:4}
+LR_SEEDS=${LR_SEEDS//:/,}
 if [ -e "$LR_OUT/report.json" ]; then
     # Output that already exists makes a rerun look like a success.
     echo "Existing output: $LR_OUT/report.json; move it before rerunning"
