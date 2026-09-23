@@ -342,7 +342,14 @@ target = min(r.target_h_m for _, r in regions_m)
 # The coastline inside the hole is cut at the LOCAL size, not at the target.
 # h_achieved is the same field DistMesh gets, without the 1.2 field-to-bar
 # factor, because these are the bar lengths themselves.
-h_achieved = patch_sizing(base.nodes, base.elements, sized, distmesh_scale=1.0)
+# `outside` matters only on the hires branch, and there it matters a lot:
+# `resolve` moves the boundary onto the source shoreline, so part of the hole
+# is outside the base mesh, and the historical "field maximum out there" is a
+# cliff -- measured at a slope of 35-42 against a C4 reference of 0.414,
+# where the same patch on the default branch measures 0.375.
+_OUTSIDE = "nearest" if HIRES is not None else "max"
+h_achieved = patch_sizing(base.nodes, base.elements, sized, distmesh_scale=1.0,
+                          outside=_OUTSIDE)
 rc = rim_constraints(base.nodes, sel, size=h_achieved,
                      coastline=cfg["coastline"], shoreline=shore,
                      tolerance_m=cfg["coastline_tolerance_m"])
@@ -396,7 +403,7 @@ if fslope["max_slope"] > fslope["c4_reference_gradation"]:
 
 # ------------------------------------------------------------------ fill
 fh = patch_sizing(base.nodes, base.elements, sized,
-                  distmesh_scale=DISTMESH_SCALE)
+                  distmesh_scale=DISTMESH_SCALE, outside=_OUTSIDE)
 shapely.prepare(hole)
 boundary = shapely.boundary(hole)
 

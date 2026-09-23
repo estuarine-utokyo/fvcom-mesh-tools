@@ -1546,3 +1546,46 @@ def test_resolve_never_returns_fewer_points_than_the_base_stretch_had():
     assert len(out) >= len(base), (
         f"a 900 m walk returned {len(out)} points for a 21-point base stretch; "
         "subdividing keeps every original vertex and walking does not")
+
+
+def test_the_size_field_outside_the_mesh_is_a_cliff_or_a_continuation():
+    """`resolve` moves the boundary off the base mesh, and what is out there
+    decides whether the mesher is handed a step.
+
+    Measured on the real patches: with the field maximum outside, the hires
+    runs report a size-field slope of 35-42 against a C4 reference of 0.414,
+    where the same patch on the default branch reports 0.375.
+
+    The mesh here has to be GRADED for the question to exist: on a uniform
+    grid the field's maximum IS its local value, so both fills agree and the
+    first version of this test proved nothing.
+    """
+    from fvcom_mesh_tools.patch import base_size_field
+
+    # columns 20 m apart on the left, 400 m apart on the right
+    xs = np.concatenate([[0.0], np.cumsum(np.linspace(20.0, 400.0, 14))])
+    ys = np.linspace(0.0, 400.0, 5)
+    gx, gy = np.meshgrid(xs, ys)
+    nodes = np.column_stack([gx.ravel(), gy.ravel()])
+    nx, ny = len(xs), len(ys)
+    tri = []
+    for j in range(ny - 1):
+        for i in range(nx - 1):
+            a = j * nx + i
+            tri += [[a, a + 1, a + nx + 1], [a, a + nx + 1, a + nx]]
+    tri = np.asarray(tri, dtype=np.int64)
+
+    fine = np.array([[10.0, 200.0]])                  # in the 20 m columns
+    beyond = np.array([[10.0, 430.0]])                # 30 m past the top edge
+    f_max = base_size_field(nodes, tri)
+    f_near = base_size_field(nodes, tri, outside="nearest")
+    assert np.allclose(f_max(fine), f_near(fine)), (
+        "inside the mesh the two must be the same field")
+    local = float(f_max(fine)[0])
+    step = abs(float(f_max(beyond)[0]) - local)
+    smooth = abs(float(f_near(beyond)[0]) - local)
+    assert step > 10 * max(smooth, 1e-9), (
+        f"the maximum fill should be a cliff here: {step:.1f} m against "
+        f"{smooth:.1f} m, on a field whose local value is {local:.1f} m")
+    with pytest.raises(ValueError, match="outside must be"):
+        base_size_field(nodes, tri, outside="zero")

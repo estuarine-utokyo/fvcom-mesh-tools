@@ -925,6 +925,7 @@ def patch_sizing(
     regions,
     *,
     distmesh_scale: float = 1.2,
+    outside: str = "max",
 ):
     """A callable ``h(points) -> edge length`` for the hole, in mesh CRS metres.
 
@@ -961,7 +962,7 @@ def patch_sizing(
     mode; what varies instead is the LOCAL slope, which the caller should
     check with :func:`effective_gradation` against what C4 allows.
     """
-    base_size = base_size_field(nodes, elements)
+    base_size = base_size_field(nodes, elements, outside=outside)
     geoms = [_region_geometry(r) for r in regions]
 
     def h(points):
@@ -975,26 +976,54 @@ def patch_sizing(
     return h
 
 
-def base_size_field(nodes, elements):
+def base_size_field(nodes, elements, *, outside: str = "max"):
     """``f(points) -> the base mesh's own edge length there``, in metres.
 
-    The ambient field of :func:`ambient_size_field`, interpolated, with the
-    field's maximum outside the mesh.  Shared by :func:`patch_sizing` and
-    :func:`region_conflicts` so that what the report evaluates is the field
-    the mesher is given, not a second formula that resembles it.
+    The ambient field of :func:`ambient_size_field`, interpolated.  Shared by
+    :func:`patch_sizing` and :func:`region_conflicts` so that what the report
+    evaluates is the field the mesher is given, not a second formula that
+    resembles it.
+
+    ``outside`` decides what happens beyond the base mesh's footprint.
+
+    ``max``      the field's maximum, which is the historical behaviour and
+                 is safe while the hole stays inside the mesh -- and it does,
+                 because the rim is built from base edges.
+    ``nearest``  the nearest in-mesh value.  ``coastline: resolve`` moves the
+                 boundary onto the source shoreline, so parts of the hole end
+                 up OUTSIDE the base mesh, and there ``max`` is a cliff: the
+                 hires runs measured a field slope of 35-42 against a C4
+                 reference of 0.414, where the same patch on the default
+                 branch measures 0.375.  A mesher handed a size field with a
+                 step resolves it with slivers, and that is where the
+                 7.30-degree elements at Kimitsu port came from.
     """
     from matplotlib.tri import LinearTriInterpolator, Triangulation
 
+    if outside not in ("max", "nearest"):
+        raise ValueError(f"outside must be 'max' or 'nearest', got {outside!r}")
     xy = np.asarray(nodes, dtype=float)[:, :2]
     tri = np.asarray(elements, dtype=np.int64)
     amb = ambient_size_field(xy, tri)
     interp = LinearTriInterpolator(Triangulation(xy[:, 0], xy[:, 1], tri), amb)
     amb_max = float(np.nanmax(amb))
+    tree = None
+    if outside == "nearest":
+        from scipy.spatial import cKDTree
+
+        tree = cKDTree(xy)
 
     def f(points):
         p = np.atleast_2d(np.asarray(points, dtype=float))[:, :2]
         out = np.asarray(interp(p[:, 0], p[:, 1]), dtype=float)
-        return np.where(np.isfinite(out), out, amb_max)
+        bad = ~np.isfinite(out)
+        if not bad.any():
+            return out
+        if tree is None:
+            return np.where(bad, amb_max, out)
+        out = np.array(out, dtype=float)
+        out[bad] = amb[tree.query(p[bad])[1]]
+        return out
 
     return f
 
