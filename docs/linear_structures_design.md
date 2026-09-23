@@ -363,3 +363,46 @@ The five seeds gave 5, 3, 2, 1 and 2 introduced violations, and seed 3 was
 accepted. The one left is at (393366, 3906973), 28.8 deg, where the
 transition wall has 100-160 m edges. The other failing check, min_depth_clip,
 is reported and not gated on this branch.
+
+## 13. No node in a single element; the walled harbour in FVCOM (jobs 115612-115618)
+
+The first 20-day M2 run on the walled mesh (115589) finished cleanly, but
+three nodes kept an M2 amplitude of **exactly 0**, while every neighbour had
+0.44 m. Each of them was in ONE element with two boundary sides: inside a
+wall bend, or at a 44 deg corner of the resolved coastline. FVCOM never
+updates such a node. Neither the base nor the unwalled port mesh had one,
+and no QA gate looked for it.
+
+- **QA:** a new FVCOM gate, `no_lone_corner_nodes`, fails any node in a
+  single element that is not on the open boundary.
+- **The geometric cause.** Once a wall is split, the water between two
+  boundary lines that meet at under 60 deg holds one element if every angle
+  is to stay at 30 or more. Bisecting that element leaves angles under 30:
+  the patch went from 1 violation to 8-10. So:
+  - a wall edge meeting another line at under 60 deg is dropped (was 30);
+  - `patch.blunt_acute_corners` cuts off a resolved-coastline corner under
+    60 deg on the water side. It walks one local element along each side
+    and joins the two points reached with a chord; a first version cut at
+    0.45 of the corner's own edges, left a 7.4 m chord and cut the external
+    step from 2.46 to 1.37 s.
+- **What is left:** a lone node the mesher still makes is opened by
+  `walls.open_lone_corners`, before the repair so the new node is smoothed.
+  `improve_patch` never flips an edge that would leave a node in one element.
+
+| | 115573 | 115612 |
+|---|---:|---:|
+| violations introduced by the patch | 1 | **0** |
+| QA | 19/21 | **20/22** (base element 2101 at 29.0 deg; min_depth reported only) |
+| nodes in a single element | 3 | **0** |
+| finished-mesh external step | 1.2 s | 1.0 s |
+
+M2, 20 days, the walled mesh against the base (same forcing, DTE 1.0 s):
+
+- **Both runs:** complete (TADA) and finite.
+- **At the five gauges:** walled minus base is -0.2 to -0.4 mm in amplitude
+  and +0.016 deg in phase.
+- **In the harbour** (notebook 431, `outputs/m2wall_20260924_025411/`):
+  - the amplitude is 0.438-0.443 m everywhere, with no frozen node;
+  - the long breakwater separates a sheltered basin, whose amplitude is
+    0.443 m against 0.439-0.441 m outside;
+  - currents stop at the walls.
