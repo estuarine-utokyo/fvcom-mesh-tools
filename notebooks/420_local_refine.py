@@ -349,6 +349,19 @@ rc = rim_constraints(base.nodes, sel, size=h_achieved,
 reports["rim"] = {k: v for k, v in rc.items()
                   if isinstance(v, (int, float, str, bool))}
 say("rim: " + json.dumps(reports["rim"]))
+if rc.get("n_coastline_nodes_new", 0) < rc.get("n_coastline_nodes_replaced", 0):
+    # The coastline is cut at the LOCAL size, and out at the edge of a
+    # transition that is the AMBIENT size.  Measured on the first hires run:
+    # a 300 m fishery 2 km offshore put its coastline where the field asks
+    # for 400-1700 m elements, and `resolve` replaced 17 base nodes with 13 --
+    # a coarser coastline than the base's, which is the failure `preserve`
+    # was written to avoid.  Resolving a coastline needs the REGION to reach
+    # it, not merely the transition.
+    say(f"WARNING the resolved coastline is COARSER than the base's: "
+        f"{rc['n_coastline_nodes_replaced']} base node(s) replaced by "
+        f"{rc['n_coastline_nodes_new']}. The coastline is cut at the local "
+        "size, and here that is the transition's, not the target. To refine "
+        "a coastline the region has to contain it.")
 
 # The curves each replaced stretch was cut from.  Saved because the fidelity
 # question -- how far the delivered coastline is from the source -- can only
@@ -714,7 +727,14 @@ def attempt(seed):
                                             elements[:, [2, 0]]]), axis=1),
                          axis=0, return_counts=True)
     _bnd = _u2[_c2 == 1]
-    _new_bnd = _bnd[is_new[_bnd].any(axis=1)]
+    # BOTH ends new.  A chord with one retained end runs out past the end of
+    # the substring the stretch was cut from, and the distance from a curve
+    # that has stopped is not a fidelity measure: on the first hires run that
+    # put one junction chord 821.6 m "from the source" while every chord
+    # inside the resolved stretch was within 78.5 m.  The junction chords are
+    # measured separately, against the whole source, below.
+    _new_bnd = _bnd[is_new[_bnd].all(axis=1)]
+    _junction = _bnd[is_new[_bnd].any(axis=1) & ~is_new[_bnd].all(axis=1)]
     if len(_new_bnd):
         _a, _b = nodes[_new_bnd[:, 0]], nodes[_new_bnd[:, 1]]
         _f = np.linspace(0.0, 1.0, 9)[:, None, None]
@@ -733,6 +753,19 @@ def attempt(seed):
     else:
         imp["coastline_departure_m"] = 0.0
         imp["coastline_node_departure_m"] = 0.0
+    imp["n_coastline_chords"] = int(len(_new_bnd))
+    imp["n_junction_chords"] = int(len(_junction))
+    # The junctions, against the WHOLE source rather than one stretch's
+    # substring, because that is the only reference that reaches them.
+    if len(_junction) and shore:
+        _ja, _jb = nodes[_junction[:, 0]], nodes[_junction[:, 1]]
+        _jf = np.linspace(0.0, 1.0, 9)[:, None, None]
+        _js = (_ja[None] + _jf * (_jb - _ja)[None]).reshape(-1, 2)
+        imp["junction_departure_m"] = float(shapely.distance(
+            shapely.points(_js),
+            shapely.MultiLineString([np.asarray(ln.coords) for ln in shore])).max())
+    else:
+        imp["junction_departure_m"] = 0.0
     out["improve"] = imp
     if imp["coastline_departure_m"] > cfg["coastline_tolerance_m"]:
         say(f"  seed {seed}: the repair moved the coastline "
@@ -740,7 +773,9 @@ def attempt(seed):
             f"from, past the {cfg['coastline_tolerance_m']:g} m tolerance")
         return None, out
     say(f"seam repair: {imp['n_flips']} flips, {imp['n_moves']} moves, "
-        f"coastline departure {imp['coastline_departure_m']:.1f} m "
+        f"coastline departure {imp['coastline_departure_m']:.1f} m over "
+        f"{imp['n_coastline_chords']} chord(s), junctions "
+        f"{imp['junction_departure_m']:.1f} m over {imp['n_junction_chords']} "
         f"(nodes {imp['coastline_node_departure_m']:.2f} m), "
         f"angles {imp['min_angle_deg']:.2f}-{imp['max_angle_deg']:.2f} deg "
         f"({int(movable.sum()):,} movable, {int(slidable.sum()):,} slidable nodes, "

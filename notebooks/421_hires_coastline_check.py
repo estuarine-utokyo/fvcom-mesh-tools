@@ -102,6 +102,41 @@ print(f"chord departure: max {per_edge.max():.1f} m, p99 "
       f"{np.percentile(per_edge, 99):.1f} m, median {np.median(per_edge):.1f} m")
 print(f"chords over 100 m from OSM: {int((per_edge > 100).sum())} of {len(per_edge)}")
 
+# Where the violations the patch introduced actually are.  "Two QA failures"
+# is a count; whether they sit ON the resolved coastline is the question that
+# decides whether `resolve` caused them.
+qa_path = next(OUT.glob("*_qa.json"), None)
+if qa_path is not None:
+    import json
+
+    qa = json.loads(qa_path.read_text())
+    bnd_nodes = set(np.unique(new_bnd).tolist())
+    coast_line = shapely.MultiLineString(
+        [shapely.LineString(mesh.nodes[[i, j]]) for i, j in new_bnd.tolist()])
+    for chk in qa.get("checks", []):
+        if chk.get("status") != "fail":
+            continue
+        ids = chk.get("offender_ids") or chk.get("offenders") or []
+        here = []
+        for off in ids[:400]:
+            els = off.get("elements") or ([off["id"]] if off.get("kind") == "element"
+                                          else [])
+            if els:
+                nn = mesh.elements[np.asarray(els, dtype=int)].ravel()
+            elif off.get("kind") == "node":
+                nn = np.array([off["id"]], dtype=int)
+            else:
+                continue
+            c = mesh.nodes[nn].mean(axis=0)
+            here.append((float(shapely.distance(shapely.Point(c), coast_line)),
+                         bool(set(nn.tolist()) & bnd_nodes)))
+        if here:
+            d = np.array([x[0] for x in here])
+            on = sum(x[1] for x in here)
+            print(f"\n{chk['check_id']}: {len(here)} offender(s) placed; "
+                  f"{on} touch the resolved coastline; distance to it "
+                  f"min {d.min():.0f} m, median {np.median(d):.0f} m")
+
 k = int(order[0])
 mid = 0.5 * (a[k] + b[k])
 half = max(2500.0, 3.0 * float(np.linalg.norm(b[k] - a[k])))

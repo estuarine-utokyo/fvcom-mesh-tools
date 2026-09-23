@@ -1,0 +1,37 @@
+# The hires branch on a region that CONTAINS the coastline, which is what the
+# option is for.
+#
+# `futtsu_nori_hires.yaml` asked for the same thing over a 300 m circle of
+# open water 2 km offshore, and the result is the reason this recipe exists.
+# The coastline is cut at the LOCAL size; 2 km out that is the transition's
+# size, 400-1700 m, so `resolve` walked the shore at 1.7 km and replaced 17
+# base nodes with 13 -- a coastline COARSER than the base's. Refining a
+# coastline needs the region to reach it, not merely the transition.
+#
+# The circle below straddles the Futtsu shore. It is a DEMONSTRATION outline
+# placed on the coastline, not a fishery-right boundary: the chord midpoints
+# of the first run's delivered coastline (139.786-139.812 E, 35.307-35.315 N)
+# are what it was positioned from.
+#
+# Roughly half the core is on land, which pre-flight now reports instead of
+# refusing: the water is meshed, the land is not, and the boundary between
+# them is the thing being refined.
+base_mesh: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
+base_depth: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
+base_obc: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
+
+dt_expected_s: 4.5
+gradation: 0.165
+
+hires:
+  coastline: resolve
+  bathymetry: tokyo_bay
+  scope: hole
+  blend: ramp
+
+refine:
+  - name: futtsu_coast
+    geometry:
+      circle: {center: [139.7930, 35.3120], radius_m: 700}
+    target_h_m: 30
+    priority: 0
