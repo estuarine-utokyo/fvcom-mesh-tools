@@ -107,3 +107,82 @@ def test_no_wall_is_no_change():
     out, t2, copy_of, rep = split_along_walls(xy, tri, np.zeros((0, 2)))
     assert np.array_equal(out, xy) and np.array_equal(t2, tri)
     assert rep["n_copies"] == 0 and rep["n_components"] == 1
+
+
+# --- extraction --------------------------------------------------------------
+
+def _extract(land, h0):
+    from fvcom_mesh_tools.patch import filter_shoreline
+    from fvcom_mesh_tools.walls import extract_walls
+
+    area, _ = filter_shoreline(land, h0, elements_per_feature=2)
+    return area, *extract_walls(land, area, h0)
+
+
+def test_a_pier_becomes_one_wall_rooted_in_its_quay_and_reaching_its_tip():
+    import shapely
+
+    quay = shapely.box(0.0, 0.0, 400.0, 300.0)
+    pier = shapely.box(190.0, 300.0, 202.0, 800.0)      # 12 m x 500 m
+    area, walls, rep = _extract(shapely.union_all([quay, pier]), 30.0)
+    assert len(walls) == 1, rep
+    w = walls[0]
+    ends = np.asarray(w.coords)[[0, -1]]
+    root, tip = sorted(ends, key=lambda p: p[1])
+    assert abs(root[1] - 300.0) < 1.0, "the root must be ON the quay"
+    assert abs(tip[1] - 800.0) < 8.0, "the wall must reach the real tip"
+    assert np.allclose(np.asarray(w.coords)[:, 0], 196.0, atol=2.0), "centreline"
+    assert shapely.equals(area.buffer(0), quay.buffer(0)) or \
+        abs(area.area - quay.area) < 0.01 * quay.area, "the quay stays land"
+    assert rep["footprint_given_to_water_m2"] == pytest.approx(pier.area, rel=0.05)
+
+
+def test_an_l_shaped_breakwater_is_one_wall_with_its_corner():
+    import shapely
+
+    arm1 = shapely.box(0.0, 0.0, 300.0, 10.0)
+    arm2 = shapely.box(290.0, 0.0, 300.0, 200.0)
+    _, walls, rep = _extract(shapely.union_all([arm1, arm2]), 30.0)
+    assert len(walls) == 1, rep
+    assert walls[0].length == pytest.approx(300 + 200 - 10, rel=0.08)
+
+
+def test_a_wide_structure_stays_land_and_a_stub_is_dropped():
+    import shapely
+
+    wide = shapely.box(0.0, 0.0, 70.0, 400.0)            # 70 m >= 2 x 30
+    stub = shapely.box(500.0, 0.0, 508.0, 20.0)          # 20 m < L_min = 30
+    area, walls, rep = _extract(shapely.union_all([wide, stub]), 30.0)
+    assert not walls, rep
+    assert area.area == pytest.approx(wide.area, rel=0.01)
+    assert rep["n_dropped"] >= 1
+
+
+def test_mitre_joins_leave_a_square_quay_whole():
+    """Round joins shave each convex corner into a crescent."""
+    import shapely
+
+    from fvcom_mesh_tools.patch import filter_shoreline
+
+    quay = shapely.box(0.0, 0.0, 400.0, 300.0)
+    area, rep = filter_shoreline(quay, 30.0, elements_per_feature=2)
+    assert rep["land_lost_m2"] < 1.0
+
+
+def test_extraction_holds_at_utm_coordinates():
+    """In UTM the input is 3.9e6 m with points 0.5 m apart on straight lines.
+
+    qhull stopped on the first real harbour with "a wide merge error"; the
+    joggle that fixes that leaves a small loop half-way along a straight
+    axis, which cut one pier into two walls until the skeleton was made a
+    tree.  Both only happen far from the origin.
+    """
+    import shapely
+    from shapely.affinity import translate
+
+    quay = shapely.box(0.0, 0.0, 400.0, 300.0)
+    pier = shapely.box(190.0, 300.0, 202.0, 800.0)
+    land = translate(shapely.union_all([quay, pier]), 393000.0, 3909000.0)
+    _, walls, rep = _extract(land, 30.0)
+    assert len(walls) == 1, rep
+    assert walls[0].length == pytest.approx(500.0, abs=8.0)

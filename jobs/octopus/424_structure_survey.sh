@@ -16,5 +16,5 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 export FMESH_LAND=${FMESH_LAND:-"$DATA_DIR/geodata/OSM/coastmask_cache/custom_139.55_34.9_140.3_35.75_minarea1e-05/land.shp"}
 IFS=: read -r a b c d <<< "${FMESH_SITE:?set FMESH_SITE}"
-python notebooks/425_structure_survey.py "$a" "$b" "$c" "$d"
+python notebooks/${FMESH_SCRIPT:-425_structure_survey.py} "$a" "$b" "$c" "$d" ${FMESH_MESH_DIR:+"$FMESH_MESH_DIR"}
 echo "end=$(date -Is)"

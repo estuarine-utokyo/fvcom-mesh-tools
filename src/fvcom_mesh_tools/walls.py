@@ -38,7 +38,7 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["split_along_walls", "wall_edges_from_path"]
+__all__ = ["extract_walls", "split_along_walls", "wall_edges_from_path"]
 
 
 def _edge_key(a: int, b: int) -> tuple[int, int]:
@@ -194,4 +194,191 @@ def split_along_walls(nodes, elements, wall_edges) -> tuple[np.ndarray, np.ndarr
         "max_sectors_at_a_node": max(sectors_at.values()) if sectors_at else 0,
         "n_components": n_components,
         "pairs": [[int(s), int(n0 + k)] for k, s in enumerate(copy_src)],
+    }
+
+
+# --------------------------------------------------------------- extraction
+# What becomes a wall, decided by the declared grid size (owner, 2026-09-23):
+#
+#   area   local width >= k_area * h0   land, as before
+#   wall   narrower, and length >= L_min  its centreline, split into boundary
+#   drop   shorter than L_min             removed and reported
+#
+# `k_area = 2`, `L_min = h0`.  Opening and closing use MITRE joins: a port is
+# rectilinear, and round joins shave every convex corner of a quay into a
+# crescent that would come back as a "wall" hugging the coast.
+
+
+def _skeleton(poly, ds: float):
+    """Approximate medial axis of one polygon: Voronoi edges inside it."""
+    import shapely
+    from scipy.spatial import Voronoi
+
+    pts = []
+    for ring in [poly.exterior, *poly.interiors]:
+        n = max(8, int(np.ceil(ring.length / ds)))
+        s = np.linspace(0.0, ring.length, n, endpoint=False)
+        pts.append(np.asarray([ring.interpolate(x).coords[0] for x in s])[:, :2])
+    p = np.vstack(pts)
+    if len(p) < 4:
+        return np.zeros((0, 2)), [], np.zeros(0)
+    # Relative to the piece's own centre, and joggled.  In UTM the input is
+    # 3.9e6 m with points 0.5 m apart on straight lines -- exactly the nearly
+    # degenerate, cocircular input qhull gives up on: the first real harbour
+    # stopped with "a wide merge error".
+    c0 = p.mean(axis=0)
+    vor = Voronoi(p - c0, qhull_options="Qbb Qc Qz QJ")
+    v = vor.vertices + c0
+    shapely.prepare(poly)
+    inside = np.asarray(shapely.contains(poly, shapely.points(v[:, 0], v[:, 1])))
+    edges = [(a, b) for a, b in vor.ridge_vertices
+             if a >= 0 and b >= 0 and inside[a] and inside[b]]
+    radius = np.asarray(shapely.distance(poly.boundary, shapely.points(v[:, 0], v[:, 1])))
+    return v, edges, radius
+
+
+def _spanning_tree(v, edges):
+    """Minimum spanning forest of the skeleton graph, by edge length."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import minimum_spanning_tree
+
+    e = np.asarray(edges, dtype=np.int64)
+    w = np.linalg.norm(v[e[:, 0]] - v[e[:, 1]], axis=1) + 1e-12
+    n = len(v)
+    mst = minimum_spanning_tree(coo_matrix((w, (e[:, 0], e[:, 1])), shape=(n, n)))
+    a, b = mst.nonzero()
+    return list(zip(a.tolist(), b.tolist()))
+
+
+def _prune(v, edges, radius, factor: float = 1.5, l_min: float = 0.0):
+    """Remove the spurs a medial axis sends into every corner.
+
+    A branch from a leaf to the first junction is a spur when it is shorter
+    than ``factor`` times the inscribed radius at that junction: the arm to a
+    corner of a w-wide strip is about 0.7 w long, against a radius of w / 2.
+
+    All the spurs at a junction go in the SAME pass.  The two corner spurs at
+    the end of a strip meet at one junction, and removing them one at a time
+    turned the second into a continuation of the main axis -- a path with no
+    junction left to prune against -- so every wall came out with a kink into
+    one corner at each end.
+    """
+    adj: dict[int, set[int]] = {}
+    for a, b in edges:
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+
+    def branch(leaf):
+        path, prev, cur = [leaf], None, leaf
+        while True:
+            nxt = [q for q in adj[cur] if q != prev]
+            if not nxt:
+                return path, None
+            prev, cur = cur, nxt[0]
+            path.append(cur)
+            if len(adj[cur]) != 2:
+                return path, cur
+
+    while True:
+        spurs: dict[int, list[list[int]]] = {}
+        for leaf in [n for n, s in adj.items() if len(s) == 1]:
+            path, junction = branch(leaf)
+            if junction is None or len(adj[junction]) < 3:
+                continue
+            length = float(np.sum(np.linalg.norm(np.diff(v[path], axis=0), axis=1)))
+            # A branch shorter than L_min is a spur too: an arm that short
+            # would be dropped as a structure anyway, and the joggle qhull
+            # needs in UTM leaves small side branches along a straight axis
+            # that otherwise cut one pier into two walls.
+            if length < max(factor * radius[junction], l_min):
+                spurs.setdefault(junction, []).append(path)
+        if not spurs:
+            break
+        for junction, paths in spurs.items():
+            # never strip a junction bare: it keeps at least one branch
+            keep = len(adj[junction]) - len(paths)
+            if keep < 1:
+                paths = sorted(paths, key=len)[:-1]
+            for path in paths:
+                for a, b in zip(path[:-1], path[1:]):
+                    adj[a].discard(b)
+                    adj[b].discard(a)
+                for q in path[:-1]:
+                    if not adj.get(q):
+                        adj.pop(q, None)
+    return [(a, b) for a, s in adj.items() for b in s if a < b]
+
+
+def extract_walls(land, area_land, h0: float, *, l_min: float | None = None,
+                  ds: float | None = None):
+    """Centrelines of the land that ``area_land`` no longer has.
+
+    ``land`` is the source land; ``area_land`` what survives the area filter
+    at the declared size (``patch.filter_shoreline``).  Every piece of the
+    difference is a candidate structure.  Its medial axis, pruned of corner
+    spurs, is the wall; a free end is extended by its own inscribed radius so
+    the wall reaches the real tip, and an end within that radius of
+    ``area_land`` is carried onto it so a pier is rooted in its quay.
+
+    Returns ``(walls, report)``: a list of LineStrings and a report of what
+    was kept, dropped and why, with the footprint handed to the water.
+    """
+    import shapely
+    from shapely.ops import linemerge, nearest_points
+
+    if not (np.isfinite(h0) and h0 > 0):
+        raise ValueError("h0 must be finite and positive")
+    l_min = float(h0 if l_min is None else l_min)
+    before = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
+    area = shapely.union_all([area_land] if hasattr(area_land, "geom_type")
+                             else list(area_land))
+    thin = shapely.difference(before, area)
+    pieces = [q for q in getattr(thin, "geoms", [thin])
+              if q.geom_type == "Polygon" and q.area > 1.0]
+    walls, dropped, footprint = [], [], 0.0
+    area_edge = area.boundary
+    for q in pieces:
+        step = ds if ds is not None else max(0.5, min(h0 / 8.0,
+                                                      q.area / max(q.length, 1e-9)))
+        v, edges, radius = _skeleton(q, step)
+        if not q.interiors and edges:
+            # The medial axis of a simply connected polygon is a TREE.  The
+            # sampled one is not quite: the first real pier came back with a
+            # 13.8 m double path half-way along it, which leaf pruning can
+            # never remove, and linemerge then cut the pier into two walls
+            # at the loop.  A minimum spanning tree takes the loop out and
+            # leaves the axis.  A ring-shaped structure keeps its cycle.
+            edges = _spanning_tree(v, edges)
+        edges = _prune(v, edges, radius, l_min=l_min)
+        if not edges:
+            dropped.append({"why": "no centreline", "area_m2": float(q.area)})
+            continue
+        merged = linemerge(shapely.MultiLineString([v[[a, b]] for a, b in edges]))
+        for line in getattr(merged, "geoms", [merged]):
+            c = np.asarray(line.coords)[:, :2]
+            for end in (0, -1):
+                p = shapely.Point(c[end])
+                r_end = float(shapely.distance(q.boundary, p))
+                if float(shapely.distance(area_edge, p)) <= 2.0 * r_end + 1e-6:
+                    c[end] = np.asarray(nearest_points(area_edge, p)[0].coords[0])
+                else:
+                    nb = c[1] if end == 0 else c[-2]
+                    d = c[end] - nb
+                    n = np.linalg.norm(d)
+                    if n > 0:
+                        c[end] = c[end] + d / n * r_end
+            line = shapely.LineString(c).simplify(step)
+            if line.length < l_min:
+                dropped.append({"why": f"shorter than {l_min:g} m",
+                                "length_m": float(line.length)})
+                continue
+            walls.append(line)
+        footprint += float(q.area)
+    return walls, {
+        "h0_m": float(h0), "l_min_m": l_min,
+        "n_candidate_pieces": len(pieces),
+        "n_walls": len(walls),
+        "wall_length_m": float(sum(w.length for w in walls)),
+        "n_dropped": len(dropped), "dropped": dropped[:50],
+        "footprint_given_to_water_m2": footprint,
     }

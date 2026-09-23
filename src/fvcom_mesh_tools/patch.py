@@ -677,8 +677,11 @@ def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0):
     r = 0.5 * float(elements_per_feature) * float(h0)
     before = shapely.union_all(
         [land] if hasattr(land, "geom_type") else list(land))
-    opened = before.buffer(-r).buffer(r)          # land narrower than h0 goes
-    closed = opened.buffer(r).buffer(-r)          # water narrower than h0 goes
+    # MITRE joins: a port is rectilinear, and round joins shave every convex
+    # corner of a quay into a crescent -- land lost that was never narrow,
+    # and a sliver that the wall extraction would read as a structure.
+    opened = before.buffer(-r, join_style="mitre").buffer(r, join_style="mitre")
+    closed = opened.buffer(r, join_style="mitre").buffer(-r, join_style="mitre")
     out = shapely.make_valid(closed)
 
     def _rings(g):
