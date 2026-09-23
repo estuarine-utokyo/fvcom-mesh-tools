@@ -1,0 +1,53 @@
+# A PORT: the hardest thing to ask a coastline resolver for.
+#
+# Surveyed before this was written (notebooks/423_site_survey.py, job 115422),
+# because a recipe writer cannot guess any of it:
+#
+#   * 9.58 km of OSM shoreline inside a 900 m disc, 132 vertices, 73 m apart
+#     -- quays, breakwaters, rectangular basins and a pier.
+#   * the base mesh has FIVE coastline edges here, 320-592 m, median 431 m,
+#     and eight elements with a median edge of 488 m. It represents none of
+#     the port: the whole harbour is inside two or three triangles.
+#   * 45 % of the disc is water, 1.1445 km2.
+#   * depths -3.90 to 8.65 m, median 0.96, and 19 % of the water at or above
+#     the datum. The ladder answers with M7001 620 and the 30 m grid 771:
+#     more than half of it is the intertidal grid, because M7001's marks
+#     start 1 m below chart datum and a harbour basin is shallower than that.
+#     The nearest real sounding is 168 m away on the median.
+#
+# WHAT A 30 m TARGET CANNOT DO HERE, measured by eroding the water polygon:
+#
+#     erosion   water left   parts
+#       5 m     1.0820 km2     2
+#      10 m     1.0204 km2     3      <- a channel about 20 m wide is severed
+#      20 m     0.8994 km2     3
+#      40 m     0.6819 km2     8      <- several 80 m connections severed
+#      80 m     0.4291 km2     3
+#
+# A channel that a 10 m erosion cuts is about 20 m wide, and 30 m elements
+# cannot carry it. The pier running north from the quay is a strip of LAND
+# about 20 m across -- narrower than one element, so the mesh cannot put
+# water on both sides of it. The run is expected to report exactly that, and
+# the point of this recipe is that it says so rather than silently drowning
+# the port or failing without a reason.
+#
+# The outline is a DEMONSTRATION circle over the harbour, not a port limit.
+base_mesh: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
+base_depth: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
+base_obc: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
+
+dt_expected_s: 4.5
+gradation: 0.165
+
+hires:
+  coastline: resolve
+  bathymetry: tokyo_bay
+  scope: hole
+  blend: ramp
+
+refine:
+  - name: kimitsu_port
+    geometry:
+      circle: {center: [139.82280, 35.32301], radius_m: 900}
+    target_h_m: 30
+    priority: 0
