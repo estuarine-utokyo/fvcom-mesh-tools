@@ -196,3 +196,41 @@ footprint goes in the report.
 Order of work, as §4 requires: the split function and its unit tests, then a
 synthetic FVCOM case (a channel with a pier and a detached breakwater), then
 the harbour.
+
+## 7. The FVCOM test: a split wall stops water, an edge does not
+
+Job 115449, notebook 427. The finished Kimitsu port case, which had already
+integrated for 20 days, with ONE change: three paths of existing interior
+edges split into walls -- a seal from coast to coast (24 edges), a pier
+(8 edges, one free tip) and a detached breakwater (13 edges, two free tips).
+45 nodes duplicated, 3 free tips, the domain cut in two. OBC ids, sponge,
+tide, namelist and element order all kept; 64 ranks, 2 days. The control is
+the same case unsplit, already run.
+
+| | split | unsplit (same edges) |
+|---|---:|---:|
+| finished | exit 0, 97 records, TADA | exit 0, 97 records |
+| sealed region (383 nodes): max \|zeta\| | **0.0 m** | 0.419 m |
+| sealed region: M2 amplitude | **0.0 m** | 0.395 m |
+| open water: M2 amplitude (median) | 0.3976 m | 0.3974 m |
+| max speed at elements touching a free tip | 0.194 m/s | -- |
+| 99th percentile speed, whole mesh | 0.245 m/s | 0.245 m/s |
+
+* **A split wall is impermeable, to the last digit.** Behind the seal the
+  level never left zero.
+* **The same edges unsplit let the tide straight through**: 0.395 m in a
+  region whose open-water neighbour has 0.397 m. §2's claim, that an edge is
+  not a wall in FVCOM, is now measured in FVCOM rather than argued from
+  `tge.F`.
+* **Both risks of §4 are retired.** Coincident nodes did not trouble the
+  build (METIS, neighbour tables, 64 ranks), and the free tips are not a hot
+  spot -- the fastest element touching one runs below the mesh's own 99th
+  percentile.
+* The walls change the open-water tide by 0.19 mm.
+
+Three things went wrong on the way, all in the test harness and none in the
+wall: the synthetic channel of notebook 426 had a corner element with one
+open and one solid side, which `tge.F` refuses; it then went unstable beside
+its open boundary after 1.8 days with AND without walls, so it could not
+separate a wall from a forcing problem and was set aside; and FVCOM reads
+`INPUT_DIR` into 80 characters and truncates it silently.
