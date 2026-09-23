@@ -137,29 +137,69 @@ if qa_path is not None:
                   f"{on} touch the resolved coastline; distance to it "
                   f"min {d.min():.0f} m, median {np.median(d):.0f} m")
 
+# Two panels, because the two questions are at two scales: the whole patch
+# says whether the coastline was followed at all, and the declared region says
+# whether it was followed at the size that was asked for.  The first figure of
+# this run showed only the first, and its worst chord was 6 km from the core
+# in a part of the transition the recipe never claimed to refine.
 k = int(order[0])
 mid = 0.5 * (a[k] + b[k])
-half = max(2500.0, 3.0 * float(np.linalg.norm(b[k] - a[k])))
-fig, ax = plt.subplots(figsize=(11, 9))
-# The mesh, always: a coastline figure without the elements beside it cannot
-# show whether the departure is a coastline problem or a spacing problem.
-ax.triplot(mesh.nodes[:, 0], mesh.nodes[:, 1], mesh.elements,
-           lw=0.25, color="0.75")
-for ln in rings:
-    xy = np.asarray(ln.coords)
-    ax.plot(xy[:, 0], xy[:, 1], color="tab:blue", lw=1.2, zorder=3)
-ax.plot([], [], color="tab:blue", lw=1.2, label="OSM shoreline")
-for i, j in new_bnd:
-    ax.plot(mesh.nodes[[i, j], 0], mesh.nodes[[i, j], 1],
-            color="tab:red", lw=1.4, zorder=4)
-ax.plot([], [], color="tab:red", lw=1.4, label="resolved coastline (mesh)")
-ax.plot([a[k, 0], b[k, 0]], [a[k, 1], b[k, 1]], color="k", lw=3.0, zorder=5,
-        label=f"worst chord: {per_edge[k]:.0f} m from OSM")
-ax.set_xlim(mid[0] - half, mid[0] + half)
-ax.set_ylim(mid[1] - half, mid[1] + half)
-ax.set_aspect("equal")
-ax.legend(loc="upper right", fontsize=9)
-ax.set_title(f"{OUT.name}: resolved coastline against OSM")
+import json as _json  # noqa: E402
+
+rep = _json.loads((OUT / "report.json").read_text())
+reg = rep["regions"][0]
+rxy = np.asarray(reg["xy"], dtype=float)
+rc_ = rxy.mean(axis=0)
+rr = float(np.linalg.norm(rxy - rc_, axis=1).max())
+
+bad = []
+if qa_path is not None:
+    for chk in qa.get("checks", []):
+        if chk.get("status") != "fail" or chk["check_id"] != "c1_min_angle":
+            continue
+        for off in (chk.get("offender_ids") or [])[:50]:
+            els = off.get("elements") or ([off["id"]] if off.get("kind") == "element"
+                                          else [])
+            if els:
+                bad.append(mesh.nodes[mesh.elements[np.asarray(els, int)].ravel()]
+                           .mean(axis=0))
+
+fig, axes = plt.subplots(1, 2, figsize=(17, 8.5))
+for ax, (cx, cy, half, ttl) in zip(axes, [
+        (mid[0], mid[1], max(3000.0, 3.0 * float(np.linalg.norm(b[k] - a[k]))),
+         f"whole patch: worst chord {per_edge[k]:.0f} m from OSM"),
+        (rc_[0], rc_[1], 2.2 * rr,
+         f"the declared region ({reg['name']}, target {reg['target_h_m']:g} m)")]):
+    # The mesh, always: a coastline figure without the elements beside it
+    # cannot show whether a departure is the coastline or the spacing.
+    ax.triplot(mesh.nodes[:, 0], mesh.nodes[:, 1], mesh.elements,
+               lw=0.2, color="0.8")
+    for ln in rings:
+        q = np.asarray(ln.coords)
+        ax.plot(q[:, 0], q[:, 1], color="tab:blue", lw=1.1, zorder=3)
+    for i, j in new_bnd:
+        ax.plot(mesh.nodes[[i, j], 0], mesh.nodes[[i, j], 1],
+                color="tab:red", lw=1.3, zorder=4)
+    ax.plot(np.append(rxy[:, 0], rxy[0, 0]), np.append(rxy[:, 1], rxy[0, 1]),
+            color="tab:green", lw=1.6, ls="--", zorder=5)
+    if bad:
+        B = np.asarray(bad)
+        ax.plot(B[:, 0], B[:, 1], "x", color="tab:orange", ms=11, mew=2.2,
+                zorder=6)
+    ax.set_xlim(cx - half, cx + half)
+    ax.set_ylim(cy - half, cy + half)
+    ax.set_aspect("equal")
+    ax.set_title(ttl, fontsize=11)
+axes[0].plot([a[k, 0], b[k, 0]], [a[k, 1], b[k, 1]], color="k", lw=3.0, zorder=7)
+for ax, lab in zip(axes, [True, False]):
+    ax.plot([], [], color="tab:blue", lw=1.1, label="OSM shoreline")
+    ax.plot([], [], color="tab:red", lw=1.3, label="resolved coastline (mesh)")
+    ax.plot([], [], color="tab:green", lw=1.6, ls="--", label="declared region")
+    if bad:
+        ax.plot([], [], "x", color="tab:orange", ms=9, mew=2,
+                label=f"min-angle offender ({len(bad)})")
+    ax.legend(loc="upper right", fontsize=8)
+fig.suptitle(f"{OUT.name}: resolved coastline against OSM", fontsize=13)
 fig.tight_layout()
 fig.savefig(OUT / "coastline_vs_osm.png", dpi=150)
 print(f"\nwrote {OUT / 'coastline_vs_osm.png'}")

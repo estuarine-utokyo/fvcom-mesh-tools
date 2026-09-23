@@ -980,8 +980,17 @@ _side = np.stack([
     np.linalg.norm(written.nodes[written.elements[:, (i + 1) % 3]]
                    - written.nodes[written.elements[:, i]], axis=1)
     for i in range(3)], axis=1)
-_dt = (2 * _area / _side.max(axis=1)) / np.sqrt(
-    9.81 * written.depths[written.elements].max(axis=1))
+# A dry element has no wave speed, and sqrt(g * H) for H <= 0 is NaN -- which
+# is what the first coastal hires run reported as its achieved time step.  The
+# floor is a DIAGNOSTIC one, not a depth written anywhere: shallower water
+# gives a LARGER dt, so an element clamped to it cannot become the binding one,
+# and the number this reports is still the real constraint (owner, 2026-09-23:
+# "the wave speed can be computed if you give it a sensible minimum depth").
+DT_MIN_DEPTH_M = 0.05
+_hmax = np.maximum(written.depths[written.elements].max(axis=1), DT_MIN_DEPTH_M)
+_n_dry_elements = int((written.depths[written.elements].max(axis=1)
+                       <= DT_MIN_DEPTH_M).sum())
+_dt = (2 * _area / _side.max(axis=1)) / np.sqrt(9.81 * _hmax)
 # Achieved, per region, on the finished mesh -- the same measure the seed
 # loop gated on, recomputed on the file that was actually written.
 per_region, missed = achieved_per_region(written)
@@ -999,6 +1008,8 @@ for _name, _st in per_region.items():
 reports["achieved"] = {
     "dt_min_s": float(_dt.min()),
     "dt_min_element": int(_dt.argmin()),
+    "dt_wave_speed_floor_m": DT_MIN_DEPTH_M,
+    "n_elements_at_or_above_datum": _n_dry_elements,
     "n_nodes": int(written.n_nodes),
     "n_elements": int(written.n_elements),
     "per_region": per_region,
@@ -1022,7 +1033,10 @@ say(f"wrote the FVCOM case: {', '.join(sorted(_case))} in {OUT / 'fvcom'}")
 
 say(f"QA {qa.n_gate_total - qa.n_gate_failed}/{qa.n_gate_total} "
     f"({reports['qa']['n_introduced']} introduced by the patch), achieved "
-    f"dt {_dt.min():.2f} s (predicted {reports['preflight'][0]['dt_s']:.2f} s)")
+    f"dt {_dt.min():.2f} s (predicted {reports['preflight'][0]['dt_s']:.2f} s"
+    + (f", {_n_dry_elements} element(s) at or above the datum, wave speed "
+       f"floored at {DT_MIN_DEPTH_M:g} m for this diagnostic)"
+       if _n_dry_elements else ")"))
 (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
 if reports["qa"]["n_introduced"]:
     raise SystemExit(
