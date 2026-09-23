@@ -350,12 +350,25 @@ target = min(r.target_h_m for _, r in regions_m)
 _OUTSIDE = "nearest" if HIRES is not None else "max"
 h_achieved = patch_sizing(base.nodes, base.elements, sized, distmesh_scale=1.0,
                           outside=_OUTSIDE)
+# The base mesh's own boundary, so a replaced stretch can be checked against
+# the coastline it does NOT own.  `resolve` moves the boundary onto the source
+# and a moved boundary can cross the frozen one -- verify_patch does not look
+# for that and matplotlib's TriFinder does, which is how a run with a clean
+# size field came back "Triangulation is invalid" for a single crossing pair.
+_ub, _cb = np.unique(np.sort(np.vstack(
+    [base.elements[:, [0, 1]], base.elements[:, [1, 2]],
+     base.elements[:, [2, 0]]]), axis=1), axis=0, return_counts=True)
 rc = rim_constraints(base.nodes, sel, size=h_achieved,
                      coastline=cfg["coastline"], shoreline=shore,
-                     tolerance_m=cfg["coastline_tolerance_m"])
+                     tolerance_m=cfg["coastline_tolerance_m"],
+                     boundary_edges=_ub[_cb == 1])
 reports["rim"] = {k: v for k, v in rc.items()
                   if isinstance(v, (int, float, str, bool))}
 say("rim: " + json.dumps(reports["rim"]))
+if rc.get("n_stretches_kept_to_avoid_a_crossing"):
+    say(f"    {rc['n_stretches_kept_to_avoid_a_crossing']} stretch(es) were "
+        "KEPT on the base polyline because following the source would have "
+        "crossed the frozen coastline")
 if rc.get("n_coastline_nodes_new", 0) < rc.get("n_coastline_nodes_replaced", 0):
     # The coastline is cut at the LOCAL size, and out at the edge of a
     # transition that is the AMBIENT size.  Measured on the first hires run:

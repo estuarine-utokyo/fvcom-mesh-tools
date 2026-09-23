@@ -595,6 +595,31 @@ def _source_substring(pts: np.ndarray, shoreline):
     return coords
 
 
+def _crosses_boundary(new: np.ndarray, xy: np.ndarray, idx, boundary_edges) -> bool:
+    """Would this replacement cross the boundary it does not own?
+
+    ``boundary_edges`` are the base mesh's boundary edges as node-id pairs.
+    The ones this stretch REPLACES are excluded -- the new curve shares its
+    endpoints with them, and a shared endpoint is a touch, not a crossing.
+    """
+    if boundary_edges is None or len(new) < 2:
+        return False
+    import shapely
+
+    e = np.asarray(boundary_edges, dtype=np.int64).reshape(-1, 2)
+    own = np.zeros(len(e), dtype=bool)
+    mine = set(np.asarray(idx, dtype=np.int64).ravel().tolist())
+    for k, (i, j) in enumerate(e.tolist()):
+        own[k] = i in mine and j in mine
+    others = e[~own]
+    if not len(others):
+        return False
+    line = shapely.LineString(np.asarray(new, dtype=float)[:, :2])
+    segs = [shapely.LineString(xy[[i, j], :2]) for i, j in others.tolist()]
+    tree = shapely.STRtree(segs)
+    return any(shapely.crosses(line, segs[q]) for q in tree.query(line))
+
+
 def _base_spacing(pts: np.ndarray) -> np.ndarray:
     """How far apart the base polyline's own vertices are, per vertex."""
     seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
@@ -712,6 +737,7 @@ def rim_constraints(
     *,
     size,
     coastline: str = "resample",
+    boundary_edges=None,
     shoreline=None,
     tolerance_m: float = 100.0,
 ) -> dict[str, Any]:
@@ -738,6 +764,7 @@ def rim_constraints(
     curves: list[np.ndarray] = []
     curve_of: dict[int, int] = {}
     n_resampled = 0
+    n_uncrossed = 0
     n_new = 0
 
     # A free rim node's two rim edges are both on the physical boundary, and
@@ -787,7 +814,20 @@ def rim_constraints(
                     new = coastline_points(xy[idx], size, mode=coastline,
                                            shoreline=shoreline,
                                            tolerance_m=tolerance_m)
-                    curves.append(coastline_curve(xy[idx], coastline, shoreline))
+                    if _crosses_boundary(new, xy, idx, boundary_edges):
+                        # A resolved coastline that crosses the FROZEN one is
+                        # a mesh whose boundary self-intersects.  verify_patch
+                        # does not look for it and matplotlib's TriFinder does:
+                        # the first run with a continuous size field came back
+                        # "Triangulation is invalid" for exactly one crossing
+                        # pair, a retained edge against a resolved one.
+                        # Subdividing cannot cross anything, because it stays
+                        # on the base polyline.
+                        new = _subdivide(xy[idx], size)
+                        n_uncrossed += 1
+                        curves.append(np.asarray(xy[idx], dtype=float))
+                    else:
+                        curves.append(coastline_curve(xy[idx], coastline, shoreline))
                     for q in new[1:-1]:
                         curve_of[_push(pts, base_id, q, -1)] = len(curves) - 1
                         ring_rows.append(len(pts) - 1)
@@ -808,6 +848,7 @@ def rim_constraints(
         "curve_of_pfix": curve_of,
         "n_pfix": int(len(pfix)),
         "n_egfix": int(len(egfix)),
+        "n_stretches_kept_to_avoid_a_crossing": n_uncrossed,
         "n_coastline_nodes_replaced": n_resampled,
         "n_coastline_nodes_new": n_new,
         "coastline_mode": coastline,
@@ -1281,7 +1322,18 @@ def region_resolution(nodes, elements, geometry, target_h_m: float, *,
         # one place it certainly covers, and one sample is better than a
         # claim of nothing.
         p = shapely.get_coordinates(geometry.representative_point())
-    finder = Triangulation(xy[:, 0], xy[:, 1], tri).get_trifinder()
+    try:
+        finder = Triangulation(xy[:, 0], xy[:, 1], tri).get_trifinder()
+    except RuntimeError as exc:
+        # The trapezoid map is stricter than verify_patch: it refuses a
+        # boundary that self-intersects, which a moved coastline can produce
+        # and which the frozen-zone checks do not look for.  That is one
+        # CANDIDATE's failure, so it has to arrive as one -- a RuntimeError
+        # here ended a whole five-seed search on its first seed.
+        raise ValueError(
+            f"the patched mesh is not a triangulation a point locator will "
+            f"accept ({exc}); a self-intersecting boundary is the usual "
+            "cause, and notebooks/422_mesh_validity.py says which") from exc
     found = finder(p[:, 0], p[:, 1])
     inside = found >= 0
     u = xy[tri[:, 1]] - xy[tri[:, 0]]

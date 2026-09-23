@@ -1589,3 +1589,28 @@ def test_the_size_field_outside_the_mesh_is_a_cliff_or_a_continuation():
         f"{smooth:.1f} m, on a field whose local value is {local:.1f} m")
     with pytest.raises(ValueError, match="outside must be"):
         base_size_field(nodes, tri, outside="zero")
+
+
+def test_a_replacement_that_would_cross_the_frozen_boundary_is_refused():
+    """A moved boundary can cross the one it does not own.
+
+    Measured: a hires run with a clean size field produced exactly one
+    crossing pair -- a retained boundary edge against a resolved one -- and
+    matplotlib's TriFinder refused the mesh with "Triangulation is invalid",
+    while verify_patch had passed it. Subdividing cannot cross anything,
+    because it stays on the base polyline.
+    """
+    from fvcom_mesh_tools.patch import _crosses_boundary
+
+    xy = np.array([[0.0, 0.0], [100.0, 0.0], [200.0, 0.0],   # the stretch
+                   [50.0, -50.0], [50.0, 50.0]])             # an edge across it
+    idx = np.array([0, 1, 2])
+    other = np.array([[3, 4]])
+    own = np.array([[0, 1], [1, 2]])
+    straight = xy[idx]
+    assert not _crosses_boundary(straight, xy, idx, own), (
+        "the stretch's own edges are shared endpoints, not crossings")
+    assert _crosses_boundary(straight, xy, idx, np.vstack([own, other]))
+    away = np.array([[0.0, 0.0], [100.0, 200.0], [200.0, 0.0]])
+    assert not _crosses_boundary(away, xy, idx, np.vstack([own, other]))
+    assert not _crosses_boundary(straight, xy, idx, None)
