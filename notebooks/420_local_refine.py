@@ -665,6 +665,11 @@ if HIRES is not None and _shl is not None and _walls_src:
         f"the coast, {len(WALL_PTS)} constrained point(s), {len(WALL_SEGS)} edge(s); "
         f"{n_acute} dropped for meeting another line at under 30 deg")
 PFIX_ALL = np.vstack([np.asarray(rc["pfix"], dtype=float), WALL_PTS])
+# What the fill was given, kept so a wall's geometry can be inspected
+# without re-running the whole cut.
+np.savez(OUT / "fill_constraints.npz", pfix=PFIX_ALL,
+         egfix=np.vstack([np.asarray(rc["egfix"], dtype=np.int64), WALL_SEGS]),
+         n_rim=len(rc["pfix"]))
 EGFIX_ALL = np.vstack([np.asarray(rc["egfix"], dtype=np.int64), WALL_SEGS])
 PFIX_BASE_ALL = np.concatenate([np.asarray(rc["pfix_base"], dtype=np.int64),
                                 np.full(len(WALL_PTS), -1, dtype=np.int64)])
