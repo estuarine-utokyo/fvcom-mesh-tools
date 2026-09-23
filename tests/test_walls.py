@@ -200,3 +200,14 @@ def test_walls_that_cross_or_butt_are_noded_at_a_shared_vertex():
     ends = [tuple(np.round(np.asarray(g.coords)[e], 6)) for g in out for e in (0, -1)]
     assert ends.count((50.0, 0.0)) == 4, "the crossing is a 4-way vertex"
     assert ends.count((80.0, 0.0)) == 3, "the T is a 3-way vertex"
+
+
+def test_a_detached_wall_of_one_edge_is_refused_with_the_reason():
+    """Two free tips and nothing between them: neither end has a second
+    sector, so the edge stays interior.  A slit needs a node inside it."""
+    xy, tri, n = grid()
+    with pytest.raises(ValueError, match="join two free tips"):
+        split_along_walls(xy, tri, [[node(3, 3, n), node(3, 4, n)]])
+    _, _, _, rep = split_along_walls(xy, tri, wall_edges_from_path(
+        [node(3, 3, n), node(3, 4, n), node(3, 5, n)]))
+    assert rep["n_copies"] == 1 and rep["n_free_tips"] == 2

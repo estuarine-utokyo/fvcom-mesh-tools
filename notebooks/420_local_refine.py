@@ -556,6 +556,15 @@ if HIRES is not None and _shl is not None and _walls_src:
                 _index[key] = len(_pts)
                 _pts.append(xy)
             ids.append(("wall", _index[key]))
+        ids = [x for k_, x in enumerate(ids) if k_ == 0 or x != ids[k_ - 1]]
+        if len(ids) == 2 and ids[0][0] == "wall" and ids[1][0] == "wall":
+            # A detached wall of ONE edge has two free tips and nothing
+            # between them: neither end has a second sector to copy into,
+            # so the edge stays interior and the split refuses it -- one
+            # such edge failed every seed.  A slit needs a node inside it.
+            mid = 0.5 * (_pts[ids[0][1]] + _pts[ids[1][1]])
+            _pts.append(mid)
+            ids.insert(1, ("wall", len(_pts) - 1))
         for (ka, ia), (kb, ib) in zip(ids[:-1], ids[1:]):
             if (ka, ia) != (kb, ib):
                 _segs.append(((ka, ia), (kb, ib)))

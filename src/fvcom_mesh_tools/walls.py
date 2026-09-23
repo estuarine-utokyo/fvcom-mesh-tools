@@ -157,8 +157,13 @@ def split_along_walls(nodes, elements, wall_edges) -> tuple[np.ndarray, np.ndarr
             per_wall[(a, b)] += 1
     not_split = [e for e, n in per_wall.items() if n != 2]
     if not_split:
-        raise ValueError(f"{len(not_split)} wall edge(s) did not become boundary on "
-                         f"both sides, first {not_split[:3]}")
+        lone = [e for e in not_split if sectors_at[e[0]] == 1 and sectors_at[e[1]] == 1]
+        raise ValueError(
+            f"{len(not_split)} wall edge(s) did not become boundary on both sides, "
+            f"first {not_split[:3]}"
+            + (f"; {len(lone)} of them join two free tips -- a detached wall of "
+               "one edge has no node inside it to split, so give it one"
+               if lone else ""))
     if (c > 2).any():
         raise ValueError("the split produced a non-manifold edge")
 
