@@ -1435,3 +1435,72 @@ def test_two_obc_segments_with_the_same_pair_do_not_collide():
     a = {"kind": "obc_pair", "id": [1, 3], "segment": 0}
     b = {"kind": "obc_pair", "id": [1, 3], "segment": 1}
     assert _offender_key(a) != _offender_key(b)
+
+
+# --- coastline: resolve, the hires fork -------------------------------------
+
+def _wiggly_source(n=400):
+    """A source shoreline with detail far finer than any element here."""
+    import shapely
+
+    t = np.linspace(0.0, 1000.0, n)
+    return shapely.LineString(np.column_stack([t, 20.0 * np.sin(t / 25.0)]))
+
+
+def test_resolve_follows_the_source_past_the_departure_veto():
+    """`resample` refuses a departure over the tolerance; `resolve` is the branch
+    where the coastline is SUPPOSED to move, so it has no veto at all."""
+    from fvcom_mesh_tools.patch import coastline_points
+
+    src = _wiggly_source()
+    base = np.array([[0.0, 0.0], [500.0, 0.0], [1000.0, 0.0]])
+    with pytest.raises(ValueError, match="beyond the"):
+        coastline_points(base, 25.0, mode="resample", shoreline=src, tolerance_m=5.0)
+    out = coastline_points(base, 25.0, mode="resolve", shoreline=src, tolerance_m=5.0)
+    assert len(out) > len(base)
+    assert np.abs(out[1:-1, 1]).max() > 5.0, "it must have left the base polyline"
+    assert np.allclose(out[0], base[0]) and np.allclose(out[-1], base[-1]), (
+        "the frozen anchors are still frozen")
+
+
+def test_resolve_refuses_a_stretch_the_source_does_not_cover():
+    """Silently subdividing the base is how a fidelity check certifies itself."""
+    import shapely
+
+    from fvcom_mesh_tools.patch import coastline_curve, coastline_points
+
+    # Both endpoints of the stretch project to the SAME station on the source,
+    # so there is no substring between them and _source_substring returns None.
+    source = shapely.LineString([[0.0, 0.0], [1000.0, 0.0]])
+    base = np.array([[500.0, 100.0], [500.0, 200.0]])
+    with pytest.raises(ValueError, match="no source component"):
+        coastline_points(base, 25.0, mode="resolve", shoreline=source)
+    with pytest.raises(ValueError, match="no source component"):
+        coastline_curve(base, "resolve", source)
+    # the same stretch on the `resample` branch falls back to the base, which
+    # is the behaviour this branch refuses rather than a bug in that one
+    out = coastline_points(base, 25.0, mode="resample", shoreline=source,
+                           tolerance_m=1e9)
+    assert np.allclose(out[0], base[0]) and np.allclose(out[-1], base[-1])
+
+
+def test_resolve_keeps_core_detail_that_the_median_rule_destroys():
+    """The simplifier's tolerance is a quarter of the MEDIAN size over the whole
+    substring, so a stretch fine in the core and coarse in the transition loses
+    its core detail at the transition's scale (review P2-11)."""
+    from fvcom_mesh_tools.patch import coastline_points
+
+    src = _wiggly_source()
+    base = np.array([[0.0, 0.0], [1000.0, 0.0]])
+
+    def size(q):
+        # 10 m over the first fifth, 400 m after it
+        return np.where(np.asarray(q)[:, 0] < 200.0, 10.0, 400.0)
+
+    coarse = coastline_points(base, size, mode="resample", shoreline=src,
+                              tolerance_m=1e9)
+    fine = coastline_points(base, size, mode="resolve", shoreline=src,
+                            tolerance_m=1e9)
+    in_core = lambda p: p[(p[:, 0] > 0) & (p[:, 0] < 200.0)]      # noqa: E731
+    assert len(in_core(fine)) > len(in_core(coarse)), (
+        "the pointwise tolerance has to keep what the median rule threw away")

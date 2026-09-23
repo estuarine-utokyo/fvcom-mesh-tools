@@ -29,6 +29,11 @@ import oceanmesh as om
 import shapely
 from shapely.ops import unary_union
 
+from fvcom_mesh_tools.bathy_patch import (  # noqa: E402
+    edge_slopes,
+    interface_lines,
+    patch_depths,
+)
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14, write_fort14
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case
 from fvcom_mesh_tools.patch import (
@@ -107,9 +112,11 @@ land_m = None
 if LAND.exists():
     land_m = unary_union(list(gpd.read_file(LAND).to_crs(MESH_EPSG).geometry))
     say(f"land {LAND.name}: {len(getattr(land_m, 'geoms', [land_m]))} polygons")
-elif cfg["coastline"] == "resample":
-    raise SystemExit(f"coastline: resample needs a source shoreline; "
-                     f"FMESH_LAND={LAND} does not exist")
+elif cfg["coastline"] in ("resample", "resolve"):
+    raise SystemExit(f"coastline: {cfg['coastline']} needs a source shoreline; "
+                     f"FMESH_LAND={LAND} does not exist. On the hires branch "
+                     "that is the OSM land polygons (DATA_INVENTORY.md: "
+                     "coastline precedence #1).")
 
 # ---------------------------------------------------------------- geometry
 # The recipe declares the region in lon/lat; everything below is in the mesh
@@ -120,6 +127,7 @@ elif cfg["coastline"] == "resample":
 from pyproj import Transformer  # noqa: E402
 
 to_m = Transformer.from_crs("EPSG:4326", f"EPSG:{MESH_EPSG}", always_xy=True)
+to_ll = Transformer.from_crs(f"EPSG:{MESH_EPSG}", "EPSG:4326", always_xy=True)
 
 
 def region_in_metres(region):
@@ -177,12 +185,44 @@ _mt = Triangulation(base.nodes[:, 0], base.nodes[:, 1], base.elements)
 _di = LinearTriInterpolator(_mt, base.depths)
 
 
-def depth_of(lon, lat):
+def base_depth_of(lon, lat):
     x, y = to_m.transform(np.asarray(lon), np.asarray(lat))
     # Outside the base mesh there is no depth to inherit, so NaN is the
     # honest answer; preflight refuses it, which is right for a region that
     # is not over this mesh at all.
     return np.ma.filled(_di(x, y), np.nan)
+
+
+# ---------------------------------------------------------------- the branch
+# ONE `if`, taken here (owner, 2026-09-23).  `hires` absent and nothing below
+# is reached; everything the recipe did before it existed, it still does.
+HIRES = cfg["hires"]
+if HIRES is not None:
+    say(f"hires: coastline {HIRES['coastline']}, bathymetry "
+        f"{HIRES['bathymetry']}, scope {HIRES['scope']}, blend {HIRES['blend']}")
+    if HIRES["bathymetry"] == "tokyo_bay":
+        say("hires: depths come from the ladder, NOT from the base mesh. "
+            "Nothing is floored, capped or smoothed here -- the minimum depth "
+            "and the r-factor smoothing are the next step.")
+
+_LADDER = HIRES is not None and HIRES["bathymetry"] == "tokyo_bay"
+
+
+def depth_of(lon, lat):
+    """The field pre-flight judges: the one the mesh will actually carry.
+
+    On the hires branch that is the ladder, not the base mesh -- advertising a
+    time step computed on a seabed the run will not have is the mistake this
+    avoids.  Depths at or above the datum come back as they are: a tidal flat
+    is a tidal flat, and `allow_dry` lets pre-flight report it instead of
+    refusing it.
+    """
+    if not _LADDER:
+        return base_depth_of(lon, lat)
+    from fvcom_mesh_tools.dem import tokyo_bay as _tb
+
+    d, _rung, _dist = _tb.sample(np.asarray(lon), np.asarray(lat))
+    return d
 
 
 # The declared regions in the mesh CRS, so a figure can outline what was
@@ -203,7 +243,7 @@ for geom, region in regions_m:
     pf = preflight(region, gradation=cfg["gradation"],
                    dt_expected_s=cfg["dt_expected_s"],
                    ambient_h_m=ambient[region.name], depth_of=depth_of,
-                   land=land_ll)
+                   land=land_ll, allow_dry=_LADDER)
     reports["preflight"].append(pf)
     say(f"preflight {region.name}: transition {pf['transition_m']:.0f} m, "
         f"dt {pf['dt_s']:.2f} s, +{pf['elements_added']:.0f} elements")
@@ -211,6 +251,10 @@ for geom, region in regions_m:
         say("ALERT " + pf["dt_alert"])
     if pf["land_alert"]:
         say("ALERT " + pf["land_alert"])
+    if pf.get("core_at_or_above_datum"):
+        say(f"    {pf['core_at_or_above_datum']} of {pf['core_samples']} core "
+            f"samples ({100 * pf['core_dry_fraction']:.0f} %) are at or above "
+            "the datum -- a tidal flat, which needs WET_DRY_ON and a MIN_DEPTH")
 
 # ------------------------------------------------------------------- cut
 widths = {region.name: (region.transition_m if region.transition_m is not None
@@ -258,13 +302,25 @@ sel = select_patch(base.nodes, base.elements, footprint,
 reports["selection"] = sel.report
 say("cut: " + json.dumps(sel.report))
 
+# The interface the blend's weight measures from: the rim of the RETAINED
+# region, minus the base mesh's own boundary.  It is computed on the base
+# because retained nodes keep their coordinates, so these lines are the same
+# lines after stitching -- and it is the cut the selection ACTUALLY made,
+# which is not the analytic buffer: select_patch takes whole faces by centroid
+# and then grows the selection to repair pinches.
+iface_lines = interface_lines(base.nodes, base.elements, sel.retained) \
+    if HIRES is not None else None
+if HIRES is not None:
+    say(f"interface: {len(iface_lines.geoms)} edge(s), "
+        f"{iface_lines.length / 1000:.2f} km")
+
 # ------------------------------------------------------------------- rim
 # The source shoreline for `resample` is picked ONCE per stretch, by the land
 # ring the stretch already lies on.  Picking it inside the resampler by
 # nearest distance would let a stretch jump to the opposite bank at a strait.
 free = np.setdiff1d(np.unique(sel.rim_edges), sel.frozen_nodes)
 shore = None
-if cfg["coastline"] == "resample" and free.size:
+if cfg["coastline"] in ("resample", "resolve") and free.size:
     # Every land ring within reach is offered, and rim_constraints picks the
     # one nearest EACH stretch.  Offering a single nearest ring for the whole
     # free rim is a closest-pair distance, and two stretches on opposite
@@ -277,8 +333,8 @@ if cfg["coastline"] == "resample" and free.size:
             if shapely.intersects(reach, r):
                 shore.append(shapely.LineString(np.asarray(r.coords)))
     if not shore:
-        raise SystemExit("coastline: resample found no source shoreline within "
-                         "3 km of the free rim")
+        raise SystemExit(f"coastline: {cfg['coastline']} found no source "
+                         "shoreline within 3 km of the free rim")
     say(f"source shoreline: {len(shore)} ring(s) within 3 km, nearest "
         f"{min(shapely.distance(pts, ln) for ln in shore):.1f} m from the free rim")
 
@@ -542,13 +598,45 @@ def attempt(seed):
     imp["n_depths_recomputed"] = int(_shifted.sum())
     imp["n_recomputed_outside_base"] = int(_n_out)
 
+    if _LADDER:
+        # The ladder, sampled at the FINAL coordinates -- after improve_patch,
+        # because the repair slides boundary nodes along their coastline curve
+        # and a depth sampled before the move belongs to a coordinate the mesh
+        # no longer has.  Only new nodes: every retained node keeps its base
+        # depth bit for bit, which is what makes the frozen contract checkable.
+        _idx = np.flatnonzero(is_new)
+        _lo, _la = to_ll.transform(nodes[_idx, 0], nodes[_idx, 1])
+        _d, binfo = patch_depths(
+            np.column_stack([_lo, _la]), nodes[_idx], depths[_idx],
+            regions=[g for g, _ in regions_m], interface=iface_lines,
+            scope=HIRES["scope"], blend=HIRES["blend"])
+        depths = depths.copy()
+        depths[_idx] = _d
+        binfo["slopes"] = edge_slopes(nodes, elements, depths, is_new)
+        out["bathymetry"] = binfo
+        say(f"hires depths: {binfo['n_from_m7001']} m7001 / "
+            f"{binfo['n_from_grid30']} grid30 / {binfo['n_from_kanto']} kanto / "
+            f"{binfo['n_extrapolated']} extrapolated, "
+            f"{binfo['depth_min_m']:.2f}..{binfo['depth_max_m']:.2f} m, "
+            f"{binfo['n_at_or_below_zero']} at or above the datum, "
+            f"worst |source-base| {binfo['max_source_minus_base_m']:.2f} m")
+        if binfo["n_extrapolated"]:
+            say(f"    {binfo['n_extrapolated']} node(s) were covered by no "
+                f"product and were extrapolated up to "
+                f"{binfo['extrapolated_distance_max_m']:.0f} m")
+        _sl = binfo["slopes"]["seam"]
+        say(f"    seam: {_sl['n']} retained-to-new edges, slope max "
+            f"{_sl.get('slope_max', 0):.4f} m/m"
+            + (f", r max {_sl['r_max']:.4f}" if _sl.get("r_max") is not None
+               else " (r undefined on an intertidal pair)"))
+
     # Inherit the base's r-factor property, not just its values. The base is
     # m7001tp_rfac0p2_cap300: every one of its edges satisfies r <= 0.2, and
     # interpolation does not carry that across a new edge joining different
     # base elements -- ten new edges came out above it, the worst at 0.3075.
     # Only new nodes' depths move; every base depth is untouched, and the
     # report says how far a new one was pulled.
-    if cfg["rfactor_limit"] != "off":
+    if cfg["rfactor_limit"] != "off" and not _LADDER:
         rmax = base_rmax if cfg["rfactor_limit"] == "base" \
             else float(cfg["rfactor_limit"])
         depths, rinfo = limit_rfactor(
@@ -741,6 +829,20 @@ for seed in seeds:
     # at one element 18 km from Futtsu, the contract freezes that element,
     # and an absolute gate blamed every seed for it.
     new_bad = introduced_violations(qa.checks, len(sel.retained), written.elements)
+    if _LADDER:
+        # run_qa's floor is 2 m and this branch writes the depths as the source
+        # gives them, so a tidal flat fails it.  That is a tidal flat, not a
+        # defect, and gating it would refuse the very field the option exists
+        # to deliver; it is re-gated in the next step, once a floor is
+        # declared.  Reported here, and named, so nobody mistakes the absence
+        # of the gate for the absence of the shallow water.
+        _shallow = [b for b in new_bad if b.get("check") == "min_depth_clip"]
+        if _shallow:
+            new_bad = [b for b in new_bad if b.get("check") != "min_depth_clip"]
+            say(f"    seed {seed}: min-depth is REPORTED not gated on this "
+                f"branch -- {len(_shallow)} offender(s), minimum "
+                f"{written.depths.min():.2f} m")
+        out["min_depth_reported_not_gated"] = len(_shallow)
     per_region, missed = achieved_per_region(written)
     out["achieved_per_region"] = per_region
     for _name in missed:

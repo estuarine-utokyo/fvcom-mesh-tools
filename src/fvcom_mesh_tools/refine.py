@@ -54,6 +54,10 @@ from fvcom_mesh_tools.sizing import _geometry, _keys, _positive
 
 __all__ = [
     "COASTLINE_MODES",
+    "HIRES_BATHYMETRY",
+    "HIRES_BLEND",
+    "HIRES_COASTLINE",
+    "HIRES_SCOPE",
     "GRAVITY_M_S2",
     "ALTITUDE_OVER_EDGE",
     "depths_from_base",
@@ -86,6 +90,28 @@ __all__ = [
 #: Every mode is bounded by ``coastline_tolerance_m`` against the base
 #: polyline, and none of them touches the coastline outside the hole.
 COASTLINE_MODES = ("preserve", "resample", "spline")
+
+#: The ``hires`` branch (owner, 2026-09-23).  It is ONE ``if`` taken at the
+#: top of the driver, and inside it the FIRST fork is the coastline: keep the
+#: region's coastline, or resolve it.  Resolving means following OSM
+#: faithfully -- so ``coastline_tolerance_m``, whose job is to refuse a
+#: coastline that moved, does not apply on that branch and is refused
+#: alongside it.  The base polyline runs 300-600 m between nodes and sits up
+#: to 68.5 m from OSM at its segment midpoints; recovering that is the
+#: request, not a violation to be bounded.
+HIRES_COASTLINE = ("resolve", "preserve")
+
+#: ``tokyo_bay`` is the ladder of :mod:`fvcom_mesh_tools.dem.tokyo_bay`, which
+#: is this repository's own resolved precedence (``DATA_INVENTORY.md``):
+#: M7001, then the 30 m grid where M7001 has nothing, then the Kanto blend,
+#: then an extrapolation whose area is reported.  ``base`` inherits the base
+#: mesh's depths exactly as the default branch does -- offered because making
+#: the coastline the first fork separates it from the depths, and a region
+#: whose shore needs resolving does not necessarily need its seabed replaced.
+HIRES_BATHYMETRY = ("tokyo_bay", "base")
+
+HIRES_SCOPE = ("hole", "core")
+HIRES_BLEND = ("ramp", "none")
 
 GRAVITY_M_S2 = 9.81
 
@@ -195,7 +221,7 @@ def load_refine(path) -> dict[str, Any]:
         cfg = yaml.load(stream, Loader=UniqueLoader)
     _keys(cfg, ["base_mesh", "dt_expected_s", "gradation", "refine"],
           ["base_depth", "base_obc", "coastline", "coastline_tolerance_m",
-           "rfactor_limit"])
+           "rfactor_limit", "hires"])
 
     def _resolve(key, required=True):
         if key not in cfg or cfg[key] is None:
@@ -226,16 +252,24 @@ def load_refine(path) -> dict[str, Any]:
                          "fort.14 carries its own depths")
     cfg["dt_expected_s"] = _positive(cfg["dt_expected_s"], "dt_expected_s")
     cfg["gradation"] = _positive(cfg["gradation"], "gradation")
+    cfg["hires"] = _hires(cfg.get("hires"), cfg)
     # `preserve` is the default: the operation refines an existing mesh and
     # leaves its coastline where it is (owner, 2026-09-22).  `resample` is
     # for the case where the base polyline is known to be a poor rendering of
     # a source shoreline that is available -- it buys fidelity and costs the
     # guarantee that the coastline did not move.
-    mode = cfg.setdefault("coastline", "preserve")
-    if mode not in COASTLINE_MODES:
-        raise ValueError(f"coastline must be one of {COASTLINE_MODES}, got {mode!r}")
-    cfg["coastline_tolerance_m"] = _positive(
-        cfg.get("coastline_tolerance_m", 100.0), "coastline_tolerance_m")
+    if cfg["hires"] is not None:
+        # The branch drives the coastline itself, and its `resolve` fork has
+        # no departure veto, so the two keys that steer the other branch are
+        # refused alongside it by `_hires` and are not defaulted here.
+        cfg["coastline"] = cfg["hires"]["coastline"]
+        cfg["coastline_tolerance_m"] = float("inf")
+    else:
+        mode = cfg.setdefault("coastline", "preserve")
+        if mode not in COASTLINE_MODES:
+            raise ValueError(f"coastline must be one of {COASTLINE_MODES}, got {mode!r}")
+        cfg["coastline_tolerance_m"] = _positive(
+            cfg.get("coastline_tolerance_m", 100.0), "coastline_tolerance_m")
     # The base is a product with a property -- m7001tp_rfac0p2_cap300 means
     # r <= 0.2 on every edge -- and interpolation does not inherit it. `base`
     # asks for whatever the base itself achieves, a number asks for that, and
@@ -263,6 +297,48 @@ def load_refine(path) -> dict[str, Any]:
     return cfg
 
 
+def _hires(spec, cfg) -> dict[str, Any] | None:
+    """Validate the ``hires`` block, or ``None`` when the recipe has none.
+
+    Its presence is the branch (owner, 2026-09-23): absent, nothing in this
+    option is reached and the recipe behaves exactly as it did before.
+
+    ``coastline`` and ``coastline_tolerance_m`` are refused alongside it. They
+    steer the other branch, and a recipe that sets both is asking for two
+    different things about the same coastline -- one of them a veto on the
+    coastline moving, the other an instruction to move it onto OSM.
+    """
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        raise ValueError("hires must be a mapping")
+    for key in ("coastline", "coastline_tolerance_m"):
+        if key in cfg and cfg[key] is not None:
+            raise ValueError(
+                f"hires and {key} may not both be declared: hires.coastline is "
+                "the fork, and its `resolve` value moves the coastline onto the "
+                "source on purpose, which is what "
+                f"{'coastline_tolerance_m' if key.endswith('_m') else key} exists "
+                "to refuse")
+    _keys(spec, [], ["coastline", "bathymetry", "scope", "blend"])
+    out = {
+        "coastline": spec.get("coastline", "resolve"),
+        "bathymetry": spec.get("bathymetry", "tokyo_bay"),
+        "scope": spec.get("scope", "hole"),
+        "blend": spec.get("blend", "ramp"),
+    }
+    for key, allowed in (("coastline", HIRES_COASTLINE),
+                         ("bathymetry", HIRES_BATHYMETRY),
+                         ("scope", HIRES_SCOPE), ("blend", HIRES_BLEND)):
+        if out[key] not in allowed:
+            raise ValueError(f"hires.{key} must be one of {allowed}, got {out[key]!r}")
+    if out["scope"] == "core" and out["blend"] == "ramp":
+        raise ValueError("hires: scope: core with blend: ramp is contradictory -- "
+                         "a ramp that is not evaluated over the transition is "
+                         "not a ramp")
+    return out
+
+
 def _to_metres(geom, lat0: float):
     """Project a lon/lat geometry to local metres about the equator meridian."""
     from shapely.affinity import affine_transform
@@ -280,6 +356,7 @@ def preflight(
     depth_of,
     land=None,
     samples: int = 4000,
+    allow_dry: bool = False,
 ) -> dict[str, Any]:
     """Decide whether a region can be met, before any meshing happens.
 
@@ -339,8 +416,18 @@ def preflight(
         raise ValueError(f"{region.name}: the core is entirely on land")
 
     depth = np.asarray(depth_of(plon[wet], plat[wet]), dtype=float)
-    if not np.isfinite(depth).all() or (depth <= 0).any():
+    if not np.isfinite(depth).all():
+        raise ValueError(f"{region.name}: depths must be finite")
+    # A depth at or below zero is a defect in a base mesh and a TIDAL FLAT in
+    # a hires recipe, which FVCOM integrates with wetting and drying (owner,
+    # 2026-09-23).  What this refusal protects is the wave speed, and that is
+    # bounded by the DEEPEST water rather than the shallowest -- so the honest
+    # requirement is that there be some water, not that there be no flat.
+    dry = depth <= 0.0
+    if not allow_dry and dry.any():
         raise ValueError(f"{region.name}: depths must be finite and positive-down")
+    if not (depth.max() > 0.0):
+        raise ValueError(f"{region.name}: no sample in the core is below the datum")
     c = np.sqrt(GRAVITY_M_S2 * depth.max())
     dt_edge = region.target_h_m / c
     dt = ALTITUDE_OVER_EDGE * dt_edge          # the measure that is reported
@@ -382,6 +469,8 @@ def preflight(
         "core_on_land": int(on_land.sum()),
         "core_depth_min_m": float(depth.min()),
         "core_depth_max_m": float(depth.max()),
+        "core_at_or_above_datum": int(dry.sum()),
+        "core_dry_fraction": float(dry.mean()),
         "dt_s": float(dt),
         "dt_by_shortest_edge_s": float(dt_edge),
         # The equilateral bound is optimistic and the caller pays for the

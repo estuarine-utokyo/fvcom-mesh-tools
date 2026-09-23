@@ -132,6 +132,10 @@ def seed_search_env(tmp_path, attempts, qa_failures, misses=None):
             {"check": c.check_id, "kind": "element", "id": 0}
             for c in checks if c.status == "fail"],
         "_called": called, "_written": written,
+        # The hires branch is one `if` at the top of the driver, so the search
+        # block reads its flag.  False is the default path: everything the
+        # recipe did before the branch existed.
+        "_LADDER": False,
     }
 
 
@@ -249,3 +253,38 @@ def test_the_m2_step_is_one_the_output_interval_divides():
         assert abs(steps - round(steps)) < 1e-9, (
             f"{dte} s leaves {steps} steps per output, which FVCOM refuses")
     assert dividing_step(interval, isplit, 1.7276) == 1.5
+
+
+def test_the_minimum_depth_is_reported_not_gated_on_the_hires_branch(tmp_path):
+    """The branch writes the depths as the source gives them, so a tidal flat
+    fails run_qa's 2 m floor.  That is a tidal flat under wetting and drying,
+    not a defect the seed can be blamed for; gating it would refuse the very
+    field the option exists to deliver (owner, 2026-09-23).
+    """
+    env = seed_search_env(tmp_path, attempts={0: (np.array([0]), None, None, np.arange(1))},
+                     qa_failures={0: 1})
+
+    def run_qa(written_mesh, **kw):
+        return SimpleNamespace(
+            n_gate_total=21, n_gate_failed=1,
+            checks=[SimpleNamespace(check_id="min_depth_clip",
+                                    requirement=">= 2 m",
+                                    observed="0.07 m", status="fail")])
+
+    env["run_qa"] = run_qa
+    env["os"].environ = {"LR_SEEDS": "0"}
+    env["_LADDER"] = True
+    run_search(env)
+    attempt = env["reports"]["attempts"][0]
+    assert attempt["qa"]["n_introduced"] == 0, (
+        "a shallow node must not be counted against the seed on this branch")
+    assert attempt["min_depth_reported_not_gated"] == 1, (
+        "and the absence of the gate must not be the absence of the report")
+
+    env2 = seed_search_env(tmp_path, attempts={0: (np.array([0]), None, None, np.arange(1))},
+                      qa_failures={0: 1})
+    env2["run_qa"] = run_qa
+    env2["os"].environ = {"LR_SEEDS": "0"}
+    run_search(env2)                      # _LADDER False: the default branch
+    assert env2["reports"]["attempts"][0]["qa"]["n_introduced"] == 1, (
+        "off the branch the floor is still a gate")

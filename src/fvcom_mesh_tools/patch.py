@@ -399,18 +399,29 @@ def coastline_points(
     pts = np.asarray(pts, dtype=float)[:, :2]
     if len(pts) < 2:
         raise ValueError("a coastline stretch needs at least two points")
-    if mode not in ("preserve", "resample", "spline"):
+    if mode not in ("preserve", "resample", "spline", "resolve"):
         raise ValueError(f"unknown coastline mode {mode!r}")
     base = shapely.LineString(pts)
 
-    if mode == "resample":
+    if mode in ("resample", "resolve"):
         if shoreline is None:
-            raise ValueError("coastline: resample needs the source shoreline")
-        out = _resample_on_source(pts, shoreline, size)
+            raise ValueError(f"coastline: {mode} needs the source shoreline")
+        out = _resample_on_source(pts, shoreline, size,
+                                  pointwise=mode == "resolve",
+                                  require=mode == "resolve")
     elif mode == "spline":
         out = _spline_resample(pts, size)
     else:
         out = _subdivide(pts, size)
+
+    # `resolve` is the hires branch, and there the coastline is SUPPOSED to
+    # move: the base polyline runs 300-600 m between nodes and sits up to
+    # 68.5 m from OSM at its segment midpoints, and recovering that is the
+    # request.  The departure is measured and reported by the driver instead
+    # (owner, 2026-09-23).  Every other mode keeps the veto unchanged.
+    if mode == "resolve":
+        out[0], out[-1] = pts[0], pts[-1]
+        return out
 
     off = shapely.distance(shapely.points(out[1:-1]), base) if len(out) > 2 \
         else np.zeros(0)
@@ -513,10 +524,20 @@ def coastline_curve(pts: np.ndarray, mode: str, shoreline=None) -> np.ndarray:
     projected onto it lands in the sea.
     """
     pts = np.asarray(pts, dtype=float)[:, :2]
-    if mode == "resample":
+    if mode in ("resample", "resolve"):
         piece = _source_substring(pts, shoreline)
         if piece is not None:
             return piece
+        if mode == "resolve":
+            # Silently returning the base here is how a fidelity check
+            # certifies "zero departure from the source" without ever having
+            # looked at the source (review P2-12, 2026-09-23).  On the hires
+            # branch the instruction is to follow OSM, so a stretch OSM does
+            # not cover is a refusal, not a fallback.
+            raise ValueError(
+                "coastline: resolve found no source component for a stretch; "
+                "the shoreline does not cover it, or the match was rejected "
+                "as running the wrong way round a ring")
 
     if mode == "spline":
         from scipy.interpolate import CubicSpline
@@ -573,7 +594,9 @@ def _source_substring(pts: np.ndarray, shoreline):
 
 
 def _resample_on_source(pts: np.ndarray, shoreline, size,
-                        simplify_frac: float = 0.25) -> np.ndarray:
+                        simplify_frac: float = 0.25, *,
+                        pointwise: bool = False,
+                        require: bool = False) -> np.ndarray:
     """Re-space one stretch along the source shoreline between its endpoints.
 
     The source is simplified to a fraction of the LOCAL element size first.
@@ -582,17 +605,48 @@ def _resample_on_source(pts: np.ndarray, shoreline, size,
     other: measured on the Futtsu patch, every surviving QA failure was a
     coastal element 1.8-2.3 km out, where the transition is coarse and the
     coast is not.  Simplifying is not throwing detail away -- there is no
-    room for it at that size -- and what remains is still bounded by
-    ``coastline_tolerance_m`` against the base polyline.
+    room for it at that size.
+
+    ``pointwise`` is what the hires branch needs.  The default tolerance is a
+    quarter of the MEDIAN size over the whole substring, and a stretch that is
+    fine in the core and coarse in the transition therefore has its core
+    detail simplified away at the transition's scale (review P2-11).  The
+    pointwise form splits the substring into octave bands of the local size
+    and simplifies each with a quarter of that band's SMALLEST size, so detail
+    survives wherever there are elements small enough to carry it.
     """
     import shapely
 
     coords = _source_substring(pts, shoreline)
     if coords is None:
+        if require:
+            raise ValueError(
+                "coastline: resolve found no source component for a stretch")
         return _subdivide(pts, size)
-    h = float(np.median(_size_at(size, coords)))
-    simple = shapely.simplify(shapely.LineString(coords), simplify_frac * h)
-    out = np.asarray(simple.coords, dtype=float)[:, :2]
+    if not pointwise:
+        h = float(np.median(_size_at(size, coords)))
+        simple = shapely.simplify(shapely.LineString(coords), simplify_frac * h)
+        out = np.asarray(simple.coords, dtype=float)[:, :2]
+        return _walk(out if len(out) >= 2 else coords, size)
+
+    h = _size_at(size, coords)
+    # One band per octave of the local size.  Runs are simplified separately
+    # and rejoined; the shared vertex at each join is kept exactly once, so
+    # the curve stays continuous and no band can move another band's ends.
+    band = np.floor(np.log2(h / h.min())).astype(np.int64)
+    cuts = np.flatnonzero(np.diff(band)) + 1
+    out = [coords[0]]
+    for a, b in zip(np.concatenate([[0], cuts]),
+                    np.concatenate([cuts, [len(coords)]])):
+        run = coords[a:min(b + 1, len(coords))]
+        if len(run) < 2:
+            continue
+        tol = simplify_frac * float(h[a:b].min())
+        simple = np.asarray(
+            shapely.simplify(shapely.LineString(run), tol).coords,
+            dtype=float)[:, :2]
+        out.extend((simple if len(simple) >= 2 else run)[1:])
+    out = np.asarray(out, dtype=float)
     return _walk(out if len(out) >= 2 else coords, size)
 
 

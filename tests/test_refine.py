@@ -719,3 +719,72 @@ def test_the_preflight_brackets_the_step_a_real_fill_delivers():
     assert rep["dt_worst_legal_cell_s"] < 2.49 < rep["dt_s"], (
         "the bracket must contain what Futtsu actually delivered")
     assert "dt_worst_legal_cell_s" in rep["dt_alert"]
+
+
+# --- the hires branch -------------------------------------------------------
+# Its presence is the branch (owner, 2026-09-23): absent, nothing in the option
+# is reached, which is the property the whole design rests on.
+
+def _hires_recipe(tmp_path, body: str):
+    mesh = tmp_path / "base.14"
+    mesh.write_text("stub\n")
+    p = tmp_path / "r.yaml"
+    p.write_text(
+        "base_mesh: base.14\ndt_expected_s: 4.5\ngradation: 0.165\n"
+        + body +
+        "refine:\n  - name: a\n"
+        "    geometry: {circle: {center: [139.79, 35.32], radius_m: 300}}\n"
+        "    target_h_m: 30\n"
+    )
+    return p
+
+
+def test_a_recipe_without_hires_is_untouched(tmp_path):
+    cfg = load_refine(_hires_recipe(tmp_path, ""))
+    assert cfg["hires"] is None
+    assert cfg["coastline"] == "preserve"
+    assert cfg["coastline_tolerance_m"] == 100.0
+
+
+def test_hires_defaults_to_resolving_the_coastline_on_the_ladder(tmp_path):
+    cfg = load_refine(_hires_recipe(tmp_path, "hires: {}\n"))
+    assert cfg["hires"] == {"coastline": "resolve", "bathymetry": "tokyo_bay",
+                            "scope": "hole", "blend": "ramp"}
+    # the branch drives the coastline, and `resolve` has no departure veto
+    assert cfg["coastline"] == "resolve"
+    assert cfg["coastline_tolerance_m"] == float("inf")
+
+
+def test_hires_can_keep_the_coastline_and_still_replace_the_depths(tmp_path):
+    cfg = load_refine(_hires_recipe(tmp_path, "hires: {coastline: preserve}\n"))
+    assert cfg["coastline"] == "preserve"
+    assert cfg["hires"]["bathymetry"] == "tokyo_bay"
+
+
+def test_hires_can_resolve_the_coastline_and_keep_the_depths(tmp_path):
+    """The coastline is the FIRST fork, so it is independent of the seabed."""
+    cfg = load_refine(_hires_recipe(tmp_path, "hires: {bathymetry: base}\n"))
+    assert cfg["coastline"] == "resolve"
+    assert cfg["hires"]["bathymetry"] == "base"
+
+
+@pytest.mark.parametrize("key", ["coastline: resample", "coastline_tolerance_m: 50"])
+def test_hires_beside_the_other_branchs_keys_is_refused(tmp_path, key):
+    """A recipe setting both asks for two different things about one coastline."""
+    with pytest.raises(ValueError, match="may not both be declared"):
+        load_refine(_hires_recipe(tmp_path, f"hires: {{}}\n{key}\n"))
+
+
+@pytest.mark.parametrize("body,msg", [
+    ("hires: {coastline: redraw}\n", "hires.coastline must be one of"),
+    ("hires: {bathymetry: jfa}\n", "hires.bathymetry must be one of"),
+    ("hires: {scope: everything}\n", "hires.scope must be one of"),
+    ("hires: {blend: smooth}\n", "hires.blend must be one of"),
+    ("hires: {hmin_m: 3.0}\n", "unknown"),
+    ("hires: {rfactor: 0.2}\n", "unknown"),
+    ("hires: {scope: core, blend: ramp}\n", "not a ramp"),
+    ("hires: 3\n", "hires must be a mapping"),
+])
+def test_hires_refusals(tmp_path, body, msg):
+    with pytest.raises(ValueError, match=msg):
+        load_refine(_hires_recipe(tmp_path, body))

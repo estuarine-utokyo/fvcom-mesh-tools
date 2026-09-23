@@ -1,0 +1,45 @@
+# The hires branch, on the Futtsu case that already exists.
+#
+# `futtsu_nori.yaml` refines the MESH and inherits the base mesh's depths node
+# for node.  This refines the coastline against OSM and takes the depths from
+# the Tokyo Bay ladder instead.  Everything else -- the base, the region, the
+# target, the gradation -- is deliberately identical, so the difference
+# between the two outputs is the option and nothing else.
+#
+# What this recipe does NOT deliver, and the run will say so:
+#
+#   * 30 m BATHYMETRY.  M7001's gridded product is 181 x 222 m and its
+#     soundings are 188 m apart inside this circle (8 of them, over
+#     0.2827 km2), all reading 3.08 m.  The depths a 30 m node receives are
+#     the product's own interpolation, and `sounding_distance` reports how
+#     far the nearest real measurement is.  The mesh is refined; the seabed
+#     is resampled.
+#   * a finished depth file.  Nothing here is floored, capped or smoothed --
+#     the depths are the source's, including any at or above the datum, which
+#     FVCOM integrates with wetting and drying.  The minimum depth and the
+#     r-factor smoothing are the NEXT step (owner, 2026-09-23).
+#
+# FMESH_LAND must point at the OSM land polygons: `DATA_INVENTORY.md` records
+# them as coastline precedence #1, superseding the MLIT C23 extract.
+base_mesh: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
+base_depth: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
+base_obc: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
+
+dt_expected_s: 4.5            # advisory: an alert, not a veto
+gradation: 0.165
+
+# `coastline` and `coastline_tolerance_m` are REFUSED beside this block: the
+# fork below is the coastline decision, and `resolve` moves the shore onto OSM
+# on purpose, which is what the tolerance exists to refuse.
+hires:
+  coastline: resolve          # resolve | preserve
+  bathymetry: tokyo_bay       # tokyo_bay | base
+  scope: hole
+  blend: ramp
+
+refine:
+  - name: futtsu_nori
+    geometry:
+      circle: {center: [139.7881, 35.3228], radius_m: 300}
+    target_h_m: 30
+    priority: 0
