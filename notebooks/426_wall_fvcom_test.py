@@ -61,7 +61,14 @@ def grid():
     for j in range(NY - 1):
         for i in range(NX - 1):
             a = node(i, j)
-            tri += [[a, a + 1, a + NX + 1], [a, a + NX + 1, a + NX]]
+            if i == 0 and j == NY - 2:
+                # FVCOM refuses a boundary element with one open and one
+                # solid side (tge.F).  With this diagonal the top-left
+                # corner triangle had both; the first run stopped on it in
+                # BOTH cases, so it was the grid and not the walls.
+                tri += [[a, a + 1, a + NX], [a + 1, a + NX + 1, a + NX]]
+            else:
+                tri += [[a, a + 1, a + NX + 1], [a, a + NX + 1, a + NX]]
     return xy, np.asarray(tri, dtype=np.int64)
 
 
