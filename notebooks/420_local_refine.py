@@ -308,7 +308,7 @@ say("cut: " + json.dumps(sel.report))
 # lines after stitching -- and it is the cut the selection ACTUALLY made,
 # which is not the analytic buffer: select_patch takes whole faces by centroid
 # and then grows the selection to repair pinches.
-iface_lines = interface_lines(base.nodes, base.elements, sel.retained) \
+iface_lines = interface_lines(base.nodes, sel.rim_edges, sel.physical_rim) \
     if HIRES is not None else None
 if HIRES is not None:
     say(f"interface: {len(iface_lines.geoms)} edge(s), "

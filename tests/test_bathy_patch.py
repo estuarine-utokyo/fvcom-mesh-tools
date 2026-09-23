@@ -15,8 +15,13 @@ from fvcom_mesh_tools.bathy_patch import (
 )
 
 
-def square_patch():
-    """A 1000 m square cut out of a 3000 m mesh, so there is a real interface."""
+def square_patch(hole=None):
+    """A square cut out of a 3000 m mesh, with the rim `select_patch` reports.
+
+    Returns ``(nodes, tri, rim_edges, physical_rim, hole)``: the rim of the
+    retained region, and the flag that says which of its edges lie on the
+    mesh's own boundary -- which is what `select_patch` hands the driver.
+    """
     n = 7
     g = np.linspace(0.0, 3000.0, n)
     gx, gy = np.meshgrid(g, g)
@@ -27,15 +32,26 @@ def square_patch():
             a = j * n + i
             tri += [[a, a + 1, a + n + 1], [a, a + n + 1, a + n]]
     tri = np.asarray(tri, dtype=np.int64)
-    hole = shapely.box(1000.0, 1000.0, 2000.0, 2000.0)
+    hole = hole if hole is not None else shapely.box(1000.0, 1000.0, 2000.0, 2000.0)
     cen = nodes[tri].mean(axis=1)
     inside = shapely.contains(hole, shapely.points(cen[:, 0], cen[:, 1]))
-    return nodes, tri, np.flatnonzero(~inside), hole
+    keep = tri[~inside]
+
+    def rim_of(faces):
+        e = np.sort(np.vstack([faces[:, [0, 1]], faces[:, [1, 2]],
+                               faces[:, [2, 0]]]), axis=1)
+        u, c = np.unique(e, axis=0, return_counts=True)
+        return u[c == 1]
+
+    rim = rim_of(keep)
+    outer = {tuple(x) for x in rim_of(tri).tolist()}
+    physical = np.array([tuple(x) in outer for x in rim.tolist()], dtype=bool)
+    return nodes, tri, rim, physical, hole
 
 
 def test_the_weight_is_one_on_the_core_and_zero_at_the_interface():
-    nodes, tri, retained, hole = square_patch()
-    iface = interface_lines(nodes, tri, retained)
+    nodes, tri, rim, physical, hole = square_patch()
+    iface = interface_lines(nodes, rim, physical)
     assert not iface.is_empty, "a cut in the middle of a mesh has an interface"
     core = shapely.box(1350.0, 1350.0, 1650.0, 1650.0)
 
@@ -54,16 +70,13 @@ def test_the_weight_is_one_on_the_core_and_zero_at_the_interface():
 def test_the_interface_is_the_actual_cut_not_the_analytic_buffer():
     """select_patch takes whole faces and grows; the weight must follow THAT.
 
-    Here the cut is grown by one more ring of faces than the declared square,
-    so a weight keyed to the square's buffer would not vanish where the mesh
-    actually meets the frozen zone.
+    Here the cut is a wider square than the one declared, so a weight keyed to
+    the declared region's buffer would not vanish where the mesh actually
+    meets the frozen zone.
     """
-    nodes, tri, retained, hole = square_patch()
-    grown = np.array([k for k in retained
-                      if not shapely.intersects(
-                          hole.buffer(500.0),
-                          shapely.Point(nodes[tri[k]].mean(axis=0)))])
-    iface = interface_lines(nodes, tri, grown)
+    nodes, tri, rim, physical, _ = square_patch(
+        hole=shapely.box(500.0, 500.0, 2500.0, 2500.0))
+    iface = interface_lines(nodes, rim, physical)
     core = shapely.box(1350.0, 1350.0, 1650.0, 1650.0)
     w = blend_weights(np.array(shapely.get_coordinates(iface)), [core], iface)
     assert np.allclose(w, 0.0), (
@@ -74,27 +87,39 @@ def test_the_coastline_is_not_forced_to_zero():
     """A free coastline inside the cut is hole boundary and must take the source.
 
     Weighting it to zero would give the newly resolved shore its BASE depths,
-    which is the opposite of what the branch is for.
+    which is the opposite of what the branch is for.  A cut that reaches the
+    mesh boundary has both kinds of rim edge, and only one of them counts.
     """
-    nodes, tri, retained, hole = square_patch()
-    rim_nodes = np.unique(tri[retained])
-    coast = rim_nodes[nodes[rim_nodes][:, 1] <= 1000.0]
-    full = interface_lines(nodes, tri, retained)
-    minus_coast = interface_lines(nodes, tri, retained, coast_nodes=coast)
-    assert minus_coast.length < full.length, "the coast must have been dropped"
+    nodes, tri, rim, physical, _ = square_patch(
+        hole=shapely.box(1000.0, -1.0, 2000.0, 2000.0))
+    assert physical.any(), "this cut reaches the mesh boundary"
+    iface = interface_lines(nodes, rim, physical)
+    everything = shapely.MultiLineString(
+        [shapely.LineString(nodes[[i, j]]) for i, j in rim.tolist()])
+    assert iface.length < everything.length, "the coast must have been dropped"
+    # A node where the coast MEETS the interface is on the interface, and
+    # w = 0 there is right.  What must not happen is the shore between those
+    # junctions being pinned to the base.
+    coast_only = np.setdiff1d(np.unique(rim[physical]), np.unique(rim[~physical]))
+    assert coast_only.size
+    assert (blend_weights(nodes[coast_only],
+                          [shapely.box(1350.0, 1350.0, 1650.0, 1650.0)],
+                          iface) > 0).all(), (
+        "a node on the coast must still take some of the source")
 
 
 def test_a_patch_with_no_interface_takes_the_source_everywhere():
-    nodes, tri, retained, hole = square_patch()
-    empty = interface_lines(nodes, tri, np.zeros(0, dtype=np.int64))
+    nodes, tri, rim, physical, _ = square_patch()
+    empty = interface_lines(nodes, np.zeros((0, 2), dtype=np.int64),
+                            np.zeros(0, dtype=bool))
     core = shapely.box(1350.0, 1350.0, 1650.0, 1650.0)
     w = blend_weights(np.array([[1500.0, 1500.0], [2900.0, 2900.0]]), [core], empty)
     assert np.allclose(w, 1.0)
 
 
 def test_overlapping_regions_need_no_separate_rule():
-    nodes, tri, retained, hole = square_patch()
-    iface = interface_lines(nodes, tri, retained)
+    nodes, tri, rim, physical, _ = square_patch()
+    iface = interface_lines(nodes, rim, physical)
     a = shapely.box(1300.0, 1300.0, 1600.0, 1600.0)
     b = shapely.box(1500.0, 1500.0, 1800.0, 1800.0)
     shared = np.array([[1550.0, 1550.0]])
@@ -148,8 +173,8 @@ def test_the_blend_meets_the_base_exactly_where_the_weight_is_zero():
     """
     import fvcom_mesh_tools.dem.tokyo_bay as tb
 
-    nodes, tri, retained, hole = square_patch()
-    iface = interface_lines(nodes, tri, retained)
+    nodes, tri, rim, physical, _ = square_patch()
+    iface = interface_lines(nodes, rim, physical)
     core = shapely.box(1350.0, 1350.0, 1650.0, 1650.0)
     xy = np.vstack([np.array(shapely.get_coordinates(iface))[:3],
                     np.array([[1500.0, 1500.0]])])

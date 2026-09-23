@@ -39,39 +39,32 @@ __all__ = [
 ]
 
 
-def interface_lines(nodes, elements, retained, *, coast_nodes=()):
+def interface_lines(nodes, rim_edges, physical_rim):
     """The retained interface of a cut, as lines the weight can measure from.
 
-    The rim of the retained region has two kinds of edge: the ones that face
-    the hole -- the interface, where the patch must meet frozen depths -- and
-    the ones on the physical coastline. Only the first kind belongs here.
+    ``select_patch`` has already classified its own rim: ``physical_rim``
+    marks the edges that lie on the mesh's physical boundary -- the coastline
+    -- and the rest face the hole.  This takes that classification rather than
+    re-deriving it, so the interface here is exactly the
+    ``n_interface_rim_edges`` the selection reports.
 
-    Forcing ``w = 0`` on the coast is the mistake this argument exists to
-    prevent: the free coastline inside the cut is hole boundary too, and
-    weighting it to zero would give the newly resolved shore its BASE depths,
-    which is the opposite of what the branch is for.
+    Excluding the coast is the point.  The free coastline inside the cut is
+    hole boundary too, and measuring the weight from it would drive ``w`` to
+    zero along the shore -- giving the newly resolved coastline its BASE
+    depths, which is the opposite of what the branch is for.
     """
     import shapely
 
     xy = np.asarray(nodes, dtype=float)[:, :2]
-    tri = np.asarray(elements, dtype=np.int64)
-    keep = np.asarray(retained, dtype=np.int64)
-    if not keep.size:
+    rim = np.asarray(rim_edges, dtype=np.int64).reshape(-1, 2)
+    coast = np.asarray(physical_rim, dtype=bool).ravel()
+    if coast.size != rim.shape[0]:
+        raise ValueError("physical_rim must mark one flag per rim edge")
+    sel = rim[~coast]
+    if not sel.size:
         return shapely.MultiLineString([])
-    sel = tri[keep]
-    e = np.sort(np.vstack([sel[:, [0, 1]], sel[:, [1, 2]], sel[:, [2, 0]]]), axis=1)
-    u, c = np.unique(e, axis=0, return_counts=True)
-    rim = u[c == 1]
-    # The mesh's own boundary is not an interface: an edge on the outer
-    # boundary of the BASE mesh borders no hole.
-    a = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]), axis=1)
-    ua, ca = np.unique(a, axis=0, return_counts=True)
-    outer = set(map(tuple, ua[ca == 1].tolist()))
-    coast = set(np.asarray(coast_nodes, dtype=np.int64).ravel().tolist())
-    lines = [xy[[i, j]] for i, j in rim.tolist()
-             if (i, j) not in outer and not (i in coast and j in coast)]
-    return shapely.MultiLineString([shapely.LineString(ln) for ln in lines]) \
-        if lines else shapely.MultiLineString([])
+    return shapely.MultiLineString(
+        [shapely.LineString(xy[[int(i), int(j)]]) for i, j in sel.tolist()])
 
 
 def blend_weights(points, regions, interface) -> np.ndarray:
