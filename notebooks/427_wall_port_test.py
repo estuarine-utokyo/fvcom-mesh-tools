@@ -128,6 +128,12 @@ def prep(case: Path, out: Path):
 
     if out.exists():
         raise SystemExit(f"exists: {out}")
+    # FVCOM reads INPUT_DIR into an 80-character string and truncates it
+    # without a word: the first run looked for ".../refined_wal" + "inpm2_obc.dat".
+    for d in (out / "input", out / "output"):
+        if len(str(d)) + 1 > 80:
+            raise SystemExit(f"{d} is {len(str(d)) + 1} characters with its slash; "
+                             "FVCOM truncates INPUT_DIR/OUTPUT_DIR at 80")
     shutil.copytree(case, out, ignore=shutil.ignore_patterns("output", "*.log"))
     (out / "output").mkdir()
     oi = out / "input"
