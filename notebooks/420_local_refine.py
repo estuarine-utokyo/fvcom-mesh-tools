@@ -861,9 +861,22 @@ def attempt(seed):
         _ub2, _cb2 = np.unique(np.sort(np.vstack(
             [elements[:, [0, 1]], elements[:, [1, 2]], elements[:, [2, 0]]]), axis=1),
             axis=0, return_counts=True)
+        # The expectation was written in PRE-split ids.  A coast node where a
+        # wall is rooted is duplicated too, so the coastline edge on one side
+        # of the pier now runs to the copy: every seed failed verify with 12
+        # boundary edges "unexpected" and the same 12 "missing".  Re-express
+        # each expected edge through copy_of; one that has no post-split
+        # boundary edge at all stays in its old form, so it is still
+        # reported missing rather than quietly dropped.
+        _by_orig: dict = {}
         for e in _ub2[_cb2 == 1].tolist():
-            if tuple(sorted(copy_of[e].tolist())) in _ws:
-                want_boundary.add(tuple(sorted(e)))
+            _by_orig.setdefault(tuple(sorted(copy_of[e].tolist())), []).append(
+                tuple(sorted(e)))
+        _want = set()
+        for e in set(want_boundary) | _ws:
+            found = _by_orig.get(tuple(sorted(e)))
+            _want.update(found if found else [tuple(sorted(e))])
+        want_boundary = _want
         out["want_boundary"] = want_boundary
         out["walls"] = {k: v for k, v in srep.items() if k != "pairs"}
         say(f"walls split: {srep['n_wall_edges']} edge(s), {srep['n_copies']} "
