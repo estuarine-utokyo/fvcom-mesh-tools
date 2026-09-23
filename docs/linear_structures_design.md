@@ -234,3 +234,33 @@ open and one solid side, which `tge.F` refuses; it then went unstable beside
 its open boundary after 1.8 days with AND without walls, so it could not
 separate a wall from a forcing problem and was set aside; and FVCOM reads
 `INPUT_DIR` into 80 characters and truncates it silently.
+
+## 8. The harbour, with walls (job 115511)
+
+`recipes/refine/kimitsu_port_hires.yaml`, filtered at 2 x h0, walls extracted,
+meshed as interior constraints and split. 24 wall pieces in the hole, 23 ends
+rooted on the coast; 49 wall edges split, 47 nodes duplicated, 15 free tips,
+one connected domain. Achieved 28.5 m median against 30 m, 99.9 % of the
+water within 1.25x; frozen zone exact; coastline 0.3 m median from OSM.
+
+QA 17/21 with 32 violations introduced, down from 78 at the first complete
+run. The gates each earned:
+
+| rule | why (measured) |
+|---|---|
+| walls kept 0.4 h clear of the coast except at roots | a wall hugging a quay made 3.1 / 4.8 deg elements and closed pockets off |
+| a root is inserted INTO the coastline rim, judged at its foot | a root stopping short of the coast leaves a gap; judging at the wall end inserted a vertex twice |
+| wall points within 0.25 h of another fixed point are that point | the mesher merges them, and the edge between becomes a self-edge |
+| a detached single edge gets a midpoint | two free tips and nothing between: no second sector to split into |
+| the shortest wall edge bordering water cut off from the OBC is withdrawn | withdrawing whole pieces removed an arm of the L-shaped breakwater |
+| no wall meets another line at under 30 deg | elements between two lines cannot be wider than their angle |
+| a free tip within 0.5 h of another line loses its last edge | dropping the acute crossing left a tip 4.4 m from the other wall |
+
+**What remains is in the transition, not the harbour.** The worst element,
+4.7 deg, is on the resolved COASTLINE 2.3 km east of the region, touching no
+wall; the next wall-related ones (22-30 deg) are on the long pier where it runs
+north into the transition. Both come from judging features at the declared
+h0 across the whole hole (owner, 2026-09-23): features and walls that a 30 m
+mesh can carry survive where the transition's elements are 150-400 m. The
+earlier 3 x h0 port mesh had no introduced violations; the difference is
+exactly the detail 2 x h0 lets through where elements are coarse.
