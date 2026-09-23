@@ -88,8 +88,12 @@ def prep(root: Path):
         inp, out = root / case / "input", root / case / "output"
         inp.mkdir(parents=True, exist_ok=True)
         out.mkdir(exist_ok=True)
+        # A sponge along the open boundary, at the production case's own
+        # coefficient.  Without one the first run went dry beside the open
+        # boundary after 1.8 days in BOTH cases -- the forcing, not the walls.
         export_fvcom_case(mesh, inp, "m2", cor=np.full(len(p), 35.0),
-                          write_empty_spg=True, twodm=False, obc_depth_control=False)
+                          sponge=[(int(n), 1000.0, 0.001) for n in obc],
+                          twodm=False, obc_depth_control=False)
         (inp / "sigma.dat").write_text(
             "NUMBER OF SIGMA LEVELS = 6\nSIGMA COORDINATE TYPE = UNIFORM\n")
         (inp / "m2_tide.dat").write_text(

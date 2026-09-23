@@ -32,14 +32,17 @@ INSTALLDIR=/octfs/work/G16445/share/local/fvcom/libs/install-oneapi-2025.3.1
 export INSTALLDIR OMP_NUM_THREADS=1 PROJ_DATA=/usr/share/proj
 export LD_LIBRARY_PATH="$INSTALLDIR/lib:$INSTALLDIR/lib64:${LD_LIBRARY_PATH:-}"
 ulimit -s unlimited
+fail=0
 for case in split edges; do
     if ( cd "$ROOT/$case" && mpiexec -np 8 "$FVCOM" --casename=m2 > fvcom.log 2>&1 ); then
         rc=0; else rc=$?; fi
     echo "[425] $case exit=$rc"
-    grep -Eci 'fatal|non[ -]?finite|floating exception|segmentation|nan detected' \
-        "$ROOT/$case/fvcom.log" || true
     tail -3 "$ROOT/$case/fvcom.log"
+    # A verdict read from a run that stopped half-way is not a verdict: the
+    # first attempt printed four passes from two aborted integrations.
+    if [ "$rc" -ne 0 ] || ! grep -q 'TADA' "$ROOT/$case/fvcom.log"; then fail=1; fi
 done
-)
+exit $fail
+) || { echo "[425] an integration did not finish; no verdict"; exit 1; }
 python notebooks/426_wall_fvcom_test.py analyze "$ROOT"
 echo "end=$(date -Is)"
