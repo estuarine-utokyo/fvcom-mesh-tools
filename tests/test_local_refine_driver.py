@@ -309,3 +309,32 @@ def test_wall_pairs_are_every_pair_a_split_made_coincident():
     assert wall_pairs({}) is None
     co = np.array([0, 1, 2, 3, 1, 3, 3])   # node 1 has one copy, node 3 two
     assert sorted(wall_pairs({"copy_of": co})) == [(1, 4), (3, 5), (3, 6), (5, 6)]
+
+
+def test_a_wall_that_closes_water_off_is_found_by_its_piece():
+    """Two walls that cross into a small triangle strand the water inside it."""
+    import importlib
+
+    walls = importlib.import_module("fvcom_mesh_tools.walls")
+    env = {"np": np}
+    walls_cut_off = driver_function("walls_cut_off", env)
+    n = 9
+    g = np.arange(n) * 100.0
+    gx, gy = np.meshgrid(g, g)
+    xy = np.column_stack([gx.ravel(), gy.ravel()])
+    tri = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            a = j * n + i
+            tri += [[a, a + 1, a + n + 1], [a, a + n + 1, a + n]]
+    tri = np.asarray(tri)
+    node = lambda i, j: j * n + i                            # noqa: E731
+    # a closed square of walls around the cell (3..5, 3..5), plus a pier
+    ring = [node(3, 3), node(4, 3), node(5, 3), node(5, 4), node(5, 5),
+            node(4, 5), node(3, 5), node(3, 4), node(3, 3)]
+    pier = [node(7, 0), node(7, 1), node(7, 2)]
+    we = np.vstack([walls.wall_edges_from_path(ring), walls.wall_edges_from_path(pier)])
+    out, t2, copy_of, _ = walls.split_along_walls(xy, tri, we)
+    obc = {node(0, j) for j in range(n)}
+    bad = walls_cut_off(t2, len(out), copy_of, we, obc)
+    assert sorted(bad) == list(range(8)), "the ring's eight edges, not the pier's"

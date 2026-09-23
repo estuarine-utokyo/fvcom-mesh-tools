@@ -751,6 +751,48 @@ def achieved_per_region(mesh):
     return per_region, missed
 
 
+def walls_cut_off(elements, n_nodes, copy_of, wall_edges, obc_nodes):
+    """Indices of the wall edges whose PIECE borders water cut off from the OBC.
+
+    A piece is a connected run of wall edges, by original node id.  Water is
+    cut off when a component of the split mesh holds no open-boundary node.
+    """
+    tri = np.asarray(elements, dtype=np.int64)
+    parent = list(range(n_nodes))
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    for a, b, c in tri.tolist():
+        for x, y in ((a, b), (b, c)):
+            ra, rb = find(x), find(y)
+            if ra != rb:
+                parent[ra] = rb
+    good = {find(n) for n in obc_nodes if n < n_nodes}
+    used = np.unique(tri)
+    stranded = {int(copy_of[n]) for n in used.tolist() if find(n) not in good}
+    if not stranded:
+        return []
+    we = np.asarray(wall_edges, dtype=np.int64)
+    wp = list(range(int(we.max()) + 1)) if len(we) else []
+
+    def wfind(k):
+        while wp[k] != k:
+            wp[k] = wp[wp[k]]
+            k = wp[k]
+        return k
+
+    for a, b in we.tolist():
+        ra, rb = wfind(a), wfind(b)
+        if ra != rb:
+            wp[ra] = rb
+    bad_pieces = {wfind(n) for e in we.tolist() for n in e if n in stranded}
+    return [k for k, (a, b) in enumerate(we.tolist()) if wfind(a) in bad_pieces]
+
+
 def wall_pairs(out):
     """Every pair of nodes a wall split made coincident ON PURPOSE."""
     co = out.get("copy_of") if isinstance(out, dict) else None
@@ -866,7 +908,34 @@ def attempt(seed):
             # gone, not a wall, and it is counted rather than raised
             out["wall_edges_merged_by_mesher"] = int(_self.sum())
             _we = _we[~_self]
-        nodes, elements, copy_of, srep = split_along_walls(nodes, elements, _we)
+        # A wall that closes water off -- two walls crossing into a small
+        # triangle, or a wall rooted twice on the coast around a pocket --
+        # leaves a piece the open boundary cannot reach.  The first harbour
+        # with walls had two, one of them two elements of 3.1 and 4.8 deg.
+        # Every wall PIECE (connected run of wall edges) touching such a
+        # piece is withdrawn and the split redone; the count is reported.
+        _obc0 = set(np.concatenate([np.asarray(s) for s in base.open_boundaries]).tolist())
+        _obc_new = {int(node_map[n]) for n in _obc0 if node_map[n] >= 0}
+        _pre = (nodes, elements)
+        withdrawn = 0
+        for _round in range(10):
+            nodes, elements, copy_of, srep = split_along_walls(_pre[0], _pre[1], _we)
+            pieces = walls_cut_off(elements, len(nodes), copy_of, _we, _obc_new)
+            if not pieces:
+                break
+            keep_e = ~np.isin(np.arange(len(_we)), pieces)
+            withdrawn += int((~keep_e).sum())
+            _we = _we[keep_e]
+            if not len(_we):
+                nodes, elements = _pre
+                copy_of = np.arange(len(nodes))
+                srep = {"n_wall_edges": 0, "n_copies": 0, "n_free_tips": 0,
+                        "n_components": 1, "pairs": []}
+                break
+        out["wall_edges_withdrawn_for_closing_water_off"] = withdrawn
+        if withdrawn:
+            say(f"walls: {withdrawn} wall edge(s) withdrawn -- they closed water "
+                "off from the open boundary")
         depths = depths[copy_of]
         _wn = set(np.unique(_we).tolist())
         wall_node = np.isin(copy_of, list(_wn))

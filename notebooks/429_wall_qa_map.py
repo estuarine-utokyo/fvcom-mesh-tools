@@ -50,6 +50,14 @@ for ch in fails:
         if off.get("kind") == "node":
             kinds["node on a wall" if wall[int(off["id"])] else "node off walls"] += 1
     print(f"  {ch['check_id']}: {dict(kinds)}")
+    if ch["check_id"] != "min_depth_clip":
+        ks = sorted({int(k) for off in (ch.get("offender_ids") or ch.get("offenders") or [])
+                     for k in (off.get("elements") or ([off["id"]] if off.get("kind") == "element" else []))
+                     if int(k) < len(tri)})
+        for k in ks[:8]:
+            cc = xy[tri[k]].mean(axis=0)
+            print(f"      element {k} at ({cc[0]:.0f}, {cc[1]:.0f}) min angle "
+                  f"{min(angles(k)):.1f}, wall={bool(el_on_wall[k])}")
 bad_el = np.unique(bad_el)
 wa = [min(angles(k)) for k in bad_el if el_on_wall[k]]
 print(f"min-angle of offending wall elements: {np.round(sorted(wa)[:15], 1)}")
