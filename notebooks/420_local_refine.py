@@ -648,6 +648,37 @@ if HIRES is not None and _shl is not None and _walls_src:
                 if deg[a] == 1 and deg[b] == 1 and a >= n_rim and b >= n_rim]
         if lone:
             WALL_SEGS = np.delete(WALL_SEGS, lone, axis=0)
+    # A free tip left close to another line is a gap of a few metres, and
+    # the mesh fills it with slivers: dropping the crossing of an L-shaped
+    # breakwater for its acute angle left one wall's tip 4.4 m from the
+    # other wall, and the 3.1 and 4.8 deg elements stayed where they were.
+    # A tip within half an element of any line it is not part of loses its
+    # last edge, until none is.
+    n_close_tips = 0
+    for _ in range(200):
+        if not len(WALL_SEGS):
+            break
+        deg = np.bincount(WALL_SEGS.ravel(), minlength=len(_all_xy))
+        lines = [(a, b) for a, b in rim_eg.tolist()] + [tuple(e) for e in WALL_SEGS.tolist()]
+        drop = None
+        for k, (a, b) in enumerate(WALL_SEGS.tolist()):
+            for tip, other in ((a, b), (b, a)):
+                if tip < n_rim or deg[tip] != 1:
+                    continue
+                h_t = float(h_achieved(np.asarray([_all_xy[tip]]))[0])
+                pt = shapely.Point(_all_xy[tip])
+                near = [shapely.LineString(_all_xy[[i, j]]) for i, j in lines
+                        if tip not in (i, j) and other not in (i, j)]
+                if near and float(shapely.distance(shapely.MultiLineString(near), pt)) \
+                        < 0.5 * h_t:
+                    drop = k
+                    break
+            if drop is not None:
+                break
+        if drop is None:
+            break
+        WALL_SEGS = np.delete(WALL_SEGS, drop, axis=0)
+        n_close_tips += 1
     # A wall point no edge uses any more would be a lone fixed point in the
     # water -- not a wall, and a small element waiting to happen.
     _used = np.unique(WALL_SEGS[WALL_SEGS >= n_rim]) if len(WALL_SEGS) else \
@@ -659,11 +690,13 @@ if HIRES is not None and _shl is not None and _walls_src:
     WALL_SEGS = _remap[WALL_SEGS] if len(WALL_SEGS) else WALL_SEGS
     reports["walls"] = {"n_pieces_in_hole": len(_pieces), "n_rooted_ends": n_rooted,
                         "n_wall_edges_dropped_for_an_acute_angle": n_acute,
+                        "n_wall_edges_dropped_for_a_tip_too_close": n_close_tips,
                         "n_wall_points": int(len(WALL_PTS)),
                         "n_wall_edges": int(len(WALL_SEGS))}
     say(f"walls in the hole: {len(_pieces)} piece(s), {n_rooted} end(s) rooted on "
         f"the coast, {len(WALL_PTS)} constrained point(s), {len(WALL_SEGS)} edge(s); "
-        f"{n_acute} dropped for meeting another line at under 30 deg")
+        f"{n_acute} dropped for meeting another line at under 30 deg, "
+        f"{n_close_tips} for a tip within half an element of another line")
 PFIX_ALL = np.vstack([np.asarray(rc["pfix"], dtype=float), WALL_PTS])
 # What the fill was given, kept so a wall's geometry can be inspected
 # without re-running the whole cut.
