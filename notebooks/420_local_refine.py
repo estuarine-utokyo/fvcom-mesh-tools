@@ -596,11 +596,74 @@ if HIRES is not None and _shl is not None and _walls_src:
     WALL_SEGS = np.asarray([e for e in WALL_SEGS.tolist()
                             if tuple(e) not in _rimset],
                            dtype=np.int64).reshape(-1, 2)
+    # No two lines may meet at under 30 degrees where a wall is involved.
+    # The elements between two lines that meet at an angle cannot be wider
+    # than the angle, and C1 wants 30: the crossing stub of an L-shaped
+    # breakwater left elements of 3.1 and 4.8 deg even after the pocket it
+    # closed was opened.  The WALL edge of an acute pair goes, never the
+    # coast's; a detached single edge left behind goes too, since a slit
+    # needs a node inside it.
+    _all_xy = np.vstack([rim_xy, WALL_PTS])
+    _rim_set = {tuple(sorted(e)) for e in rim_eg.tolist()}
+    n_acute = 0
+    while len(WALL_SEGS):
+        inc: dict = {}
+        for k, (a, b) in enumerate(WALL_SEGS.tolist()):
+            inc.setdefault(a, []).append(("w", k, b))
+            inc.setdefault(b, []).append(("w", k, a))
+        for a, b in rim_eg.tolist():
+            if a in inc:
+                inc[a].append(("r", -1, b))
+            if b in inc:
+                inc[b].append(("r", -1, a))
+        drop = None
+        for v, lst in inc.items():
+            for i in range(len(lst)):
+                for j in range(i + 1, len(lst)):
+                    if lst[i][0] == "r" and lst[j][0] == "r":
+                        continue
+                    u1 = _all_xy[lst[i][2]] - _all_xy[v]
+                    u2 = _all_xy[lst[j][2]] - _all_xy[v]
+                    ang = np.degrees(np.arccos(np.clip(
+                        u1 @ u2 / (np.linalg.norm(u1) * np.linalg.norm(u2) + 1e-12), -1, 1)))
+                    if ang < 30.0:
+                        drop = lst[i][1] if lst[i][0] == "w" else lst[j][1]
+                        if lst[i][0] == "w" and lst[j][0] == "w":
+                            li = np.linalg.norm(u1)
+                            lj = np.linalg.norm(u2)
+                            drop = lst[i][1] if li <= lj else lst[j][1]
+                        break
+                if drop is not None:
+                    break
+            if drop is not None:
+                break
+        if drop is None:
+            break
+        WALL_SEGS = np.delete(WALL_SEGS, drop, axis=0)
+        n_acute += 1
+        # a lone edge whose ends touch nothing else and are not on the rim
+        deg = np.bincount(WALL_SEGS.ravel(), minlength=len(_all_xy)) if len(WALL_SEGS) \
+            else np.zeros(len(_all_xy), int)
+        lone = [k for k, (a, b) in enumerate(WALL_SEGS.tolist())
+                if deg[a] == 1 and deg[b] == 1 and a >= n_rim and b >= n_rim]
+        if lone:
+            WALL_SEGS = np.delete(WALL_SEGS, lone, axis=0)
+    # A wall point no edge uses any more would be a lone fixed point in the
+    # water -- not a wall, and a small element waiting to happen.
+    _used = np.unique(WALL_SEGS[WALL_SEGS >= n_rim]) if len(WALL_SEGS) else \
+        np.zeros(0, dtype=np.int64)
+    _remap = np.full(len(_all_xy), -1, dtype=np.int64)
+    _remap[:n_rim] = np.arange(n_rim)
+    _remap[_used] = n_rim + np.arange(len(_used))
+    WALL_PTS = _all_xy[_used] if len(_used) else np.zeros((0, 2))
+    WALL_SEGS = _remap[WALL_SEGS] if len(WALL_SEGS) else WALL_SEGS
     reports["walls"] = {"n_pieces_in_hole": len(_pieces), "n_rooted_ends": n_rooted,
+                        "n_wall_edges_dropped_for_an_acute_angle": n_acute,
                         "n_wall_points": int(len(WALL_PTS)),
                         "n_wall_edges": int(len(WALL_SEGS))}
     say(f"walls in the hole: {len(_pieces)} piece(s), {n_rooted} end(s) rooted on "
-        f"the coast, {len(WALL_PTS)} constrained point(s), {len(WALL_SEGS)} edge(s)")
+        f"the coast, {len(WALL_PTS)} constrained point(s), {len(WALL_SEGS)} edge(s); "
+        f"{n_acute} dropped for meeting another line at under 30 deg")
 PFIX_ALL = np.vstack([np.asarray(rc["pfix"], dtype=float), WALL_PTS])
 EGFIX_ALL = np.vstack([np.asarray(rc["egfix"], dtype=np.int64), WALL_SEGS])
 PFIX_BASE_ALL = np.concatenate([np.asarray(rc["pfix_base"], dtype=np.int64),
