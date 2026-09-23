@@ -1,4 +1,4 @@
-# Refining the coastline and the bathymetry: design, revision 2
+# Refining the coastline and the bathymetry: design, revision 3
 
 A new **option** on the local refinement recipe. Today a refinement re-cuts the
 mesh inside a declared region and inherits the base mesh's bathymetry node for
@@ -10,11 +10,13 @@ node (`depths_from_base`, owner 2026-09-22). The request is for the other half:
 4. everything outside region + transition keeps the base, unchanged;
 5. every behaviour that exists today keeps working, as the default.
 
-Revision 2 follows `refine_coast_and_bathy_design_review.md` (gpt-6-astra,
-2026-09-23), which raised three P1 findings against revision 1, and three
+Revision 3 follows `refine_coast_and_bathy_design_review.md` (gpt-6-astra,
+2026-09-23), which raised three P1 findings against revision 1, and the four
 owner decisions taken after it. **Revision 1 was wrong in three places and one
 of its measurements was wrong**; §0 says what changed and why, because a
-design that quietly drops its errors teaches nobody.
+design that quietly drops its errors teaches nobody. Revision 2 survived a day:
+the owner's fourth decision -- use the depths as they are, and adjust the
+minimum depth in a later step -- removed two of its stages.
 
 ## 0. What revision 1 got wrong
 
@@ -76,39 +78,44 @@ CRS is recorded in `docs/DATA_INVENTORY.md` §1: EPSG:6677 (JGD2011 Japan Plane
 Rectangular CS IX), columns `id, Y_easting_m, X_northing_m, elev_m, flag`, with
 `.prj` files present. I should have read the inventory before asking.
 
-## 1. The owner's decisions, and what they settle
+## 1. The owner's decisions
 
 | # | question | decision (2026-09-23) |
 |---|---|---|
-| 1 | the 3 m depth floor | **not kept fixed; adjustable at the end** |
-| 2 | the depth source | **M7001, T.P.-corrected, and accept the range it supports** |
-| 3 | the coastline source | **OSM** |
+| 1 | the depth source | **M7001, T.P.-corrected, and accept the range it supports** |
+| 2 | the coastline source | **OSM** |
+| 3 | where M7001 has nothing | **use the grid product; where that is still not enough, extrapolate and report the area** |
+| 4 | the depth floor | **none here. Use the depths as they are. The minimum-depth adjustment is the NEXT step** |
 
-Decision 2 settles the review's P1-5 the same way the review argued it: source
+Decision 1 settles the review's P1-5 the way the review argued it: source
 coarseness is a fact to report, not grounds to refuse the option the owner
 asked for. There is **no source-spacing gate** and **no JFA source** in this
-design. §2 reports what M7001 can and cannot deliver; it does not veto.
+design.
 
-Decision 3 is already the repository's resolved precedence:
+Decision 2 is already the repository's resolved precedence.
 `DATA_INVENTORY.md` records OSM land polygons (2026-03) as coastline
 precedence #1, superseding MLIT C23, with the meshing shoreline being the
-xcoast "true land" product (land polygons minus inland water). So the option
-inherits an existing decision rather than making a new one.
+xcoast "true land" product. The option inherits a decision rather than making
+one.
 
-Decision 1 is the one with design consequences, and they are larger than a
-constant: see §4.3.
+Decision 4 is the one that reshapes the pipeline, and it makes it **smaller**:
+see §4. It also answers a question of mine that was badly posed -- I asked
+which of three existing floors should be the *starting value*, when the
+instruction is that this step applies no floor at all.
 
-## 2. What M7001 delivers here, reported and not gated
+## 2. What the sources deliver here, reported and not gated
+
+### 2.1 M7001's resolution, in region
 
 Two T.P.-corrected M7001 products exist, and neither resolves a fishery.
 
 | product | what it is | spacing |
 |---|---|---|
-| `M7001/TP/M7001_dem_tokyobay.nc` | the gridded DEM `interpolate_m7001_tp` reads | 181 × 222 m |
+| `M7001/TP/M7001_dem_tokyobay.nc` | the gridded DEM `interpolate_m7001_tp` reads | 181 x 222 m |
 | `M7001/TP/M7001_TP.parquet` | the raw soundings, 3,950,314 rows | 128-188 m *in region* (§0.4) |
 
 The raw soundings look dense until they are counted inside the region rather
-than in a box around it: a nearest-neighbour statistic over a 3.6 × 4.4 km box
+than in a box around it: a nearest-neighbour statistic over a 3.6 x 4.4 km box
 gives 38 m at Futtsu and 17.7 m at Banzu, but that is dominated by along-track
 spacing and it is the wrong number to quote. `sqrt(area / N)` is an
 **equivalent areal spacing** for an explicitly defined point population, not a
@@ -122,14 +129,40 @@ and the polygon's whole range is 3.08-4.08 m.
 So the honest claim, and the one the reports will make: **a 30-40 m mesh
 sampling M7001 does not acquire 30-40 m bathymetric information.** It can still
 change the represented field -- the base's own discretisation, floor and
-smoothing removed variation that the source retains -- and that is what the
-option delivers. It is not a new survey resolution and nothing in the output
-will claim to be.
+smoothing removed variation the source retains -- and that is what the option
+delivers.
 
-**One consequence of decision 2 needs the owner's eye** (§9.1): M7001 has
-**no intertidal data** -- `DATA_INVENTORY.md` §2 records that its marks start
-≥ 1 m below chart datum -- and these fisheries are tidal flats. 22 % of the
-soundings inside `banzu_nori` are shallower than 3 m, minimum 1.14 m.
+### 2.2 "Where M7001 has nothing" is not where these fisheries are
+
+Measured over area samples inside each region, as the fraction each product
+returns a finite value for:
+
+| region | M7001 fine, 181 m | `tokyo_bay` 30 m grid | Kanto blend, 380 m |
+|---|---|---|---|
+| `futtsu_nori` circle | **100 %**, 2.47-4.15 m | 100 %, 2.65-4.50 m | 100 %, 2.70-4.33 m |
+| `banzu_nori` | **99.9 %**, 0.50-7.35 m | 100 %, 0.07-7.08 m | 100 %, -0.40-7.02 m |
+| `futtsu_nori` (two-beds) | 100 %, 2.52-4.06 m | 100 %, 2.18-4.61 m | 100 %, 2.32-4.41 m |
+| `futtsu_nori_east` | 100 %, 2.64-4.51 m | 100 %, 2.62-5.05 m | 100 %, 2.62-5.05 m |
+
+The M7001 grid is 39.9 % finite overall, but the missing 60 % is land and the
+water outside the bay. **Inside these fisheries it is complete**, so the
+fallback decision 3 asks for will not engage here -- and that is itself the
+result, because it means the design must not *claim* M7001 coverage as
+evidence of M7001 measurement.
+
+**A finite grid value is not a sounding.** The 181 m product interpolates
+across its own gaps, so "M7001 exists here" at grid level says nothing about
+whether a survey point is nearby. §5 therefore reports, per node, the
+**distance to the nearest actual M7001 sounding**. Where that exceeds the
+product's own grid interval, the value is the product's interpolation and the
+report says so. That is the measurable form of "where M7001 has nothing", and
+it needs no threshold chosen in advance.
+
+One further note carried from `DATA_INVENTORY.md` §2: M7001's marks start
+>= 1 m below chart datum, so it has **no intertidal data** -- and these
+fisheries are tidal flats. The gridded product fills that gap by interpolation
+rather than leaving it empty, which is exactly why the sounding-distance
+report exists.
 
 ## 3. Schema
 
@@ -139,41 +172,57 @@ New optional block. **Absent, the recipe behaves as it does today.**
 # ------- existing keys, unchanged -------
 coastline: resample            # this option needs it; `preserve` stays the default
 coastline_tolerance_m: 120     # stays a per-recipe veto (review P2-12)
-rfactor_limit: base
 
 # ------- NEW: absent means "inherit the base depths", i.e. today -------
 bathymetry:
-  source: m7001tp              # the only value; dem.m7001.interpolate_m7001_tp
+  source: tokyo_bay            # the ladder of 3.1; the only value
   scope: hole                  # hole (the actual cut) | core
   blend: ramp                  # ramp | none
-  hmin_m: 3.0                  # applied in the final stage; see 4.3
-  hmax_m: 300.0
-  rfactor: 0.2                 # the final smoothing; must not be given with rfactor_limit
 ```
 
 Revision 1 proposed a `sources:` list with a generic `xyz_dir` loader. That is
-withdrawn: the review is right that §2 does not require it, the owner scoped
-the work to M7001, and `CLAUDE.md` forbids abstractions built for hypothetical
-features. One named source, one existing function.
+withdrawn: the review is right that the measurements do not require it, the
+owner scoped the work to M7001, and `CLAUDE.md` forbids abstractions built for
+hypothetical features. `source` names **one policy**, not a user-assembled
+stack, and the policy is the repository's own documented precedence.
 
-The raw sampler is **`interpolate_m7001_tp`, not `production_depths`**: the
-latter already floors and runs an unmasked Beckmann-Haidvogel smoother over the
-whole connectivity, which would move frozen depths and pre-empt the final local
-smoothing this option promises.
+`hmin_m`, `hmax_m` and `rfactor` are **gone** from revision 2's schema:
+decision 4 puts them in the next step, and a key that this step does not act on
+has no business being validated by it.
 
-Validation, all of which must be written as refusals and tested: unknown keys
-rejected; `source` in the enum; `scope`/`blend` in their enums; `hmin_m`,
-`hmax_m` finite, positive, ordered; `rfactor` in `[0, 1)`; **`bathymetry.rfactor`
-and `rfactor_limit` may not both be declared** -- the base's own worst r is a
-statement about the base's bathymetry and means nothing once the depths come
-from elsewhere. `scope: core` with `blend: ramp` is refused as contradictory:
-a ramp that is not evaluated over the transition is not a ramp.
+### 3.1 The ladder
+
+Per node, in order, first finite value wins:
+
+1. `M7001/TP/M7001_dem_tokyobay.nc` -- the survey authority;
+2. `tokyo_bay/depth_0030-*.nc` -- 27.7 x 34.0 m, inner bay, 100 % finite over
+   139.565-140.172 E / 35.101-35.856 N. This is decision 3's "grid data";
+3. `tokyo_bay/kanto_M7001_srtm_15s.nc` -- the 380 m Kanto blend, for the bay
+   mouth and the shelf, which is what `interpolate_m7001_tp` already falls back
+   to internally;
+4. **extrapolation** -- nearest finite value of the last product that had any,
+   with the distance recorded. Decision 3 requires the extrapolated area to be
+   reported, so it is reported as geometry, not as a count: the nodes, their
+   convex extent and their distance to real data.
+
+`interpolate_m7001_tp` currently **raises** when a point is covered by
+neither of its two products. It is not modified -- existing callers depend on
+that refusal -- and the ladder is a new composition in `bathy_patch.py` that
+reuses its grid readers.
+
+The raw sampler is that function's interpolation, **not `production_depths`**:
+the latter floors and runs an unmasked Beckmann-Haidvogel smoother over the
+whole connectivity, which would move frozen depths and pre-empt the next step.
+
+Validation, written as refusals and tested: unknown keys rejected; `source`,
+`scope`, `blend` in their enums; `scope: core` with `blend: ramp` refused as
+contradictory, since a ramp not evaluated over the transition is not a ramp.
 
 `coastline_h_m` (revision 1, per region) is **withdrawn**. `coastline_points`
-requires a position-dependent size and its docstring records a 0.8° minimum
-angle when 30 m coastal spacing met a transition asking for 400 m triangles.
-The driver already cuts the coastline at the **local** size field, which is the
-target inside the core and the ramp outside it. Nothing needs adding.
+requires a position-dependent size and its docstring records a 0.8 degree
+minimum angle when 30 m coastal spacing met a transition asking for 400 m
+triangles. The driver already cuts the coastline at the **local** size field,
+which is the target inside the core and the ramp outside it. Nothing to add.
 
 ## 4. Pipeline
 
@@ -184,18 +233,31 @@ Only the depth stages change. Cut, rim, fill, repair and stitch are untouched.
       -> fill (DistMesh, notebook) -> clean -> stitch
       -> improve_patch                 <-- node coordinates become final HERE
       --------------------------------------------------------------------
-      -> [1] sample M7001 at the FINAL coordinates, new nodes only
-      -> [2] blend across the transition            (4.1)
-      -> [3] floor at hmin_m, cap at hmax_m, MASKED to new nodes
-      -> [4] r-factor smoothing over the cut, frozen depths held fixed
-      -> [5] reports and gates, then write
+      -> [1] sample the ladder at the FINAL coordinates, new nodes only
+      -> [2] blend across the transition                          (4.1)
+      -> [3] reports and gates, then write
+      ====================================================================
+         NEXT STEP, separately: minimum depth, cap, r-factor smoothing
 ```
 
-Stages 1-4 replace `refresh_depths` + `limit_rfactor` when `bathymetry` is
-declared and are not imported when it is not. Stage 1 must follow
-`improve_patch`: the repair slides boundary nodes along their coastline curve,
-and a depth sampled before the move belongs to a coordinate the mesh no longer
-has (review finding 9, 2026-09-22).
+Stages 1-2 replace `refresh_depths` when `bathymetry` is declared and are not
+imported when it is not. Stage 1 must follow `improve_patch`: the repair slides
+boundary nodes along their coastline curve, and a depth sampled before the move
+belongs to a coordinate the mesh no longer has (review finding 9, 2026-09-22).
+
+**Decision 4 removes two stages from this step, and with them two gates.**
+Revision 2 clipped and then ran `limit_rfactor` here. Neither happens now. The
+consequences are stated rather than hidden:
+
+* the written depths are the source's, so the case has whatever r-factor the
+  source gives. That is **reported**, not gated;
+* `limit_rfactor` requires finite, strictly positive depths, so it could not
+  run here anyway: the ladder returns 0.07 m at Banzu and the Kanto blend
+  returns -0.40 m, above T.P. zero. Deferring the floor and the smoothing
+  together is the only consistent order, and it is the one the owner named;
+* **the written case is not yet runnable by FVCOM.** It is the input to the
+  next step, and the driver says so in its report rather than leaving it to be
+  discovered by a failing run.
 
 ### 4.1 The blend weight, defined geometrically
 
@@ -204,12 +266,12 @@ Revision 1's size-field weight is withdrawn (§0.3). Let
 * `d_core(x)` = distance to the declared region, 0 inside it (the union, when
   regions overlap, so overlap needs no separate rule);
 * `d_int(x)` = distance to the **retained interface** -- the nodes the cut
-  actually kept, taken from `select_patch`'s own rim, excluding the physical
+  actually kept, from `select_patch`'s own rim, excluding the physical
   coastline.
 
 ```
-    w(x) = d_int(x) / (d_int(x) + d_core(x))          w = 1 in the core, 0 at the interface
-    depth(x) = w * m7001(x) + (1 - w) * base_interp(x)
+    w(x) = d_int(x) / (d_int(x) + d_core(x))     w = 1 in the core, 0 at the interface
+    depth(x) = w * source(x) + (1 - w) * base_interp(x)
 ```
 
 This answers the review's P1-2 and P1-3 together. It is exactly 1 on the core
@@ -226,92 +288,66 @@ refined shore its *base* depths, which is the opposite of the request.
 Where `d_int + d_core = 0` -- a node on the core boundary that is also on the
 interface, which happens when a transition is clipped by land -- `w = 1`.
 
-`blend: none` writes the source throughout `scope` and leaves stage 4 to cope.
-It exists so §0.1 can be measured rather than argued.
+`blend: none` writes the source throughout `scope`. It exists so §0.1 can be
+measured rather than argued.
 
-### 4.2 The final smoothing, and what it can and cannot do
+### 4.2 What the blend does to the next step's job
 
-Stage 4 is `limit_rfactor(elements, depths, movable, rmax, depth_min, depth_max)`
--- the existing function. It moves only `movable` depths and it reports
-`n_over_rmax_movable`, `n_over_rmax_frozen_pair` and `converged`.
+The blend no longer has an r-factor claim attached to it (§0.1, withdrawn), but
+it still decides whether the next step can succeed, and that is forecastable
+here. A ramp spreading a source-base difference `D` over a transition width `W`
+has depth slope `D/W`, so across an edge of length `h` at local depth `H`,
 
-Three corrections to revision 1 follow from §0.1-0.2:
+```
+    r ~ (D / W) * h / (2H)        and      r <= rmax   iff   h <= 2 H W rmax / D
+```
 
-* the driver must **reject a candidate that does not converge**, exactly as it
-  already rejects one that breaks the frozen contract. Non-convergence is an
-  infeasible seam, not a cosmetic residue;
-* a frozen-pair violation is **unaffected by the blend** -- both ends are
-  fixed -- so revision 1's test "`blend: none` produces a frozen-pair
-  violation" was testing the wrong thing. The right expectation is *movable*
-  violations and `converged = False`, which is what the reviewer measured on a
-  two-triangle probe with fixed depths 1 and 4 (ratio 4 > R² = 2.25);
-* the a-priori inequality of §0.1, `h <= 2 H W rmax / D`, is computed in
-  pre-flight from the region's own numbers and reported, so an infeasible
-  request is visible before the meshing rather than after it.
+Pre-flight reports that margin per region from numbers the recipe already has.
+A region that fails it is telling the owner, before any meshing, that the next
+step will have to move depths a long way -- or that its seam is infeasible,
+which `limit_rfactor` can only discover afterwards.
 
-### 4.3 The floor is a knob at the end, so the depth stage must be separable
-
-Decision 1 -- "not kept, but adjustable at the end" -- is not satisfied by
-making `hmin_m` a recipe key. A refinement run costs a seed search over the
-whole fill-repair-stitch loop; re-running it to try a different floor would be
-absurd. So stages 1-2 are **cached** and stages 3-5 are **re-runnable**:
-
-* the driver writes `<case>_dep_blended.npy` -- the blended field before any
-  clipping or smoothing -- beside the case, with the node map;
-* a new CLI, `fmesh-refine-depths <case> --hmin --hmax --rfactor`, reads that,
-  applies stages 3-5 and rewrites `<case>_dep.dat`. The mesh is not touched, so
-  the frozen contract is not at risk and no seed search happens.
-
-This also settles what "floor then smooth" means: the floor is applied first
-and the smoothing is bounded by it, as `production_depths` does, but both are
-re-done together for each floor the owner tries. It is cheap -- a Gauss-Seidel
-sweep over the edges of one patch.
-
-Two consequences the review caught (P2-10) and that this must carry:
-
-* `run_qa`'s `min_depth_m` defaults to **2.0**, and the project's own fixed
-  setting in `DATA_INVENTORY.md` is a 2 m clip while the goto2023 production
-  file used 3 m. A declared floor of 1 m would fail the existing gate and a
-  declared 3 m is not certified by it. The QA call must be given the declared
-  floor;
-* pre-flight's `depth_of` must forecast **the clipped, blended field**, not raw
-  survey depths: `preflight` requires strictly positive depths and raw
-  positive-up land elevations would be rejected before the floor could act. The
-  authoritative time step stays the one measured on the written depths.
+The other correction from §0.2 belongs with it: the feasibility condition
+between the two frozen neighbours of a movable node is `B/A <= R^2`, not `R`,
+and `limit_rfactor`'s docstring carries the error and is corrected with this
+work. A frozen-pair violation is **unaffected by any blend** -- both ends are
+fixed -- so revision 1's test "`blend: none` produces a frozen-pair violation"
+tested the wrong thing. The right expectation is *movable* violations, which is
+what the reviewer measured on a two-triangle probe with fixed depths 1 and 4
+(ratio 4 > R^2 = 2.25).
 
 ## 5. Reports and gates, labelled as what they are
 
 The review is right that revision 1 called several things gates that had no
-threshold. Split:
+threshold.
 
 **Gates** -- a failure refuses the candidate:
 
 | # | gate |
 |---|---|
-| G1 | frozen depths equal the base **exactly**, compared to the base through the node map, after **every** stage including export -- not by re-reading `limit_rfactor`'s own statistic, which compares against its own input and would show zero after an earlier unmasked clip |
-| G2 | `limit_rfactor` converged: no movable edge over `rmax` |
-| G3 | no **new** frozen-pair edge over `rmax` that the base did not already have (the existing rule, kept) |
-| G4 | every replaced coastline stretch was matched to an OSM component. `_source_substring` returns `None` on failure and `_resample_on_source` then silently subdivides the base while `coastline_curve` returns the base as the reference -- so a fidelity check against that curve would certify zero departure without ever using the requested shoreline (review P2-12). Under this option that fallback is a refusal |
-| G5 | the existing 21 QA checks, with `min_depth_m` set to the declared floor |
+| G1 | frozen depths equal the base **exactly**, compared to the base through the node map, after **every** stage including export -- not by re-reading a limiter statistic, which compares against its own input and would show zero after an earlier unmasked change |
+| G2 | every replaced coastline stretch was matched to an OSM component. `_source_substring` returns `None` on failure and `_resample_on_source` then silently subdivides the base while `coastline_curve` returns the base as the reference -- so a fidelity check against that curve would certify zero departure without ever using the requested shoreline (review P2-12). Under this option that fallback is a refusal |
+| G3 | the existing 21 QA checks, **with the minimum-depth check reported rather than gated**. `run_qa`'s `min_depth_m` defaults to 2.0 and decision 4 writes depths as they are -- 0.07 m at Banzu. Gating it here would refuse the very field the owner asked to keep. It is re-gated in the next step, once a floor exists |
 
 **Reports** -- measured, printed, never a veto:
 
 | what | why |
 |---|---|
-| source spacing in each region, with population, CRS and polygon identity | §2; decision 2 says report, not gate |
-| which product won at each node, and the area fraction each won | `interpolate_m7001_tp` itself falls back from the fine grid to the Kanto/SRTM blend, and a single `m7001tp` label would hide it |
-| fraction of the core clipped by `hmin_m` and by `hmax_m`, separately for stage 3 and for stage 4 | §2; and stage 4 can drive nodes onto a bound that stage 3 did not |
-| raw / blended / clipped / final depth statistics, area-weighted | so "the survey was delivered" can be checked rather than assumed. A dense but datum-shifted survey floored to a flat plateau passes every numerical threshold above |
-| max r on retained-to-new edges, before and after stage 4 | the seam. Retained-to-retained edges are unchanged by construction and are not the interesting set |
+| per node: which rung of the ladder won, and the area fraction each won | decision 3, and `interpolate_m7001_tp` itself falls back internally, which a single source label would hide |
+| the **extrapolated** nodes: geometry, extent and distance to real data | decision 3 asks for the area, so it is reported as area |
+| per node: distance to the nearest real M7001 **sounding**, and the fraction of each region beyond the product's grid interval | §2.2. This is "where M7001 has nothing", measured rather than assumed |
+| source spacing in each region, with population, CRS and polygon identity | §2.1; decision 1 says report, not gate |
+| raw / blended depth statistics, area-weighted, per region | so "the survey was delivered" can be checked rather than assumed |
+| max r on retained-to-new edges | the seam the next step inherits. Retained-to-retained edges are unchanged by construction and are not the interesting set |
+| the feasibility margin `h <= 2 H W rmax / D` per region | §4.2 |
 | coastline departure from the **matched OSM component**, over segment interiors | not only endpoint distance: a one-way nearest test accepts a shortcut that omits a narrow inlet |
-| the a-priori feasibility margin `h <= 2 H W rmax / D` per region | §4.2 |
-| achieved dt from the final written depths | a diagnostic at the gravity-wave convention, not a namelist |
+| depths at or below zero, and the area they cover | the next step's input, and the reason it is needed |
 
 **The affected zone is the actual cut, not the analytic envelope.** `is_new`
 means newly allocated, and `select_patch` grows its selection, so new nodes can
-exist slightly outside `region.buffer(W)` and be blended, clipped and smoothed
-while every retained node passes G1. The reports name the actual cut and its
-enlargement over the request; `hole_clearance` already measures the latter.
+exist slightly outside `region.buffer(W)` and be blended while every retained
+node passes G1. The reports name the actual cut and its enlargement over the
+request; `hole_clearance` already measures the latter.
 
 The driver writes **no sponge file** (it passes neither `sponge` nor
 `write_empty_spg`), so there is nothing sponge-shaped for late smoothing to
@@ -323,10 +359,10 @@ which are frozen.
 
 | file | change |
 |---|---|
-| `src/fvcom_mesh_tools/bathy_patch.py` (new) | `blend_weights(...)` (§4.1), `patch_depths(...)` = stages 1-3, `smooth_patch_depths(...)` = stage 4 |
-| `src/fvcom_mesh_tools/cli/refine_depths.py` (new) | `fmesh-refine-depths`, §4.3 |
-| `src/fvcom_mesh_tools/refine.py` | schema; `preflight` forecasts the clipped field; `limit_rfactor` docstring corrected (§0.2) |
-| `notebooks/420_local_refine.py` | branch at the depth stage; reject non-convergence; QA floor |
+| `src/fvcom_mesh_tools/dem/tokyo_bay.py` (new) | the ladder of §3.1: `sample(lon, lat) -> (depth, rung, distance_to_data)`, plus `sounding_distance(lon, lat)` |
+| `src/fvcom_mesh_tools/bathy_patch.py` (new) | `blend_weights(...)` (§4.1), `patch_depths(...)` = stages 1-2, and the reports of §5 |
+| `src/fvcom_mesh_tools/refine.py` | schema; `limit_rfactor` docstring corrected (§0.2) |
+| `notebooks/420_local_refine.py` | branch at the depth stage; QA minimum-depth reported not gated; the report says the case needs the next step |
 | `recipes/refine/futtsu_nori_bathy.yaml` (new) | the option on the existing Futtsu case |
 
 Licence: numpy/scipy/shapely/netCDF4/pyproj only. DistMesh stays in the
@@ -337,51 +373,42 @@ notebook.
 Revision 1 named "the committed output" as the oracle. `git ls-files outputs`
 returns nothing, so that oracle does not exist. The reference is instead a
 **controlled old-versus-new execution**: the recipe, the base revision, the
-input file hashes, `LR_SEED`/`LR_MAX_ITER`, `FMESH_LAND` and the dependency
+input file hashes, `LR_SEED` / `LR_MAX_ITER`, `FMESH_LAND` and the dependency
 versions recorded, the run made before and after the change, and byte equality
 required on `_grd.dat` and `_dep.dat`. One Futtsu recipe does not cover
-`preserve`/`resample`/`spline`, multiple regions, or `rfactor_limit` off and
-numeric; those keep their existing unit coverage.
+`preserve` / `resample` / `spline`, multiple regions, or `rfactor_limit` off
+and numeric; those keep their existing unit coverage.
 
 ## 8. Test plan
 
 * `blend_weights`: 1 on the core, 0 on the retained interface for a cut that is
   **not** the analytic buffer, monotone between, 1 where `d_int + d_core = 0`,
   and not forced to 0 on the free coastline;
-* the R² feasibility condition, against the two-triangle probe in the review:
-  fixed 1 and 4 must not converge, fixed 1 and 2 must;
-* `blend: none` on a step field produces **movable** violations and
-  `converged = False` (not frozen-pair violations, §4.2);
-* frozen depths bit-identical through stages 1-4 *and* through export,
-  including when the limiter hits its round cap and when `hmin_m` differs from
-  the base minimum -- the unmasked-clip path of G1;
+* the ladder: each rung wins where the one above it is NaN; extrapolation
+  engages only when all three are NaN and records its distance; a point covered
+  by none of them is reported, never silently zero;
+* the sounding-distance report reproduces §2.1's counts for the four polygons,
+  measured in UTM as the driver works -- not the degree-buffered values
+  revision 1 quoted (§0.4);
+* frozen depths bit-identical through stages 1-2 *and* through export,
+  including when the source is negative at a node adjacent to the interface;
 * a coastline stretch whose OSM match fails is refused, not silently
-  subdivided (G4);
-* schema refusals: unknown key, `rfactor` with `rfactor_limit`, `scope: core`
-  with `blend: ramp`, unordered bounds;
-* `fmesh-refine-depths` re-run with a different floor changes only the depth
-  file and leaves the grid byte-identical;
+  subdivided (G2);
+* schema refusals: unknown key, `scope: core` with `blend: ramp`, and any of
+  revision 2's removed keys (`hmin_m`, `rfactor`) rejected rather than ignored;
+* the R^2 feasibility condition, against the two-triangle probe in the review:
+  fixed 1 and 4 must not converge, fixed 1 and 2 must (this guards the
+  corrected docstring, and the next step);
 * regression: the controlled run of §7;
-* integration: `futtsu_nori_bathy.yaml`, reporting the 188 m source spacing
-  against a 30 m target as the honest statement of what was delivered.
+* integration: `futtsu_nori_bathy.yaml`, reporting 188 m source spacing against
+  a 30 m target, the ladder rungs used, and the depths below zero that the next
+  step will have to deal with.
 
 ## 9. Open with the owner
 
-1. **The intertidal gap.** Decision 2 scopes the source to M7001-T.P., and
-   M7001 has no intertidal data (`DATA_INVENTORY.md`: marks start ≥ 1 m below
-   chart datum) while these fisheries are tidal flats -- 22 % of the soundings
-   inside `banzu_nori` are shallower than 3 m. The repository's own resolved
-   precedence already covers this: "M7001 wins where both have data; the
-   `tokyo_bay` 30 m grid wins in the intertidal/shallow gap and anywhere M7001
-   has no soundings". That grid is `depth_0030-11+12+13+14+15.nc`, measured at
-   **27.7 × 34.0 m**, covering 139.565-140.172 E / 35.101-35.856 N -- both
-   fisheries, 100 % finite. It is a 2021 regrid from a prior study, not a
-   survey authority. Is applying the documented precedence in scope, or is
-   M7001 alone the instruction?
-2. **The floor's range.** §4.3 makes it adjustable. The project's fixed
-   setting is a 2 m clip, the goto2023 production file used 3 m, and `run_qa`
-   defaults to 2 m. Which of those is the starting value, and is there a floor
-   below which the run should be refused rather than reported?
-3. **`coastline_tolerance_m`.** Kept as a per-recipe veto, per the review: a
-   larger global default would weaken requirement 5 for every existing recipe.
-   Each recipe using this option raises it deliberately. Confirm.
+1. **`coastline_tolerance_m`.** Kept as a per-recipe veto, per the review: a
+   larger global default would weaken requirement 5 for every existing recipe,
+   so each recipe using this option raises it deliberately. Confirm.
+2. **Nothing else.** The floor, the source, the fallback and the shoreline are
+   decided; the intertidal question is now a report rather than a decision,
+   because §2.2 makes it measurable.
