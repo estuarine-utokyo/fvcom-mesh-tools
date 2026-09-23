@@ -1665,3 +1665,26 @@ def test_a_replacement_that_cannot_be_used_says_which_of_the_three_reasons():
     placed = [shapely.LineString([[50.0, -50.0], [50.0, 50.0]])]
     assert _unusable_replacement(straight, xy, idx, None, placed) == "other"
     assert _unusable_replacement(straight, xy, idx, None, []) is None
+
+
+def test_the_local_filter_keeps_detail_where_the_mesh_is_fine_and_drops_it_where_not():
+    """The owner's rule: the size decides, wherever it is."""
+    from fvcom_mesh_tools.patch import filter_shoreline_local
+
+    shore = shapely.box(0.0, -500.0, 4000.0, 0.0)
+    # two identical 80 m wide groynes, one where the mesh is 30 m and one
+    # where it is 240 m
+    near = shapely.box(400.0, 0.0, 480.0, 300.0)
+    far = shapely.box(3400.0, 0.0, 3480.0, 300.0)
+    land = shapely.union_all([shore, near, far])
+
+    def size(p):
+        return np.where(np.asarray(p)[:, 0] < 2000.0, 30.0, 240.0)
+
+    foot = shapely.box(-100.0, -600.0, 4100.0, 800.0)
+    out, rep = filter_shoreline_local(land, size, 30.0, foot)
+    assert shapely.intersects(out, shapely.Point(440.0, 200.0)), (
+        "80 m is more than two 30 m elements: it stays land")
+    assert not shapely.intersects(out, shapely.Point(3440.0, 200.0)), (
+        "80 m is less than two 240 m elements: it goes")
+    assert {r["h_m"] for r in rep["bands"]} >= {30.0, 240.0}

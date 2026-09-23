@@ -43,7 +43,7 @@ from fvcom_mesh_tools.patch import (
     boundary_after_patch,
     effective_gradation,
     field_gradation,
-    filter_shoreline,
+    filter_shoreline_local,
     hole_polygon,
     improve_patch,
     introduced_violations,
@@ -367,9 +367,25 @@ if HIRES is not None and cfg["coastline"] == "resolve" and shore:
     # Two elements across for an AREA, and the rest is not deleted but
     # becomes WALLS (docs/linear_structures_design.md, owner 2026-09-23): a
     # 12 m pier cannot be meshed as land at 30 m, but it can as a line.
-    _filtered, _frep = filter_shoreline(_keep, _h0, elements_per_feature=2)
+    # ... judged at the LOCAL size (owner, 2026-09-23): h0 inside the region,
+    # the transition's own element size outside it.  One h0 everywhere let
+    # 60-90 m features and walls survive among 150-400 m elements, and they
+    # were the worst elements left in the port mesh.
+    _h_local = patch_sizing(base.nodes, base.elements, sized, distmesh_scale=1.0,
+                            outside="nearest")
+    _filtered, _frep = filter_shoreline_local(_keep, _h_local, _h0, _foot,
+                                              elements_per_feature=2)
     reports["shoreline_filter"] = _frep
+    for _b in _frep["bands"]:
+        say(f"    band {_b['band']}: h {_b['h_m']:g} m over {_b['zone_km2']:.2f} km2, "
+            f"features narrower than {_b['removes_narrower_than_m']:g} m removed")
     _walls_src, _wrep = extract_walls(_keep, _filtered, _h0)
+    # a wall shorter than the element it sits in is not carried there
+    _n_before = len(_walls_src)
+    _walls_src = [w for w in _walls_src
+                  if w.length >= float(_h_local(np.asarray(
+                      [w.interpolate(0.5, normalized=True).coords[0]]))[0])]
+    _wrep["n_dropped_shorter_than_local_size"] = _n_before - len(_walls_src)
     _walls_src = node_walls(_walls_src, snap_m=_h0)
     reports["walls_extracted"] = {k: v for k, v in _wrep.items() if k != "dropped"}
     say(f"walls: {_wrep['n_walls']} extracted, {_wrep['wall_length_m'] / 1000:.2f} km, "

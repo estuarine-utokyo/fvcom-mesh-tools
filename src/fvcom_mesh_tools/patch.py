@@ -707,6 +707,67 @@ def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0):
     return out, report
 
 
+def filter_shoreline_local(land, size_field, h0: float, footprint, *,
+                           elements_per_feature: float = 2.0,
+                           spacing: float | None = None):
+    """:func:`filter_shoreline` at the LOCAL element size, not one size.
+
+    One size for the whole hole let 60-90 m features and walls survive where
+    the transition's elements are 150-400 m, and they came back as the worst
+    elements of the Kimitsu port mesh (4.7 deg on a coastline 2.3 km from the
+    region).  The owner's rule (2026-09-23): the size decides, wherever it is
+    -- which inside the region is h0 itself, so the region is unchanged.
+
+    The size field is sampled over ``footprint`` and cut into octave bands,
+    ``[h0 * 2**k, h0 * 2**(k+1))``; each band takes the land filtered at its
+    LOWER bound, so no band removes a feature the finest element in it could
+    carry.  The pieces are joined and filtered once more at ``h0``, which
+    removes the slivers a seam between two bands leaves and nothing else --
+    every band already removed more than that.
+
+    Returns ``(filtered, report)`` with a line per band.
+    """
+    import shapely
+    from rasterio import features
+    from rasterio.transform import from_origin
+
+    s = float(spacing if spacing is not None else h0)
+    x0, y0, x1, y1 = footprint.bounds
+    nx, ny = int(np.ceil((x1 - x0) / s)) + 1, int(np.ceil((y1 - y0) / s)) + 1
+    gx = x0 + (np.arange(nx) + 0.5) * s
+    gy = y1 - (np.arange(ny) + 0.5) * s
+    mx, my = np.meshgrid(gx, gy)
+    h = np.asarray(size_field(np.column_stack([mx.ravel(), my.ravel()])),
+                   dtype=float).reshape(ny, nx)
+    band = np.floor(np.log2(np.maximum(h, h0) / h0)).astype(np.int32)
+    transform = from_origin(x0, y1, s, s)
+    zones: dict[int, list] = {}
+    for geom, value in features.shapes(band, transform=transform):
+        zones.setdefault(int(value), []).append(shapely.geometry.shape(geom))
+    pieces, rows = [], []
+    for k in sorted(zones):
+        hk = h0 * 2.0 ** k
+        zone = shapely.intersection(shapely.union_all(zones[k]), footprint)
+        if zone.is_empty:
+            continue
+        fk, rk = filter_shoreline(land, hk, elements_per_feature=elements_per_feature)
+        part = shapely.intersection(fk, zone)
+        pieces.append(part)
+        rows.append({"band": k, "h_m": hk, "zone_km2": float(zone.area / 1e6),
+                     "removes_narrower_than_m": rk["removes_features_narrower_than_m"]})
+    # land outside the sampled footprint is kept exactly as the finest band has it
+    f0, _ = filter_shoreline(land, h0, elements_per_feature=elements_per_feature)
+    pieces.append(shapely.difference(f0, footprint))
+    joined = shapely.union_all([q for q in pieces if not q.is_empty])
+    out, rep = filter_shoreline(joined, h0, elements_per_feature=elements_per_feature)
+    before = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
+    rep = {**rep, "bands": rows,
+           "land_lost_m2": float(shapely.difference(before, out).area),
+           "water_lost_m2": float(shapely.difference(out, before).area),
+           "area_before_m2": float(before.area), "area_after_m2": float(out.area)}
+    return out, rep
+
+
 def _base_spacing(pts: np.ndarray) -> np.ndarray:
     """How far apart the base polyline's own vertices are, per vertex."""
     seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
