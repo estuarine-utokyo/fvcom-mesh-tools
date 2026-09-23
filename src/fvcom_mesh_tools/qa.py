@@ -97,6 +97,7 @@ _CHECK_LABELS: dict[str, dict[str, str]] = {
     "no_duplicate_nodes": {"ja": "重複節点なし", "en": "no duplicate nodes"},
     "no_orphan_nodes": {"ja": "孤立節点なし", "en": "no orphan nodes"},
     "no_tiny_area": {"ja": "微小面積要素なし", "en": "no tiny-area elements"},
+    "no_lone_corner_nodes": {"ja": "単一要素の節点なし", "en": "no single-element nodes"},
     "isbce2_authentic": {
         "ja": "ISBCE=2要素の開境界エッジ実在",
         "en": "ISBCE=2 elements have true open edge",
@@ -685,6 +686,19 @@ def run_qa(
         "no_orphan_nodes", "fvcom", True, orphan.size == 0,
         "unreferenced nodes = 0", f"orphans = {orphan.size}", int(orphan.size),
         offenders=_node_offenders(orphan, mesh, None, limit=max_offenders),
+    ))
+
+    # A node in ONE element, off the open boundary: both of that element's
+    # other sides at the node are boundary, and FVCOM leaves the node's
+    # elevation at its initial value for the whole run (measured: M2
+    # amplitude exactly 0 at three such nodes inside a walled harbour, where
+    # every neighbour had 0.44 m).  Silent in FVCOM, so gated here.
+    lone = np.setdiff1d(np.where(valence == 1)[0], obc_nodes_all)
+    checks.append(QACheck(
+        "no_lone_corner_nodes", "fvcom", True, lone.size == 0,
+        "nodes in a single element, off the OBC = 0", f"lone = {lone.size}",
+        int(lone.size),
+        offenders=_node_offenders(lone, mesh, None, limit=max_offenders),
     ))
 
     # Tiny / zero areas (only a WARNING in cell_area.F; gate here).

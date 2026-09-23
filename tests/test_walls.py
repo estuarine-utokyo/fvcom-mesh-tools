@@ -245,3 +245,41 @@ def test_resolution_is_measured_when_the_two_sides_of_a_wall_no_longer_match():
     assert r["median_m"] == pytest.approx(
         region_resolution(xy, tri, shapely.box(100, 100, 700, 700), 100.0)["median_m"],
         rel=0.05)
+
+
+def test_open_lone_corners_gives_the_node_a_second_element():
+    from fvcom_mesh_tools.walls import open_lone_corners
+
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+    tri = np.array([[0, 1, 2], [0, 2, 3]])
+    p, t, par, mut, rep = open_lone_corners(xy, tri)
+    count = np.bincount(t.ravel(), minlength=len(p))
+    assert (count >= 2).all()
+    assert rep["n_lone_nodes"] == 2 and rep["n_opened"] == 1
+    assert par.tolist() == [[2, 0]]
+    assert np.allclose(p[4], [0.5, 0.5])
+    a = p[t]
+    area = 0.5 * ((a[:, 1, 0] - a[:, 0, 0]) * (a[:, 2, 1] - a[:, 0, 1])
+                  - (a[:, 2, 0] - a[:, 0, 0]) * (a[:, 1, 1] - a[:, 0, 1]))
+    assert (area > 0).all() and np.isclose(area.sum(), 1.0)
+    assert len(mut) == len(t) and mut.all()
+
+
+def test_open_lone_corners_leaves_frozen_faces_and_reports_them():
+    from fvcom_mesh_tools.walls import open_lone_corners
+
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+    tri = np.array([[0, 1, 2], [0, 2, 3]])
+    p, t, par, mut, rep = open_lone_corners(xy, tri, mutable=[True, False])
+    assert len(p) == 4 and np.array_equal(t, tri)
+    assert rep["n_opened"] == 0 and sorted(rep["unresolved"]) == [1, 3]
+
+
+def test_open_lone_corners_is_a_no_op_on_a_mesh_without_one():
+    from fvcom_mesh_tools.walls import open_lone_corners
+
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.5, 0.5]])
+    tri = np.array([[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]])
+    p, t, par, _, rep = open_lone_corners(xy, tri)
+    assert rep["n_lone_nodes"] == 0 and len(par) == 0
+    assert np.array_equal(p, xy) and np.array_equal(t, tri)

@@ -79,7 +79,10 @@ def _grid_mesh(
 def _pristine() -> Fort14Mesh:
     return _grid_mesh(
         obc=[_nid(0, 1), _nid(0, 2)],
-        flip_squares={(0, 2)},
+        # both corner squares off the main diagonal are flipped: with one
+        # diagonal throughout, the corners (0, 3) and (3, 0) would each be
+        # in a single element, which FVCOM never updates
+        flip_squares={(0, 2), (N - 2, 0)},
     )
 
 
@@ -269,7 +272,7 @@ def test_obc_checks_skipped_without_open_boundary():
         + [_nid(i, 0) for i in range(N - 2, 0, -1)]
         + [_nid(0, 0)]
     )
-    mesh = _grid_mesh(obc=None, land=land)
+    mesh = _grid_mesh(obc=None, land=land, flip_squares={(0, 2), (N - 2, 0)})
     report = run_qa(mesh, channel_check=False)
     assert _check(report, "obc_perpendicularity").skipped
     assert _check(report, "obc_reachable").skipped
@@ -386,3 +389,24 @@ def test_cli_pass_and_fail(tmp_path, capsys):
 
 def test_cli_missing_input(tmp_path):
     assert meshqa.main([str(tmp_path / "nope.14")]) == 2
+
+
+def test_lone_corner_node_fails_the_gate():
+    # one diagonal throughout: the corner (N-1, 0) is in a single element
+    mesh = _grid_mesh(obc=[_nid(0, 1), _nid(0, 2)], flip_squares={(0, 2)})
+    report = run_qa(mesh, channel_check=False)
+    c = _check(report, "no_lone_corner_nodes")
+    assert not c.passed and c.n_violations == 1
+    assert c.offenders[0]["id"] == _nid(N - 1, 0)
+
+
+def test_lone_corner_on_the_open_boundary_is_not_a_violation():
+    # the same corner, but on the OBC: its elevation is prescribed
+    mesh = _grid_mesh(obc=[_nid(N - 2, 0), _nid(N - 1, 0), _nid(N - 1, 1)],
+                      flip_squares={(0, 2)},
+                      land=[_nid(N - 1, 1)] + [_nid(N - 1, j) for j in range(2, N)]
+                      + [_nid(i, N - 1) for i in range(N - 2, -1, -1)]
+                      + [_nid(0, j) for j in range(N - 2, -1, -1)]
+                      + [_nid(i, 0) for i in range(1, N - 1)])
+    report = run_qa(mesh, channel_check=False)
+    assert _check(report, "no_lone_corner_nodes").passed

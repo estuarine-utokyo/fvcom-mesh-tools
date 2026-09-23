@@ -998,6 +998,68 @@ def _push(pts: list, base_id: list, q, bid: int) -> int:
     return len(pts) - 1
 
 
+def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0):
+    """Cut off every coastline corner sharper than ``min_angle_deg`` on the water side.
+
+    The water between two boundary lines that meet at under 60 degrees holds
+    ONE element if every angle is to stay at 30 or more, so the corner node is
+    in a single element -- and FVCOM never updates such a node: on the walled
+    Kimitsu harbour a 44 deg corner of the resolved coastline kept an M2
+    amplitude of exactly 0, and bisecting its element left angles of 22 deg.
+
+    The corner vertex is replaced by two points on its own two edges, a
+    distance ``d = min(size, 0.45 * each edge)`` from it, so the chord between
+    them turns the corner into two of ``90 + angle/2`` each.  The water lost is
+    the triangle cut off.  Only points the fill added (``pfix_base < 0``) with
+    exactly two constrained edges are touched; a frozen point is not negotiable.
+
+    ``water`` is the hole the rim bounds; ``size`` maps (n, 2) points to the
+    local element size.  Returns ``(pfix, egfix, pfix_base, report)``.
+    """
+    import shapely
+
+    pfix = np.asarray(pfix, dtype=float).copy()
+    egfix = np.asarray(egfix, dtype=np.int64).copy()
+    pfix_base = np.asarray(pfix_base, dtype=np.int64).copy()
+    corners = []
+    for v in range(len(pfix)):
+        if pfix_base[v] >= 0:
+            continue
+        rows = np.flatnonzero((egfix == v).any(axis=1))
+        if len(rows) != 2:
+            continue
+        p, n = (int(egfix[r][egfix[r] != v][0]) for r in rows)
+        up, un = pfix[p] - pfix[v], pfix[n] - pfix[v]
+        lp, ln = float(np.linalg.norm(up)), float(np.linalg.norm(un))
+        if lp <= 0 or ln <= 0:
+            continue
+        ang = float(np.degrees(np.arccos(np.clip(up @ un / (lp * ln), -1, 1))))
+        # the angle between the edges is the WATER's only if the bisector
+        # points into the water; otherwise the water has 360 minus it
+        bis = up / lp + un / ln
+        if np.linalg.norm(bis) < 1e-9:
+            continue
+        probe = pfix[v] + bis / np.linalg.norm(bis) * 0.05 * min(lp, ln)
+        if ang >= min_angle_deg or not water.contains(shapely.Point(probe)):
+            continue
+        d = min(float(size(pfix[v][None])[0]), 0.45 * lp, 0.45 * ln)
+        corners.append((v, p, n, rows, pfix[v] + up / lp * d, pfix[v] + un / ln * d, ang))
+    for v, p, n, rows, a, b, _ in corners:
+        w = len(pfix)
+        pfix[v] = a                     # the corner becomes the point on edge v-p
+        pfix = np.vstack([pfix, b])
+        pfix_base = np.append(pfix_base, -1)
+        # edge v-n now runs from the new point w; the chord is v-w
+        for r in rows:
+            if n in egfix[r]:
+                egfix[r] = [w, n]
+        egfix = np.vstack([egfix, [v, w]])
+    report = {"n_corners_blunted": len(corners),
+              "angles_deg": [round(c[6], 1) for c in corners],
+              "at": [[round(float(x), 1) for x in c[4]] for c in corners]}
+    return pfix, egfix, pfix_base, report
+
+
 def hole_polygon(pfix: np.ndarray, egfix: np.ndarray):
     """The domain the filler meshes, built from the FINAL rim.
 
@@ -2378,6 +2440,9 @@ def improve_patch(
             # C5 at every seed that way.  A guarantee beats a heuristic.
             if val[c] + 1 > max_valence or val[d] + 1 > max_valence:
                 continue
+            if val[a] <= 2 or val[b] <= 2:
+                # a node left in ONE element is one FVCOM never updates
+                continue
             faces = np.unique(np.concatenate(
                 [inc[lo[v]:hi[v]] for v in (a, b, c, d)]))
             before = _scores(xy, tri, faces, adj, min_angle_deg, max_angle_deg,
@@ -2466,6 +2531,9 @@ def improve_patch(
             if not _convex_quad(xy, a, b, c, d):
                 continue
             if val[c] + 1 > max_valence or val[d] + 1 > max_valence:
+                continue
+            if val[a] <= 2 or val[b] <= 2:
+                # a node left in ONE element is one FVCOM never updates
                 continue
             faces = np.unique(np.concatenate(
                 [inc[lo[v]:hi[v]] for v in (a, b, c, d)]))

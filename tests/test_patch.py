@@ -1688,3 +1688,50 @@ def test_the_local_filter_keeps_detail_where_the_mesh_is_fine_and_drops_it_where
     assert not shapely.intersects(out, shapely.Point(3440.0, 200.0)), (
         "80 m is less than two 240 m elements: it goes")
     assert {r["h_m"] for r in rep["bands"]} >= {30.0, 240.0}
+
+
+def test_blunt_acute_corners_cuts_a_sharp_water_corner():
+    import shapely
+
+    from fvcom_mesh_tools.patch import blunt_acute_corners, hole_polygon
+
+    # a right triangle of water with a 45 deg corner at the origin
+    pfix = np.array([[0.0, 0.0], [200.0, 0.0], [200.0, 200.0]])
+    egfix = np.array([[0, 1], [1, 2], [2, 0]])
+    base = np.array([-1, 5, 6])          # only the corner is the fill's own
+    water = hole_polygon(pfix, egfix)
+    p, e, b, rep = blunt_acute_corners(pfix, egfix, base, water,
+                                       lambda xy: np.full(len(xy), 30.0))
+    assert rep["n_corners_blunted"] == 1 and rep["angles_deg"] == [45.0]
+    assert len(p) == 4 and b.tolist() == [-1, 5, 6, -1]
+    ring = hole_polygon(p, e)
+    assert ring.is_valid and ring.area < water.area
+    # every corner of the new ring is at least 60 deg on the water side
+    xy = np.asarray(ring.exterior.coords)[:-1]
+    for k in range(len(xy)):
+        u, v = xy[k - 1] - xy[k], xy[(k + 1) % len(xy)] - xy[k]
+        ang = np.degrees(np.arccos(u @ v / np.linalg.norm(u) / np.linalg.norm(v)))
+        assert ang >= 45.0 - 1e-9          # the two frozen corners are left
+    assert np.isclose(np.linalg.norm(p[0] - [0, 0]), 30.0)
+    assert shapely.Point(0.5, 0.1).within(water) and not shapely.Point(0.5, 0.1).within(ring)
+
+
+def test_blunt_acute_corners_leaves_land_corners_and_frozen_points():
+    from fvcom_mesh_tools.patch import blunt_acute_corners, hole_polygon
+
+    # a square of water with a sharp LAND spike poking in: the spike's tip is
+    # acute on the land side and reflex on the water side
+    pfix = np.array([[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [55.0, 100.0],
+                     [50.0, 20.0], [45.0, 100.0], [0.0, 100.0]])
+    egfix = np.array([[i, (i + 1) % 7] for i in range(7)])
+    water = hole_polygon(pfix, egfix)
+    p, e, b, rep = blunt_acute_corners(pfix, egfix, np.full(7, -1), water,
+                                       lambda xy: np.full(len(xy), 30.0))
+    assert rep["n_corners_blunted"] == 0 and np.array_equal(p, pfix)
+    # an acute water corner on a FROZEN point stays
+    tri = np.array([[0.0, 0.0], [200.0, 0.0], [200.0, 200.0]])
+    eg = np.array([[0, 1], [1, 2], [2, 0]])
+    _, _, _, rep = blunt_acute_corners(tri, eg, np.array([3, 5, 6]),
+                                       hole_polygon(tri, eg),
+                                       lambda xy: np.full(len(xy), 30.0))
+    assert rep["n_corners_blunted"] == 0

@@ -418,3 +418,71 @@ def node_walls(walls, *, snap_m: float = 0.0):
     noded = shapely.union_all(lines)
     merged = linemerge(noded) if noded.geom_type == "MultiLineString" else noded
     return [g for g in getattr(merged, "geoms", [merged]) if g.length > 0]
+
+
+def open_lone_corners(nodes, elements, mutable=None):
+    """Give every node that sits in ONE element a second one.
+
+    Inside the bend of a split wall the mesher may lay a single element across
+    the whole sector, so the copy of the bend node is in that element only and
+    both its sides at the node are boundary.  FVCOM then never changes the
+    node's elevation: on the walled Kimitsu harbour three such nodes kept an
+    M2 amplitude of exactly 0 while all their neighbours had 0.44 m.
+
+    The element's third side is interior; it is bisected, and so is the
+    element across it, which puts the node in two elements joined by an
+    interior edge.  Only elements that are ``mutable`` (all, when None) are
+    touched.  A node on an open boundary is not special-cased here: the caller
+    decides which nodes matter, and every lone node found is reported.
+
+    Returns ``(nodes, elements, parents, mutable, report)``; ``parents`` holds,
+    for each added node, the two nodes it was put halfway between.
+    """
+    nodes = np.asarray(nodes, dtype=float)
+    elements = np.asarray(elements, dtype=np.int64).copy()
+    mutable = np.ones(len(elements), dtype=bool) if mutable is None \
+        else np.asarray(mutable, dtype=bool).copy()
+    new_xy, parents, new_el, new_mut = [], [], [], []
+    n0 = len(nodes)
+    count = np.bincount(elements.ravel(), minlength=n0)
+    lone = np.flatnonzero(count == 1)
+    unresolved = []
+    edge_to = {}
+    for f, tri in enumerate(elements.tolist()):
+        for i in range(3):
+            edge_to.setdefault(tuple(sorted((tri[i], tri[(i + 1) % 3]))), []).append(f)
+    done_faces: set = set()
+    for k in lone.tolist():
+        holding = np.flatnonzero((elements == k).any(axis=1))
+        if len(holding) + sum(k in t for t in new_el) > 1:
+            continue                     # opened already, by a neighbour's split
+        e = int(holding[0])
+        tri = elements[e].tolist()
+        r = tri.index(k)
+        a, b = tri[(r + 1) % 3], tri[(r + 2) % 3]
+        across = [f for f in edge_to[tuple(sorted((a, b)))] if f != e]
+        if not across or not mutable[e] or not mutable[across[0]] \
+                or e in done_faces or across[0] in done_faces:
+            unresolved.append(int(k))
+            continue
+        f = across[0]
+        ft = elements[f].tolist()
+        c = [v for v in ft if v not in (a, b)][0]
+        m = n0 + len(new_xy)
+        new_xy.append(0.5 * (nodes[a] + nodes[b]))
+        parents.append((a, b))
+        # e = (k, a, b) counter-clockwise, so f runs b -> a -> c
+        elements[e] = [k, a, m]
+        new_el.append([k, m, b])
+        elements[f] = [b, m, c]
+        new_el.append([m, a, c])
+        new_mut += [True, True]
+        done_faces.update((e, f))
+    if new_xy:
+        nodes = np.vstack([nodes, np.asarray(new_xy)])
+        elements = np.vstack([elements, np.asarray(new_el, dtype=np.int64)])
+        mutable = np.concatenate([mutable, np.asarray(new_mut, dtype=bool)])
+    report = {"n_lone_nodes": int(len(lone)), "n_opened": int(len(new_xy)),
+              "unresolved": unresolved}
+    return nodes, elements, np.asarray(parents, dtype=np.int64).reshape(-1, 2), \
+        mutable, report

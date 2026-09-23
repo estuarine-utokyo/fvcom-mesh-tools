@@ -40,6 +40,7 @@ from fvcom_mesh_tools.patch import (
     _subdivide,  # noqa: E402
     ambient_size_field,
     base_size_field,
+    blunt_acute_corners,
     boundary_after_patch,
     effective_gradation,
     field_gradation,
@@ -65,6 +66,7 @@ from fvcom_mesh_tools.refine import (
 from fvcom_mesh_tools.walls import (  # noqa: E402
     extract_walls,
     node_walls,
+    open_lone_corners,
     split_along_walls,
 )
 
@@ -480,6 +482,19 @@ if rc["curves"]:
                 for k, c in enumerate(rc["curves"]) if len(c) > 1})
 
 hole = hole_polygon(rc["pfix"], rc["egfix"])
+if HIRES is not None:
+    # A resolved coastline follows OSM into every corner, and a corner under
+    # 60 deg holds one element: its node is then in that element alone, and
+    # FVCOM never updates it (M2 amplitude exactly 0 at a 44 deg corner of
+    # the Kimitsu harbour).  Such corners are cut off by a chord.
+    _p, _e, _b, _brep = blunt_acute_corners(
+        rc["pfix"], rc["egfix"], rc["pfix_base"], hole, h_achieved)
+    reports["acute_corners_blunted"] = _brep
+    if _brep["n_corners_blunted"]:
+        rc["pfix"], rc["egfix"], rc["pfix_base"] = _p, _e, _b
+        hole = hole_polygon(rc["pfix"], rc["egfix"])
+        say(f"coastline: {_brep['n_corners_blunted']} corner(s) under 60 deg cut "
+            f"off by a chord ({_brep['angles_deg']} deg)")
 say(f"hole {hole.area / 1e6:.3f} km2 ({hole.geom_type}, valid={hole.is_valid})")
 
 # ------------------------------------------------------------------- walls
@@ -714,7 +729,14 @@ if HIRES is not None and _shl is not None and _walls_src:
     WALL_SEGS = np.asarray([e for e in WALL_SEGS.tolist()
                             if tuple(e) not in _rimset],
                            dtype=np.int64).reshape(-1, 2)
-    # No two lines may meet at under 30 degrees where a wall is involved.
+    # No two lines may meet at under 60 degrees where a wall is involved.
+    # Both lines are boundary once the wall is split, so the sector between
+    # them is a mesh of its own, and a sector under 60 deg holds ONE element
+    # if every angle is to stay at 30: its corner node is then in a single
+    # element, which FVCOM never updates (M2 amplitude exactly 0 at three
+    # such nodes), and bisecting that element leaves angles under 30 (the
+    # patch went from 1 violation to 8).  The rest of this note is the
+    # original 30 deg reasoning, which the 60 includes.
     # The elements between two lines that meet at an angle cannot be wider
     # than the angle, and C1 wants 30: the crossing stub of an L-shaped
     # breakwater left elements of 3.1 and 4.8 deg even after the pocket it
@@ -744,7 +766,7 @@ if HIRES is not None and _shl is not None and _walls_src:
                     u2 = _all_xy[lst[j][2]] - _all_xy[v]
                     ang = np.degrees(np.arccos(np.clip(
                         u1 @ u2 / (np.linalg.norm(u1) * np.linalg.norm(u2) + 1e-12), -1, 1)))
-                    if ang < 30.0:
+                    if ang < 60.0:
                         drop = lst[i][1] if lst[i][0] == "w" else lst[j][1]
                         if lst[i][0] == "w" and lst[j][0] == "w":
                             li = np.linalg.norm(u1)
@@ -819,7 +841,7 @@ if HIRES is not None and _shl is not None and _walls_src:
                         "n_wall_edges": int(len(WALL_SEGS))}
     say(f"walls in the hole: {len(_pieces)} piece(s), {n_rooted} end(s) rooted on "
         f"the coast, {len(WALL_PTS)} constrained point(s), {len(WALL_SEGS)} edge(s); "
-        f"{n_acute} dropped for meeting another line at under 30 deg, "
+        f"{n_acute} dropped for meeting another line at under 60 deg, "
         f"{n_close_tips} for a tip within half an element of another line")
 PFIX_ALL = np.vstack([np.asarray(rc["pfix"], dtype=float), WALL_PTS])
 # What the fill was given, kept so a wall's geometry can be inspected
@@ -1202,6 +1224,24 @@ def attempt(seed):
             f"{srep['n_components']} component(s)")
     out["copy_of"] = copy_of
 
+    # A node in ONE element is a node FVCOM never updates: inside the bend of
+    # a split wall the mesher laid one element across the whole sector, and
+    # the first walled M2 run kept an amplitude of exactly 0 at three such
+    # nodes.  The element's interior side is bisected, with its neighbour,
+    # BEFORE the repair: bisected after it, the new node was never smoothed
+    # and the patch went from 1 violation to 10.
+    nodes, elements, _par, _, _lone = open_lone_corners(
+        nodes, elements, np.arange(len(elements)) >= len(sel.retained))
+    if len(_par):
+        _k = len(_par)
+        depths = np.concatenate([depths, depths[_par].mean(axis=1)])
+        wall_node = np.concatenate([wall_node, np.zeros(_k, dtype=bool)])
+        copy_of = np.concatenate([copy_of, len(copy_of) + np.arange(_k)])
+        out["copy_of"] = copy_of
+    if _lone["n_lone_nodes"]:
+        say(f"lone corners: {_lone['n_lone_nodes']} node(s) in a single element, "
+            f"{_lone['n_opened']} opened")
+
     # ------------------------------------------------------------ seam repair
     # The base mesh was finished to sit exactly on its gates -- min angle 30.01
     # deg, area change 0.500 -- so it has no margin to absorb a new neighbour,
@@ -1254,6 +1294,19 @@ def attempt(seed):
             slide_on=slide_on, only_below=only_below, soft=True)
         imp = {**imp2, "n_flips": imp["n_flips"] + imp2["n_flips"],
                "n_moves": imp["n_moves"] + imp2["n_moves"], "soft_pass": True}
+    # The repair may not leave a node in one element either; if it ever did,
+    # it is opened here too, without the smoothing the first opening gets.
+    nodes, elements, _par, mutable_faces, _lone2 = open_lone_corners(
+        nodes, elements, mutable_faces)
+    if len(_par):
+        _k = len(_par)
+        depths = np.concatenate([depths, depths[_par].mean(axis=1)])
+        is_new = np.concatenate([is_new, np.ones(_k, dtype=bool)])
+        wall_node = np.concatenate([wall_node, np.zeros(_k, dtype=bool)])
+        copy_of = np.concatenate([copy_of, len(copy_of) + np.arange(_k)])
+        out["copy_of"] = copy_of
+        _before_repair = np.vstack([_before_repair, np.full((_k, 2), np.inf)])
+    imp["lone_corners"] = {**_lone, "after_repair": _lone2}
     _shifted = is_new & (np.linalg.norm(nodes - _before_repair, axis=1) > 0)
     depths, _n_out = refresh_depths(base.nodes, base.elements, base.depths,
                                     nodes, _shifted, depths)
