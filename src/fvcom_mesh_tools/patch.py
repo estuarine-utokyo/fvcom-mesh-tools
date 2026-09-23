@@ -403,12 +403,14 @@ def coastline_points(
         raise ValueError(f"unknown coastline mode {mode!r}")
     base = shapely.LineString(pts)
 
-    if mode in ("resample", "resolve"):
+    if mode == "resolve":
         if shoreline is None:
-            raise ValueError(f"coastline: {mode} needs the source shoreline")
-        out = _resample_on_source(pts, shoreline, size,
-                                  pointwise=mode == "resolve",
-                                  require=mode == "resolve")
+            raise ValueError("coastline: resolve needs the source shoreline")
+        out = _resolve_stretch(pts, shoreline, size)
+    elif mode == "resample":
+        if shoreline is None:
+            raise ValueError("coastline: resample needs the source shoreline")
+        out = _resample_on_source(pts, shoreline, size)
     elif mode == "spline":
         out = _spline_resample(pts, size)
     else:
@@ -591,6 +593,60 @@ def _source_substring(pts: np.ndarray, shoreline):
     if piece.length > 3.0 * shapely.LineString(pts).length:
         return None
     return coords
+
+
+def _base_spacing(pts: np.ndarray) -> np.ndarray:
+    """How far apart the base polyline's own vertices are, per vertex."""
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    if not seg.size:
+        return np.zeros(len(pts))
+    return np.minimum(np.concatenate([[seg[0]], seg]),
+                      np.concatenate([seg, [seg[-1]]]))
+
+
+def _resolve_stretch(pts: np.ndarray, shoreline, size) -> np.ndarray:
+    """Follow the source where the mesh is fine enough to carry it, and keep
+    the base polyline where it is not.
+
+    A coastline is cut at the LOCAL size, and a stretch runs from the core out
+    to the ambient field.  Walking a detailed shoreline at the coarse end is
+    not resolution, it is damage, and both halves of that were measured:
+
+    * a 300 m fishery 2 km offshore put its whole coastline in a 400-1700 m
+      field, and resolving it replaced 17 base nodes with 13 -- a COARSER
+      coastline than the base's;
+    * a region on the shore resolved its core cleanly and then produced two
+      6-degree elements 6 km away at Kimitsu port, where the transition is
+      1 km and the port shoreline is not.
+
+    So the switch is per vertex and needs no new parameter: where the local
+    element size is at most the base polyline's own spacing, the mesh can
+    carry more than the base holds and the source is followed; where it is
+    coarser, the base is subdivided instead, which cannot move the coastline
+    and cannot introduce a corner the mesh has no room for.
+    """
+    pts = np.asarray(pts, dtype=float)[:, :2]
+    h = _size_at(size, pts)
+    fine = h <= _base_spacing(pts)
+    if fine.all():
+        return _resample_on_source(pts, shoreline, size, pointwise=True,
+                                   require=True)
+    if not fine.any():
+        return _subdivide(pts, size)
+    # Maximal runs of one kind or the other, sharing the vertex at each join
+    # so the delivered polyline stays continuous.
+    cuts = np.flatnonzero(np.diff(fine.astype(np.int8))) + 1
+    out = [pts[0]]
+    for a, b in zip(np.concatenate([[0], cuts]),
+                    np.concatenate([cuts, [len(pts)]])):
+        run = pts[a:min(b + 1, len(pts))]
+        if len(run) < 2:
+            continue
+        piece = (_resample_on_source(run, shoreline, size, pointwise=True,
+                                     require=True)
+                 if fine[a] else _subdivide(run, size))
+        out.extend(np.asarray(piece, dtype=float)[1:])
+    return np.asarray(out, dtype=float)
 
 
 def _resample_on_source(pts: np.ndarray, shoreline, size,

@@ -1504,3 +1504,45 @@ def test_resolve_keeps_core_detail_that_the_median_rule_destroys():
     in_core = lambda p: p[(p[:, 0] > 0) & (p[:, 0] < 200.0)]      # noqa: E731
     assert len(in_core(fine)) > len(in_core(coarse)), (
         "the pointwise tolerance has to keep what the median rule threw away")
+
+
+def test_resolve_follows_the_source_only_where_the_mesh_is_fine_enough():
+    """Measured twice, in opposite directions, on the real patches.
+
+    A 300 m fishery 2 km offshore put its whole coastline in a 400-1700 m
+    field and `resolve` replaced 17 base nodes with 13 -- COARSER than the
+    base.  A region on the shore resolved its core cleanly and produced two
+    6-degree elements 6 km away at Kimitsu port.  Both are the same thing:
+    walking a detailed shoreline at the coarse end of a transition.
+    """
+    from fvcom_mesh_tools.patch import coastline_points
+
+    src = _wiggly_source()
+    # base vertices 100 m apart, so 10 m of mesh is finer than the base and
+    # 400 m is coarser
+    base = np.column_stack([np.arange(0.0, 1001.0, 100.0), np.zeros(11)])
+
+    def size(q):
+        return np.where(np.asarray(q)[:, 0] < 500.0, 10.0, 400.0)
+
+    out = coastline_points(base, size, mode="resolve", shoreline=src,
+                           tolerance_m=1e9)
+    west, east = out[out[:, 0] < 500.0], out[out[:, 0] > 500.0]
+    assert np.abs(west[:, 1]).max() > 5.0, (
+        "where the mesh is finer than the base, the source must be followed")
+    assert np.allclose(east[:, 1], 0.0, atol=1e-9), (
+        "where it is coarser, the base polyline must be kept exactly")
+    assert len(out) > len(base)
+
+
+def test_resolve_never_returns_fewer_points_than_the_base_stretch_had():
+    """The coarsening that started this: 17 base nodes replaced by 13."""
+    from fvcom_mesh_tools.patch import coastline_points
+
+    src = _wiggly_source()
+    base = np.column_stack([np.arange(0.0, 1001.0, 50.0), np.zeros(21)])
+    out = coastline_points(base, 900.0, mode="resolve", shoreline=src,
+                           tolerance_m=1e9)
+    assert len(out) >= len(base), (
+        f"a 900 m walk returned {len(out)} points for a 21-point base stretch; "
+        "subdividing keeps every original vertex and walking does not")

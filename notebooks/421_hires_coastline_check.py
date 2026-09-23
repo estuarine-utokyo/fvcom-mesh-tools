@@ -157,12 +157,18 @@ if qa_path is not None:
     for chk in qa.get("checks", []):
         if chk.get("status") != "fail" or chk["check_id"] != "c1_min_angle":
             continue
-        for off in (chk.get("offender_ids") or [])[:50]:
+        # The same fallback the count above uses: a report may carry the
+        # complete `offender_ids` or only the capped display list, and reading
+        # one of the two left the figure with nothing to mark.
+        for off in (chk.get("offender_ids") or chk.get("offenders") or [])[:50]:
             els = off.get("elements") or ([off["id"]] if off.get("kind") == "element"
                                           else [])
             if els:
-                bad.append(mesh.nodes[mesh.elements[np.asarray(els, int)].ravel()]
-                           .mean(axis=0))
+                c = mesh.nodes[mesh.elements[np.asarray(els, int)].ravel()].mean(axis=0)
+                bad.append(c)
+                lo, la = to_ll.transform(c[0], c[1])
+                print(f"  c1 offender at {lo:.5f}, {la:.5f} "
+                      f"(element {els[0]})")
 
 fig, axes = plt.subplots(1, 2, figsize=(17, 8.5))
 for ax, (cx, cy, half, ttl) in zip(axes, [
