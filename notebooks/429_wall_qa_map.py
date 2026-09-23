@@ -1,0 +1,75 @@
+# Where are the QA failures of a mesh with walls, relative to the walls?
+#
+#   python notebooks/429_wall_qa_map.py <refinement output dir>
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+
+import matplotlib
+import numpy as np
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+
+from fvcom_mesh_tools.io.fort14 import read_fort14  # noqa: E402
+
+OUT = Path(sys.argv[1]).resolve()
+m = read_fort14(next(OUT.glob("*.14")))
+qa = json.loads(next(OUT.glob("*_qa.json")).read_text())
+xy, tri = m.nodes[:, :2], m.elements
+# wall nodes: coincident positions
+_, inv, cnt = np.unique(np.round(xy, 6), axis=0, return_inverse=True, return_counts=True)
+wall = cnt[inv.ravel()] > 1
+e = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]), axis=1)
+u, c = np.unique(e, axis=0, return_counts=True)
+bnd_node = np.zeros(len(xy), bool)
+bnd_node[np.unique(u[c == 1])] = True
+el_on_wall = wall[tri].any(axis=1)
+
+def angles(k):
+    p = xy[tri[k]]
+    out = []
+    for i in range(3):
+        a, b = p[(i + 1) % 3] - p[i], p[(i + 2) % 3] - p[i]
+        out.append(np.degrees(np.arccos(np.clip(a @ b / np.linalg.norm(a) / np.linalg.norm(b), -1, 1))))
+    return out
+
+fails = [ch for ch in qa["checks"] if ch.get("status") == "fail"]
+print("failing checks:", [(ch["check_id"], ch.get("observed")) for ch in fails])
+bad_el = []
+for ch in fails:
+    kinds = Counter()
+    for off in ch.get("offender_ids") or ch.get("offenders") or []:
+        els = off.get("elements") or ([off["id"]] if off.get("kind") == "element" else [])
+        for k in els:
+            k = int(k)
+            if k < len(tri):
+                bad_el.append(k)
+                kinds["touches a wall node" if el_on_wall[k] else "no wall node"] += 1
+        if off.get("kind") == "node":
+            kinds["node on a wall" if wall[int(off["id"])] else "node off walls"] += 1
+    print(f"  {ch['check_id']}: {dict(kinds)}")
+bad_el = np.unique(bad_el)
+wa = [min(angles(k)) for k in bad_el if el_on_wall[k]]
+print(f"min-angle of offending wall elements: {np.round(sorted(wa)[:15], 1)}")
+cen = xy[tri].mean(axis=1)
+c0 = cen[bad_el].mean(axis=0) if len(bad_el) else xy.mean(axis=0)
+fig, axes = plt.subplots(1, 2, figsize=(17, 8.5))
+for ax, half in zip(axes, (1100.0, 350.0)):
+    cx, cy = (393010.0, 3909480.0) if half > 500 else (392500.0, 3909000.0)
+    ax.triplot(xy[:, 0], xy[:, 1], tri, lw=0.25, color="0.6")
+    for i, j in u[c == 1]:
+        col = "tab:red" if (wall[i] and wall[j]) else "tab:blue"
+        ax.plot(xy[[i, j], 0], xy[[i, j], 1], color=col, lw=1.2)
+    ax.plot(cen[bad_el, 0], cen[bad_el, 1], "x", color="tab:orange", ms=8, mew=2)
+    ax.set_xlim(cx - half, cx + half)
+    ax.set_ylim(cy - half, cy + half)
+    ax.set_aspect("equal")
+axes[0].plot([], [], color="tab:blue", label="coast (boundary)")
+axes[0].plot([], [], color="tab:red", label="wall (split)")
+axes[0].plot([], [], "x", color="tab:orange", label=f"QA offender ({len(bad_el)})")
+axes[0].legend(loc="upper right", fontsize=9)
+fig.tight_layout()
+fig.savefig(OUT / "walls_qa.png", dpi=150)
+print(f"wrote {OUT / 'walls_qa.png'}")

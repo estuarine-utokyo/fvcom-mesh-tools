@@ -481,6 +481,15 @@ if HIRES is not None and _shl is not None and _walls_src:
         if not iface_lines.is_empty else hole
     _coast = shapely.difference(hole.boundary, iface_lines.buffer(1.0)) \
         if not iface_lines.is_empty else hole.boundary
+    # And kept clear of the coast, except where they are rooted in it.  A
+    # wall running within a few metres of the shore -- the sliver an area
+    # filter leaves along a quay it keeps -- put elements of 3.1 and 4.8 deg
+    # between itself and the coast, and closed off pockets the open boundary
+    # could not reach (QA: 3 components, 7 elements unreachable).  Removing
+    # the part within 0.4 of an element of the shore leaves such a sliver as
+    # stubs shorter than L_min; a pier keeps its body, and its end, now
+    # 0.4 h from the coast, is rooted by the rule below.
+    _room = shapely.difference(_room, _coast.buffer(0.4 * target))
     _pieces = []
     for w in _walls_src:
         g = shapely.intersection(w, _room)
