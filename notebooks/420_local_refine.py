@@ -538,10 +538,17 @@ if HIRES is not None and _shl is not None and _walls_src:
         # element off the coast, so a foot landing ON a rim vertex passed a
         # test made at the end and was inserted a second time -- two fixed
         # points at one position, which the mesher collapses.
-        d = np.linalg.norm(rim_xy - foot[k], axis=1)
-        if d.min() <= 0.3 * h_here:
-            return int(d.argmin())
         i, j = rim_eg[k]
+        # Never cut the coastline into a piece under half an element.  An
+        # inserted root split 30 m rim edges into 9.1, 10.1, 13.6 and 16.5 m
+        # pieces, and each short piece put an element under 30 deg against
+        # the wall beside it.  A foot within half an element of either end of
+        # its segment takes that vertex instead: the root moves along the
+        # coast by at most h/2, and the rim keeps its spacing.
+        di = float(np.linalg.norm(foot[k] - rim_xy[i]))
+        dj = float(np.linalg.norm(foot[k] - rim_xy[j]))
+        if min(di, dj) < 0.5 * h_here:
+            return int(i if di <= dj else j)
         new = len(rim_xy)
         rim_xy = np.vstack([rim_xy, foot[k]])
         rim_base = np.append(rim_base, -1)
@@ -557,7 +564,29 @@ if HIRES is not None and _shl is not None and _walls_src:
                 n_rooted += 1
             else:
                 ends.append(None)
-        walk = _subdivide(c, h_achieved)
+        # The walk starts AT the root: placing the points first and swapping
+        # the end for the root afterwards left a 22 m first edge beside 45 m
+        # coastline edges.
+        c = np.asarray(c, dtype=float).copy()
+        if ends[0] is not None:
+            c[0] = rim_xy[ends[0]]
+        if ends[1] is not None:
+            c[-1] = rim_xy[ends[1]]
+        walk = np.asarray(_subdivide(c, h_achieved), dtype=float)
+        # and no edge shorter than half an element survives at a point where
+        # the wall runs straight: the vertices of a simplified centreline can
+        # sit a few metres from the clipped end, and _subdivide keeps them.
+        k_ = 1
+        while k_ < len(walk) - 1:
+            h_k = float(h_achieved(np.asarray([walk[k_]]))[0])
+            a_, b_ = walk[k_] - walk[k_ - 1], walk[k_ + 1] - walk[k_]
+            short = min(np.linalg.norm(a_), np.linalg.norm(b_)) < 0.5 * h_k
+            turn = np.degrees(np.arccos(np.clip(
+                a_ @ b_ / (np.linalg.norm(a_) * np.linalg.norm(b_) + 1e-12), -1, 1)))
+            if short and turn < 20.0:
+                walk = np.delete(walk, k_, axis=0)
+            else:
+                k_ += 1
         ids = []
         for k_, xy in enumerate(walk):
             if k_ == 0 and ends[0] is not None:
