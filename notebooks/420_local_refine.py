@@ -536,19 +536,43 @@ if HIRES is not None and _shl is not None and _walls_src:
             if k_ == len(walk) - 1 and ends[1] is not None:
                 ids.append(("rim", ends[1]))
                 continue
+            # A point closer than a quarter element to one already placed --
+            # on the rim or on another wall -- IS that point.  Two fixed
+            # points that close are merged by the mesher anyway, and the
+            # first run with walls failed every seed on the resulting edge
+            # from a node to itself.
+            h_here = float(h_achieved(np.asarray([xy]))[0])
+            d_rim = np.linalg.norm(rim_xy - xy, axis=1)
+            if d_rim.min() <= 0.25 * h_here:
+                ids.append(("rim", int(d_rim.argmin())))
+                continue
+            if _pts:
+                d_w = np.linalg.norm(np.asarray(_pts) - xy, axis=1)
+                if d_w.min() <= 0.25 * h_here:
+                    ids.append(("wall", int(d_w.argmin())))
+                    continue
             key = _key(xy)
             if key not in _index:
                 _index[key] = len(_pts)
                 _pts.append(xy)
             ids.append(("wall", _index[key]))
         for (ka, ia), (kb, ib) in zip(ids[:-1], ids[1:]):
-            _segs.append(((ka, ia), (kb, ib)))
+            if (ka, ia) != (kb, ib):
+                _segs.append(((ka, ia), (kb, ib)))
     rc["pfix"], rc["egfix"], rc["pfix_base"] = rim_xy, rim_eg, rim_base
     n_rim = len(rim_xy)
     WALL_PTS = np.asarray(_pts, dtype=float).reshape(-1, 2)
     WALL_SEGS = np.asarray([[ia if ka == "rim" else n_rim + ia,
                              ib if kb == "rim" else n_rim + ib]
                             for (ka, ia), (kb, ib) in _segs],
+                           dtype=np.int64).reshape(-1, 2)
+    if len(WALL_SEGS):
+        WALL_SEGS = np.unique(np.sort(WALL_SEGS, axis=1), axis=0)
+    # A wall edge along the coastline rim is already boundary; it has no
+    # second side to split off, and the mesher already honours it.
+    _rimset = {tuple(sorted(e)) for e in rim_eg.tolist()}
+    WALL_SEGS = np.asarray([e for e in WALL_SEGS.tolist()
+                            if tuple(e) not in _rimset],
                            dtype=np.int64).reshape(-1, 2)
     reports["walls"] = {"n_pieces_in_hole": len(_pieces), "n_rooted_ends": n_rooted,
                         "n_wall_points": int(len(WALL_PTS)),
@@ -814,6 +838,12 @@ def attempt(seed):
     wall_node = np.zeros(len(nodes), dtype=bool)
     if len(WALL_SEGS):
         _we = np.asarray(st["pfix_new"], dtype=np.int64)[WALL_SEGS]
+        _self = _we[:, 0] == _we[:, 1]
+        if _self.any():
+            # two fixed points the mesher merged: the edge between them is
+            # gone, not a wall, and it is counted rather than raised
+            out["wall_edges_merged_by_mesher"] = int(_self.sum())
+            _we = _we[~_self]
         nodes, elements, copy_of, srep = split_along_walls(nodes, elements, _we)
         depths = depths[copy_of]
         _wn = set(np.unique(_we).tolist())
