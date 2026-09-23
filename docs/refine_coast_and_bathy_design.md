@@ -87,6 +87,7 @@ Rectangular CS IX), columns `id, Y_easting_m, X_northing_m, elev_m, flag`, with
 | 3 | where M7001 has nothing | **use the grid product; where that is still not enough, extrapolate and report the area** |
 | 4 | the depth floor | **none here. Use the depths as they are. The minimum-depth adjustment is the NEXT step** |
 | 5 | where the r-factor smoothing lives | **the next step, with the minimum depth** |
+| 6 | how the option is shaped | **one branch taken at the top. Its first fork is: keep the region's coastline, or resolve it. Resolving means following OSM faithfully -- nothing else** |
 
 Decision 1 settles the review's P1-5 the way the review argued it: source
 coarseness is a fact to report, not grounds to refuse the option the owner
@@ -103,6 +104,16 @@ Decision 4 is the one that reshapes the pipeline, and it makes it **smaller**:
 see §4. It also answers a question of mine that was badly posed -- I asked
 which of three existing floors should be the *starting value*, when the
 instruction is that this step applies no floor at all.
+
+Decision 6 removes a question I asked three times and should not have asked
+once. `coastline_tolerance_m` refuses a resample that departs from the base
+polyline by more than the tolerance, and I kept asking how large to make it --
+when the point of this branch is that the mesh's coastline SHOULD move onto
+OSM. The base polyline runs 300-600 m between nodes and sits up to 68.5 m from
+OSM at its segment midpoints; recovering that is the request, not a violation
+to be bounded. So the tolerance is not applied on this branch, and the
+departure is reported instead. It stays exactly as it is on every other
+branch, which is what keeps requirement 5.
 
 Decision 5 keeps the two together, and the reason is that a floor is what
 makes the classic r-factor well defined on every edge. Smoothing here would
@@ -176,29 +187,64 @@ report exists.
 
 ## 3. Schema
 
-New optional block. **Absent, the recipe behaves as it does today.**
+The option is **one branch, taken at the top** (decision 6). A recipe either
+declares `hires` or it does not; when it does not, nothing below is imported
+and the recipe behaves exactly as it does today.
 
 ```yaml
-# ------- existing keys, unchanged -------
-coastline: resample            # this option needs it; `preserve` stays the default
-coastline_tolerance_m: 120     # stays a per-recipe veto (review P2-12)
-
-# ------- NEW: absent means "inherit the base depths", i.e. today -------
-bathymetry:
-  source: tokyo_bay            # the ladder of 3.1; the only value
-  scope: hole                  # hole (the actual cut) | core
-  blend: ramp                  # ramp | none
+# ------- NEW. Its presence IS the branch. Absent = everything as today -------
+hires:
+  coastline: resolve         # resolve | preserve   <- the first fork
+  bathymetry: tokyo_bay      # the ladder of 3.1, or `base` to inherit as today
+  scope: hole                # hole (the actual cut) | core
+  blend: ramp                # ramp | none
 ```
+
+`coastline: resolve` places the new boundary nodes on **OSM**, faithfully.
+There is no departure veto on this branch: `coastline_tolerance_m` exists to
+catch a coastline that moved when it should not have, and here it is meant to.
+The departure is measured and reported (§5).
+
+`coastline: preserve` keeps the base polyline and only subdivides it, which is
+geometrically identical to the base -- the same guarantee the existing
+`preserve` mode gives.
+
+The top-level `coastline` and `coastline_tolerance_m` keys are **refused
+alongside `hires`**. They steer the other branch, and a recipe that sets both
+is a recipe asking for two different things about the same coastline.
+
+`bathymetry: base` is offered because decision 6 makes the coastline fork the
+FIRST one: a region whose coastline needs resolving does not necessarily need
+its depths replaced, and the two are now independent.
 
 Revision 1 proposed a `sources:` list with a generic `xyz_dir` loader. That is
 withdrawn: the review is right that the measurements do not require it, the
 owner scoped the work to M7001, and `CLAUDE.md` forbids abstractions built for
-hypothetical features. `source` names **one policy**, not a user-assembled
+hypothetical features. `bathymetry` names **one policy**, not a user-assembled
 stack, and the policy is the repository's own documented precedence.
 
 `hmin_m`, `hmax_m` and `rfactor` are **gone** from revision 2's schema:
-decision 4 puts them in the next step, and a key that this step does not act on
-has no business being validated by it.
+decisions 4 and 5 put them in the next step, and a key that this step does not
+act on has no business being validated by it.
+
+Validation, written as refusals and tested: unknown keys rejected; each value
+in its enum; `scope: core` with `blend: ramp` refused as contradictory, since a
+ramp not evaluated over the transition is not a ramp; `hires` together with
+`coastline` or `coastline_tolerance_m` refused.
+
+`coastline_h_m` (revision 1, per region) is **withdrawn**. `coastline_points`
+requires a position-dependent size and its docstring records a 0.8 degree
+minimum angle when 30 m coastal spacing met a transition asking for 400 m
+triangles. The driver already cuts the coastline at the **local** size field,
+which is the target inside the core and the ramp outside it. Nothing to add.
+
+**One change `resolve` does require.** `_resample_on_source` simplifies the
+source to `0.25 x the MEDIAN size over the whole substring` before walking it.
+A stretch that is fine in the core and coarse in the transition therefore has
+its core detail simplified away at the transition's scale (review P2-11). On
+this branch "faithful to OSM" is the instruction, so the tolerance must be
+pointwise -- `0.25 x the local size at each vertex` -- and the existing
+behaviour must stay untouched on the other branch.
 
 ### 3.1 The ladder
 
@@ -342,7 +388,7 @@ threshold.
 | # | gate |
 |---|---|
 | G1 | frozen depths equal the base **exactly**, compared to the base through the node map, after **every** stage including export -- not by re-reading a limiter statistic, which compares against its own input and would show zero after an earlier unmasked change |
-| G2 | every replaced coastline stretch was matched to an OSM component. `_source_substring` returns `None` on failure and `_resample_on_source` then silently subdivides the base while `coastline_curve` returns the base as the reference -- so a fidelity check against that curve would certify zero departure without ever using the requested shoreline (review P2-12). Under this option that fallback is a refusal |
+| G2 | on `coastline: resolve`, every replaced stretch was matched to an OSM component. `_source_substring` returns `None` on failure and `_resample_on_source` then silently subdivides the base while `coastline_curve` returns the base as the reference -- so a fidelity check against that curve would certify zero departure without ever having used OSM (review P2-12). "Follow OSM faithfully" makes that fallback a refusal, not a fallback |
 | G3 | the existing 21 QA checks, **with the minimum-depth check reported rather than gated**. `run_qa`'s `min_depth_m` defaults to 2.0 and decision 4 writes depths as they are -- 0.07 m at Banzu. That is a tidal flat under wetting and drying, not a defect, so the check reports it; it is re-gated in the next step, once a floor is declared |
 
 **Reports** -- measured, printed, never a veto:
@@ -357,6 +403,7 @@ threshold.
 | max r on retained-to-new edges | the seam the next step inherits. Retained-to-retained edges are unchanged by construction and are not the interesting set |
 | the feasibility margin `h <= 2 H W rmax / D` per region | §4.2 |
 | coastline departure from the **matched OSM component**, over segment interiors | not only endpoint distance: a one-way nearest test accepts a shortcut that omits a narrow inlet |
+| coastline departure from the **base** polyline | how far the shore moved. Reported on this branch, never a veto (decision 6) |
 | depths at or below zero, and the area they cover | the wetting-and-drying requirement, and the next step's input |
 | edge slope as `\|dh\| / L` on every edge, and the classic r where `h_i + h_j > 0` | the seam and the seabed gradient, in a measure that survives an intertidal node |
 
@@ -378,8 +425,9 @@ which are frozen.
 |---|---|
 | `src/fvcom_mesh_tools/dem/tokyo_bay.py` (new) | the ladder of §3.1: `sample(lon, lat) -> (depth, rung, distance_to_data)`, plus `sounding_distance(lon, lat)` |
 | `src/fvcom_mesh_tools/bathy_patch.py` (new) | `blend_weights(...)` (§4.1), `patch_depths(...)` = stages 1-2, and the reports of §5 |
-| `src/fvcom_mesh_tools/refine.py` | schema; `limit_rfactor` docstring corrected (§0.2) |
-| `notebooks/420_local_refine.py` | branch at the depth stage; QA minimum-depth reported not gated; the report says the case needs the next step |
+| `src/fvcom_mesh_tools/patch.py` | a pointwise simplification tolerance for `resolve`, leaving the existing median rule on the other branch |
+| `src/fvcom_mesh_tools/refine.py` | the `hires` schema and its refusals; `preflight` stops rejecting non-positive depths on this branch; `limit_rfactor` docstring corrected (§0.2) |
+| `notebooks/420_local_refine.py` | **the top-level `if hires`** (decision 6), the coastline fork, the depth stage, QA minimum-depth reported not gated, and a report that says the case still needs the next step |
 | `recipes/refine/futtsu_nori_bathy.yaml` (new) | the option on the existing Futtsu case |
 
 Licence: numpy/scipy/shapely/netCDF4/pyproj only. DistMesh stays in the
@@ -411,8 +459,15 @@ and numeric; those keep their existing unit coverage.
   including when the source is negative at a node adjacent to the interface;
 * a coastline stretch whose OSM match fails is refused, not silently
   subdivided (G2);
-* schema refusals: unknown key, `scope: core` with `blend: ramp`, and any of
-  revision 2's removed keys (`hmin_m`, `rfactor`) rejected rather than ignored;
+* `hires.coastline: preserve` leaves the base polyline geometrically identical,
+  and `resolve` moves it onto OSM with no tolerance veto -- the two forks of
+  decision 6, tested as two forks;
+* the simplification tolerance is pointwise on `resolve`: a stretch fine in the
+  core and coarse in the transition keeps its core detail, which the existing
+  median-over-the-substring rule destroys;
+* schema refusals: unknown key, `scope: core` with `blend: ramp`, `hires`
+  beside `coastline` or `coastline_tolerance_m`, and any of revision 2's
+  removed keys (`hmin_m`, `rfactor`) rejected rather than ignored;
 * the R^2 feasibility condition, against the two-triangle probe in the review:
   fixed 1 and 4 must not converge, fixed 1 and 2 must (this guards the
   corrected docstring, and the next step);
@@ -423,9 +478,8 @@ and numeric; those keep their existing unit coverage.
 
 ## 9. Open with the owner
 
-1. **`coastline_tolerance_m`.** Kept as a per-recipe veto, per the review: a
-   larger global default would weaken requirement 5 for every existing recipe,
-   so each recipe using this option raises it deliberately. Confirm.
-2. **Nothing else.** The floor, the source, the fallback and the shoreline are
-   decided; the intertidal question is now a report rather than a decision,
-   because §2.2 makes it measurable.
+Nothing. The six decisions of §1 settle the source, the fallback, the
+shoreline, the floor, the smoothing and the shape of the option. The intertidal
+question became a report rather than a decision once §2.2 made it measurable,
+and the coastline tolerance became a non-question once decision 6 made the
+branch explicit.
