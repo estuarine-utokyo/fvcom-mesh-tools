@@ -86,6 +86,7 @@ Rectangular CS IX), columns `id, Y_easting_m, X_northing_m, elev_m, flag`, with
 | 2 | the coastline source | **OSM** |
 | 3 | where M7001 has nothing | **use the grid product; where that is still not enough, extrapolate and report the area** |
 | 4 | the depth floor | **none here. Use the depths as they are. The minimum-depth adjustment is the NEXT step** |
+| 5 | where the r-factor smoothing lives | **the next step, with the minimum depth** |
 
 Decision 1 settles the review's P1-5 the way the review argued it: source
 coarseness is a fact to report, not grounds to refuse the option the owner
@@ -102,6 +103,15 @@ Decision 4 is the one that reshapes the pipeline, and it makes it **smaller**:
 see §4. It also answers a question of mine that was badly posed -- I asked
 which of three existing floors should be the *starting value*, when the
 instruction is that this step applies no floor at all.
+
+Decision 5 keeps the two together, and the reason is that a floor is what
+makes the classic r-factor well defined on every edge. Smoothing here would
+have needed two limiters -- `r <= rmax` on the wet edges and a `|dh| / L` slope
+cap on the intertidal ones -- and an intertidal slope limit nobody has chosen.
+Once the floor is declared, `limit_rfactor` applies unmodified to the whole
+patch. So the original instruction "smooth last, including the transition"
+is honoured by the next step, not abandoned: **this step's output is a mesh
+carrying the source's own depths, and it is not the finished bathymetry.**
 
 ## 2. What the sources deliver here, reported and not gated
 
@@ -237,7 +247,8 @@ Only the depth stages change. Cut, rim, fill, repair and stitch are untouched.
       -> [2] blend across the transition                          (4.1)
       -> [3] reports and gates, then write
       ====================================================================
-         NEXT STEP, separately: minimum depth, cap, r-factor smoothing
+         NEXT STEP: minimum depth, cap, and the r-factor smoothing that the
+         original request asks to be done last, over the transition too
 ```
 
 Stages 1-2 replace `refresh_depths` when `bathymetry` is declared and are not
@@ -245,19 +256,24 @@ imported when it is not. Stage 1 must follow `improve_patch`: the repair slides
 boundary nodes along their coastline curve, and a depth sampled before the move
 belongs to a coordinate the mesh no longer has (review finding 9, 2026-09-22).
 
-**Decision 4 removes two stages from this step, and with them two gates.**
-Revision 2 clipped and then ran `limit_rfactor` here. Neither happens now. The
-consequences are stated rather than hidden:
+**Decision 4 removes the clipping stage.** The written depths are the
+source's, including the intertidal ones, and three things revision 2 said
+about that were wrong (owner, 2026-09-23):
 
-* the written depths are the source's, so the case has whatever r-factor the
-  source gives. That is **reported**, not gated;
-* `limit_rfactor` requires finite, strictly positive depths, so it could not
-  run here anyway: the ladder returns 0.07 m at Banzu and the Kanto blend
-  returns -0.40 m, above T.P. zero. Deferring the floor and the smoothing
-  together is the only consistent order, and it is the one the owner named;
-* **the written case is not yet runnable by FVCOM.** It is the input to the
-  next step, and the driver says so in its report rather than leaving it to be
-  discovered by a failing run.
+* **the case runs.** A node above T.P. zero is not a broken mesh, it is a
+  tidal flat, and FVCOM integrates it with wetting and drying. The report
+  states the requirement -- `WET_DRY_ON` and a `MIN_DEPTH` in the namelist --
+  and the dry and intertidal area, rather than calling the case unrunnable;
+* **the slope is computable.** What is undefined for `h_i + h_j <= 0` is the
+  particular expression `|h_i - h_j| / (h_i + h_j)`, not the seabed gradient.
+  The reports carry `|dh| / L` in m/m, which is defined on every edge, beside
+  the classic r wherever the classic r means something;
+* **the time step is computable.** `c = sqrt(g H)` is bounded by the DEEPEST
+  water, not the shallowest, so an intertidal node cannot threaten the
+  external step; a declared minimum depth covers the wave speed where one is
+  needed. What must change is that `preflight` currently *refuses*
+  non-positive depths -- that refusal is correct for a base mesh and wrong for
+  this option, so it becomes a report of the dry fraction.
 
 ### 4.1 The blend weight, defined geometrically
 
@@ -327,7 +343,7 @@ threshold.
 |---|---|
 | G1 | frozen depths equal the base **exactly**, compared to the base through the node map, after **every** stage including export -- not by re-reading a limiter statistic, which compares against its own input and would show zero after an earlier unmasked change |
 | G2 | every replaced coastline stretch was matched to an OSM component. `_source_substring` returns `None` on failure and `_resample_on_source` then silently subdivides the base while `coastline_curve` returns the base as the reference -- so a fidelity check against that curve would certify zero departure without ever using the requested shoreline (review P2-12). Under this option that fallback is a refusal |
-| G3 | the existing 21 QA checks, **with the minimum-depth check reported rather than gated**. `run_qa`'s `min_depth_m` defaults to 2.0 and decision 4 writes depths as they are -- 0.07 m at Banzu. Gating it here would refuse the very field the owner asked to keep. It is re-gated in the next step, once a floor exists |
+| G3 | the existing 21 QA checks, **with the minimum-depth check reported rather than gated**. `run_qa`'s `min_depth_m` defaults to 2.0 and decision 4 writes depths as they are -- 0.07 m at Banzu. That is a tidal flat under wetting and drying, not a defect, so the check reports it; it is re-gated in the next step, once a floor is declared |
 
 **Reports** -- measured, printed, never a veto:
 
@@ -341,7 +357,8 @@ threshold.
 | max r on retained-to-new edges | the seam the next step inherits. Retained-to-retained edges are unchanged by construction and are not the interesting set |
 | the feasibility margin `h <= 2 H W rmax / D` per region | §4.2 |
 | coastline departure from the **matched OSM component**, over segment interiors | not only endpoint distance: a one-way nearest test accepts a shortcut that omits a narrow inlet |
-| depths at or below zero, and the area they cover | the next step's input, and the reason it is needed |
+| depths at or below zero, and the area they cover | the wetting-and-drying requirement, and the next step's input |
+| edge slope as `\|dh\| / L` on every edge, and the classic r where `h_i + h_j > 0` | the seam and the seabed gradient, in a measure that survives an intertidal node |
 
 **The affected zone is the actual cut, not the analytic envelope.** `is_new`
 means newly allocated, and `select_patch` grows its selection, so new nodes can
