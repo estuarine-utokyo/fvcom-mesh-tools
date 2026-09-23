@@ -332,3 +332,34 @@ What is left: two elements at wall roots in the harbour (24.8 and 26.8 deg),
 where a short edge of the resolved coastline itself or a corner of the wall
 sits next to the root, and two at a wall in the coarse transition south of
 the region (25.3 and 28.8 deg).
+
+## 12. Simplified centrelines and blunted roots (job 115573)
+
+The zoom (notebook 430) on the four elements left by §11 found two causes.
+
+- **A short rim edge at a root.** A wall continuing a pier that the width
+  filter had cut short rooted at the cut end, which was 13.6 m wide against
+  30 m elements (24.8 deg). A root now absorbs a neighbouring rim point
+  closer than half an element: the two become one point at their midpoint.
+  Only points the fill added may move, never a frozen one, and the hole is
+  rebuilt afterwards.
+- **Bends the size cannot resolve.** The medial axis keeps every corner, and
+  `_subdivide` keeps every vertex it is given. So a 5.6 m bend left a 22 m
+  edge beside 45 m ones at a root (26.8 deg), and a bend on the transition
+  wall put a 123 deg element against a 160 m wall edge. Each piece is now
+  simplified (Douglas-Peucker) at 0.2 of the local element before it is
+  walked. Junctions between walls are kept whatever their bend.
+
+| | 115569 | 115573 |
+|---|---:|---:|
+| minimum angle | 24.84 deg | **28.81 deg** |
+| C1 violations (incl. base element 2101) | 5 | **2** |
+| C4 violations | 1 | **0** |
+| violations introduced | 5 | **1** |
+| QA | 18/21 | **19/21** |
+| water within 1.25x of target | 100.0 % | 100.0 % |
+
+The five seeds gave 5, 3, 2, 1 and 2 introduced violations, and seed 3 was
+accepted. The one left is at (393366, 3906973), 28.8 deg, where the
+transition wall has 100-160 m edges. The other failing check, min_depth_clip,
+is reported and not gated on this branch.
