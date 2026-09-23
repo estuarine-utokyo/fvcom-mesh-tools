@@ -264,3 +264,25 @@ h0 across the whole hole (owner, 2026-09-23): features and walls that a 30 m
 mesh can carry survive where the transition's elements are 150-400 m. The
 earlier 3 x h0 port mesh had no introduced violations; the difference is
 exactly the detail 2 x h0 lets through where elements are coarse.
+
+## 9. Judged at the local size (owner, 2026-09-23; job 115531)
+
+`patch.filter_shoreline_local`: the size field sampled over the patch
+footprint, cut into octave bands, each band given the land filtered at its
+lower bound, joined and cleaned once at h0. Walls shorter than the element at
+their middle are dropped. Bands on this patch: 30, 60, 120 m (8.44 km2), 240 m
+(34.71 km2), 480 m (44.03 km2), 960 m (0.13 km2).
+
+| | one h0 everywhere (115511) | local size (115531) |
+|---|---:|---:|
+| minimum angle | 4.70 deg | **22.87 deg** |
+| QA | 17/21 | **18/21** (C2 now passes) |
+| violations introduced | 32 | **17** |
+| walls split / free tips | 49 / 15 | 47 / 14 |
+| achieved in the region | 28.5 m, 99.9 % | 28.5 m, 99.9 % |
+
+The region is unchanged, as the rule promised; the transition lost the detail
+its elements could not carry, and with it the 4.7 deg coastline element and
+the walls running into coarse ground. What is left -- 14 elements between
+22.9 and 29.0 deg, one of them the base's own element 2101 -- sits at wall
+roots and tips in the harbour, where the repair may not move a wall node.
