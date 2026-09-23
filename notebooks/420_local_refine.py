@@ -491,6 +491,7 @@ say(f"hole {hole.area / 1e6:.3f} km2 ({hole.geom_type}, valid={hole.is_valid})")
 # SPLIT along them, which is what makes them walls (notebook 427).
 WALL_PTS = np.zeros((0, 2))
 WALL_SEGS = np.zeros((0, 2), dtype=np.int64)
+WALL_LINES: list = []
 if HIRES is not None and _shl is not None and _walls_src:
     _margin = 0.5 * float(max(ambient.values()))
     _room = shapely.difference(hole, iface_lines.buffer(_margin)) \
@@ -704,6 +705,11 @@ if HIRES is not None and _shl is not None and _walls_src:
     _remap[_used] = n_rim + np.arange(len(_used))
     WALL_PTS = _all_xy[_used] if len(_used) else np.zeros((0, 2))
     WALL_SEGS = _remap[WALL_SEGS] if len(WALL_SEGS) else WALL_SEGS
+    # The lines a wall node may slide along in the repair: each piece's own
+    # centreline, whose vertices are its corners and ends.  The repair slides
+    # a node only inside the span between two vertices, so the ends, the
+    # corners and the junctions stay put and the wall keeps its shape.
+    WALL_LINES = [shapely.LineString(c) for c in _pieces if len(c) > 1]
     reports["walls"] = {"n_pieces_in_hole": len(_pieces), "n_rooted_ends": n_rooted,
                         "n_wall_edges_dropped_for_an_acute_angle": n_acute,
                         "n_wall_edges_dropped_for_a_tip_too_close": n_close_tips,
@@ -1107,10 +1113,14 @@ def attempt(seed):
     on_boundary = np.zeros(len(nodes), dtype=bool)
     on_boundary[np.unique(_u[_c == 1])] = True
     is_new = np.arange(len(nodes)) >= st["n_nodes_retained"]
-    # A wall node does not move: it is on a structure, not on a curve it
-    # could slide along, and the nearest coastline curve is not its own.
+    # A wall node does not move freely -- it is on a structure -- but it may
+    # SLIDE along its own wall, like a coastline node along its coast.  The
+    # two sides of a wall are separate boundaries, so a copy sliding on one
+    # side leaves the slit a slit: both sides stay on the same line.  With
+    # the wall nodes pinned, the 14 elements left under 30 deg all sat at
+    # wall roots and tips where the repair could not reach.
     movable = is_new & ~on_boundary & ~wall_node
-    slidable = is_new & on_boundary & ~wall_node
+    slidable = is_new & on_boundary
     mutable_faces = np.arange(len(elements)) >= len(sel.retained)
     _before_repair = nodes.copy()
     # The curves new boundary nodes may slide along are the ones rim_constraints
@@ -1119,7 +1129,8 @@ def attempt(seed):
     # consecutive pairs are boundary edges and it jumps up to 2,867 m, so a line
     # built from it runs through open water and a node projected onto it lands
     # in the sea.
-    slide_on = [shapely.LineString(c) for c in rc["curves"] if len(c) > 1]
+    slide_on = [shapely.LineString(c) for c in rc["curves"] if len(c) > 1] \
+        + list(WALL_LINES)
 
     # Depths follow the nodes.  stitch_patch evaluated the base field at the
     # positions the fill produced; improve_patch then moved some of those nodes,
