@@ -554,3 +554,57 @@ size, so refining one needs the region to reach it.**
   fact that it is 0 m from the curve it was cut from;
 * M7001 still does not resolve 30 m. The mesh is refined and the seabed is
   resampled, and `sounding_distance` is what says which is which.
+
+
+## 11. A port, and where the option stops
+
+`recipes/refine/kimitsu_port_hires.yaml` (job 115426, seed 1). Surveyed first
+with `notebooks/423_site_survey.py`, because a port is where every number in
+§10 is hardest: 9.58 km of OSM shoreline inside a 900 m disc, against a base
+mesh that represents the whole harbour in two or three 450 m triangles.
+
+| | delivered |
+|---|---|
+| coastline | 36 base nodes resolved into **137** |
+| fidelity, against OSM | median **24.3 m**, max 180.3 m; 37 of 139 chords over 100 m |
+| achieved resolution | **28.9 m** median against 30 m, **100 %** of the water within 1.25x |
+| bathymetry | M7001 1,597 / 30 m grid **389** / Kanto 0 / extrapolated **0** |
+| depths | -6.38 to 13.74 m, 56 nodes at or above the datum |
+| size field | max slope **0.348** against 0.414, 0.00 % above |
+| QA | **19/21, 0 introduced**; geometry simple, 0 crossings |
+| minimum angle | **28.992 deg**, element 2101, 18.9 km away, the base's own |
+| achieved dt | 1.91 s |
+
+**The predicted failure happened, and was reported rather than hit.** One
+stretch was kept on the base polyline, and the run said why: *the source
+polyline touches itself there -- a feature narrower than the local element
+size*. That is the pier, about 20 m across, which the recipe had already
+named from the erosion test. Before the guard existed, the same patch died
+inside GEOS with "side location conflict at 395979.8 3911747.5".
+
+### 11.1 The option refines the coastline that exists. It does not open a harbour.
+
+The figure is the finding. The resolved coastline runs across the seaward
+face of the port; it does not enter the basins, and the 37 chords more than
+100 m from OSM are where it cuts a harbour mouth instead of going round it.
+
+The reason is the contract, not a defect. **The base mesh's water domain does
+not include the port.** Its boundary runs along the outer quay line, and
+everything behind that is land as far as the base is concerned -- the site
+survey found the same thing more starkly at 139.85011, 35.33680, where the
+base mesh has *no boundary at all*. A local refinement re-cuts the mesh
+inside a hole; it does not extend the model domain into water the base never
+had. `_source_substring` also refuses a piece more than three times the
+length of the stretch it replaces, which is what stops a walk from wandering
+into a basin and back.
+
+Opening the basins is a different operation -- the domain changes, so the
+comparison with the goto2023 baseline changes with it -- and it is an owner's
+decision, not a bug fix.
+
+### 11.2 What a port costs
+
+The time step. 1.91 s achieved against the base's 11.9 s, because a 30 m
+element over 8.65 m of water allows 2.82 s before the fill's own geometry
+takes another third. Pre-flight said so before the run: *keeping 4.5 s would
+need a 48 m target*.
