@@ -172,3 +172,27 @@ the base as in §12 of `refine_coast_and_bathy_design.md`.
 5. **Volume.** A zero-width wall counts the structure's footprint as water on
    both sides: the 852 m x 12 m pier is about 10,000 m2. Acceptable, or should
    walls wider than some limit be kept as areas even below `k_area * h0`?
+
+## 6. Decisions (owner, 2026-09-23)
+
+| # | decision |
+|---|---|
+| 1 | **split mesh** |
+| 2 | `k_area = 2`, `L_min = h0` |
+| 3 | water is closed below **2 x h0** (it was 3) |
+| 4 | OSM `man_made` lines: **not now**; later |
+| 5 | every wall is **zero-width**, and the footprint it hands to the water is reported |
+
+On 5, what was being asked, said plainly: a real pier 852 m long and 12 m
+wide covers about 10,000 m2 of sea. A zero-width wall lets the elements on
+both sides reach its centreline, so that footprint becomes water in the model
+-- at 5 m depth about 50,000 m3, a harbour's tidal prism enlarged by the
+fraction of it the structures occupy. The alternative was to keep structures
+above some width (say 20 m) as real land holes even below `2 * h0`, which is
+geometrically exact and costs elements smaller than the target beside them,
+and so the time step. The owner chose zero width throughout; the lost
+footprint goes in the report.
+
+Order of work, as §4 requires: the split function and its unit tests, then a
+synthetic FVCOM case (a channel with a pier and a detached breakwater), then
+the harbour.
