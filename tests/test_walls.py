@@ -225,3 +225,23 @@ def test_a_split_mesh_can_still_have_its_resolution_measured():
     before = region_resolution(xy, tri, shapely.box(100, 100, 700, 700), 100.0)
     after = region_resolution(out, t2, shapely.box(100, 100, 700, 700), 100.0)
     assert after["median_m"] == pytest.approx(before["median_m"])
+
+
+def test_resolution_is_measured_when_the_two_sides_of_a_wall_no_longer_match():
+    """The repair slides a wall node on ONE side; the trapezoid map refused
+    the two collinear boundaries whose vertices then differ."""
+    import shapely
+
+    from fvcom_mesh_tools.patch import region_resolution
+
+    xy, tri, n = grid()
+    out, t2, copy_of, rep = split_along_walls(xy, tri, wall_edges_from_path(
+        [node(4, j, n) for j in range(0, 5)]))
+    moved = out.copy()
+    copy = rep["pairs"][1][1]                    # a copy of an interior wall node
+    moved[copy, 1] += 30.0                       # slid 30 m along the wall (x fixed)
+    r = region_resolution(moved, t2, shapely.box(100, 100, 700, 700), 100.0)
+    assert r["n_outside_mesh"] == 0
+    assert r["median_m"] == pytest.approx(
+        region_resolution(xy, tri, shapely.box(100, 100, 700, 700), 100.0)["median_m"],
+        rel=0.05)

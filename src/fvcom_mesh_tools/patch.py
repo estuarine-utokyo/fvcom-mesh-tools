@@ -1449,7 +1449,6 @@ def region_resolution(nodes, elements, geometry, target_h_m: float, *,
     cannot be refined.
     """
     import shapely
-    from matplotlib.tri import Triangulation
 
     xy = np.asarray(nodes, dtype=float)[:, :2]
     tri = np.asarray(elements, dtype=np.int64)
@@ -1473,27 +1472,21 @@ def region_resolution(nodes, elements, geometry, target_h_m: float, *,
         # one place it certainly covers, and one sample is better than a
         # claim of nothing.
         p = shapely.get_coordinates(geometry.representative_point())
-    # Coincident nodes are legitimate now -- a wall is a split, and a split
-    # is two nodes at one point (walls.split_along_walls) -- but the
-    # trapezoid map refuses them.  Locating a point needs the triangles, not
-    # the ids, so the locator is built on one node per position; element
-    # order is unchanged and the areas measured below are the same triangles.
-    _u, _inv = np.unique(np.round(xy, 6), axis=0, return_inverse=True)
-    _loc_xy, _loc_tri = (xy, tri) if len(_u) == len(xy) else \
-        (_u, _inv.ravel()[tri])
-    try:
-        finder = Triangulation(_loc_xy[:, 0], _loc_xy[:, 1], _loc_tri).get_trifinder()
-    except RuntimeError as exc:
-        # The trapezoid map is stricter than verify_patch: it refuses a
-        # boundary that self-intersects, which a moved coastline can produce
-        # and which the frozen-zone checks do not look for.  That is one
-        # CANDIDATE's failure, so it has to arrive as one -- a RuntimeError
-        # here ended a whole five-seed search on its first seed.
-        raise ValueError(
-            f"the patched mesh is not a triangulation a point locator will "
-            f"accept ({exc}); a self-intersecting boundary is the usual "
-            "cause, and notebooks/422_mesh_validity.py says which") from exc
-    found = finder(p[:, 0], p[:, 1])
+    # Which triangle each sample falls in, asked of the triangles directly.
+    # matplotlib's trapezoid map was used first and refuses two things a
+    # mesh with walls legitimately has: coincident nodes (a split puts two
+    # nodes at one point) and, once the repair slides a wall node on one
+    # side only, two boundary polylines on one line whose vertices no longer
+    # match.  A spatial index over the triangles minds neither.
+    polys = shapely.polygons(xy[tri])
+    tree = shapely.STRtree(polys)
+    pi, ti = tree.query(shapely.points(p[:, 0], p[:, 1]), predicate="intersects")
+    found = np.full(p.shape[0], -1, dtype=np.int64)
+    # first hit per sample; a sample on a shared edge belongs to either side
+    order = np.argsort(pi, kind="stable")
+    pi, ti = pi[order], ti[order]
+    first = np.r_[True, pi[1:] != pi[:-1]] if len(pi) else np.zeros(0, bool)
+    found[pi[first]] = ti[first]
     inside = found >= 0
     u = xy[tri[:, 1]] - xy[tri[:, 0]]
     v = xy[tri[:, 2]] - xy[tri[:, 0]]
