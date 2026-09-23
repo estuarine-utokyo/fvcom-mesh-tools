@@ -511,15 +511,19 @@ if HIRES is not None and _shl is not None and _walls_src:
         """Put a wall's root ON the coastline rim; return its pfix row."""
         global rim_xy, rim_eg, rim_base
         h_here = float(h_achieved(np.asarray([xy]))[0])
-        d = np.linalg.norm(rim_xy - xy, axis=1)
-        if d.min() <= 0.3 * h_here:
-            return int(d.argmin())
         a, b = rim_xy[rim_eg[:, 0]], rim_xy[rim_eg[:, 1]]
         ab = b - a
         s = np.clip(np.einsum("ij,ij->i", xy - a, ab)
                     / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0, 1)
         foot = a + s[:, None] * ab
         k = int(np.argmin(np.linalg.norm(foot - xy, axis=1)))
+        # Judged at the FOOT, not at the wall's end.  The end may sit half an
+        # element off the coast, so a foot landing ON a rim vertex passed a
+        # test made at the end and was inserted a second time -- two fixed
+        # points at one position, which the mesher collapses.
+        d = np.linalg.norm(rim_xy - foot[k], axis=1)
+        if d.min() <= 0.3 * h_here:
+            return int(d.argmin())
         i, j = rim_eg[k]
         new = len(rim_xy)
         rim_xy = np.vstack([rim_xy, foot[k]])
