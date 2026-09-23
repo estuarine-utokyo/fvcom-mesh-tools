@@ -42,6 +42,7 @@ from fvcom_mesh_tools.patch import (
     boundary_after_patch,
     effective_gradation,
     field_gradation,
+    filter_shoreline,
     hole_polygon,
     improve_patch,
     introduced_violations,
@@ -338,6 +339,46 @@ if cfg["coastline"] in ("resample", "resolve") and free.size:
     say(f"source shoreline: {len(shore)} ring(s) within 3 km, nearest "
         f"{min(shapely.distance(pts, ln) for ln in shore):.1f} m from the free rim")
 
+_shl = None
+if HIRES is not None and cfg["coastline"] == "resolve" and shore:
+    # THE JUDGEMENT the declared grid size implies, made once and applied to
+    # the whole hole -- the transition is treated like the region (owner,
+    # 2026-09-23).  Everything narrower than the target goes, because a mesh
+    # of that size cannot carry it; what survives is handed to oceanmesh,
+    # which resamples, culls by area and smooths it, and whose signed
+    # distance function is then part of the domain the fill sees.
+    _h0 = min(r.target_h_m for _, r in regions_m)
+    _keep = [g for g in getattr(land_m, "geoms", [land_m])
+             if shapely.intersects(reach, g)]
+    _filtered, _frep = filter_shoreline(_keep, _h0)
+    reports["shoreline_filter"] = _frep
+    say(f"shoreline filter at h0 = {_h0:g} m: "
+        f"{_frep['rings_before']} ring(s) -> {_frep['rings_after']}, "
+        f"land lost {_frep['land_lost_m2'] / 1e6:.4f} km2, water lost "
+        f"{_frep['water_lost_m2'] / 1e6:.4f} km2, perimeter "
+        f"{_frep['perimeter_before_m'] / 1000:.2f} -> "
+        f"{_frep['perimeter_after_m'] / 1000:.2f} km")
+    _shp = OUT / "shoreline_filtered.shp"
+    gpd.GeoDataFrame(geometry=[_filtered], crs=MESH_EPSG).explode(
+        index_parts=False).to_file(_shp)
+    _b = _filtered.bounds
+    _pad = 3.0 * _h0
+    _shl = om.Shoreline(str(_shp),
+                        (_b[0] - _pad, _b[2] + _pad, _b[1] - _pad, _b[3] + _pad),
+                        _h0, crs=f"EPSG:{MESH_EPSG}")
+    say(f"oceanmesh Shoreline(h0={_h0:g}): mainland {len(_shl.mainland):,} pt, "
+        f"inner {len(_shl.inner):,} pt")
+    # The rim is cut from what survived, not from the raw OSM.
+    shore = []
+    for g in getattr(_filtered, "geoms", [_filtered]):
+        for r in [g.exterior, *g.interiors]:
+            if shapely.intersects(reach, r):
+                shore.append(shapely.LineString(np.asarray(r.coords)))
+    if not shore:
+        raise SystemExit(f"the h0 = {_h0:g} m filter left no shoreline near "
+                         "the free rim; the declared size cannot carry this "
+                         "coastline at all")
+
 target = min(r.target_h_m for _, r in regions_m)
 # The coastline inside the hole is cut at the LOCAL size, not at the target.
 # h_achieved is the same field DistMesh gets, without the 1.2 field-to-bar
@@ -426,12 +467,25 @@ shapely.prepare(hole)
 boundary = shapely.boundary(hole)
 
 
+_sdf = om.signed_distance_function(_shl) if _shl is not None else None
+
+
 def fd(points):
-    """Signed distance to the hole: negative inside, in metres."""
+    """Signed distance to the hole: negative inside, in metres.
+
+    On the hires branch the shoreline is an authority of its own, so the
+    domain is the INTERSECTION of the hole and oceanmesh's signed distance
+    function for the filtered coastline.  Taking the larger of the two is
+    that intersection: a point is inside only where both say so, which keeps
+    the frozen interface from the rim and the coastline from the source.
+    """
     p = np.atleast_2d(np.asarray(points, dtype=float))[:, :2]
     pt = shapely.points(p[:, 0], p[:, 1])
     d = shapely.distance(pt, boundary)
-    return np.where(shapely.contains(hole, pt), -d, d)
+    d = np.where(shapely.contains(hole, pt), -d, d)
+    if _sdf is None:
+        return d
+    return np.maximum(d, np.asarray(_sdf.eval(p), dtype=float))
 
 
 xmin, ymin, xmax, ymax = hole.bounds

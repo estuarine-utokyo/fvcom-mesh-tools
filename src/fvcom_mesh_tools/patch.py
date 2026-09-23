@@ -642,6 +642,57 @@ def _unusable_replacement(new: np.ndarray, xy: np.ndarray, idx,
     return None
 
 
+def filter_shoreline(land, h0: float):
+    """Remove what a mesh of size ``h0`` cannot resolve, and say what went.
+
+    This is the judgement the declared grid size implies, and it has to be
+    made explicitly because nothing else makes it.  `oceanmesh.Shoreline`
+    culls by AREA -- islands under ``minimum_area_mult * h0**2`` -- which does
+    not touch a long thin one: the Kimitsu pier is about 20 m across and
+    700 m long, 14,000 m2 against a 3,600 m2 threshold, and a 30 m mesh
+    cannot carry it whatever its area.
+
+    Width is what matters, and a morphological opening and closing is what
+    measures it.  ``buffer(-r).buffer(r)`` deletes land narrower than ``2r``;
+    the same pair the other way round deletes water narrower than ``2r``.
+    With ``r = h0/2`` the survivors are exactly the features an ``h0`` mesh
+    has room for.
+
+    Returns ``(filtered, report)``.  The report is the point: a coastline
+    that quietly lost its piers is worse than one that says it did.
+    """
+    import shapely
+
+    if not (np.isfinite(h0) and h0 > 0):
+        raise ValueError("h0 must be finite and positive")
+    r = 0.5 * float(h0)
+    before = shapely.union_all(
+        [land] if hasattr(land, "geom_type") else list(land))
+    opened = before.buffer(-r).buffer(r)          # land narrower than h0 goes
+    closed = opened.buffer(r).buffer(-r)          # water narrower than h0 goes
+    out = shapely.make_valid(closed)
+
+    def _rings(g):
+        return sum(1 + len(q.interiors) for q in getattr(g, "geoms", [g])
+                   if not q.is_empty and q.geom_type == "Polygon")
+
+    report = {
+        "h0_m": float(h0),
+        "area_before_m2": float(before.area),
+        "area_after_m2": float(out.area),
+        "area_removed_m2": float(before.area - out.area),
+        "area_removed_fraction": float((before.area - out.area) / before.area)
+        if before.area > 0 else 0.0,
+        "rings_before": _rings(before),
+        "rings_after": _rings(out),
+        "land_lost_m2": float(shapely.difference(before, out).area),
+        "water_lost_m2": float(shapely.difference(out, before).area),
+        "perimeter_before_m": float(before.length),
+        "perimeter_after_m": float(out.length),
+    }
+    return out, report
+
+
 def _base_spacing(pts: np.ndarray) -> np.ndarray:
     """How far apart the base polyline's own vertices are, per vertex."""
     seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
@@ -652,48 +703,22 @@ def _base_spacing(pts: np.ndarray) -> np.ndarray:
 
 
 def _resolve_stretch(pts: np.ndarray, shoreline, size) -> np.ndarray:
-    """Follow the source where the mesh is fine enough to carry it, and keep
-    the base polyline where it is not.
+    """Follow the source, over the whole stretch.
 
-    A coastline is cut at the LOCAL size, and a stretch runs from the core out
-    to the ambient field.  Walking a detailed shoreline at the coarse end is
-    not resolution, it is damage, and both halves of that were measured:
+    An earlier version kept the base polyline wherever the local element size
+    was coarser than the base's own spacing, because resolving a coastline in
+    a 400-1700 m field replaced 17 base nodes with 13.  The owner settled it
+    (2026-09-23): the transition is treated like the region, the source is
+    OSM throughout, and the base is not consulted for the SHAPE anywhere
+    inside the hole.  A coarse part of the stretch is therefore a coarse
+    sampling of OSM, not a copy of the base -- fewer nodes, but one
+    provenance.
 
-    * a 300 m fishery 2 km offshore put its whole coastline in a 400-1700 m
-      field, and resolving it replaced 17 base nodes with 13 -- a COARSER
-      coastline than the base's;
-    * a region on the shore resolved its core cleanly and then produced two
-      6-degree elements 6 km away at Kimitsu port, where the transition is
-      1 km and the port shoreline is not.
-
-    So the switch is per vertex and needs no new parameter: where the local
-    element size is at most the base polyline's own spacing, the mesh can
-    carry more than the base holds and the source is followed; where it is
-    coarser, the base is subdivided instead, which cannot move the coastline
-    and cannot introduce a corner the mesh has no room for.
+    What decides whether a feature survives is :func:`filter_shoreline`,
+    applied to the source before any of this, at the declared grid size.
     """
-    pts = np.asarray(pts, dtype=float)[:, :2]
-    h = _size_at(size, pts)
-    fine = h <= _base_spacing(pts)
-    if fine.all():
-        return _resample_on_source(pts, shoreline, size, pointwise=True,
-                                   require=True)
-    if not fine.any():
-        return _subdivide(pts, size)
-    # Maximal runs of one kind or the other, sharing the vertex at each join
-    # so the delivered polyline stays continuous.
-    cuts = np.flatnonzero(np.diff(fine.astype(np.int8))) + 1
-    out = [pts[0]]
-    for a, b in zip(np.concatenate([[0], cuts]),
-                    np.concatenate([cuts, [len(pts)]])):
-        run = pts[a:min(b + 1, len(pts))]
-        if len(run) < 2:
-            continue
-        piece = (_resample_on_source(run, shoreline, size, pointwise=True,
-                                     require=True)
-                 if fine[a] else _subdivide(run, size))
-        out.extend(np.asarray(piece, dtype=float)[1:])
-    return np.asarray(out, dtype=float)
+    return _resample_on_source(np.asarray(pts, dtype=float)[:, :2], shoreline,
+                               size, pointwise=True, require=True)
 
 
 def _resample_on_source(pts: np.ndarray, shoreline, size,

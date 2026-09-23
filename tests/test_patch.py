@@ -1506,20 +1506,18 @@ def test_resolve_keeps_core_detail_that_the_median_rule_destroys():
         "the pointwise tolerance has to keep what the median rule threw away")
 
 
-def test_resolve_follows_the_source_only_where_the_mesh_is_fine_enough():
-    """Measured twice, in opposite directions, on the real patches.
+def test_resolve_follows_the_source_over_the_whole_stretch():
+    """The transition is treated like the region (owner, 2026-09-23).
 
-    A 300 m fishery 2 km offshore put its whole coastline in a 400-1700 m
-    field and `resolve` replaced 17 base nodes with 13 -- COARSER than the
-    base.  A region on the shore resolved its core cleanly and produced two
-    6-degree elements 6 km away at Kimitsu port.  Both are the same thing:
-    walking a detailed shoreline at the coarse end of a transition.
+    An earlier version kept the base polyline wherever the local size was
+    coarser than the base's own spacing.  That made one stretch have two
+    provenances, and the curve the repair slides nodes along could then pull
+    a kept node onto the source.  The source is OSM throughout; a coarse part
+    is a coarse SAMPLING of OSM, not a copy of the base.
     """
     from fvcom_mesh_tools.patch import coastline_points
 
     src = _wiggly_source()
-    # base vertices 100 m apart, so 10 m of mesh is finer than the base and
-    # 400 m is coarser
     base = np.column_stack([np.arange(0.0, 1001.0, 100.0), np.zeros(11)])
 
     def size(q):
@@ -1527,25 +1525,48 @@ def test_resolve_follows_the_source_only_where_the_mesh_is_fine_enough():
 
     out = coastline_points(base, size, mode="resolve", shoreline=src,
                            tolerance_m=1e9)
-    west, east = out[out[:, 0] < 500.0], out[out[:, 0] > 500.0]
-    assert np.abs(west[:, 1]).max() > 5.0, (
-        "where the mesh is finer than the base, the source must be followed")
-    assert np.allclose(east[:, 1], 0.0, atol=1e-9), (
-        "where it is coarser, the base polyline must be kept exactly")
-    assert len(out) > len(base)
+    east = out[(out[:, 0] > 500.0) & (out[:, 0] < 1000.0)]
+    assert east.size, "the coarse half must still have interior nodes"
+    assert np.abs(east[:, 1]).max() > 1e-6, (
+        "the coarse half must be OSM sampled coarsely, not the base polyline")
 
 
-def test_resolve_never_returns_fewer_points_than_the_base_stretch_had():
-    """The coarsening that started this: 17 base nodes replaced by 13."""
-    from fvcom_mesh_tools.patch import coastline_points
+def test_filter_shoreline_removes_what_the_declared_size_cannot_carry():
+    """Width, not area, is what a mesh size can or cannot carry.
 
-    src = _wiggly_source()
-    base = np.column_stack([np.arange(0.0, 1001.0, 50.0), np.zeros(21)])
-    out = coastline_points(base, 900.0, mode="resolve", shoreline=src,
-                           tolerance_m=1e9)
-    assert len(out) >= len(base), (
-        f"a 900 m walk returned {len(out)} points for a 21-point base stretch; "
-        "subdividing keeps every original vertex and walking does not")
+    oceanmesh's Shoreline culls islands under `minimum_area_mult * h0**2`.
+    The Kimitsu pier is about 20 m across and 700 m long -- 14,000 m2 against
+    a 3,600 m2 threshold at h0 = 30 -- so an area cull keeps it and a 30 m
+    mesh still cannot carry it.  The opening is what measures width.
+    """
+    from fvcom_mesh_tools.patch import filter_shoreline
+
+    body = shapely.box(0.0, 0.0, 500.0, 500.0)
+    pier = shapely.box(500.0, 240.0, 1200.0, 260.0)      # 20 m across, 700 long
+    land = shapely.union_all([body, pier])
+    assert pier.area > 4 * 30.0 ** 2, "an area cull would keep this pier"
+
+    out, rep = filter_shoreline(land, 30.0)
+    assert not shapely.intersects(out, shapely.Point(1100.0, 250.0)), (
+        "a 20 m pier cannot be carried by a 30 m mesh and must go")
+    assert rep["land_lost_m2"] > 0.5 * pier.area
+    assert rep["area_removed_fraction"] > 0
+
+    kept, rep2 = filter_shoreline(land, 10.0)
+    assert shapely.intersects(kept, shapely.Point(1100.0, 250.0)), (
+        "at 10 m the same pier is two elements wide and must survive")
+    assert rep2["land_lost_m2"] < rep["land_lost_m2"]
+
+    # a channel narrower than h0 is closed for the same reason
+    banks = shapely.union_all([shapely.box(0.0, 0.0, 100.0, 1000.0),
+                               shapely.box(115.0, 0.0, 215.0, 1000.0)])
+    closed, rep3 = filter_shoreline(banks, 40.0)
+    assert shapely.intersects(closed, shapely.Point(107.0, 500.0)), (
+        "a 15 m channel cannot be carried by a 40 m mesh and must close")
+    assert rep3["water_lost_m2"] > 0
+
+    with pytest.raises(ValueError, match="finite and positive"):
+        filter_shoreline(land, 0.0)
 
 
 def test_the_size_field_outside_the_mesh_is_a_cliff_or_a_continuation():
