@@ -338,3 +338,6 @@ def test_a_wall_that_closes_water_off_is_found_by_its_piece():
     obc = {node(0, j) for j in range(n)}
     bad = walls_cut_off(t2, len(out), copy_of, we, obc)
     assert sorted(bad) == list(range(8)), "the ring's eight edges, not the pier's"
+    one = walls_cut_off(t2, len(out), copy_of, we, obc, xy=xy)
+    assert len(one) == 1 and one[0] < 8, (
+        "given coordinates, only the shortest touching edge is withdrawn")

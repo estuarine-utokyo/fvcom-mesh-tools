@@ -751,7 +751,7 @@ def achieved_per_region(mesh):
     return per_region, missed
 
 
-def walls_cut_off(elements, n_nodes, copy_of, wall_edges, obc_nodes):
+def walls_cut_off(elements, n_nodes, copy_of, wall_edges, obc_nodes, xy=None):
     """Indices of the wall edges whose PIECE borders water cut off from the OBC.
 
     A piece is a connected run of wall edges, by original node id.  Water is
@@ -789,8 +789,18 @@ def walls_cut_off(elements, n_nodes, copy_of, wall_edges, obc_nodes):
         ra, rb = wfind(a), wfind(b)
         if ra != rb:
             wp[ra] = rb
-    bad_pieces = {wfind(n) for e in we.tolist() for n in e if n in stranded}
-    return [k for k, (a, b) in enumerate(we.tolist()) if wfind(a) in bad_pieces]
+    del wfind
+    # The SHORTEST wall edge that touches the stranded water, one at a time.
+    # Withdrawing the whole connected piece removed an entire arm of the
+    # L-shaped breakwater to open a pocket its short crossing stub had made.
+    touching = [k for k, (a, b) in enumerate(we.tolist())
+                if a in stranded or b in stranded]
+    if not touching:
+        return []
+    if xy is None:
+        return touching
+    lengths = [float(np.linalg.norm(xy[we[k, 0]] - xy[we[k, 1]])) for k in touching]
+    return [touching[int(np.argmin(lengths))]]
 
 
 def wall_pairs(out):
@@ -918,9 +928,10 @@ def attempt(seed):
         _obc_new = {int(node_map[n]) for n in _obc0 if node_map[n] >= 0}
         _pre = (nodes, elements)
         withdrawn = 0
-        for _round in range(10):
+        for _round in range(40):
             nodes, elements, copy_of, srep = split_along_walls(_pre[0], _pre[1], _we)
-            pieces = walls_cut_off(elements, len(nodes), copy_of, _we, _obc_new)
+            pieces = walls_cut_off(elements, len(nodes), copy_of, _we, _obc_new,
+                                   xy=_pre[0])
             if not pieces:
                 break
             keep_e = ~np.isin(np.arange(len(_we)), pieces)
