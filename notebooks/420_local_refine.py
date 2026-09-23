@@ -1011,6 +1011,10 @@ def attempt(seed):
     # put one junction chord 821.6 m "from the source" while every chord
     # inside the resolved stretch was within 78.5 m.  The junction chords are
     # measured separately, against the whole source, below.
+    # Walls are boundary now, and they are not coastline: measuring them
+    # against the coastline curves reported a 775.6 m "departure" that was a
+    # breakwater's distance from the shore.
+    _bnd = _bnd[~wall_node[_bnd].all(axis=1)]
     _new_bnd = _bnd[is_new[_bnd].all(axis=1)]
     _junction = _bnd[is_new[_bnd].any(axis=1) & ~is_new[_bnd].all(axis=1)]
     if len(_new_bnd):
@@ -1179,13 +1183,13 @@ for seed in seeds:
         continue
     if candidate is None:
         reports["attempts"].append({k: v for k, v in out.items()
-                                    if k != "want_boundary"})
+                                    if k not in ("want_boundary", "copy_of")})
         save_report()
         continue
     written, mesh = serialise(candidate, out, out14)
     if written is None:
         reports["attempts"].append({k: v for k, v in out.items()
-                                    if k != "want_boundary"})
+                                    if k not in ("want_boundary", "copy_of")})
         save_report()
         continue
     qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000,
@@ -1212,7 +1216,7 @@ for seed in seeds:
                              "observed": c.observed} for c in qa.checks
                             if c.status == "fail"]}
     reports["attempts"].append({k: v for k, v in out.items()
-                                if k != "want_boundary"})
+                                if k not in ("want_boundary", "copy_of")})
     save_report()
     say(f"    seed {seed}: QA {qa.n_gate_total - qa.n_gate_failed}/"
         f"{qa.n_gate_total}, {len(new_bad)} introduced by the patch"
@@ -1238,7 +1242,7 @@ if _n_missed:
         + f"; see attempts in {OUT / 'report.json'}")
 nodes, elements, depths, node_map = candidate
 reports.update({k: v for k, v in out.items()
-                if k not in ("seed", "want_boundary")})
+                if k not in ("seed", "want_boundary", "copy_of")})
 reports["seed"] = seed
 np.save(OUT / "node_map.npy", node_map)
 reports["mesh"] = str(out14)
