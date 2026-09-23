@@ -310,3 +310,25 @@ triangles.
 
 The seven patch C1 elements (22.9-28.8 deg) sit at wall roots and at two
 spots on the resolved coastline; none is below 22.8 deg.
+
+## 11. Roots that do not cut the coast short (job 115569)
+
+Zooming on the remaining elements (notebook 430, the fill's saved constraints)
+put most of them beside short rim edges: inserting a root split 30 m coastline
+edges into 9.1-16.5 m pieces. A foot within half an element of either end of
+its segment now takes that vertex (the root moves along the coast by at most
+h/2), each wall is walked from its root rather than re-ended at it, and wall
+edges under half an element are merged where the wall runs straight.
+
+| | 115553 | 115569 |
+|---|---:|---:|
+| minimum angle | 22.85 deg | **24.84 deg** |
+| C1 violations (incl. base element 2101) | 8 | **5** |
+| C4 violations | 2 | **1** |
+| violations introduced | 9 | **5** |
+| water within 1.25x of target | 99.9 % | **100.0 %** |
+
+What is left: two elements at wall roots in the harbour (24.8 and 26.8 deg),
+where a short edge of the resolved coastline itself or a corner of the wall
+sits next to the root, and two at a wall in the coarse transition south of
+the region (25.3 and 28.8 deg).
