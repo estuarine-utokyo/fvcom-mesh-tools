@@ -1,4 +1,4 @@
-# Refining the coastline and the bathymetry: design, revision 3
+# Refining the coastline and the bathymetry: design, revision 3, and what it delivered
 
 A new **option** on the local refinement recipe. Today a refinement re-cuts the
 mesh inside a declared region and inherits the base mesh's bathymetry node for
@@ -483,3 +483,74 @@ shoreline, the floor, the smoothing and the shape of the option. The intertidal
 question became a report rather than a decision once §2.2 made it measurable,
 and the coastline tolerance became a non-question once decision 6 made the
 branch explicit.
+
+
+## 10. What it delivered
+
+Implemented and run on OCTOPUS (job 115419, `recipes/refine/futtsu_coast_hires.yaml`,
+a 700 m circle straddling the Futtsu shore at a 30 m target, five seeds).
+
+| | delivered |
+|---|---|
+| mesh | NP 6,153 / NE 11,412, from a base of 3,210 / 5,645 |
+| achieved resolution | **29.5 m** median cell against a 30 m target, **100 %** of the water within 1.25x |
+| coastline | **0.00 m** from the curve each stretch was cut from, over 142 chords |
+| bathymetry | M7001 2,500 / 30 m grid **589** / Kanto 0 / extrapolated **0** |
+| depths | -2.44 to 28.58 m, 126 nodes at or above the datum, nothing floored or smoothed |
+| frozen zone | coordinates, depths and retained faces identical; `frozen_exact: true` |
+| size field | max slope **0.349** against a C4 reference of 0.414, **0.00 %** of samples above it |
+| QA | **19/21, 0 introduced by the patch**; the two failures are the base's own |
+| geometry | boundary **simple**, 0 crossing pairs, 0 duplicate nodes, 0 non-manifold edges |
+| minimum angle | **28.992 deg**, at element 2101 -- the base's own, 19.7 km away |
+| achieved dt | 2.70 s (predicted 3.46 s) |
+
+The 589 nodes from the 30 m grid are decision 3 doing real work: M7001 has no
+intertidal data and this region is a tidal flat. Nothing was extrapolated.
+
+### 10.1 Four attempts at one defect
+
+The first working mesh took four passes, and three of the four diagnoses were
+wrong. They are recorded because the wrong ones cost the most time.
+
+| # | diagnosis | outcome |
+|---|---|---|
+| 1 | shoreline detail near the core, at the 7.5 m simplification tolerance | **wrong** -- the offenders were 6 km away, in the coarse outer transition |
+| 2 | follow the source only where the mesh is finer than the base polyline | **no effect** on the offenders (6.03 to 7.30 deg, same two elements) |
+| 3 | the size field is a cliff outside the base mesh | **right** -- max slope 42 to 1.005 |
+| 4 | the moved boundary crosses the frozen one | **right** -- and 0 introduced violations |
+
+The measurement that found (3) was in every report from the first run and I
+had not read it: every hires run recorded a size-field slope of 35-42 with 6-11
+"partial support" samples, where the same patch on the default branch records
+0.375 and none. `base_size_field` returns the field's MAXIMUM beyond the base
+mesh, which is safe while the hole stays inside -- and `coastline: resolve`
+takes it outside.
+
+(4) was found by `notebooks/422_mesh_validity.py`, written for the purpose:
+matplotlib's point locator refused a mesh `verify_patch` had passed, and the
+difference was exactly one crossing pair, a retained boundary edge against a
+resolved one. `verify_patch` does not test that the boundary is simple.
+
+(2) is kept even though it did not fix this: it is what stops the other
+failure, the one the offshore recipe showed -- resolving a coastline in a
+400-1700 m field replaced 17 base nodes with 13, a coastline COARSER than the
+base's.
+
+### 10.2 What the offshore recipe is for
+
+`recipes/refine/futtsu_nori_hires.yaml` asks for the same thing over 300 m of
+open water 2 km from the shore. It is kept as the counter-example: the
+coastline it touches lies at the outer edge of the transition, so `resolve`
+has nothing to work with there and says so. **A coastline is cut at the local
+size, so refining one needs the region to reach it.**
+
+### 10.3 Still true, and still reported
+
+* the depths are the source's. The case needs `WET_DRY_ON` and a `MIN_DEPTH`,
+  and the minimum depth and the r-factor smoothing are the next step;
+* 1,581 nodes are below run_qa's 2 m floor, which is reported and not gated;
+* one stretch was kept on the base polyline to avoid a crossing, and its
+  departure from OSM (up to 147 m) is in the report rather than hidden by the
+  fact that it is 0 m from the curve it was cut from;
+* M7001 still does not resolve 30 m. The mesh is refined and the seabed is
+  resampled, and `sounding_distance` is what says which is which.
