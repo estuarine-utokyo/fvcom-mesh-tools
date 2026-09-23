@@ -475,25 +475,29 @@ shapely.prepare(hole)
 boundary = shapely.boundary(hole)
 
 
-_sdf = om.signed_distance_function(_shl) if _shl is not None else None
-
-
 def fd(points):
     """Signed distance to the hole: negative inside, in metres.
 
-    On the hires branch the shoreline is an authority of its own, so the
-    domain is the INTERSECTION of the hole and oceanmesh's signed distance
-    function for the filtered coastline.  Taking the larger of the two is
-    that intersection: a point is inside only where both say so, which keeps
-    the frozen interface from the rim and the coastline from the source.
+    The shoreline enters through the RIM, not through here.  Intersecting
+    this with oceanmesh's signed distance function for the filtered coastline
+    was tried and does not work: the filter moves the coastline -- on the
+    Kimitsu patch it closed 4.46 km2 of water -- so base rim points that the
+    FROZEN mesh says are water fall on the land side of the new shoreline,
+    and DistMesh prunes them.  Measured, 19 of 248 fixed points were dropped,
+    one of them 1,434 m from where it was asked for.
+
+    The frozen rim is not negotiable and the shoreline is not either, so the
+    reconciliation has to happen where they meet, and it does: every coastal
+    rim point is cut from the FILTERED shoreline, and this polygon is built
+    from those points.  The domain inside the hole is therefore the source's,
+    and the base supplies only the interface -- which is the one thing it
+    must supply, because that is where the patch meets what it promised not
+    to touch.
     """
     p = np.atleast_2d(np.asarray(points, dtype=float))[:, :2]
     pt = shapely.points(p[:, 0], p[:, 1])
     d = shapely.distance(pt, boundary)
-    d = np.where(shapely.contains(hole, pt), -d, d)
-    if _sdf is None:
-        return d
-    return np.maximum(d, np.asarray(_sdf.eval(p), dtype=float))
+    return np.where(shapely.contains(hole, pt), -d, d)
 
 
 xmin, ymin, xmax, ymax = hole.bounds

@@ -582,6 +582,54 @@ size*. That is the pier, about 20 m across, which the recipe had already
 named from the erosion test. Before the guard existed, the same patch died
 inside GEOS with "side location conflict at 395979.8 3911747.5".
 
+### 11.0 Rebuilt: the declared size decides, and OSM is the only source
+
+The first port mesh (job 115426) kept the base polyline in two places -- where
+the local size was coarser than the base's own spacing, and on any stretch
+whose resolved form would have self-touched.  The owner removed both
+(2026-09-23): **the transition is treated like the region, the source is OSM
+throughout, and whether a feature survives at the declared grid size is a
+judgement that has to be made rather than worked around.**
+
+`patch.filter_shoreline` makes it, once, at `h0 = target`, over the whole
+hole.  oceanmesh's `Shoreline` culls by AREA -- the Kimitsu pier is 20 m
+across and 700 m long, 14,000 m2 against a 3,600 m2 threshold at h0 = 30 --
+so an area cull keeps what a 30 m mesh cannot carry.  Width is what matters,
+and a morphological opening and closing measures it.  The radius is
+`3 * h0 / 2`, not `h0 / 2`: a channel exactly h0 wide has a node on each bank
+and no element between them, and at `h0/2` the run collapsed 43 of 248 fixed
+points in pairs 30 m apart.
+
+Measured on this patch at h0 = 30 m: 27 rings became 68, 2.01 km2 of land was
+removed and 4.46 km2 of water closed, and the perimeter fell from 919 to
+547 km.
+
+**And it paid, by a factor of twenty.**
+
+| | kept the base where it could (115426) | OSM throughout, filtered (115433) |
+|---|---|---|
+| coastline nodes from 36 base | 137 | **207** |
+| departure from OSM | median 24.3 m, max 180.3 m | **median 1.2 m, max 38.2 m** |
+| chords over 100 m from OSM | 37 of 139 | **1 of 209** |
+| stretches kept on the base | 1 | **0** |
+| QA | 19/21, 0 introduced | 19/21, 0 introduced |
+| achieved dt | 1.91 s | 2.01 s |
+| depths from the 30 m grid | 389 | **1,014** |
+
+#### What could not be done as designed
+
+Replacing the fill's domain with `oceanmesh.signed_distance_function` was
+tried and withdrawn.  The filter MOVES the coastline -- it closed 4.46 km2 of
+water here -- so base rim points that the FROZEN mesh says are water fall on
+the land side of the new shoreline, and DistMesh prunes them: 19 of 248 fixed
+points dropped, one of them 1,434 m from where it was asked for.  The frozen
+rim is not negotiable and neither is the shoreline, so the reconciliation
+happens where they meet.  It already did: every coastal rim point is cut from
+the filtered shoreline and the hole polygon is built from those points, so
+the domain inside the hole is the source's and the base supplies only the
+interface -- the one thing it must supply, because that is where the patch
+meets what it promised not to touch.
+
 ### 11.1 The option refines the coastline that exists. It does not open a harbour.
 
 The figure is the finding. The resolved coastline runs across the seaward
