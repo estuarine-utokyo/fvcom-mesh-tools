@@ -366,9 +366,14 @@ reports["rim"] = {k: v for k, v in rc.items()
                   if isinstance(v, (int, float, str, bool))}
 say("rim: " + json.dumps(reports["rim"]))
 if rc.get("n_stretches_kept_to_avoid_a_crossing"):
+    _why = {"self": "the source polyline touches itself there -- a feature "
+                    "narrower than the local element size",
+            "other": "it would cross another replaced stretch",
+            "frozen": "it would cross the frozen coastline"}
     say(f"    {rc['n_stretches_kept_to_avoid_a_crossing']} stretch(es) were "
-        "KEPT on the base polyline because following the source would have "
-        "crossed the frozen coastline")
+        "KEPT on the base polyline: "
+        + "; ".join(f"{n} because {_why.get(k, k)}"
+                    for k, n in rc.get("kept_because", {}).items()))
 if rc.get("n_coastline_nodes_new", 0) < rc.get("n_coastline_nodes_replaced", 0):
     # The coastline is cut at the LOCAL size, and out at the edge of a
     # transition that is the AMBIENT size.  Measured on the first hires run:

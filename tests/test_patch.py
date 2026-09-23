@@ -1591,26 +1591,40 @@ def test_the_size_field_outside_the_mesh_is_a_cliff_or_a_continuation():
         base_size_field(nodes, tri, outside="zero")
 
 
-def test_a_replacement_that_would_cross_the_frozen_boundary_is_refused():
-    """A moved boundary can cross the one it does not own.
+def test_a_replacement_that_cannot_be_used_says_which_of_the_three_reasons():
+    """Three ways a moved boundary breaks the mesh, all met on real patches.
 
-    Measured: a hires run with a clean size field produced exactly one
+    `frozen`: a hires run with a clean size field produced exactly one
     crossing pair -- a retained boundary edge against a resolved one -- and
-    matplotlib's TriFinder refused the mesh with "Triangulation is invalid",
-    while verify_patch had passed it. Subdividing cannot cross anything,
-    because it stays on the base polyline.
+    matplotlib's point locator refused the mesh that verify_patch had passed.
+
+    `self`: the Kimitsu port run resolved 36 base coastline nodes into 264
+    and then died inside GEOS with "side location conflict".  A pier 20 m
+    wide walked at 30 m goes up one side and back down the other, and the
+    two sides interleave.
     """
-    from fvcom_mesh_tools.patch import _crosses_boundary
+    import shapely
+
+    from fvcom_mesh_tools.patch import _unusable_replacement
 
     xy = np.array([[0.0, 0.0], [100.0, 0.0], [200.0, 0.0],   # the stretch
                    [50.0, -50.0], [50.0, 50.0]])             # an edge across it
     idx = np.array([0, 1, 2])
-    other = np.array([[3, 4]])
     own = np.array([[0, 1], [1, 2]])
+    other = np.array([[3, 4]])
     straight = xy[idx]
-    assert not _crosses_boundary(straight, xy, idx, own), (
+
+    assert _unusable_replacement(straight, xy, idx, own, []) is None, (
         "the stretch's own edges are shared endpoints, not crossings")
-    assert _crosses_boundary(straight, xy, idx, np.vstack([own, other]))
+    assert _unusable_replacement(straight, xy, idx,
+                                 np.vstack([own, other]), []) == "frozen"
     away = np.array([[0.0, 0.0], [100.0, 200.0], [200.0, 0.0]])
-    assert not _crosses_boundary(away, xy, idx, np.vstack([own, other]))
-    assert not _crosses_boundary(straight, xy, idx, None)
+    assert _unusable_replacement(away, xy, idx, np.vstack([own, other]), []) is None
+
+    # a figure of eight: the polyline crosses itself, which is the pier
+    knot = np.array([[0.0, 0.0], [100.0, 100.0], [100.0, 0.0], [0.0, 100.0]])
+    assert _unusable_replacement(knot, xy, idx, None, []) == "self"
+
+    placed = [shapely.LineString([[50.0, -50.0], [50.0, 50.0]])]
+    assert _unusable_replacement(straight, xy, idx, None, placed) == "other"
+    assert _unusable_replacement(straight, xy, idx, None, []) is None

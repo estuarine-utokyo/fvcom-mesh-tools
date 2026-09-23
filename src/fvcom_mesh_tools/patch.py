@@ -595,29 +595,51 @@ def _source_substring(pts: np.ndarray, shoreline):
     return coords
 
 
-def _crosses_boundary(new: np.ndarray, xy: np.ndarray, idx, boundary_edges) -> bool:
-    """Would this replacement cross the boundary it does not own?
+def _unusable_replacement(new: np.ndarray, xy: np.ndarray, idx,
+                          boundary_edges, placed) -> str | None:
+    """Why this replacement cannot be used, or ``None`` when it can.
 
-    ``boundary_edges`` are the base mesh's boundary edges as node-id pairs.
-    The ones this stretch REPLACES are excluded -- the new curve shares its
-    endpoints with them, and a shared endpoint is a touch, not a crossing.
+    Three ways a moved boundary breaks the mesh, and all three were met on
+    real patches:
+
+    ``self``      the new polyline touches or crosses ITSELF.  A pier 20 m
+                  wide resolved at 30 m does this: the walk goes up one side
+                  and back down the other and the two sides interleave.  The
+                  ring is then not simple, and `hole_polygon` fails inside
+                  GEOS with "side location conflict", which is a sentence
+                  about topology and not about the port.
+    ``other``     it crosses a stretch already placed on this rim.
+    ``frozen``    it crosses the base mesh's boundary somewhere it does not
+                  own -- a shared endpoint is a touch, not a crossing, so the
+                  edges this stretch REPLACES are excluded.
+
+    Subdividing cannot do any of the three, because it stays on a polyline
+    that was already part of a valid mesh.
     """
-    if boundary_edges is None or len(new) < 2:
-        return False
+    if len(new) < 2:
+        return None
     import shapely
 
-    e = np.asarray(boundary_edges, dtype=np.int64).reshape(-1, 2)
-    own = np.zeros(len(e), dtype=bool)
-    mine = set(np.asarray(idx, dtype=np.int64).ravel().tolist())
-    for k, (i, j) in enumerate(e.tolist()):
-        own[k] = i in mine and j in mine
-    others = e[~own]
-    if not len(others):
-        return False
     line = shapely.LineString(np.asarray(new, dtype=float)[:, :2])
+    if not line.is_simple:
+        return "self"
+    if placed:
+        tree = shapely.STRtree(placed)
+        for q in tree.query(line):
+            if shapely.crosses(line, placed[q]) or shapely.overlaps(line, placed[q]):
+                return "other"
+    if boundary_edges is None:
+        return None
+    e = np.asarray(boundary_edges, dtype=np.int64).reshape(-1, 2)
+    mine = set(np.asarray(idx, dtype=np.int64).ravel().tolist())
+    others = e[[not (i in mine and j in mine) for i, j in e.tolist()]]
+    if not len(others):
+        return None
     segs = [shapely.LineString(xy[[i, j], :2]) for i, j in others.tolist()]
     tree = shapely.STRtree(segs)
-    return any(shapely.crosses(line, segs[q]) for q in tree.query(line))
+    if any(shapely.crosses(line, segs[q]) for q in tree.query(line)):
+        return "frozen"
+    return None
 
 
 def _base_spacing(pts: np.ndarray) -> np.ndarray:
@@ -765,6 +787,8 @@ def rim_constraints(
     curve_of: dict[int, int] = {}
     n_resampled = 0
     n_uncrossed = 0
+    placed: list = []
+    kept_because: dict[str, int] = {}
     n_new = 0
 
     # A free rim node's two rim edges are both on the physical boundary, and
@@ -814,20 +838,20 @@ def rim_constraints(
                     new = coastline_points(xy[idx], size, mode=coastline,
                                            shoreline=shoreline,
                                            tolerance_m=tolerance_m)
-                    if _crosses_boundary(new, xy, idx, boundary_edges):
-                        # A resolved coastline that crosses the FROZEN one is
-                        # a mesh whose boundary self-intersects.  verify_patch
-                        # does not look for it and matplotlib's TriFinder does:
-                        # the first run with a continuous size field came back
-                        # "Triangulation is invalid" for exactly one crossing
-                        # pair, a retained edge against a resolved one.
-                        # Subdividing cannot cross anything, because it stays
-                        # on the base polyline.
+                    why = _unusable_replacement(new, xy, idx, boundary_edges,
+                                                placed)
+                    if why is not None:
                         new = _subdivide(xy[idx], size)
                         n_uncrossed += 1
+                        kept_because[why] = kept_because.get(why, 0) + 1
                         curves.append(np.asarray(xy[idx], dtype=float))
                     else:
                         curves.append(coastline_curve(xy[idx], coastline, shoreline))
+                    if len(new) > 1:
+                        import shapely as _sh
+
+                        placed.append(_sh.LineString(
+                            np.asarray(new, dtype=float)[:, :2]))
                     for q in new[1:-1]:
                         curve_of[_push(pts, base_id, q, -1)] = len(curves) - 1
                         ring_rows.append(len(pts) - 1)
@@ -849,6 +873,7 @@ def rim_constraints(
         "n_pfix": int(len(pfix)),
         "n_egfix": int(len(egfix)),
         "n_stretches_kept_to_avoid_a_crossing": n_uncrossed,
+        "kept_because": kept_because,
         "n_coastline_nodes_replaced": n_resampled,
         "n_coastline_nodes_new": n_new,
         "coastline_mode": coastline,
@@ -900,7 +925,21 @@ def hole_polygon(pfix: np.ndarray, egfix: np.ndarray):
                 holes.append(np.asarray(pfix, dtype=float)[rings[j]])
         shells.append(shapely.Polygon(
             np.asarray(pfix, dtype=float)[rings[k]], holes))
-    out = shapely.union_all(shells)
+    try:
+        out = shapely.union_all(shells)
+    except Exception as exc:
+        # GEOS says "side location conflict at <x> <y>", which is a sentence
+        # about topology and not about the mesh.  A rim ring that is not
+        # simple is what produces it, and a shoreline feature narrower than
+        # the local element size is what produces that.
+        bad = [k for k, p in enumerate(polys) if not p.is_valid
+               or not p.exterior.is_simple]
+        raise ValueError(
+            f"the rim does not bound a valid polygon ({exc}); "
+            f"{len(bad)} of {len(polys)} ring(s) are not simple. A coastline "
+            "feature narrower than the local element size is the usual cause "
+            "-- notebooks/423_site_survey.py measures that by eroding the "
+            "water polygon") from exc
     if out.is_empty:
         raise ValueError("the rim segments do not close a polygon")
     # A valid Polygon is not evidence that it is the domain the rim asked
