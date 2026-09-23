@@ -1703,7 +1703,7 @@ def test_blunt_acute_corners_cuts_a_sharp_water_corner():
     p, e, b, rep = blunt_acute_corners(pfix, egfix, base, water,
                                        lambda xy: np.full(len(xy), 30.0))
     assert rep["n_corners_blunted"] == 1 and rep["angles_deg"] == [45.0]
-    assert len(p) == 4 and b.tolist() == [-1, 5, 6, -1]
+    assert len(p) == 4 and sorted(b.tolist()) == [-1, -1, 5, 6]
     ring = hole_polygon(p, e)
     assert ring.is_valid and ring.area < water.area
     # every corner of the new ring is at least 60 deg on the water side
@@ -1712,7 +1712,8 @@ def test_blunt_acute_corners_cuts_a_sharp_water_corner():
         u, v = xy[k - 1] - xy[k], xy[(k + 1) % len(xy)] - xy[k]
         ang = np.degrees(np.arccos(u @ v / np.linalg.norm(u) / np.linalg.norm(v)))
         assert ang >= 45.0 - 1e-9          # the two frozen corners are left
-    assert np.isclose(np.linalg.norm(p[0] - [0, 0]), 30.0)
+    d = np.linalg.norm(p[b < 0], axis=1)
+    assert np.allclose(d, 30.0)
     assert shapely.Point(0.5, 0.1).within(water) and not shapely.Point(0.5, 0.1).within(ring)
 
 
@@ -1735,3 +1736,21 @@ def test_blunt_acute_corners_leaves_land_corners_and_frozen_points():
                                        hole_polygon(tri, eg),
                                        lambda xy: np.full(len(xy), 30.0))
     assert rep["n_corners_blunted"] == 0
+
+
+def test_blunt_acute_corners_walks_past_short_edges():
+    from fvcom_mesh_tools.patch import blunt_acute_corners, hole_polygon
+
+    # the corner's own edges are 5 m: the chord is still an element away
+    pfix = np.array([[0.0, 0.0], [5.0, 0.0], [200.0, 0.0], [200.0, 200.0],
+                     [5 / np.sqrt(2), 5 / np.sqrt(2)]])
+    egfix = np.array([[0, 1], [1, 2], [2, 3], [3, 4], [4, 0]])
+    base = np.array([-1, -1, 5, 6, -1])
+    water = hole_polygon(pfix, egfix)
+    p, e, b, rep = blunt_acute_corners(pfix, egfix, base, water,
+                                       lambda xy: np.full(len(xy), 30.0))
+    assert rep["n_corners_blunted"] == 1 and rep["n_points_removed"] == 3
+    assert np.allclose(np.linalg.norm(p[b < 0], axis=1), 30.0)
+    assert rep["chord_m"][0] > 20.0
+    ring = hole_polygon(p, e)
+    assert ring.is_valid and len(p) == 4

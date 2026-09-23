@@ -1007,11 +1007,14 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0)
     Kimitsu harbour a 44 deg corner of the resolved coastline kept an M2
     amplitude of exactly 0, and bisecting its element left angles of 22 deg.
 
-    The corner vertex is replaced by two points on its own two edges, a
-    distance ``d = min(size, 0.45 * each edge)`` from it, so the chord between
-    them turns the corner into two of ``90 + angle/2`` each.  The water lost is
-    the triangle cut off.  Only points the fill added (``pfix_base < 0``) with
-    exactly two constrained edges are touched; a frozen point is not negotiable.
+    From the corner the coastline is walked one local element ``size`` along
+    each side, and the two points reached are joined by a chord; the corner
+    and any point passed on the way are removed.  Walking a fixed fraction of
+    the first edge instead left a 7.4 m chord where that edge was short, and
+    the external step fell from 2.46 to 1.37 s.  The walk stops early at a
+    point it may not remove -- a frozen one (``pfix_base >= 0``) or one with
+    other than two constrained edges -- and, so that the chord stays inside
+    the water, at 0.9 of a side it would otherwise run past.
 
     ``water`` is the hole the rim bounds; ``size`` maps (n, 2) points to the
     local element size.  Returns ``(pfix, egfix, pfix_base, report)``.
@@ -1021,14 +1024,33 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0)
     pfix = np.asarray(pfix, dtype=float).copy()
     egfix = np.asarray(egfix, dtype=np.int64).copy()
     pfix_base = np.asarray(pfix_base, dtype=np.int64).copy()
-    corners = []
+    nbrs: dict = {}
+    for a, b in egfix.tolist():
+        nbrs.setdefault(a, []).append(b)
+        nbrs.setdefault(b, []).append(a)
+
+    def free(k):
+        return pfix_base[k] < 0 and len(nbrs.get(k, [])) == 2
+
+    def walk(v, first, d):
+        """Walk from v through `first` for arc length d; return (point, stop, passed)."""
+        prev, cur, left, passed = v, first, d, []
+        while True:
+            seg = float(np.linalg.norm(pfix[cur] - pfix[prev]))
+            if seg >= left or not free(cur):
+                t = min(left, 0.9 * seg) / seg
+                return pfix[prev] + t * (pfix[cur] - pfix[prev]), cur, passed
+            left -= seg
+            passed.append(cur)
+            nxt = [k for k in nbrs[cur] if k != prev][0]
+            prev, cur = cur, nxt
+
+    gone: set = set()
+    new_pts, new_edges, corners = [], [], []
     for v in range(len(pfix)):
-        if pfix_base[v] >= 0:
+        if v in gone or not free(v):
             continue
-        rows = np.flatnonzero((egfix == v).any(axis=1))
-        if len(rows) != 2:
-            continue
-        p, n = (int(egfix[r][egfix[r] != v][0]) for r in rows)
+        p, n = nbrs[v]
         up, un = pfix[p] - pfix[v], pfix[n] - pfix[v]
         lp, ln = float(np.linalg.norm(up)), float(np.linalg.norm(un))
         if lp <= 0 or ln <= 0:
@@ -1037,26 +1059,39 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0)
         # the angle between the edges is the WATER's only if the bisector
         # points into the water; otherwise the water has 360 minus it
         bis = up / lp + un / ln
-        if np.linalg.norm(bis) < 1e-9:
+        if ang >= min_angle_deg or np.linalg.norm(bis) < 1e-9:
             continue
         probe = pfix[v] + bis / np.linalg.norm(bis) * 0.05 * min(lp, ln)
-        if ang >= min_angle_deg or not water.contains(shapely.Point(probe)):
+        if not water.contains(shapely.Point(probe)):
             continue
-        d = min(float(size(pfix[v][None])[0]), 0.45 * lp, 0.45 * ln)
-        corners.append((v, p, n, rows, pfix[v] + up / lp * d, pfix[v] + un / ln * d, ang))
-    for v, p, n, rows, a, b, _ in corners:
-        w = len(pfix)
-        pfix[v] = a                     # the corner becomes the point on edge v-p
-        pfix = np.vstack([pfix, b])
-        pfix_base = np.append(pfix_base, -1)
-        # edge v-n now runs from the new point w; the chord is v-w
-        for r in rows:
-            if n in egfix[r]:
-                egfix[r] = [w, n]
-        egfix = np.vstack([egfix, [v, w]])
+        d = float(size(pfix[v][None])[0])
+        a_xy, a_stop, a_pass = walk(v, p, d)
+        b_xy, b_stop, b_pass = walk(v, n, d)
+        removed = {v, *a_pass, *b_pass}
+        if removed & gone or a_stop in removed or b_stop in removed or a_stop == b_stop:
+            continue
+        chord = shapely.LineString([a_xy, b_xy])
+        if not water.buffer(1e-6).contains(chord):
+            continue
+        gone |= removed
+        ia = len(pfix) + len(new_pts)
+        new_pts += [a_xy, b_xy]
+        new_edges += [[a_stop, ia], [ia, ia + 1], [ia + 1, b_stop]]
+        corners.append((ang, a_xy, float(chord.length)))
+    if corners:
+        keep_e = ~np.isin(egfix, list(gone)).any(axis=1)
+        egfix = np.vstack([egfix[keep_e], np.asarray(new_edges, dtype=np.int64)])
+        pfix = np.vstack([pfix, np.asarray(new_pts)])
+        pfix_base = np.concatenate([pfix_base, np.full(len(new_pts), -1, dtype=np.int64)])
+        live = np.setdiff1d(np.arange(len(pfix)), list(gone))
+        remap = np.full(len(pfix), -1, dtype=np.int64)
+        remap[live] = np.arange(len(live))
+        pfix, pfix_base, egfix = pfix[live], pfix_base[live], remap[egfix]
     report = {"n_corners_blunted": len(corners),
-              "angles_deg": [round(c[6], 1) for c in corners],
-              "at": [[round(float(x), 1) for x in c[4]] for c in corners]}
+              "angles_deg": [round(c[0], 1) for c in corners],
+              "chord_m": [round(c[2], 1) for c in corners],
+              "n_points_removed": len(gone),
+              "at": [[round(float(x), 1) for x in c[1]] for c in corners]}
     return pfix, egfix, pfix_base, report
 
 
