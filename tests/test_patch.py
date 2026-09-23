@@ -1552,18 +1552,34 @@ def test_filter_shoreline_removes_what_the_declared_size_cannot_carry():
     assert rep["land_lost_m2"] > 0.5 * pier.area
     assert rep["area_removed_fraction"] > 0
 
-    kept, rep2 = filter_shoreline(land, 10.0)
+    assert rep["removes_features_narrower_than_m"] == 90.0, (
+        "three elements across, so 3 x h0 -- not h0, which leaves a channel "
+        "with a node on each bank and no element between them")
+
+    kept, rep2 = filter_shoreline(land, 6.0)
     assert shapely.intersects(kept, shapely.Point(1100.0, 250.0)), (
-        "at 10 m the same pier is two elements wide and must survive")
+        "at 6 m the same pier is three elements wide and must survive")
     assert rep2["land_lost_m2"] < rep["land_lost_m2"]
 
-    # a channel narrower than h0 is closed for the same reason
-    banks = shapely.union_all([shapely.box(0.0, 0.0, 100.0, 1000.0),
-                               shapely.box(115.0, 0.0, 215.0, 1000.0)])
+    # a channel too narrow for three elements is closed for the same reason
+    banks = shapely.union_all([shapely.box(0.0, 0.0, 400.0, 1000.0),
+                               shapely.box(415.0, 0.0, 815.0, 1000.0)])
     closed, rep3 = filter_shoreline(banks, 40.0)
-    assert shapely.intersects(closed, shapely.Point(107.0, 500.0)), (
+    assert shapely.intersects(closed, shapely.Point(407.0, 500.0)), (
         "a 15 m channel cannot be carried by a 40 m mesh and must close")
     assert rep3["water_lost_m2"] > 0
+    assert shapely.intersects(closed, shapely.Point(200.0, 500.0)), (
+        "and the banks themselves are wide enough to survive")
+
+    # a channel wide enough for three elements is kept
+    wide = shapely.union_all([shapely.box(0.0, 0.0, 400.0, 1000.0),
+                              shapely.box(500.0, 0.0, 900.0, 1000.0)])
+    open_, _ = filter_shoreline(wide, 30.0)
+    assert not shapely.intersects(open_, shapely.Point(450.0, 500.0)), (
+        "a 100 m channel is more than three 30 m elements and must stay open")
+
+    with pytest.raises(ValueError, match="elements_per_feature"):
+        filter_shoreline(land, 30.0, elements_per_feature=0.0)
 
     with pytest.raises(ValueError, match="finite and positive"):
         filter_shoreline(land, 0.0)

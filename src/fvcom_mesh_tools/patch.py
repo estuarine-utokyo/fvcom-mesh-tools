@@ -642,7 +642,7 @@ def _unusable_replacement(new: np.ndarray, xy: np.ndarray, idx,
     return None
 
 
-def filter_shoreline(land, h0: float):
+def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0):
     """Remove what a mesh of size ``h0`` cannot resolve, and say what went.
 
     This is the judgement the declared grid size implies, and it has to be
@@ -655,8 +655,15 @@ def filter_shoreline(land, h0: float):
     Width is what matters, and a morphological opening and closing is what
     measures it.  ``buffer(-r).buffer(r)`` deletes land narrower than ``2r``;
     the same pair the other way round deletes water narrower than ``2r``.
-    With ``r = h0/2`` the survivors are exactly the features an ``h0`` mesh
-    has room for.
+
+    ``elements_per_feature`` is how many elements a surviving feature must
+    have room for, so ``r = elements_per_feature * h0 / 2``.  It is not 1:
+    a channel exactly ``h0`` wide has a node on each bank and no element
+    between them, and the first run of this filter at ``r = h0/2`` collapsed
+    43 of 262 fixed points onto 21 vertices, in pairs 30 m apart at a 30 m
+    target.  Three is what OceanMesh2D's feature sizing asks for across a
+    channel, and it is the smallest number that leaves an element with
+    neighbours on both sides.
 
     Returns ``(filtered, report)``.  The report is the point: a coastline
     that quietly lost its piers is worse than one that says it did.
@@ -665,7 +672,9 @@ def filter_shoreline(land, h0: float):
 
     if not (np.isfinite(h0) and h0 > 0):
         raise ValueError("h0 must be finite and positive")
-    r = 0.5 * float(h0)
+    if not (np.isfinite(elements_per_feature) and elements_per_feature > 0):
+        raise ValueError("elements_per_feature must be finite and positive")
+    r = 0.5 * float(elements_per_feature) * float(h0)
     before = shapely.union_all(
         [land] if hasattr(land, "geom_type") else list(land))
     opened = before.buffer(-r).buffer(r)          # land narrower than h0 goes
@@ -678,6 +687,8 @@ def filter_shoreline(land, h0: float):
 
     report = {
         "h0_m": float(h0),
+        "elements_per_feature": float(elements_per_feature),
+        "removes_features_narrower_than_m": float(2.0 * r),
         "area_before_m2": float(before.area),
         "area_after_m2": float(out.area),
         "area_removed_m2": float(before.area - out.area),

@@ -348,8 +348,16 @@ if HIRES is not None and cfg["coastline"] == "resolve" and shore:
     # which resamples, culls by area and smooths it, and whose signed
     # distance function is then part of the domain the fill sees.
     _h0 = min(r.target_h_m for _, r in regions_m)
+    # Only the land the PATCH touches.  The first version filtered every
+    # polygon within 3 km of the free rim, which fragmented industrial coast
+    # kilometres away -- 27 rings into 189 -- for no benefit to a hole that
+    # never reaches it.  Whole polygons, never clipped: clipping a land
+    # polygon invents coastline along the cut.
+    _foot = shapely.MultiPoint(
+        base.nodes[np.unique(base.elements[sel.removed]), :2]).convex_hull
+    _foot = _foot.buffer(max(500.0, 3.0 * float(max(ambient.values()))))
     _keep = [g for g in getattr(land_m, "geoms", [land_m])
-             if shapely.intersects(reach, g)]
+             if shapely.intersects(_foot, g)]
     _filtered, _frep = filter_shoreline(_keep, _h0)
     reports["shoreline_filter"] = _frep
     say(f"shoreline filter at h0 = {_h0:g} m: "
