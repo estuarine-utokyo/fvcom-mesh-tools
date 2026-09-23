@@ -548,13 +548,69 @@ if HIRES is not None and _shl is not None and _walls_src:
         di = float(np.linalg.norm(foot[k] - rim_xy[i]))
         dj = float(np.linalg.norm(foot[k] - rim_xy[j]))
         if min(di, dj) < 0.5 * h_here:
-            return int(i if di <= dj else j)
+            return _blunt(int(i if di <= dj else j), h_here)
         new = len(rim_xy)
         rim_xy = np.vstack([rim_xy, foot[k]])
         rim_base = np.append(rim_base, -1)
         rim_eg = np.vstack([np.delete(rim_eg, k, axis=0), [[i, new], [new, j]]])
         return new
 
+    def _blunt(r, h_here):
+        """Fold a short coastline edge at a root into the root.
+
+        A wall that continues a pier the width filter has cut short roots at
+        the cut end, and the end is as wide as the pier: 13.6 m against 30 m
+        elements.  The wall, the short end and the pier's side made a 24.8 deg
+        element.  Where the root has a neighbour on the rim closer than half
+        an element, both become one point at their midpoint -- the end moves
+        by half its width, and only points the fill added may move.
+        """
+        global rim_xy, rim_eg
+        for _ in range(2):
+            nb = [int(b if a == r else a) for a, b in rim_eg.tolist() if r in (a, b)]
+            short = [n for n in nb if n != r and rim_base[n] < 0 and rim_base[r] < 0
+                     and np.linalg.norm(rim_xy[n] - rim_xy[r]) < 0.5 * h_here
+                     and sum(n in e for e in rim_eg.tolist()) == 2
+                     and all(("rim", n) not in e for e in _segs)]
+            if not short:
+                break
+            n = short[0]
+            rim_xy[r] = 0.5 * (rim_xy[r] + rim_xy[n])
+            rim_eg = np.where(rim_eg == n, r, rim_eg)
+            rim_eg = rim_eg[rim_eg[:, 0] != rim_eg[:, 1]]
+            _folded.append((n, r))
+        return r
+
+    def _protected():
+        """Vertices two pieces share -- the junctions node_walls made."""
+        seen: dict = {}
+        for c in _pieces:
+            for xy in c:
+                seen[_key(xy)] = seen.get(_key(xy), 0) + 1
+        return {k for k, n in seen.items() if n > 1}
+
+    def _simplify(c, keep):
+        """Drop the centreline's wiggles smaller than a fifth of an element.
+
+        The medial axis keeps every corner of the polygon it came from, and
+        _subdivide keeps every vertex it is given, so a bend of 5.6 m left a
+        22 m edge beside 45 m ones at a root (26.8 deg), and a bend in the
+        transition put a 123 deg element against a 160 m wall edge.  Junctions
+        with other walls are kept whatever their bend.
+        """
+        cut = [0] + [k for k in range(1, len(c) - 1) if _key(c[k]) in keep] + [len(c) - 1]
+        out = [c[0]]
+        for a, b in zip(cut[:-1], cut[1:]):
+            span = c[a:b + 1]
+            h_s = float(np.min(h_achieved(np.asarray(span))))
+            g = shapely.simplify(shapely.LineString(span), 0.2 * h_s,
+                                 preserve_topology=False)
+            out.extend(np.asarray(g.coords)[1:, :2])
+        return np.asarray(out, dtype=float)
+
+    _folded: list = []
+    _keep = _protected()
+    _pieces = [_simplify(np.asarray(c, dtype=float), _keep) for c in _pieces]
     for c in _pieces:
         ends = []
         for e in (0, -1):
@@ -627,7 +683,23 @@ if HIRES is not None and _shl is not None and _walls_src:
         for (ka, ia), (kb, ib) in zip(ids[:-1], ids[1:]):
             if (ka, ia) != (kb, ib):
                 _segs.append(((ka, ia), (kb, ib)))
+    if _folded:
+        # the folded points are no longer on the rim: renumber it without them
+        # (a point folded into a root is that root, also for a wall that
+        # had already snapped to it)
+        _gone = [n for n, _ in _folded]
+        _live = np.setdiff1d(np.arange(len(rim_xy)), _gone)
+        _rn = np.full(len(rim_xy), -1, dtype=np.int64)
+        _rn[_live] = np.arange(len(_live))
+        for n, r in reversed(_folded):
+            _rn[n] = _rn[r]
+        rim_xy, rim_base, rim_eg = rim_xy[_live], rim_base[_live], _rn[rim_eg]
+        _segs = [tuple((k, int(_rn[i]) if k == "rim" else i) for k, i in e)
+                 for e in _segs]
+        _segs = [e for e in _segs if e[0] != e[1]]
     rc["pfix"], rc["egfix"], rc["pfix_base"] = rim_xy, rim_eg, rim_base
+    if _folded:
+        hole = hole_polygon(rc["pfix"], rc["egfix"])
     n_rim = len(rim_xy)
     WALL_PTS = np.asarray(_pts, dtype=float).reshape(-1, 2)
     WALL_SEGS = np.asarray([[ia if ka == "rim" else n_rim + ia,
@@ -739,7 +811,8 @@ if HIRES is not None and _shl is not None and _walls_src:
     # a node only inside the span between two vertices, so the ends, the
     # corners and the junctions stay put and the wall keeps its shape.
     WALL_LINES = [shapely.LineString(c) for c in _pieces if len(c) > 1]
-    reports["walls"] = {"n_pieces_in_hole": len(_pieces), "n_rooted_ends": n_rooted,
+    reports["wall_constraints"] = {"n_pieces_in_hole": len(_pieces), "n_rooted_ends": n_rooted,
+                        "n_short_coast_edges_folded_into_a_root": len(_folded),
                         "n_wall_edges_dropped_for_an_acute_angle": n_acute,
                         "n_wall_edges_dropped_for_a_tip_too_close": n_close_tips,
                         "n_wall_points": int(len(WALL_PTS)),
