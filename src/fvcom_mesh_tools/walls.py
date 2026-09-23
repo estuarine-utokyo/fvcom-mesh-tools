@@ -38,7 +38,7 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["extract_walls", "split_along_walls", "wall_edges_from_path"]
+__all__ = ["extract_walls", "node_walls", "split_along_walls", "wall_edges_from_path"]
 
 
 def _edge_key(a: int, b: int) -> tuple[int, int]:
@@ -382,3 +382,34 @@ def extract_walls(land, area_land, h0: float, *, l_min: float | None = None,
         "n_dropped": len(dropped), "dropped": dropped[:50],
         "footprint_given_to_water_m2": footprint,
     }
+
+
+def node_walls(walls, *, snap_m: float = 0.0):
+    """Walls that meet, made to meet AT a vertex.
+
+    Separately extracted walls cross (the X at the corner of an L-shaped
+    breakwater) or stop just short of one another (a pier butting onto a
+    breakwater).  A constrained mesher needs a shared vertex at every such
+    meeting, and :func:`split_along_walls` turns that vertex into one node
+    per sector.  An end within ``snap_m`` of another wall is carried onto it
+    first; then the union nodes every crossing and T.
+    """
+    import shapely
+    from shapely.ops import linemerge, nearest_points
+
+    lines = [shapely.LineString(np.asarray(w.coords)[:, :2]) for w in walls
+             if w.length > 0]
+    if snap_m > 0 and len(lines) > 1:
+        for k, w in enumerate(lines):
+            c = np.asarray(w.coords).copy()
+            others = shapely.union_all([x for j, x in enumerate(lines) if j != k])
+            for end in (0, -1):
+                p = shapely.Point(c[end])
+                if 0 < float(shapely.distance(others, p)) <= snap_m:
+                    c[end] = np.asarray(nearest_points(others, p)[0].coords[0])
+            lines[k] = shapely.LineString(c)
+    if not lines:
+        return []
+    noded = shapely.union_all(lines)
+    merged = linemerge(noded) if noded.geom_type == "MultiLineString" else noded
+    return [g for g in getattr(merged, "geoms", [merged]) if g.length > 0]

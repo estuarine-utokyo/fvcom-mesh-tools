@@ -1910,8 +1910,13 @@ def verify_patch(
     *,
     open_boundaries=(),
     expected_boundary=None,
+    copy_of=None,
 ) -> dict[str, Any]:
     """Check the frozen zone really is frozen, through the node map.
+
+    ``copy_of`` declares the nodes a wall split duplicated on purpose
+    (:func:`fvcom_mesh_tools.walls.split_along_walls`): a coincident pair is
+    a defect unless both are copies of the same node.
 
     Several separate claims, because "the mesh outside is unchanged" is
     several claims wearing one coat: the retained nodes kept their
@@ -1972,6 +1977,9 @@ def verify_patch(
     if len(new_xy):
         from scipy.spatial import cKDTree
         pairs = cKDTree(new_xy).query_pairs(1e-3, output_type="ndarray")
+        if copy_of is not None and len(pairs):
+            co = np.asarray(copy_of, dtype=np.int64)
+            pairs = pairs[co[pairs[:, 0]] != co[pairs[:, 1]]]
         dup = int(len(pairs))
     orphan = int(len(new_xy) - np.unique(tri).size)
 

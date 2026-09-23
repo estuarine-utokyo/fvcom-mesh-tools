@@ -147,6 +147,7 @@ def with_patch_violations(env: dict) -> dict:
     a stub of it would test the test.
     """
     driver_function("patch_violations", env)
+    driver_function("wall_pairs", env)
     return env
 
 
@@ -300,3 +301,11 @@ def test_the_minimum_depth_is_reported_not_gated_on_the_hires_branch(tmp_path):
     run_search(env2)                      # _LADDER False: the default branch
     assert env2["reports"]["attempts"][0]["qa"]["n_introduced"] == 1, (
         "off the branch the floor is still a gate")
+
+
+def test_wall_pairs_are_every_pair_a_split_made_coincident():
+    env = {"np": np}
+    wall_pairs = driver_function("wall_pairs", env)
+    assert wall_pairs({}) is None
+    co = np.array([0, 1, 2, 3, 1, 3, 3])   # node 1 has one copy, node 3 two
+    assert sorted(wall_pairs({"copy_of": co})) == [(1, 4), (3, 5), (3, 6), (5, 6)]

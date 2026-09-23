@@ -521,6 +521,7 @@ def run_qa(
     utm_epsg: int = 32654,
     land_interior_m: float = 200.0,
     land_strict_polygon: list | None = None,
+    allowed_duplicate_pairs=None,
 ) -> QAReport:
     """Run the full QA battery and return a :class:`QAReport`.
 
@@ -656,6 +657,13 @@ def run_qa(
 
     # Duplicate nodes (silent in FVCOM).
     dup_pairs = sorted(cKDTree(nodes_m).query_pairs(r=duplicate_tol_m))
+    # Nodes a wall split duplicated ON PURPOSE (walls.split_along_walls): a
+    # breakwater is boundary on both sides, and that takes two nodes at one
+    # point.  Only the declared pairs are excused; any other coincidence is
+    # still a defect.
+    if allowed_duplicate_pairs is not None:
+        ok = {tuple(sorted((int(a), int(b)))) for a, b in allowed_duplicate_pairs}
+        dup_pairs = [pr for pr in dup_pairs if tuple(sorted(pr)) not in ok]
     dup_off = [
         {
             "kind": "node_pair", "id": [int(a), int(b)],

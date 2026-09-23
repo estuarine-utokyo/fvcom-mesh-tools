@@ -37,6 +37,7 @@ from fvcom_mesh_tools.bathy_patch import (  # noqa: E402
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14, write_fort14
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case
 from fvcom_mesh_tools.patch import (
+    _subdivide,  # noqa: E402
     ambient_size_field,
     base_size_field,
     boundary_after_patch,
@@ -60,6 +61,11 @@ from fvcom_mesh_tools.refine import (
     load_refine,
     preflight,
     transition_width_m,
+)
+from fvcom_mesh_tools.walls import (  # noqa: E402
+    extract_walls,
+    node_walls,
+    split_along_walls,
 )
 
 # The base's CRS. fort.14 and FVCOM's _grd.dat both carry bare numbers, so
@@ -358,8 +364,18 @@ if HIRES is not None and cfg["coastline"] == "resolve" and shore:
     _foot = _foot.buffer(max(500.0, 3.0 * float(max(ambient.values()))))
     _keep = [g for g in getattr(land_m, "geoms", [land_m])
              if shapely.intersects(_foot, g)]
-    _filtered, _frep = filter_shoreline(_keep, _h0)
+    # Two elements across for an AREA, and the rest is not deleted but
+    # becomes WALLS (docs/linear_structures_design.md, owner 2026-09-23): a
+    # 12 m pier cannot be meshed as land at 30 m, but it can as a line.
+    _filtered, _frep = filter_shoreline(_keep, _h0, elements_per_feature=2)
     reports["shoreline_filter"] = _frep
+    _walls_src, _wrep = extract_walls(_keep, _filtered, _h0)
+    _walls_src = node_walls(_walls_src, snap_m=_h0)
+    reports["walls_extracted"] = {k: v for k, v in _wrep.items() if k != "dropped"}
+    say(f"walls: {_wrep['n_walls']} extracted, {_wrep['wall_length_m'] / 1000:.2f} km, "
+        f"{_wrep['n_dropped']} piece(s) dropped as shorter than {_h0:g} m; "
+        f"{_wrep['footprint_given_to_water_m2'] / 1e6:.4f} km2 of structure "
+        "footprint becomes water")
     say(f"shoreline filter at h0 = {_h0:g} m: "
         f"{_frep['rings_before']} ring(s) -> {_frep['rings_after']}, "
         f"land lost {_frep['land_lost_m2'] / 1e6:.4f} km2, water lost "
@@ -449,6 +465,100 @@ if rc["curves"]:
 
 hole = hole_polygon(rc["pfix"], rc["egfix"])
 say(f"hole {hole.area / 1e6:.3f} km2 ({hole.geom_type}, valid={hole.is_valid})")
+
+# ------------------------------------------------------------------- walls
+# Each wall is clipped to the hole -- never across the frozen interface, and
+# kept a local element clear of it -- rooted by INSERTING its root into the
+# coastline rim (a root that stops short of the coast leaves a gap the tide
+# goes round), resampled at the local size keeping every corner, and handed
+# to the fill as interior constrained edges.  After stitching the mesh is
+# SPLIT along them, which is what makes them walls (notebook 427).
+WALL_PTS = np.zeros((0, 2))
+WALL_SEGS = np.zeros((0, 2), dtype=np.int64)
+if HIRES is not None and _shl is not None and _walls_src:
+    _margin = 0.5 * float(max(ambient.values()))
+    _room = shapely.difference(hole, iface_lines.buffer(_margin)) \
+        if not iface_lines.is_empty else hole
+    _coast = shapely.difference(hole.boundary, iface_lines.buffer(1.0)) \
+        if not iface_lines.is_empty else hole.boundary
+    _pieces = []
+    for w in _walls_src:
+        g = shapely.intersection(w, _room)
+        for q in getattr(g, "geoms", [g]):
+            if q.geom_type == "LineString" and q.length >= target:
+                _pieces.append(np.asarray(q.coords)[:, :2])
+    rim_xy = np.asarray(rc["pfix"], dtype=float)
+    rim_eg = np.asarray(rc["egfix"], dtype=np.int64)
+    rim_base = np.asarray(rc["pfix_base"], dtype=np.int64)
+    _index: dict = {}
+    _pts: list = []
+    _segs: list = []
+    n_rooted = 0
+
+    def _key(xy):
+        return (round(float(xy[0]), 6), round(float(xy[1]), 6))
+
+    def _root(xy):
+        """Put a wall's root ON the coastline rim; return its pfix row."""
+        global rim_xy, rim_eg, rim_base
+        h_here = float(h_achieved(np.asarray([xy]))[0])
+        d = np.linalg.norm(rim_xy - xy, axis=1)
+        if d.min() <= 0.3 * h_here:
+            return int(d.argmin())
+        a, b = rim_xy[rim_eg[:, 0]], rim_xy[rim_eg[:, 1]]
+        ab = b - a
+        s = np.clip(np.einsum("ij,ij->i", xy - a, ab)
+                    / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0, 1)
+        foot = a + s[:, None] * ab
+        k = int(np.argmin(np.linalg.norm(foot - xy, axis=1)))
+        i, j = rim_eg[k]
+        new = len(rim_xy)
+        rim_xy = np.vstack([rim_xy, foot[k]])
+        rim_base = np.append(rim_base, -1)
+        rim_eg = np.vstack([np.delete(rim_eg, k, axis=0), [[i, new], [new, j]]])
+        return new
+
+    for c in _pieces:
+        ends = []
+        for e in (0, -1):
+            h_e = float(h_achieved(np.asarray([c[e]]))[0])
+            if float(shapely.distance(_coast, shapely.Point(c[e]))) <= 0.5 * h_e:
+                ends.append(_root(c[e]))
+                n_rooted += 1
+            else:
+                ends.append(None)
+        walk = _subdivide(c, h_achieved)
+        ids = []
+        for k_, xy in enumerate(walk):
+            if k_ == 0 and ends[0] is not None:
+                ids.append(("rim", ends[0]))
+                continue
+            if k_ == len(walk) - 1 and ends[1] is not None:
+                ids.append(("rim", ends[1]))
+                continue
+            key = _key(xy)
+            if key not in _index:
+                _index[key] = len(_pts)
+                _pts.append(xy)
+            ids.append(("wall", _index[key]))
+        for (ka, ia), (kb, ib) in zip(ids[:-1], ids[1:]):
+            _segs.append(((ka, ia), (kb, ib)))
+    rc["pfix"], rc["egfix"], rc["pfix_base"] = rim_xy, rim_eg, rim_base
+    n_rim = len(rim_xy)
+    WALL_PTS = np.asarray(_pts, dtype=float).reshape(-1, 2)
+    WALL_SEGS = np.asarray([[ia if ka == "rim" else n_rim + ia,
+                             ib if kb == "rim" else n_rim + ib]
+                            for (ka, ia), (kb, ib) in _segs],
+                           dtype=np.int64).reshape(-1, 2)
+    reports["walls"] = {"n_pieces_in_hole": len(_pieces), "n_rooted_ends": n_rooted,
+                        "n_wall_points": int(len(WALL_PTS)),
+                        "n_wall_edges": int(len(WALL_SEGS))}
+    say(f"walls in the hole: {len(_pieces)} piece(s), {n_rooted} end(s) rooted on "
+        f"the coast, {len(WALL_PTS)} constrained point(s), {len(WALL_SEGS)} edge(s)")
+PFIX_ALL = np.vstack([np.asarray(rc["pfix"], dtype=float), WALL_PTS])
+EGFIX_ALL = np.vstack([np.asarray(rc["egfix"], dtype=np.int64), WALL_SEGS])
+PFIX_BASE_ALL = np.concatenate([np.asarray(rc["pfix_base"], dtype=np.int64),
+                                np.full(len(WALL_PTS), -1, dtype=np.int64)])
 
 # The slope the field actually has, measured on the hole it will be meshed
 # in -- not the per-region formula, which omits the ambient term and says
@@ -595,6 +705,19 @@ def achieved_per_region(mesh):
     return per_region, missed
 
 
+def wall_pairs(out):
+    """Every pair of nodes a wall split made coincident ON PURPOSE."""
+    co = out.get("copy_of") if isinstance(out, dict) else None
+    if co is None:
+        return None
+    co = np.asarray(co)
+    groups: dict = {}
+    for k, s in enumerate(co.tolist()):
+        groups.setdefault(s, []).append(k)
+    return [(a, b) for g in groups.values() if len(g) > 1
+            for i, a in enumerate(g) for b in g[i + 1:]]
+
+
 def patch_violations(qa_checks, written):
     """The QA failures this patch is answerable for, and the one exception.
 
@@ -641,11 +764,11 @@ def attempt(seed):
         fd, fh, bbox=bbox, min_edge_length=hmin,
         max_iter=int(os.environ.get("LR_MAX_ITER", 100)),
         seed=seed,
-        pfix=rc["pfix"], egfix=rc["egfix"], cleanup="none")
+        pfix=PFIX_ALL, egfix=EGFIX_ALL, cleanup="none")
     say(f"filled: NP={len(p):,} NE={len(t):,}")
 
-    p, t = collapse_thin_triangles(p, t, min_qual=0.25, pfix=rc["pfix"])
-    p, t = direct_smoother_lur(p, t, pfix=rc["pfix"])
+    p, t = collapse_thin_triangles(p, t, min_qual=0.25, pfix=PFIX_ALL)
+    p, t = direct_smoother_lur(p, t, pfix=PFIX_ALL)
     say(f"cleaned (pfix-protected): NP={len(p):,} NE={len(t):,}")
     # bound_connectivity is NOT run: its valence flips are blind to the sizing
     # field and on this patch they coarsened the 28.6 m core to 98.7 m.
@@ -665,7 +788,7 @@ def attempt(seed):
     # ---------------------------------------------------------------- stitch
     nodes, elements, depths, node_map, st = stitch_patch(
         base.nodes, base.elements, base.depths, sel, p, t,
-        rc["pfix"], rc["pfix_base"])
+        PFIX_ALL, PFIX_BASE_ALL)
     out["stitch"] = {k: v for k, v in st.items() if k != "pfix_new"}
     say("stitch: " + json.dumps(out["stitch"]))
     # Before the repair, while a fixed point is still exactly where it was
@@ -673,7 +796,7 @@ def attempt(seed):
     # pfix by coordinate afterwards fails.  Node ids do not change in the
     # repair, so the edge set built here stays valid.
     want_boundary = boundary_after_patch(base.elements, sel, rc, node_map,
-                                         st["pfix_new"])
+                                         st["pfix_new"][:len(rc["pfix"])])
     out["want_boundary"] = want_boundary
 
     # Orientation: fort.14 wants counter-clockwise.  The retained faces already
@@ -685,6 +808,29 @@ def attempt(seed):
     if cw.any():
         elements[cw] = elements[cw][:, [0, 2, 1]]
         say(f"reoriented {int(cw.sum()):,} clockwise elements")
+
+    # -------------------------------------------------------------- the split
+    copy_of = np.arange(len(nodes))
+    wall_node = np.zeros(len(nodes), dtype=bool)
+    if len(WALL_SEGS):
+        _we = np.asarray(st["pfix_new"], dtype=np.int64)[WALL_SEGS]
+        nodes, elements, copy_of, srep = split_along_walls(nodes, elements, _we)
+        depths = depths[copy_of]
+        _wn = set(np.unique(_we).tolist())
+        wall_node = np.isin(copy_of, list(_wn))
+        _ws = {tuple(sorted(e)) for e in _we.tolist()}
+        _ub2, _cb2 = np.unique(np.sort(np.vstack(
+            [elements[:, [0, 1]], elements[:, [1, 2]], elements[:, [2, 0]]]), axis=1),
+            axis=0, return_counts=True)
+        for e in _ub2[_cb2 == 1].tolist():
+            if tuple(sorted(copy_of[e].tolist())) in _ws:
+                want_boundary.add(tuple(sorted(e)))
+        out["want_boundary"] = want_boundary
+        out["walls"] = {k: v for k, v in srep.items() if k != "pairs"}
+        say(f"walls split: {srep['n_wall_edges']} edge(s), {srep['n_copies']} "
+            f"node(s) duplicated, {srep['n_free_tips']} free tip(s), "
+            f"{srep['n_components']} component(s)")
+    out["copy_of"] = copy_of
 
     # ------------------------------------------------------------ seam repair
     # The base mesh was finished to sit exactly on its gates -- min angle 30.01
@@ -699,8 +845,10 @@ def attempt(seed):
     on_boundary = np.zeros(len(nodes), dtype=bool)
     on_boundary[np.unique(_u[_c == 1])] = True
     is_new = np.arange(len(nodes)) >= st["n_nodes_retained"]
-    movable = is_new & ~on_boundary
-    slidable = is_new & on_boundary
+    # A wall node does not move: it is on a structure, not on a curve it
+    # could slide along, and the nearest coastline curve is not its own.
+    movable = is_new & ~on_boundary & ~wall_node
+    slidable = is_new & on_boundary & ~wall_node
     mutable_faces = np.arange(len(elements)) >= len(sel.retained)
     _before_repair = nodes.copy()
     # The curves new boundary nodes may slide along are the ones rim_constraints
@@ -893,7 +1041,7 @@ def attempt(seed):
     ver = verify_patch(base.nodes, base.depths, base.elements, sel,
                        nodes, elements, depths, node_map,
                        open_boundaries=base.open_boundaries,
-                       expected_boundary=want_boundary)
+                       expected_boundary=want_boundary, copy_of=copy_of)
     out["verify"] = ver
     say("verify: " + json.dumps(ver))
     if not ver["ok"]:
@@ -958,7 +1106,7 @@ def serialise(candidate, out, path):
         base.nodes, base.depths, base.elements, sel,
         written.nodes, written.elements, written.depths, node_map,
         open_boundaries=base.open_boundaries,
-        expected_boundary=out["want_boundary"])
+        expected_boundary=out["want_boundary"], copy_of=out.get("copy_of"))
     if not out["verify_on_disk"]["ok"]:
         return None, None
     if not np.array_equal(written.open_boundaries[0], mesh.open_boundaries[0]) or \
@@ -1001,7 +1149,8 @@ for seed in seeds:
                                     if k != "want_boundary"})
         save_report()
         continue
-    qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000)
+    qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000,
+                allowed_duplicate_pairs=wall_pairs(out))
     # What the patch is answerable for. A refinement may not be held to a
     # standard its base does not meet: the goto2023 production mesh fails C1
     # at one element 18 km from Futtsu, the contract freezes that element,
@@ -1059,7 +1208,8 @@ reports["mesh"] = str(out14)
 # not the best one.  A failed artefact investigated with another attempt's
 # node map and QA is worse than no artefact (second review, finding 4).
 written, mesh = serialise(candidate, out, out14)
-qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000)
+qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000,
+            allowed_duplicate_pairs=wall_pairs(out))
 say(f"accepted seed {seed}")
 
 _new_bad, _n_shallow = patch_violations(qa.checks, written)

@@ -186,3 +186,17 @@ def test_extraction_holds_at_utm_coordinates():
     _, walls, rep = _extract(land, 30.0)
     assert len(walls) == 1, rep
     assert walls[0].length == pytest.approx(500.0, abs=8.0)
+
+
+def test_walls_that_cross_or_butt_are_noded_at_a_shared_vertex():
+    import shapely
+
+    from fvcom_mesh_tools.walls import node_walls
+
+    a = shapely.LineString([(0, 0), (100, 0)])
+    b = shapely.LineString([(50, -40), (50, 40)])          # crosses a
+    c = shapely.LineString([(80, 3), (80, 60)])            # stops 3 m short of a
+    out = node_walls([a, b, c], snap_m=5.0)
+    ends = [tuple(np.round(np.asarray(g.coords)[e], 6)) for g in out for e in (0, -1)]
+    assert ends.count((50.0, 0.0)) == 4, "the crossing is a 4-way vertex"
+    assert ends.count((80.0, 0.0)) == 3, "the T is a 3-way vertex"
