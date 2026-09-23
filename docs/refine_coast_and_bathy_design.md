@@ -656,3 +656,45 @@ The time step. 1.91 s achieved against the base's 11.9 s, because a 30 m
 element over 8.65 m of water allows 2.82 s before the fill's own geometry
 takes another third. Pre-flight said so before the run: *keeping 4.5 s would
 need a 48 m target*.
+
+## 12. It runs: the port, finished and integrated for 20 days
+
+The hires branch writes the source's depths and says the case is not finished.
+Running it needed the step the owner deferred, so `fmesh-refine-depths` was
+built and applied at a **provisional** `--hmin 3 --rfactor 0.2` (3 m because
+that is what the goto2023 baseline it is compared with was floored at; the
+value is the owner's to set). The FVCOM binary is the main FVCOM repository's
+`uk-fabm/v5.1.0-dev` at `79d13ed9`, hydrodynamics only, built without
+`-DWET_DRY` -- which is why a floor was needed at all.
+
+| finish step | |
+|---|---|
+| patch nodes floored at 3 m | 1,764 of 2,616 (67 %) |
+| depths moved by the r-factor limiter | 204, worst 3.02 m |
+| convergence, at the depth file's own precision | converged, 0 edges over |
+| frozen depths moved | 0 m |
+
+Two things had to be fixed before the comparison meant anything. The limiter
+judged convergence at 1e-9 while the base file is written to six decimals and
+has 497 edges sitting exactly on r = 0.2, so it reported 374 untouchable edges
+"over"; and `414` was staging the base with `TokyoBay_dep.dat` (max r 0.884,
+647 m) while the refinement had inherited `..._m7001tp_rfac0p2_cap300.dat`.
+Both cases now carry the same product.
+
+**Integration** (jobs 115440/115441, 64 ranks, 20 days, DTE 1.0 s for both):
+both exit 0 with 961 records and a clean log. The M2 fit at the five tide
+gauges (job 115442):
+
+| gauge | refined minus base, amplitude | phase |
+|---|---:|---:|
+| Tokyo-Shibaura | -0.25 mm | +0.010 deg |
+| Harumi | -0.25 mm | +0.010 deg |
+| Chiba light | -0.25 mm | +0.010 deg |
+| Shinko | -0.22 mm | +0.010 deg |
+| Yokosuka | -0.13 mm | +0.011 deg |
+
+That is what a local patch should do to gauges 15-40 km away: nothing that
+matters. Both cases carry the base model's own bias against observation
+(-5.5 to -7.0 deg in phase, up to +19 mm in amplitude at Yokosuka), unchanged.
+**None of the five gauges is near Kimitsu**, so this shows the patch does not
+disturb the bay; it does not show that the port's own tide is right.
