@@ -211,3 +211,17 @@ def test_a_detached_wall_of_one_edge_is_refused_with_the_reason():
     _, _, _, rep = split_along_walls(xy, tri, wall_edges_from_path(
         [node(3, 3, n), node(3, 4, n), node(3, 5, n)]))
     assert rep["n_copies"] == 1 and rep["n_free_tips"] == 2
+
+
+def test_a_split_mesh_can_still_have_its_resolution_measured():
+    """matplotlib's point locator refuses coincident nodes; a split has them."""
+    import shapely
+
+    from fvcom_mesh_tools.patch import region_resolution
+
+    xy, tri, n = grid()
+    out, t2, _, _ = split_along_walls(xy, tri, wall_edges_from_path(
+        [node(4, j, n) for j in range(0, 5)]))
+    before = region_resolution(xy, tri, shapely.box(100, 100, 700, 700), 100.0)
+    after = region_resolution(out, t2, shapely.box(100, 100, 700, 700), 100.0)
+    assert after["median_m"] == pytest.approx(before["median_m"])

@@ -1412,8 +1412,16 @@ def region_resolution(nodes, elements, geometry, target_h_m: float, *,
         # one place it certainly covers, and one sample is better than a
         # claim of nothing.
         p = shapely.get_coordinates(geometry.representative_point())
+    # Coincident nodes are legitimate now -- a wall is a split, and a split
+    # is two nodes at one point (walls.split_along_walls) -- but the
+    # trapezoid map refuses them.  Locating a point needs the triangles, not
+    # the ids, so the locator is built on one node per position; element
+    # order is unchanged and the areas measured below are the same triangles.
+    _u, _inv = np.unique(np.round(xy, 6), axis=0, return_inverse=True)
+    _loc_xy, _loc_tri = (xy, tri) if len(_u) == len(xy) else \
+        (_u, _inv.ravel()[tri])
     try:
-        finder = Triangulation(xy[:, 0], xy[:, 1], tri).get_trifinder()
+        finder = Triangulation(_loc_xy[:, 0], _loc_xy[:, 1], _loc_tri).get_trifinder()
     except RuntimeError as exc:
         # The trapezoid map is stricter than verify_patch: it refuses a
         # boundary that self-intersects, which a moved coastline can produce
