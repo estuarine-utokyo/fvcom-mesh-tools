@@ -286,3 +286,27 @@ its elements could not carry, and with it the 4.7 deg coastline element and
 the walls running into coarse ground. What is left -- 14 elements between
 22.9 and 29.0 deg, one of them the base's own element 2101 -- sits at wall
 roots and tips in the harbour, where the repair may not move a wall node.
+
+## 10. Wall nodes slide along their wall (job 115553)
+
+Each wall piece's centreline joined the curves the repair may slide along. The
+repair already confines a node to the span between two vertices and never
+moves a vertex, so ends, corners and junctions stay put; a root has three
+boundary neighbours and is not slid. The two sides of a wall are separate
+boundaries, so a copy sliding on one side leaves the slit a slit -- which is
+also why the resolution measure had to stop using matplotlib's trapezoid map:
+two collinear boundary polylines whose vertices no longer match are refused
+by it, as coincident nodes were before. It now asks an STRtree of the
+triangles.
+
+| | pinned (115531) | sliding (115553) |
+|---|---:|---:|
+| minimum angle | 22.87 deg | 22.85 deg |
+| C1 violations | 14 | **8** (one is the base's element 2101) |
+| C4 violations | 4 | **2** |
+| violations introduced | 17 | **9** |
+| achieved in the region | 28.5 m, 99.9 % | 28.6 m, 99.9 % |
+| coastline from OSM | -- | median 0.2 m, max 37.4 m |
+
+The seven patch C1 elements (22.9-28.8 deg) sit at wall roots and at two
+spots on the resolved coastline; none is below 22.8 deg.
