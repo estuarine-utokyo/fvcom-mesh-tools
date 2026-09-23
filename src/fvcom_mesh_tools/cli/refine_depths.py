@@ -94,6 +94,26 @@ def finish_depths(depths, elements, movable, *, hmin, hmax, rfactor):
     out, rinfo = limit_rfactor(elements, clipped, free, float(rfactor),
                                depth_min=float(hmin), depth_max=float(hmax))
     report["rfactor_report"] = rinfo
+    # `limit_rfactor` judges at 1e-9, which is tighter than the depth file it
+    # will be written to.  `TokyoBay_dep_m7001tp_rfac0p2_cap300.dat` has a
+    # max r of exactly 0.2000 and 497 of its 8,858 edges sit ON that bound;
+    # written to six decimals they come back as 0.2 + 3e-8, and the patch was
+    # reported NOT CONVERGED for 374 edges it is forbidden to touch.  So the
+    # honest count is taken again at the file's own precision, and both go in
+    # the report rather than one replacing the other.
+    tri = np.asarray(elements, dtype=np.int64)
+    e = np.unique(np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]],
+                                     tri[:, [2, 0]]]), axis=1), axis=0)
+    r = np.abs(out[e[:, 0]] - out[e[:, 1]]) / (out[e[:, 0]] + out[e[:, 1]])
+    tol = float(rfactor) * 1e-6 + 1e-9
+    touched = free[e].any(axis=1)
+    over = r > float(rfactor) + tol
+    report["write_precision_tolerance"] = tol
+    report["max_r_movable"] = float(r[touched].max()) if touched.any() else 0.0
+    report["max_r_frozen_pair"] = float(r[~touched].max()) if (~touched).any() else 0.0
+    report["n_over_movable_at_tolerance"] = int((over & touched).sum())
+    report["n_over_frozen_pair_at_tolerance"] = int((over & ~touched).sum())
+    report["converged_at_write_precision"] = bool(not (over & touched).any())
     report["n_floored_after_smoothing"] = int((free & (out <= hmin + 1e-9)).sum())
     report["n_capped_after_smoothing"] = int((free & (out >= hmax - 1e-9)).sum())
     moved = np.abs(out - h0)
@@ -152,10 +172,14 @@ def main(argv: list[str] | None = None) -> int:
           f"({100 * rep['floored_fraction_of_movable']:.0f} % of the patch), "
           f"cap {args.hmax:g} m: {rep['n_capped']:,}")
     print(f"[finish] r <= {args.rfactor:g}: {r['n_depths_changed']:,} depth(s) "
-          f"moved, worst {r['max_depth_change_m']:.2f} m, "
-          f"{'converged' if r['converged'] else 'NOT CONVERGED'} in "
-          f"{r['rounds']} round(s); {r['n_over_rmax_movable']} movable and "
-          f"{r['n_over_rmax_frozen_pair']} frozen-pair edge(s) still over")
+          f"moved, worst {r['max_depth_change_m']:.2f} m in {r['rounds']} "
+          f"round(s). At the depth file's own precision "
+          f"({rep['write_precision_tolerance']:.1e}): "
+          f"{'CONVERGED' if rep['converged_at_write_precision'] else 'NOT CONVERGED'}"
+          f", {rep['n_over_movable_at_tolerance']} movable and "
+          f"{rep['n_over_frozen_pair_at_tolerance']} frozen-pair edge(s) over; "
+          f"max r movable {rep['max_r_movable']:.6f}, frozen "
+          f"{rep['max_r_frozen_pair']:.6f}")
     print(f"[finish] depths {rep['raw_min_m']:.2f}..{rep['raw_max_m']:.2f} -> "
           f"{rep['final_min_m']:.2f}..{rep['final_max_m']:.2f} m; "
           f"frozen moved {rep['max_frozen_change_m']:.3g} m")

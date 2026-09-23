@@ -22,7 +22,19 @@ python -m fvcom_mesh_tools.cli.refine_depths "$OUTDIR" \
 FIN=$(ls "$OUTDIR"/fvcom_finished/*_grd.dat)
 FIN=${FIN%_grd.dat}
 echo "finished case = $FIN"
+# The base has to carry the SAME depth product the refinement inherited.
+# goto2023's grid directory holds two: TokyoBay_dep.dat, which the grid was
+# written with (max r 0.8841 over its edges, 647 m deep), and the baseline's
+# own TokyoBay_dep_m7001tp_rfac0p2_cap300.dat (max r 0.2000, capped at 300).
+# The refinement inherited the second; staging the base with the first would
+# make the comparison a comparison of bathymetry products as well as meshes.
+BASEDIR=$RUN_ROOT/base_case
+mkdir -p "$BASEDIR"
+G=$HOME/Github/TB-FVCOM/input/goto2023/grid
+cp "$G/TokyoBay_grd.dat" "$BASEDIR/TokyoBayB_grd.dat"
+cp "$G/TokyoBay_obc.dat" "$BASEDIR/TokyoBayB_obc.dat"
+[ -f "$G/TokyoBay_cor.dat" ] && cp "$G/TokyoBay_cor.dat" "$BASEDIR/TokyoBayB_cor.dat"
+cp "$G/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat" "$BASEDIR/TokyoBayB_dep.dat"
 python notebooks/414_refine_m2_prep.py --root "$RUN_ROOT" \
-    --base "$HOME/Github/TB-FVCOM/input/goto2023/grid/TokyoBay" \
-    --refined "$FIN"
+    --base "$BASEDIR/TokyoBayB" --refined "$FIN"
 echo "end=$(date -Is)"

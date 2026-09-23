@@ -97,3 +97,24 @@ def test_non_finite_depths_are_refused():
     with pytest.raises(ValueError, match="finite"):
         finish_depths(h, tri, np.ones(12, dtype=bool), hmin=3.0, hmax=300.0,
                       rfactor=0.2)
+
+
+def test_convergence_is_judged_at_the_depth_file_s_own_precision():
+    """The base is written to six decimals and sits ON its own bound.
+
+    `TokyoBay_dep_m7001tp_rfac0p2_cap300.dat` has a max r of exactly 0.2000
+    and 497 of its 8,858 edges sit on it; read back from six decimals they
+    come out at 0.2 + 3e-8, and limit_rfactor's 1e-9 test reported the patch
+    NOT CONVERGED for 374 edges it is forbidden to touch.
+    """
+    _, tri = strip()
+    # two frozen nodes exactly on the bound, as the file would store them
+    h = np.array([round(4.0, 6), round(4.0 * 1.5, 6)] + [6.0] * 10)
+    movable = np.zeros(12, dtype=bool)
+    movable[2:] = True
+    out, rep = finish_depths(h, tri, movable, hmin=3.0, hmax=300.0, rfactor=0.2)
+    assert rep["max_r_frozen_pair"] == pytest.approx(0.2, abs=1e-9)
+    assert rep["converged_at_write_precision"], (
+        "an edge sitting on the bound is not an edge over it")
+    assert rep["n_over_movable_at_tolerance"] == 0
+    assert rep["write_precision_tolerance"] > 0
