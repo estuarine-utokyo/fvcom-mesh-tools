@@ -20,17 +20,18 @@
 #   LR_SEEDS        DistMesh seeds, colon-separated (default 0:1:2:3:4)
 #
 # NQSV has no afterok: a stage starts when the one before it ENDS, whatever
-# the outcome, and each stage checks its own inputs and stops if they are
-# missing. So read the logs in order -- and always start a monitor (the
-# commands to do so are printed at the end).
+# the outcome. So each stage writes a marker only when it passed, and the
+# next requires it: ACCEPTED (refine) -> STAGED (depths) -> SMOKE_OK (smoke)
+# -> RUN_OK per case (M2). Read the logs in order -- and always start a
+# monitor (the command is printed at the end).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 RECIPE=${1:?usage: bash jobs/octopus/refine_workflow.sh RECIPE.yaml}
 [ -f "$RECIPE" ] || { echo "no such recipe: $RECIPE"; exit 2; }
 NAME=$(basename "${RECIPE%.yaml}")
 OUT=$(pwd)/outputs/refine_$NAME
-if [ -e "$OUT/report.json" ]; then
-    echo "$OUT already holds a result; move it first (mv $OUT $OUT.old)"
+if [ -d "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then
+    echo "$OUT is not empty; move it first (mv $OUT $OUT.old)"
     exit 2
 fi
 STAMP=$(date +%Y%m%d_%H%M%S)
@@ -39,6 +40,11 @@ RUN_ROOT=/octfs/work/G16445/v61021/scratch/m2_${NAME}_$STAMP
 if [ $(( ${#RUN_ROOT} + 23 )) -gt 80 ]; then   # + "/smoke/refined/output/"
     RUN_ROOT=/octfs/work/G16445/v61021/scratch/m2_$STAMP
 fi
+# qsub -v separates variables with commas, so a comma inside a value would
+# silently become another variable (review F14)
+for v in "$RECIPE" "$OUT" "$RUN_ROOT" "${FMESH_VIEWS:-}"; do
+    case "$v" in *,*) echo "a comma in '$v' cannot pass through qsub -v; rename it"; exit 2 ;; esac
+done
 id() { grep -oE '[0-9]+\.[a-z]+' | head -1; }
 
 r=$(qsub -N "fm_$NAME" -v "FMESH_RECIPE=$RECIPE,LR_SEEDS=${LR_SEEDS:-0:1:2:3:4}" \
@@ -58,7 +64,8 @@ last=$s
 if [ "${FMESH_M2:-0}" = 1 ]; then
     runs=()
     for c in base refined; do
-        runs+=("$(qsub --after "$s" -N "m2_$c" -v "FMESH_RUN_ROOT=$RUN_ROOT,FMESH_CASE=$c" \
+        runs+=("$(qsub --after "$s" -N "m2_$c" \
+            -v "FMESH_RUN_ROOT=$RUN_ROOT,FMESH_CASE=$c,FMESH_REQUIRE_SMOKE=1" \
             jobs/octopus/412_m2_run.sh | id)")
     done
     a=$(qsub --after "$(IFS=,; echo "${runs[*]}")" \

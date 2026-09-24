@@ -35,6 +35,7 @@ from pathlib import Path
 
 from fvcom_mesh_tools.io import read_fort14
 from fvcom_mesh_tools.qa import format_report, run_qa
+from fvcom_mesh_tools.walls import read_wall_pairs
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Turn the advisory implied-dt check into a gate: fail "
                         "if any element implies an external dt below this (s).")
 
+    p.add_argument("--wall-pairs", type=Path, default=None,
+                   help="the declared wall node pairs (default: <input stem>_walls.json "
+                        "beside the mesh, when it exists); coincident nodes they "
+                        "name are not duplicates")
+    p.add_argument("--no-wall-pairs", action="store_true",
+                   help="ignore any wall-pair declaration")
     p.add_argument("--coords", choices=("auto", "lonlat", "metric"),
                    default="auto",
                    help="Node-coordinate interpretation (default auto-detect).")
@@ -96,6 +103,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     mesh = read_fort14(args.input)
+    pairs = None
+    if not args.no_wall_pairs:
+        try:
+            pairs = read_wall_pairs(args.input, mesh.n_nodes, args.wall_pairs)
+        except ValueError as exc:
+            print(f"wall pairs: {exc}", file=sys.stderr)
+            return 2
+        if pairs is not None and not args.quiet:
+            print(f"wall pairs: {len(pairs)} declared coincident pair(s) excused")
     report = run_qa(
         mesh,
         name=args.input.name,
@@ -111,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         min_channel_wh_gate=args.gate_channel_wh,
         min_dt_s=args.min_dt,
         max_offenders=args.max_offenders,
+        allowed_duplicate_pairs=pairs,
     )
 
     if not args.quiet:

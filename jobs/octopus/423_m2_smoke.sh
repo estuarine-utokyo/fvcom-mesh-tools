@@ -25,6 +25,8 @@ DAYS=${FMESH_DAYS:-2}
 RANKS=${FMESH_RANKS:-64}
 FVCOM=/octfs/work/G16445/v61021/Github/FVCOM/src/fvcom
 SMOKE=$RUN_ROOT/smoke
+[ -f "$RUN_ROOT/STAGED" ] || { echo "not staged: $RUN_ROOT (no STAGED marker)"; exit 2; }
+rm -f "$RUN_ROOT/SMOKE_OK"
 python - "$RUN_ROOT" "$SMOKE" "$DAYS" <<'PY'
 import re, shutil, sys
 from datetime import datetime, timedelta
@@ -69,9 +71,16 @@ for case in base refined; do
         echo "[423] $case: UNHEALTHY log"; tail -25 "$SMOKE/$case/fvcom.log"; fail=1
     fi
     [ "$rc" -eq 0 ] || { tail -25 "$SMOKE/$case/fvcom.log"; fail=1; }
-    ls -1 "$SMOKE/$case/output/"*.nc 2>/dev/null | while read -r f; do
-        echo "[423] $case output: $(basename "$f") $(stat -c%s "$f") bytes"
-    done
 done
+# A zero exit code and a quiet log are not a finished run: some STOP paths
+# return 0.  fmesh-check-run requires TADA, output reaching END_DATE and
+# finite fields (review F6); it needs the conda Python back.
+module purge
+unset LD_LIBRARY_PATH
+set +u; conda activate "${FMESH_ENV:-oceanmesh-bench}"; set -u
+for case in base refined; do
+    python -m fvcom_mesh_tools.cli.check_run "$SMOKE/$case" || fail=1
+done
+[ "$fail" -eq 0 ] && date -Is > "$RUN_ROOT/SMOKE_OK"
 echo "end=$(date -Is) fail=$fail"
 exit $fail

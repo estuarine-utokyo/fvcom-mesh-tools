@@ -67,9 +67,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"fmesh-refine: no such recipe: {recipe}", file=sys.stderr)
         return 2
     out = (args.out or root / "outputs" / f"refine_{recipe.stem}").expanduser().resolve()
-    if (out / "report.json").exists():
-        print(f"fmesh-refine: {out} already holds a result; move it first",
-              file=sys.stderr)
+    # ANY content counts: a run that failed before its first report leaves
+    # the rim, the constraints and the filtered shoreline behind, and a rerun
+    # into that directory would mix two runs (review F10).
+    if out.exists() and any(out.iterdir()):
+        print(f"fmesh-refine: {out} is not empty; move it first", file=sys.stderr)
         return 2
     land = args.land or os.environ.get("FMESH_LAND") or DEFAULT_LAND.format(
         DATA_DIR=os.environ.get("DATA_DIR", "/octfs/work/G16445/share/Data"))

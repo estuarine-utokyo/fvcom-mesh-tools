@@ -337,3 +337,35 @@ def test_straighten_walls_leaves_a_two_point_wall():
     w = shapely.LineString([(0, 0), (50, 10)])
     out, rep = straighten_walls([w], lambda xy: np.full(len(xy), 30.0))
     assert out[0] is w and rep["n_straightened"] == 0
+
+
+def test_wall_pairs_travel_with_their_mesh_and_only_theirs(tmp_path):
+    from fvcom_mesh_tools.cli.meshqa import main as qa_main
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh, write_fort14
+    from fvcom_mesh_tools.walls import read_wall_pairs, split_along_walls, write_wall_pairs
+
+    xy = np.array([[i, j] for j in range(3) for i in range(3)], dtype=float) * 100.0
+    tri = []
+    for j in range(2):
+        for i in range(2):
+            a = j * 3 + i
+            tri += [[a, a + 1, a + 4], [a, a + 4, a + 3]]
+    p, t, copy_of, rep = split_along_walls(xy, np.array(tri), np.array([[1, 4]]))
+    mesh = Fort14Mesh(title="w", nodes=p, depths=np.full(len(p), 10.0), elements=t,
+                      open_boundaries=[], land_boundaries=[])
+    f14 = tmp_path / "w.14"
+    write_fort14(mesh, f14)
+    write_wall_pairs(f14, rep["pairs"], len(p))
+    assert read_wall_pairs(f14, len(p)) == [tuple(x) for x in rep["pairs"]]
+    # the stand-alone gate excuses the declared copies, and only with the file
+    assert qa_main([str(f14), "--no-channel", "--quiet"]) in (0, 1)
+    import json
+    got = json.loads((tmp_path / "w_qa.json").read_text())
+    dup = next(c for c in got["checks"] if c["check_id"] == "no_duplicate_nodes")
+    assert dup["passed"]
+    qa_main([str(f14), "--no-channel", "--quiet", "--no-wall-pairs"])
+    got = json.loads((tmp_path / "w_qa.json").read_text())
+    assert not next(c for c in got["checks"] if c["check_id"] == "no_duplicate_nodes")["passed"]
+    # a changed mesh no longer matches its declaration
+    f14.write_text(f14.read_text() + "\n")
+    assert qa_main([str(f14), "--no-channel", "--quiet"]) == 2

@@ -18,6 +18,9 @@ RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
 # `--after` fires when the predecessor terminates, not when it succeeds, so
 # a failed prep or run would otherwise reach this as a puzzling traceback.
 [ -f "$RUN_ROOT/manifest.json" ] || { echo "not staged: $RUN_ROOT"; exit 2; }
+for c in base refined; do
+    [ -f "$RUN_ROOT/$c/RUN_OK" ] || { echo "run $c did not pass: no $RUN_ROOT/$c/RUN_OK"; exit 2; }
+done
 OUT=${FMESH_OUT:-$REPO/outputs/m2_$(basename "$RUN_ROOT")}
 python notebooks/384_m2_analysis.py --root "$RUN_ROOT" --output "$OUT"
 echo "wrote $OUT"

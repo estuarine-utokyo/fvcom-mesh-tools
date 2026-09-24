@@ -71,6 +71,7 @@ from fvcom_mesh_tools.walls import (  # noqa: E402
     rejoin_copies,
     split_along_walls,
     straighten_walls,
+    write_wall_pairs,
 )
 
 # The base's CRS. fort.14 and FVCOM's _grd.dat both carry bare numbers, so
@@ -108,6 +109,8 @@ if cfg["base_mesh"].suffix == ".dat":
 else:
     base = read_fort14(cfg["base_mesh"])
     say(f"recipe {recipe.name}: base {cfg['base_mesh'].name}")
+from pyproj import Transformer  # noqa: E402
+
 _be = np.unique(np.sort(np.vstack([base.elements[:, [0, 1]], base.elements[:, [1, 2]],
                                    base.elements[:, [2, 0]]]), axis=1), axis=0)
 base_rmax = float((np.abs(base.depths[_be[:, 0]] - base.depths[_be[:, 1]])
@@ -115,6 +118,24 @@ base_rmax = float((np.abs(base.depths[_be[:, 0]] - base.depths[_be[:, 1]])
 say(f"  NP={base.n_nodes:,} NE={base.n_elements:,}, depth "
     f"{base.depths.min():.3f}-{base.depths.max():.3f} m, r-factor <= "
     f"{base_rmax:.4f}, {len(base.open_boundaries)} open boundary")
+# Two things this generator assumes and cannot yet generalise, checked BEFORE
+# any meshing rather than discovered after it (review F13, owner 2026-09-24):
+# the base's coordinates are UTM zone 54N metres, and it has exactly one open
+# boundary arc -- the boundary lists are rebuilt around a single arc.
+_lo, _hi = base.nodes[:, :2].min(axis=0), base.nodes[:, :2].max(axis=0)
+_clon, _clat = Transformer.from_crs(f"EPSG:{MESH_EPSG}", "EPSG:4326", always_xy=True
+                                    ).transform(0.5 * (_lo[0] + _hi[0]), 0.5 * (_lo[1] + _hi[1]))
+if not (100_000 <= _lo[0] and _hi[0] <= 900_000 and 0 <= _lo[1] <= 10_000_000
+        and 136.0 <= _clon <= 146.0):
+    raise SystemExit(
+        f"the base mesh's coordinates ({_lo[0]:.0f}..{_hi[0]:.0f}, "
+        f"{_lo[1]:.0f}..{_hi[1]:.0f}) are not UTM zone 54N (EPSG:{MESH_EPSG}) "
+        f"metres; read that way their centre is lon {_clon:.2f}. This generator "
+        "assumes EPSG:32654 -- reproject the base first")
+if len(base.open_boundaries) != 1:
+    raise SystemExit(
+        f"the base mesh has {len(base.open_boundaries)} open boundary arcs; this "
+        "generator handles exactly one")
 
 # The land polygon is optional and only two things use it: the pre-flight's
 # "is the core dry" report, and `coastline: resample`. `preserve` needs
@@ -351,7 +372,12 @@ if cfg["coastline"] in ("resample", "resolve") and free.size:
         f"{min(shapely.distance(pts, ln) for ln in shore):.1f} m from the free rim")
 
 _shl = None
-if HIRES is not None and cfg["coastline"] == "resolve" and shore:
+_land_filtered = False
+# NOT conditional on a free base coastline: an offshore hole has none, and
+# conditioning the filter on one left OSM islands inside such a hole out of
+# the mesh altogether, with no report (review F11).  Only re-cutting the
+# base coastline needs `shore`.
+if HIRES is not None and cfg["coastline"] == "resolve":
     # THE JUDGEMENT the declared grid size implies, made once and applied to
     # the whole hole -- the transition is treated like the region (owner,
     # 2026-09-23).  Everything narrower than the target goes, because a mesh
@@ -369,6 +395,8 @@ if HIRES is not None and cfg["coastline"] == "resolve" and shore:
     _foot = _foot.buffer(max(500.0, 3.0 * float(max(ambient.values()))))
     _keep = [g for g in getattr(land_m, "geoms", [land_m])
              if shapely.intersects(_foot, g)]
+if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
+    _land_filtered = True
     # Two elements across for an AREA, and the rest is not deleted but
     # becomes WALLS (docs/linear_structures_design.md, owner 2026-09-23): a
     # 12 m pier cannot be meshed as land at 30 m, but it can as a line.
@@ -449,23 +477,26 @@ if HIRES is not None and cfg["coastline"] == "resolve" and shore:
     _shp = OUT / "shoreline_filtered.shp"
     gpd.GeoDataFrame(geometry=[_filtered], crs=MESH_EPSG).explode(
         index_parts=False).to_file(_shp)
-    _b = _filtered.bounds
-    _pad = 3.0 * _h0
-    _shl = om.Shoreline(str(_shp),
-                        (_b[0] - _pad, _b[2] + _pad, _b[1] - _pad, _b[3] + _pad),
-                        _h0, crs=f"EPSG:{MESH_EPSG}")
-    say(f"oceanmesh Shoreline(h0={_h0:g}): mainland {len(_shl.mainland):,} pt, "
-        f"inner {len(_shl.inner):,} pt")
-    # The rim is cut from what survived, not from the raw OSM.
-    shore = []
-    for g in getattr(_filtered, "geoms", [_filtered]):
-        for r in [g.exterior, *g.interiors]:
-            if shapely.intersects(reach, r):
-                shore.append(shapely.LineString(np.asarray(r.coords)))
-    if not shore:
-        raise SystemExit(f"the h0 = {_h0:g} m filter left no shoreline near "
-                         "the free rim; the declared size cannot carry this "
-                         "coastline at all")
+    if not _filtered.is_empty:
+        _b = _filtered.bounds
+        _pad = 3.0 * _h0
+        _shl = om.Shoreline(str(_shp),
+                            (_b[0] - _pad, _b[2] + _pad, _b[1] - _pad, _b[3] + _pad),
+                            _h0, crs=f"EPSG:{MESH_EPSG}")
+        say(f"oceanmesh Shoreline(h0={_h0:g}): mainland {len(_shl.mainland):,} pt, "
+            f"inner {len(_shl.inner):,} pt")
+    # The rim is cut from what survived, not from the raw OSM -- where the
+    # base HAS a free coastline to re-cut; an offshore hole has none.
+    if shore is not None:
+        shore = []
+        for g in getattr(_filtered, "geoms", [_filtered]):
+            for r in [g.exterior, *g.interiors]:
+                if shapely.intersects(reach, r):
+                    shore.append(shapely.LineString(np.asarray(r.coords)))
+        if not shore:
+            raise SystemExit(f"the h0 = {_h0:g} m filter left no shoreline near "
+                             "the free rim; the declared size cannot carry this "
+                             "coastline at all")
 
 target = min(r.target_h_m for _, r in regions_m)
 # The coastline inside the hole is cut at the LOCAL size, not at the target.
@@ -528,7 +559,7 @@ if rc["curves"]:
                 for k, c in enumerate(rc["curves"]) if len(c) > 1})
 
 hole = hole_polygon(rc["pfix"], rc["egfix"])
-if HIRES is not None and _shl is not None:
+if HIRES is not None and _land_filtered:
     # Land the base never had is not on the rim: the rim re-draws the BASE
     # coastline along the source, and a quay block standing in the Kimitsu
     # harbour -- detached once the filter made the pier that joined it to the
@@ -557,9 +588,20 @@ if HIRES is not None:
     # A resolved coastline follows OSM into every corner, and a corner under
     # 60 deg holds one element: its node is then in that element alone, and
     # FVCOM never updates it (M2 amplitude exactly 0 at a 44 deg corner of
-    # the Kimitsu harbour).  Such corners are cut off by a chord.
+    # the Kimitsu harbour).  Such corners are cut off by a chord -- on the
+    # `resolve` fork only.  `preserve` promises the coastline does not move,
+    # so there the corners are counted and reported, not cut (review F4,
+    # owner 2026-09-24); a lone node left by one is opened by the mesh repair
+    # and the QA gate says if that failed.
     _p, _e, _b, _brep = blunt_acute_corners(
         rc["pfix"], rc["egfix"], rc["pfix_base"], hole, h_achieved)
+    if HIRES["coastline"] != "resolve":
+        reports["acute_corners_kept"] = {k: _brep[k] for k in
+                                         ("n_corners_blunted", "angles_deg", "at")}
+        if _brep["n_corners_blunted"]:
+            say(f"coastline (preserve): {_brep['n_corners_blunted']} corner(s) under "
+                f"60 deg kept as they are ({_brep['angles_deg']} deg)")
+        _brep = {**_brep, "n_corners_blunted": 0}
     reports["acute_corners_blunted"] = _brep
     if _brep["n_corners_blunted"]:
         rc["pfix"], rc["egfix"], rc["pfix_base"] = _p, _e, _b
@@ -578,7 +620,7 @@ say(f"hole {hole.area / 1e6:.3f} km2 ({hole.geom_type}, valid={hole.is_valid})")
 WALL_PTS = np.zeros((0, 2))
 WALL_SEGS = np.zeros((0, 2), dtype=np.int64)
 WALL_LINES: list = []
-if HIRES is not None and _shl is not None and _walls_src:
+if HIRES is not None and _land_filtered and _walls_src:
     _margin = 0.5 * float(max(ambient.values()))
     _room = shapely.difference(hole, iface_lines.buffer(_margin)) \
         if not iface_lines.is_empty else hole
@@ -1815,6 +1857,10 @@ written, mesh = serialise(candidate, out, out14)
 qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000,
             allowed_duplicate_pairs=wall_pairs(out))
 say(f"accepted seed {seed}")
+# The wall pairs travel with the mesh, bound to it by hash, so the delivered
+# file can be checked again by `fmesh-mesh-qa` and get the same verdict.
+if wall_pairs(out):
+    write_wall_pairs(out14, wall_pairs(out), written.n_nodes)
 
 _new_bad, _n_shallow = patch_violations(qa.checks, written)
 if _n_shallow:
@@ -1907,4 +1953,12 @@ if reports["qa"]["n_introduced"]:
         + "; ".join(f"{v['check']} at {v['kind']} "
                     f"{v.get('id', v.get('elements'))}"
                     for v in reports["qa"]["introduced"][:6]))
+# Only now is the product accepted: the frozen contract, the resolution, the
+# written case and the QA gate have all passed.  The batch chain requires this
+# marker, because NQSV starts the next job whatever this one's outcome
+# (review F5).
+(OUT / "ACCEPTED").write_text(json.dumps({
+    "mesh": str(out14), "seed": seed, "qa": {k: reports["qa"][k] for k in
+                                              ("n_gate_total", "n_gate_failed", "n_introduced")},
+    "time": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=1) + "\n")
 say("done")

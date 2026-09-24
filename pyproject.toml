@@ -64,6 +64,7 @@ fmesh-refine-depths = "fvcom_mesh_tools.cli.refine_depths:main"
 fmesh-finish-depths = "fvcom_mesh_tools.cli.finish_depths:main"
 fmesh-refine = "fvcom_mesh_tools.cli.refine_run:main"
 fmesh-plot-views = "fvcom_mesh_tools.cli.plot_views:main"
+fmesh-check-run = "fvcom_mesh_tools.cli.check_run:main"
 fmesh-mesh-pipeline = "fvcom_mesh_tools.cli.meshpipeline:main"
 
 [project.urls]

@@ -662,7 +662,13 @@ def smooth_rfactor_equal(elements, depths, movable, rmax: float, *,
     violating edge with one frozen end moves only the other. Returns
     ``(depths, report)``.
     """
+    if not (np.isfinite(rmax) and 0.0 < float(rmax) < 1.0):
+        raise ValueError(f"rmax must be a finite number in (0, 1), got {rmax}")
+    if int(maxit) < 0:
+        raise ValueError("maxit must be non-negative")
     h = np.asarray(depths, dtype=np.float64).copy()
+    if not (np.isfinite(h).all() and (h > 0).all()):
+        raise ValueError("every depth must be finite and positive before smoothing")
     free = np.asarray(movable, dtype=bool)
     tri = np.asarray(elements, dtype=np.int64)
     e = np.unique(np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]),

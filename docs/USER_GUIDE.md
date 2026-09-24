@@ -64,7 +64,7 @@ at 29.0 deg), and the refinement must add none.
 | **fvcom-mesh-tools** (this repository, Apache-2.0) | https://github.com/estuarine-utokyo/fvcom-mesh-tools | public | everything |
 | **oceanmesh, the laboratory's fork** (GPL-3.0) | https://github.com/estuarine-utokyo/oceanmesh, branch `main` (tested at `76903e3`) | public | the fill in `fmesh-refine` |
 | **xcoast** | https://github.com/estuarine-utokyo/xcoast | public | making the OSM land polygons for a new area (§2.3); land in some figures |
-| **a base FVCOM model** | e.g. `TB-FVCOM` (`input/goto2023/grid/`), the laboratory's model repository | laboratory only | the recipe's `base_mesh`, `base_depth`, `base_obc` -- any FVCOM grd/dep/obc works |
+| **a base FVCOM model** | e.g. `TB-FVCOM` (`input/goto2023/grid/`), the laboratory's model repository | laboratory only | the recipe's `base_mesh`, `base_depth`, `base_obc` -- an FVCOM grd/dep/obc **in UTM zone 54N metres (EPSG:32654) with exactly one open boundary arc** (§2.5) |
 | **FVCOM** | the laboratory's `FVCOM` repository, branch `uk-fabm/v5.1.0-dev`, built | laboratory only | the FVCOM tests (§9) only |
 
 **The oceanmesh fork is required.** The oceanmesh on PyPI or conda-forge, and
@@ -128,6 +128,19 @@ M7001 is licensed survey data and is not public. The depth ladder
 - **Monitoring:** start a monitor after every `qsub`, and read the log when
   the job ends.
 
+### 2.5 What the base mesh must be
+
+Two limits of the generator, checked before any meshing and refused with a
+reason:
+
+- **Coordinates in UTM zone 54N metres (EPSG:32654).** The generator
+  projects OSM, the regions and the depth products into that frame. A base
+  in another CRS must be reprojected first.
+- **Exactly one open-boundary arc.** The boundary lists of the refined mesh
+  are rebuilt around a single arc.
+
+Lifting either is future work, not a setting.
+
 ## 3. Quick start (OCTOPUS)
 
 1. **Write a recipe.** Copy one and change the region (§4):
@@ -158,6 +171,21 @@ M7001 is licensed survey data and is not public. The depth ladder
 
 3. **Monitor it** with the command the script prints. When it ends, read the
    logs in order (§6) and look at the figures (§7).
+
+   NQSV starts a job when the one before it **ends, whatever the outcome**.
+   So each stage writes a marker only when it passed, and the next stage
+   refuses to start without it:
+
+   | marker | written by | only when |
+   |---|---|---|
+   | `ACCEPTED` | the refinement | every gate passed (see below) |
+   | `STAGED` | the depths stage | the depth product converged |
+   | `SMOKE_OK` | the smoke test | both runs pass `fmesh-check-run` |
+   | `RUN_OK` | each M2 run | the run passes `fmesh-check-run` |
+
+   `ACCEPTED` needs the frozen contract, the resolution, the written case and
+   0 QA violations introduced. A stage that stops with "no ... marker" means
+   the stage before it failed; read that stage's log.
 
 To run one step by hand instead, the same commands exist on their own (§10).
 `fmesh-refine` runs the generator; run it inside a batch job, not on a login
@@ -198,7 +226,7 @@ refine:
 | `base_obc` | no | the open-boundary node list |
 | `dt_expected_s` | yes | the model's external step; a region too fine for it raises an **alert**, not an error |
 | `gradation` | yes | the size growth rate outside the region; it sets the transition width |
-| `hires` | no | present = the coastline/bathymetry branch above; absent = the default branch, which keeps the base coastline and depths (`coastline: preserve/resample/spline`, `rfactor_limit`, `coastline_tolerance_m` apply there) |
+| `hires` | no | present = the coastline/bathymetry branch above; absent = the default branch, which keeps the base coastline and depths (`coastline: preserve/resample/spline`, `rfactor_limit`, `coastline_tolerance_m` apply there). `hires.coastline: resolve` follows OSM (sharp corners cut, islands and walls added); `preserve` keeps the base coastline exactly |
 | `refine` | yes | one or more regions |
 | `refine[].geometry` | yes | `circle: {center: [lon, lat], radius_m}`, a `bbox`, a GeoJSON `Polygon`, or `{file: area.geojson, where: {...}, buffer_m: 25}` |
 | `refine[].target_h_m` | yes | the target element size, m |
@@ -249,6 +277,8 @@ A port-sized region takes 5-10 minutes on one core.
 | `fvcom/` | the FVCOM case (grd, dep, obc, cor), depths as the source gives them |
 | `fvcom_finished/` | after `fmesh-finish-depths`: the case with finished depths, plus `<case>_dep_<variant>.dat` |
 | `node_map.npy` | base node -> refined node, the frozen contract's evidence |
+| `<base>_<name>_walls.json` | the node pairs a wall duplicated on purpose, bound to the `.14` by its SHA-256; `fmesh-mesh-qa` reads it, so the delivered mesh gets the same verdict when checked again |
+| `ACCEPTED` | written last, only when every gate passed (§3) |
 | `shoreline_filtered.shp` | the OSM land after the width filter |
 | `fill_constraints.npz`, `walls_stages.npz` | the rim and walls the mesher was given, for inspection |
 | `final_mesh_*.png` | the figures (§7) |
@@ -268,6 +298,10 @@ The run log ends with lines like these:
   gated.
 - **`no seed produced a mesh that keeps the frozen-zone contract`** means no
   seed passed. `report.json` holds each attempt and why it failed.
+- **A run that exits with violations introduced** still leaves its files for
+  diagnosis, but no `ACCEPTED`, so the chain goes no further.
+- **An output directory that is not empty** is refused (`fmesh-refine`, job
+  417, `refine_workflow.sh`). Move it aside first.
 
 ---
 
@@ -315,6 +349,11 @@ fmesh-finish-depths ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat \
 | `--rfactor` | limit on \|h_i - h_j\| / (h_i + h_j) over every edge (default 0.2; 0 = no smoothing) -- the sigma-coordinate stability condition | `rfac0p2` |
 | `--whole-mesh` | on a refinement, move the frozen depths too | |
 | `--method` | `equal` (default): TB-FVCOM's smoother -- floor, smooth the uncapped field, then cap; `limit`: the refinement's limiter | |
+| `--allow-unconverged` | write the product even if the limit was not reached (diagnosis only) | |
+
+`--rfactor` must be 0 or a number in (0, 1). If the limit is not reached --
+too few `--rounds`, or a frozen depth the floor cannot meet -- the command
+writes nothing and exits 3. So a chain never stages an unfinished product.
 
 The output is `<case>_dep_min3m_rfac0p2_cap300.dat`, with a JSON report of
 what each step moved. From `TokyoBay_dep_m7001tp_raw.dat` it reproduces
@@ -329,8 +368,13 @@ refined mesh, with the same forcing, sponge, sigma levels and external step
 (the finer mesh's). The staging is written for the Tokyo Bay goto2023 base.
 Then:
 
-- **`423_m2_smoke.sh`** runs both for 2 days. It passes if both end with
-  `TADA`, with finite output and no fatal messages in the log.
+- **`423_m2_smoke.sh`** runs both for 2 days. Each run is judged by
+  `fmesh-check-run`, which requires all of:
+  - `TADA` in the log, and no fatal message;
+  - output that reaches the namelist's `END_DATE`;
+  - finite `zeta`, `ua` and `va` in every record.
+
+  A zero exit code alone is not success: some FVCOM STOP paths return 0.
 - **`412_m2_run.sh` x 2 + `413_m2_analysis.sh`** run 20 days of M2 and
   compare the amplitude and phase at the tide gauges.
 
@@ -348,7 +392,8 @@ exactly zero amplitude is a defect.
 | `fmesh-refine RECIPE [--out] [--seeds] [--land]` | the refinement (runs `notebooks/420_local_refine.py`) |
 | `fmesh-finish-depths SOURCE --hmin --hmax --rfactor` | the depth product (§8) |
 | `fmesh-plot-views MESH [--view ...]` | mesh figures in the fixed colours |
-| `fmesh-mesh-qa MESH` | the 22-check FVCOM acceptance gate, on any fort.14 |
+| `fmesh-mesh-qa MESH` | the 22-check FVCOM acceptance gate, on any fort.14 (reads `<stem>_walls.json` when present) |
+| `fmesh-check-run RUN_DIR` | did an FVCOM run finish with usable output (§9) |
 | `fmesh-refine-depths` | the earlier depth finisher (floor, cap, then the refinement's limiter); kept for old scripts |
 | `jobs/octopus/refine_workflow.sh RECIPE` | the whole chain as batch jobs (§3) |
 
@@ -369,6 +414,11 @@ package and have unit tests.
 - OSM `man_made` lines (breakwaters mapped only as lines) are not used.
 - The result depends on the DistMesh seed; the best of several is kept.
 - The M2 staging in job 421 is specific to the Tokyo Bay goto2023 base.
+- The base must be in EPSG:32654 with one open-boundary arc (§2.5).
+- With `hires.coastline: preserve` the coastline is kept exactly, including
+  corners sharper than 60 deg. These are reported (`acute_corners_kept` in
+  `report.json`), not cut. A node left in one element at such a corner is
+  opened by the repair, and the QA gate says if that failed.
 
 ---
 

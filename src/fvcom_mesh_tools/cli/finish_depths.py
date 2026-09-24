@@ -102,12 +102,26 @@ def build_parser() -> argparse.ArgumentParser:
                         "limit: the refinement's limiter, floor and cap first")
     p.add_argument("--rounds", type=int, default=2000,
                    help="smoothing sweeps allowed (default 2000)")
+    p.add_argument("--allow-unconverged", action="store_true",
+                   help="write the product even if the r-factor limit was not "
+                        "reached (exit status stays 3); for diagnosis only")
     p.add_argument("--dry-run", action="store_true", help="report, write nothing")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Exit 0 on a run-ready product, 2 on bad input, 3 when not converged."""
     args = build_parser().parse_args(argv)
+    # Only 0 (no smoothing) or a finite r in (0, 1) means anything: NaN and a
+    # negative r used to be read as "no smoothing" and 1.2 or inf as a limit
+    # every field already meets, all with exit 0 (review F8).
+    if not (np.isfinite(args.rfactor) and 0.0 <= args.rfactor < 1.0):
+        print(f"--rfactor must be 0 (no smoothing) or a finite number in (0, 1); "
+              f"got {args.rfactor}", file=sys.stderr)
+        return 2
+    if args.rfactor > 0 and args.rounds < 1:
+        print("--rounds must be at least 1 when smoothing", file=sys.stderr)
+        return 2
     src = args.source.expanduser().resolve()
     refinement = src.is_dir()
     if refinement:
@@ -167,11 +181,20 @@ def main(argv: list[str] | None = None) -> int:
         print("[finish] a frozen depth moved -- the refinement contract is broken",
               file=sys.stderr)
         return 1
-    if not rep["converged_at_write_precision"]:
-        print("[finish] WARNING the r-factor limit was not reached everywhere; "
-              "see the report", file=sys.stderr)
+    converged = bool(rep["converged_at_write_precision"])
+    if not converged:
+        # Not a run-ready product, and not to be staged as one: exit 3 and
+        # write nothing, unless asked to for diagnosis (review F7).
+        print(f"[finish] NOT CONVERGED: the r-factor limit is not met on "
+              f"{rep.get('n_over_movable_at_tolerance', '?')} edge(s) with a movable "
+              f"end (max r {rep.get('max_r_movable', float('nan')):.6f}). Raise "
+              "--rounds, or look for a frozen depth the floor cannot reach"
+              + ("" if args.allow_unconverged else "; nothing written"),
+              file=sys.stderr)
+        if not args.allow_unconverged:
+            return 3
     if args.dry_run:
-        return 0
+        return 0 if converged else 3
 
     outdir = (args.outdir or (src / "fvcom_finished" if refinement else grd.parent)).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
@@ -188,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
             dataclasses.replace(mesh, depths=depths), outdir, name, cor=cor,
             obc_type=getattr(mesh, "obc_type", 1), obc_depth_control=False)
         print(f"[finish] wrote the case ({', '.join(sorted(written))}) in {outdir}")
-    return 0
+    return 0 if converged else 3
 
 
 if __name__ == "__main__":  # pragma: no cover

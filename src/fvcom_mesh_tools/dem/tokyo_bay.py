@@ -85,7 +85,10 @@ def _grid(rung: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     with netCDF4.Dataset(path) as ds:
         lat = np.asarray(ds["lat"][:], dtype=float)
         lon = np.asarray(ds["lon"][:], dtype=float)
-        z = np.ma.filled(np.asarray(ds[var][:], dtype=float), np.nan)
+        # filled BEFORE any conversion: np.asarray drops the mask, and a finite
+        # _FillValue (-9999, 9.97e36) would then read as a real elevation
+        z = np.asarray(np.ma.filled(np.ma.asarray(ds[var][:]).astype(float), np.nan),
+                       dtype=float)
     if z.shape != (lat.size, lon.size):
         raise ValueError(f"{path.name}: expected {(lat.size, lon.size)}, got {z.shape}")
     # RegularGridInterpolator needs ascending axes and will not say so clearly.
@@ -136,7 +139,15 @@ def _nearest_finite(rung: str, lon: np.ndarray, lat: np.ndarray,
                 jj, ii = np.nonzero(ok)
                 pts = np.column_stack([glon[ilon][ii] * kx, glat[ilat][jj] * _M_PER_DEG])
                 d, k = cKDTree(pts).query(query)
-                return sub[jj[k], ii[k]], d
+                # The nearest cell INSIDE the box is the nearest cell only if
+                # the circle of that radius fits in the box; otherwise a nearer
+                # one may lie outside it, and the answer would depend on which
+                # other points were asked in the same call (review F9).
+                need = float(d.max()) / min(kx, _M_PER_DEG)
+                if whole or need <= pad:
+                    return sub[jj[k], ii[k]], d
+                pad = max(2.0 * pad, 1.01 * need)
+                continue
         if whole:                       # this product has no finite cell at all
             return np.full(lon.shape, np.nan), np.full(lon.shape, np.inf)
         pad *= 2.0
@@ -212,6 +223,8 @@ def sounding_distance(lon, lat) -> np.ndarray:
     if not path.exists():
         raise FileNotFoundError(path)
     df = pd.read_parquet(path, columns=["lon", "lat", "z_tp"])
+    kx = _M_PER_DEG * float(np.cos(np.radians(float(np.mean(lat)))))
+    q = np.column_stack([lon * kx, lat * _M_PER_DEG])
     pad = 0.05
     while True:
         m = (np.isfinite(df["z_tp"].to_numpy())
@@ -219,16 +232,19 @@ def sounding_distance(lon, lat) -> np.ndarray:
              & (df["lon"].to_numpy() <= lon.max() + pad)
              & (df["lat"].to_numpy() >= lat.min() - pad)
              & (df["lat"].to_numpy() <= lat.max() + pad))
-        if m.any() or pad > 20.0:
-            break
+        if m.any():
+            pts = np.column_stack([df["lon"].to_numpy()[m] * kx,
+                                   df["lat"].to_numpy()[m] * _M_PER_DEG])
+            d, _ = cKDTree(pts).query(q)
+            # complete only when every nearest-distance circle fits in the box
+            need = float(d.max()) / min(kx, _M_PER_DEG)
+            if need <= pad or pad > 20.0:
+                return np.asarray(d, dtype=float)
+            pad = max(2.0 * pad, 1.01 * need)
+            continue
+        if pad > 20.0:
+            return np.full(lon.shape, np.inf)
         pad *= 2.0
-    if not m.any():
-        return np.full(lon.shape, np.inf)
-    kx = _M_PER_DEG * float(np.cos(np.radians(float(np.mean(lat)))))
-    pts = np.column_stack([df["lon"].to_numpy()[m] * kx,
-                           df["lat"].to_numpy()[m] * _M_PER_DEG])
-    d, _ = cKDTree(pts).query(np.column_stack([lon * kx, lat * _M_PER_DEG]))
-    return np.asarray(d, dtype=float)
 
 
 def provenance_report(rung: np.ndarray, distance: np.ndarray) -> dict[str, Any]:

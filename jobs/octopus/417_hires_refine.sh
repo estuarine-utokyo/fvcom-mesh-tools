@@ -35,9 +35,10 @@ export LR_OUT=${LR_OUT:-"outputs/refine_$(basename "${RECIPE%.yaml}")"}
 # LR_SEEDS=0 and then tries to set a variable called `1`.
 export LR_SEEDS=${LR_SEEDS:-0:1:2:3:4}
 LR_SEEDS=${LR_SEEDS//:/,}
-if [ -e "$LR_OUT/report.json" ]; then
-    # Output that already exists makes a rerun look like a success.
-    echo "Existing output: $LR_OUT/report.json; move it before rerunning"
+if [ -d "$LR_OUT" ] && [ -n "$(ls -A "$LR_OUT")" ]; then
+    # Output that already exists makes a rerun look like a success -- and a
+    # run that failed before writing its report still leaves files behind.
+    echo "Existing output in $LR_OUT; move it before rerunning"
     exit 2
 fi
 echo "recipe=$RECIPE land=$FMESH_LAND out=$LR_OUT seeds=$LR_SEEDS"

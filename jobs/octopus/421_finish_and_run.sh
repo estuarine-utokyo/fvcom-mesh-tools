@@ -18,6 +18,11 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 OUTDIR=${FMESH_OUT:?set FMESH_OUT}
 RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
+# NQSV starts this when the refinement ENDS, whatever its outcome; only an
+# accepted product may be finished and staged (review F5).
+[ -f "$OUTDIR/ACCEPTED" ] || { echo "not accepted: $OUTDIR (no ACCEPTED marker)"; exit 2; }
+rm -f "$RUN_ROOT/STAGED"
+# exits 3 -- and stops this job -- when the r-factor limit is not reached
 python -m fvcom_mesh_tools.cli.finish_depths "$OUTDIR" \
     --hmin "${FMESH_HMIN:-3}" --hmax "${FMESH_HMAX:-300}" \
     --rfactor "${FMESH_RFACTOR:-0.2}" --method "${FMESH_METHOD:-equal}"
@@ -39,4 +44,5 @@ cp "$G/TokyoBay_obc.dat" "$BASEDIR/TokyoBayB_obc.dat"
 cp "$G/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat" "$BASEDIR/TokyoBayB_dep.dat"
 python notebooks/414_refine_m2_prep.py --root "$RUN_ROOT" \
     --base "$BASEDIR/TokyoBayB" --refined "$FIN"
+date -Is > "$RUN_ROOT/STAGED"
 echo "end=$(date -Is)"

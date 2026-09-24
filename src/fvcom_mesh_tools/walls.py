@@ -600,3 +600,66 @@ def straighten_walls(walls, size, *, trim_factor=0.5, tol_factor=0.1):
         turned.append(round(ang, 1))
         out.append(new)
     return out, {"n_straightened": len(turned), "end_to_end_turn_deg": turned}
+
+
+def wall_pairs_path(mesh_path):
+    """Where the wall pairs of a mesh are kept: ``<stem>_walls.json`` beside it."""
+    from pathlib import Path
+
+    p = Path(mesh_path)
+    return p.with_name(p.stem + "_walls.json")
+
+
+def _sha256(path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_wall_pairs(mesh_path, pairs, n_nodes: int):
+    """Record, beside a written mesh, which coincident nodes a wall made ON PURPOSE.
+
+    A split wall duplicates its nodes, and the QA gate excuses exactly the
+    declared pairs.  Kept only in memory, the declaration was lost with the
+    run: checking the delivered mesh again reported 17 duplicate pairs and
+    changed its verdict (review F12).  The file is bound to the mesh by its
+    SHA-256 and node count, so it can never excuse coincidences in another
+    mesh.  Pairs are 0-based node indices.  Returns the path written.
+    """
+    import json
+
+    out = wall_pairs_path(mesh_path)
+    out.write_text(json.dumps({
+        "mesh": wall_pairs_path(mesh_path).name.replace("_walls.json", "") + ".14",
+        "sha256": _sha256(mesh_path), "n_nodes": int(n_nodes),
+        "index_base": 0,
+        "pairs": [[int(a), int(b)] for a, b in pairs]}, indent=1) + "\n")
+    return out
+
+
+def read_wall_pairs(mesh_path, n_nodes: int, path=None):
+    """The declared wall pairs of a mesh, or None when it declares none.
+
+    Raises ``ValueError`` when the declaration belongs to a different file
+    (hash or node count) or names a node the mesh does not have.
+    """
+    import json
+    from pathlib import Path
+
+    src = Path(path) if path is not None else wall_pairs_path(mesh_path)
+    if not src.exists():
+        if path is not None:
+            raise ValueError(f"no wall-pair file {src}")
+        return None
+    d = json.loads(src.read_text())
+    if d.get("sha256") != _sha256(mesh_path) or int(d.get("n_nodes", -1)) != int(n_nodes):
+        raise ValueError(f"{src.name} does not belong to {Path(mesh_path).name} "
+                         "(the mesh changed since it was written)")
+    pairs = [(int(a), int(b)) for a, b in d.get("pairs", [])]
+    if any(not (0 <= a < n_nodes and 0 <= b < n_nodes) for a, b in pairs):
+        raise ValueError(f"{src.name} names a node outside the mesh")
+    return pairs

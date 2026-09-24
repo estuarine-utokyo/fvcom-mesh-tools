@@ -20,6 +20,12 @@ CASE=${FMESH_CASE:?set FMESH_CASE}
 RANKS=${FMESH_RANKS:-64}
 FVCOM=/octfs/work/G16445/v61021/Github/FVCOM/src/fvcom
 [ -f "$RUN_ROOT/$CASE/m2_run.nml" ] || { echo "not staged: $RUN_ROOT/$CASE"; exit 2; }
+# In a chain with a smoke test, a failed smoke must stop the long runs: the
+# namelists were staged before it ran, so their existence proves nothing.
+if [ "${FMESH_REQUIRE_SMOKE:-0}" = 1 ] && [ ! -f "$RUN_ROOT/SMOKE_OK" ]; then
+    echo "smoke test did not pass: no $RUN_ROOT/SMOKE_OK"; exit 2
+fi
+rm -f "$RUN_ROOT/$CASE/RUN_OK"
 set +u
 conda deactivate
 set -u
@@ -44,5 +50,11 @@ if grep -Ei 'fatal|non[ -]?finite|floating.*exception|segmentation|nan detected'
         "$RUN_ROOT/$CASE/fvcom.log"; then
     status=1
 fi
+# the run is judged on its output as well as its log (review F6)
+module purge
+unset LD_LIBRARY_PATH
+set +u; conda activate "${FMESH_ENV:-oceanmesh-bench}"; set -u
+python -m fvcom_mesh_tools.cli.check_run "$RUN_ROOT/$CASE" \
+    --marker "$RUN_ROOT/$CASE/RUN_OK" || status=1
 echo "case=$CASE end=$(date -Is) status=$status"
 exit "$status"

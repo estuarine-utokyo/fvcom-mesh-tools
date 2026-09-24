@@ -1049,7 +1049,10 @@ def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
     returns it the same way.
     """
     pts = np.asarray(pts, dtype=float)[:, :2].copy()
-    if closed and len(pts) > 1 and np.allclose(pts[0], pts[-1]):
+    # EXACT repetition only: allclose's relative tolerance at a UTM northing
+    # of 3.9e6 counts two corners 30 m apart as one, and a 100 x 30 m quay
+    # block lost half its area to it (review F2)
+    if closed and len(pts) > 1 and np.array_equal(pts[0], pts[-1]):
         pts = pts[:-1]
 
     def fixed(k):
@@ -1216,73 +1219,90 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0)
     pfix = np.asarray(pfix, dtype=float).copy()
     egfix = np.asarray(egfix, dtype=np.int64).copy()
     pfix_base = np.asarray(pfix_base, dtype=np.int64).copy()
-    nbrs: dict = {}
-    for a, b in egfix.tolist():
-        nbrs.setdefault(a, []).append(b)
-        nbrs.setdefault(b, []).append(a)
 
-    def free(k):
-        return pfix_base[k] < 0 and len(nbrs.get(k, [])) == 2
+    def cut_one():
+        """Find ONE acute water corner in the current rim and cut it.
 
-    def walk(v, first, d):
-        """Walk from v through `first` for arc length d; return (point, stop, passed)."""
-        prev, cur, left, passed = v, first, d, []
-        while True:
-            seg = float(np.linalg.norm(pfix[cur] - pfix[prev]))
-            if seg >= left or not free(cur):
-                t = min(left, 0.9 * seg) / seg
-                return pfix[prev] + t * (pfix[cur] - pfix[prev]), cur, passed
-            left -= seg
-            passed.append(cur)
-            nxt = [k for k in nbrs[cur] if k != prev][0]
-            prev, cur = cur, nxt
+        One at a time, against the rim as it now stands: planning every cut
+        on the original adjacency let a later cut delete an end point an
+        earlier cut's new edges used, and two adjacent 45 deg corners came
+        back with edges to node -1 (review F1).
+        """
+        nonlocal pfix, egfix, pfix_base
+        nbrs: dict = {}
+        for a, b in egfix.tolist():
+            nbrs.setdefault(a, []).append(b)
+            nbrs.setdefault(b, []).append(a)
 
-    gone: set = set()
-    new_pts, new_edges, corners = [], [], []
-    for v in range(len(pfix)):
-        if v in gone or not free(v):
-            continue
-        p, n = nbrs[v]
-        up, un = pfix[p] - pfix[v], pfix[n] - pfix[v]
-        lp, ln = float(np.linalg.norm(up)), float(np.linalg.norm(un))
-        if lp <= 0 or ln <= 0:
-            continue
-        ang = float(np.degrees(np.arccos(np.clip(up @ un / (lp * ln), -1, 1))))
-        # the angle between the edges is the WATER's only if the bisector
-        # points into the water; otherwise the water has 360 minus it
-        bis = up / lp + un / ln
-        if ang >= min_angle_deg or np.linalg.norm(bis) < 1e-9:
-            continue
-        probe = pfix[v] + bis / np.linalg.norm(bis) * 0.05 * min(lp, ln)
-        if not water.contains(shapely.Point(probe)):
-            continue
-        d = float(size(pfix[v][None])[0])
-        a_xy, a_stop, a_pass = walk(v, p, d)
-        b_xy, b_stop, b_pass = walk(v, n, d)
-        removed = {v, *a_pass, *b_pass}
-        if removed & gone or a_stop in removed or b_stop in removed or a_stop == b_stop:
-            continue
-        chord = shapely.LineString([a_xy, b_xy])
-        if not water.buffer(1e-6).contains(chord):
-            continue
-        gone |= removed
-        ia = len(pfix) + len(new_pts)
-        new_pts += [a_xy, b_xy]
-        new_edges += [[a_stop, ia], [ia, ia + 1], [ia + 1, b_stop]]
-        corners.append((ang, a_xy, float(chord.length)))
-    if corners:
-        keep_e = ~np.isin(egfix, list(gone)).any(axis=1)
-        egfix = np.vstack([egfix[keep_e], np.asarray(new_edges, dtype=np.int64)])
-        pfix = np.vstack([pfix, np.asarray(new_pts)])
-        pfix_base = np.concatenate([pfix_base, np.full(len(new_pts), -1, dtype=np.int64)])
-        live = np.setdiff1d(np.arange(len(pfix)), list(gone))
-        remap = np.full(len(pfix), -1, dtype=np.int64)
-        remap[live] = np.arange(len(live))
-        pfix, pfix_base, egfix = pfix[live], pfix_base[live], remap[egfix]
+        def free(k):
+            return pfix_base[k] < 0 and len(nbrs.get(k, [])) == 2
+
+        def walk(v, first, d):
+            """Walk from v through `first` for arc length d; (point, stop, passed)."""
+            prev, cur, left, passed = v, first, d, []
+            while True:
+                seg = float(np.linalg.norm(pfix[cur] - pfix[prev]))
+                if seg >= left or not free(cur):
+                    t = min(left, 0.9 * seg) / seg
+                    return pfix[prev] + t * (pfix[cur] - pfix[prev]), cur, passed
+                left -= seg
+                passed.append(cur)
+                nxt = [k for k in nbrs[cur] if k != prev][0]
+                prev, cur = cur, nxt
+
+        for v in range(len(pfix)):
+            if not free(v):
+                continue
+            p, n = nbrs[v]
+            up, un = pfix[p] - pfix[v], pfix[n] - pfix[v]
+            lp, ln = float(np.linalg.norm(up)), float(np.linalg.norm(un))
+            if lp <= 0 or ln <= 0:
+                continue
+            ang = float(np.degrees(np.arccos(np.clip(up @ un / (lp * ln), -1, 1))))
+            # the angle between the edges is the WATER's only if the bisector
+            # points into the water; otherwise the water has 360 minus it
+            bis = up / lp + un / ln
+            if ang >= min_angle_deg or np.linalg.norm(bis) < 1e-9:
+                continue
+            probe = pfix[v] + bis / np.linalg.norm(bis) * 0.05 * min(lp, ln)
+            if not water.contains(shapely.Point(probe)):
+                continue
+            d = float(size(pfix[v][None])[0])
+            a_xy, a_stop, a_pass = walk(v, p, d)
+            b_xy, b_stop, b_pass = walk(v, n, d)
+            removed = {v, *a_pass, *b_pass}
+            if a_stop in removed or b_stop in removed or a_stop == b_stop:
+                continue
+            chord = shapely.LineString([a_xy, b_xy])
+            if not water.buffer(1e-6).contains(chord):
+                continue
+            ia = len(pfix)
+            keep_e = ~np.isin(egfix, list(removed)).any(axis=1)
+            egfix = np.vstack([egfix[keep_e],
+                               [[a_stop, ia], [ia, ia + 1], [ia + 1, b_stop]]])
+            pfix = np.vstack([pfix, [a_xy, b_xy]])
+            pfix_base = np.concatenate([pfix_base, [-1, -1]])
+            live = np.setdiff1d(np.arange(len(pfix)), list(removed))
+            remap = np.full(len(pfix), -1, dtype=np.int64)
+            remap[live] = np.arange(len(live))
+            pfix, pfix_base, egfix = pfix[live], pfix_base[live], remap[egfix]
+            return ang, a_xy, float(chord.length), len(removed)
+        return None
+
+    corners = []
+    n_removed = 0
+    for _ in range(max(1, len(pfix))):
+        got = cut_one()
+        if got is None:
+            break
+        corners.append(got[:3])
+        n_removed += got[3]
+    if (egfix < 0).any():               # the invariant F1 broke; never hand it on
+        raise RuntimeError("blunt_acute_corners left an edge to a deleted point")
     report = {"n_corners_blunted": len(corners),
               "angles_deg": [round(c[0], 1) for c in corners],
               "chord_m": [round(c[2], 1) for c in corners],
-              "n_points_removed": len(gone),
+              "n_points_removed": n_removed,
               "at": [[round(float(x), 1) for x in c[1]] for c in corners]}
     return pfix, egfix, pfix_base, report
 
