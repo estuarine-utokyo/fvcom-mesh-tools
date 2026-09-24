@@ -82,10 +82,12 @@ def boundary_segments(nodes, elements, open_boundaries=None):
 
 
 def draw_mesh(ax, nodes, elements, open_boundaries=None, *, mesh_color=MESH_EDGE_COLOR,
-              mesh_lw: float = 0.2, boundary_lw: float = 1.4, zorder: float = 2.0):
+              mesh_lw: float = 0.2, mesh_alpha: float = 1.0, boundary_lw: float = 1.4,
+              zorder: float = 2.0):
     """Draw a mesh with its boundaries in the project's fixed colours.
 
-    Interior edges thin in ``mesh_color``; solid boundary edges in
+    Interior edges thin in ``mesh_color`` (``mesh_alpha`` lets a dense patch
+    over a colour field stay readable); solid boundary edges in
     :data:`SOLID_BOUNDARY_COLOR`; open boundary edges in
     :data:`OPEN_BOUNDARY_COLOR`.  Returns ``{"n_solid": ..., "n_open": ...}``.
     """
@@ -93,7 +95,7 @@ def draw_mesh(ax, nodes, elements, open_boundaries=None, *, mesh_color=MESH_EDGE
 
     xy = np.asarray(nodes, dtype=float)
     ax.triplot(xy[:, 0], xy[:, 1], np.asarray(elements), color=mesh_color,
-               lw=mesh_lw, zorder=zorder)
+               lw=mesh_lw, alpha=mesh_alpha, zorder=zorder)
     solid, opened = boundary_segments(nodes, elements, open_boundaries)
     ax.add_collection(LineCollection(solid, colors=SOLID_BOUNDARY_COLOR,
                                      lw=boundary_lw, zorder=zorder + 1))

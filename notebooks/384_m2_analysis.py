@@ -24,7 +24,12 @@ from scipy.spatial import cKDTree
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from fvcom_mesh_tools.plotting import add_atlas_grid, use_readable_style  # noqa: E402
+from fvcom_mesh_tools.io.fvcom_native import read_obc  # noqa: E402
+from fvcom_mesh_tools.plotting import (  # noqa: E402
+    add_atlas_grid,
+    draw_mesh,
+    use_readable_style,
+)
 
 DEFAULT_RUN_ROOT = Path("/octfs/work/G16445/v61021/scratch/m2_383").resolve()
 # Set from the manifest at run time. The cases are a property of the
@@ -259,7 +264,10 @@ def analyze(run_root, output, figure):
             hp1 = (p1[sids] * sw).sum(axis=1)
             hp2 = (p2[sids] * sw).sum(axis=1)
             lon, lat = ll.transform(mesh["xy"][:, 0], mesh["xy"][:, 1])
-            maps[label] = (np.column_stack([lon, lat]), mesh["tri"], amp, phase)
+            # the open boundary, for the figure's fixed boundary colours
+            obc_files = sorted((run_root / label / "input").glob("*_obc.dat"))
+            obc = [read_obc(obc_files[0])] if obc_files else None
+            maps[label] = (np.column_stack([lon, lat]), mesh["tri"], amp, phase, obc)
             for k, (station, distance) in enumerate(zip(STATIONS, sdist)):
                 row = rows.setdefault(station, {"observed": manifest["gauges"][station]})
                 obs = row["observed"]
@@ -390,7 +398,7 @@ def plot(maps, rows, path):
     grid = fig.add_gridspec(3, 3, height_ratios=(1, 1, 0.65))
     max_amp = max(v[2].max() for v in maps.values())
     bounds = np.concatenate([v[0] for v in maps.values()])
-    for col, (label, (xy, tri, amp, phase)) in enumerate(maps.items()):
+    for col, (label, (xy, tri, amp, phase, obc)) in enumerate(maps.items()):
         triang = mtri.Triangulation(xy[:, 0], xy[:, 1], tri)
         for row, values in enumerate((amp, phase)):
             ax = fig.add_subplot(grid[row, col])
@@ -411,6 +419,10 @@ def plot(maps, rows, path):
                     contour_tri, phase, levels=np.arange(0, 361, 15), colors="white", linewidths=0.5
                 )
                 ax.clabel(cs, fontsize=7, fmt="%d°")
+            # The mesh, always (owner's rule): interior edges thin and light so
+            # the field stays readable, solid boundaries black, open boundary red.
+            draw_mesh(ax, xy, tri, obc, mesh_color="k", mesh_lw=0.05, mesh_alpha=0.25,
+                      boundary_lw=0.6, zorder=3)
             for i, s in enumerate(STATIONS):
                 g = rows[s]["observed"]
                 ax.plot(g["lon"], g["lat"], "r.", markersize=5)
