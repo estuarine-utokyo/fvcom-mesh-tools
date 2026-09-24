@@ -659,6 +659,10 @@ def test_the_ramp_is_declared_in_seconds_not_internal_steps(tmp_path):
 
     root = P(__file__).resolve().parents[1]
     env = runpy.run_path(str(root / "notebooks/383_m2_case_prep.py"))
+    # the namelist is written from a template in the laboratory's FVCOM
+    # checkout, which GitHub's CI does not have
+    if not env["TEMPLATE"].exists():
+        pytest.skip(f"needs the FVCOM namelist template {env['TEMPLATE']}")
     for dte in (5.0, 1.5):
         env["namelist"].__globals__["DTE"] = dte
         text = env["namelist"](P("/tmp/in"), P("/tmp/out"))
