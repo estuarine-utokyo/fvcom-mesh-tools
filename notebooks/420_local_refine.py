@@ -604,7 +604,12 @@ if HIRES is not None and _shl is not None and _walls_src:
             # quay block came out at 29 m and was dropped.
             _back = sum(float(shapely.distance(_coast, shapely.Point(q.coords[e])))
                         <= 0.4 * target + 1.0 for e in (0, -1))
-            if q.length + 0.4 * target * _back >= target:
+            # ...and against the LOCAL element, like everything else: judged
+            # against the target, a 108 m stub survived among 150-250 m
+            # transition elements on the Futtsu coast and made a 27.3 deg one.
+            _h_mid = float(h_achieved(np.asarray(
+                [q.interpolate(0.5, normalized=True).coords[0]]))[0])
+            if q.length + 0.4 * target * _back >= max(target, _h_mid):
                 _pieces.append(np.asarray(q.coords)[:, :2])
     # the walls as extracted and as clipped to the hole, for inspection
     np.savez(OUT / "walls_stages.npz",

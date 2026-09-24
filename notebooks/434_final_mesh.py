@@ -1,11 +1,12 @@
-# The delivered mesh on its own: the whole patch, the port, and a close-up.
+# The delivered mesh on its own: the whole patch, and any close-ups asked for.
 #
 # Drawn with plotting.draw_mesh, so the colours are the project's fixed ones:
 # thin grey interior edges, every solid boundary black -- coastline, quay,
 # and a wall represented as a line alike -- and the open boundary red.
 # One PNG per view at MESH_PNG_DPI.
 #
-#   python notebooks/434_final_mesh.py <refinement output dir>
+#   FMESH_VIEWS=port:391900:394100:3908350:3910600 \
+#       python notebooks/434_final_mesh.py <refinement output dir>
 import os
 import sys
 from pathlib import Path
@@ -29,11 +30,12 @@ m = read_fort14(next(out.glob("*.14")))
 fc = np.load(out / "fill_constraints.npz")
 lo, hi = fc["pfix"].min(axis=0), fc["pfix"].max(axis=0)
 pad = 0.05 * float(max(hi - lo))
-views = {
-    "patch": (lo[0] - pad, hi[0] + pad, lo[1] - pad, hi[1] + pad),
-    "port": (391900.0, 394100.0, 3908350.0, 3910600.0),
-    "south_basin": (392150.0, 392850.0, 3908650.0, 3909350.0),
-}
+# The whole patch always; close-ups from FMESH_VIEWS, "name:x0:x1:y0:y1+..."
+# (plus-separated, since qsub -v splits variables on commas)
+views = {"patch": (lo[0] - pad, hi[0] + pad, lo[1] - pad, hi[1] + pad)}
+for item in filter(None, os.environ.get("FMESH_VIEWS", "").split("+")):
+    name, *box = item.split(":")
+    views[name] = tuple(float(v) for v in box)
 for name, (x0, x1, y0, y1) in views.items():
     fig, ax = plt.subplots(figsize=(9, 9 * (y1 - y0) / (x1 - x0)))
     lw = 0.9 if name == "patch" else 1.4

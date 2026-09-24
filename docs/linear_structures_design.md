@@ -1,6 +1,8 @@
 # Breakwaters, piers and other linear structures: a design
 
-Status: design, for the owner's decision. Nothing here is implemented.
+Status: implemented and run in FVCOM on the Kimitsu port (§7-§17). §1-§5 are
+the original design, §6 and §15.1 the owner's decisions; where they differ,
+§15.1 (2026-09-24) supersedes §6 item 5.
 
 ## 1. What the owner saw, and why it happened
 
@@ -181,7 +183,7 @@ the base as in §12 of `refine_coast_and_bathy_design.md`.
 | 2 | `k_area = 2`, `L_min = h0` |
 | 3 | water is closed below **2 x h0** (it was 3) |
 | 4 | OSM `man_made` lines: **not now**; later |
-| 5 | every wall is **zero-width**, and the footprint it hands to the water is reported |
+| 5 | every wall is **zero-width**, and the footprint it hands to the water is reported (superseded 2026-09-24, §15.1: land down to half an element stays land) |
 
 On 5, what was being asked, said plainly: a real pier 852 m long and 12 m
 wide covers about 10,000 m2 of sea. A zero-width wall lets the elements on
@@ -406,3 +408,181 @@ M2, 20 days, the walled mesh against the base (same forcing, DTE 1.0 s):
   - the long breakwater separates a sheltered basin, whose amplitude is
     0.443 m against 0.439-0.441 m outside;
   - currents stop at the walls.
+
+## 14. Drawn over the raw OSM: four defects (commit 289de6f)
+
+Drawing the delivered coast and walls over the raw OSM land
+(`notebooks/432_walls_vs_osm.py`) showed four things that the QA gates cannot
+see, because each of them is a valid mesh:
+
+| defect | cause | fix |
+|---|---|---|
+| a quay block standing in the harbour meshed as **water** | the rim re-draws the BASE coastline along the source; land the base never had -- here left detached when the filter made the pier joining it to the shore a wall -- has no stretch to be re-drawn from | `patch.island_rings`: every filtered land polygon inside the hole, with half an element to spare from the rim, becomes an island of the rim, resampled at the local size with its corners kept |
+| a 15 m gap between the two arms of an L-shaped pier | a wall tip within half an element of another line lost its last edge | the tip **joins** the line: a vertex within half an element takes it, or the wall edge is split at the foot; the angles this makes go back through the 60 deg rule (§13) |
+| a 43 m pier off the quay block dropped | the piece was judged on its length after the 0.4-element coast clearance (29 m < h0), although its end is rooted and regains the clearance | judged with the clearance added back for each end that will be rooted |
+| a wall whose two sides no longer met | the repair slid the two copies of a wall node independently, up to 1.3 m apart across a bent wall | `walls.rejoin_copies` puts each group back at one position (the one with the best worst angle, never inverting) |
+
+`notebooks/433_before_after.py` draws two refinements side by side over the
+raw OSM, with the wall centrelines extracted from OSM and the pieces kept in
+the hole, so a missing wall can be traced to the stage that lost it.
+
+## 15. Narrow piers stay land; walls follow their pier (commit af263d2)
+
+### 15.1 The owner's rules (2026-09-24)
+
+The owner pointed out that the mesh size is a statement about the **water**:
+a pier narrower than an element can still be meshed round as land, as long
+as its length is resolvable, and making every pier narrower than two
+elements a wall was not right. The owner also saw walls running at an angle
+to piers that stand square to the quay.
+
+| # | decision |
+|---|---|
+| 1 | land down to **0.5 x h** stays land (its outline is coastline); thinner land becomes a wall; shorter than h is dropped, as before |
+| 2 | an end 0.5-0.75 x h wide closes onto **one point** |
+| 3 | water narrower than **2 x h** is still closed |
+| - | (after §15.4) the 0.5 x h land rule applies where the elements are up to 2 x h0; the coarse transition keeps 2 x h |
+
+Why 0.5 x h: the only edge the pier's width sets is the one across its end,
+and a triangle with a 0.5 h base and two sides of h has a 29 deg apex -- the
+C1 limit. Below 0.75 x h the end therefore closes onto its midpoint.
+
+### 15.2 What was built
+
+- `filter_shoreline(..., land_width_factor=)` opens the land at its own
+  threshold, separate from the water closing; `filter_shoreline_local`
+  applies it in bands up to `land_width_max_band`.
+- `patch._corner_walk` replaces the arc-length walk on the hires branch.
+  The walk placed stations by arc length and cut every corner it passed,
+  which on a pier under two elements wide cuts across the pier. Now:
+  - every vertex of the simplified source is kept;
+  - an edge under half an element on a straight run loses that vertex;
+  - a STEP between two corners collapses to its midpoint (dropping one of
+    the corners had cut a 14 m step in a quay into a 165 m chord across the
+    water);
+  - an end under 0.75 x h closes onto its midpoint **from half an element
+    back**, so the pier's sides stay parallel (joining the root corners
+    straight to the midpoint had made a 20 x 70 m pier a triangle).
+- `walls.straighten_walls`: a wall whose middle (half an element or a
+  quarter of its length off each end) lies within 0.1 h of a line becomes
+  that line. The medial axis bends at a pier's root, where it branches into
+  the corners of the junction with the quay.
+- Rooting: a wall is rooted where it, **carried on straight, meets the
+  coast**, not at the nearest point of the coast; and on a straight coast
+  (bend < 15 deg) the coast vertex moves to the root rather than the root to
+  the vertex. Taking the vertex had moved the wall sideways by up to half an
+  element.
+- A wall node with a copy no longer slides in the repair (§10): with straight
+  walls the copies drifted up to 37 m apart before `rejoin_copies` pulled
+  them together, bending the elements on one side. A free tip, which has no
+  copy, still slides.
+
+### 15.3 On the Kimitsu harbour
+
+The structures the width filter took from the land, with each wall's angle to
+its OSM footprint's long axis (`notebooks/433`):
+
+| structure | length | width | before (§13) | after |
+|---|---:|---:|---|---|
+| south-west pier | 67 m | 30.4 m | wall, 2.3 deg | **land** |
+| south pier | 72 m | 20.4 m | wall, 11.1 deg | **land**, end closed onto its midpoint |
+| L-shaped pier | 245 m | 25.9 m | wall, 30.3 deg | **land** |
+| quay extension | 113 m | 14.8 m | nothing (coast-hugging) | **land** |
+| long breakwater | 687 m | 13.4 m | wall, 4.8 deg | land where 15 m or wider; its 2.2 m end a wall, 7.9 deg |
+| thin piers | 34-35 m | 2.9-4.1 m | walls, 1.1-13 deg | walls, 0.1 and 2.1 deg |
+
+In the run:
+
+- **Straightening:** five walls were straightened, turning their
+  end-to-end direction by 0.4-23.9 deg.
+- **Rooting:** seven coast points moved to a root, and one tip joined a line.
+- **Water closed:** the slips between the new land piers, all narrower than
+  60 m, were closed, per rule 3.
+- **Island:** the quay block of §14 is joined to the mainland now that the
+  L-shaped pier is land, so no island was added.
+
+### 15.4 Two things the new rules exposed
+
+1. **The base's frozen coast.** The water a patch meshes is bounded by OSM
+   land and by the frozen mesh's own coast, and the closing rule saw only the
+   first. The base's land beside its frozen coast -- each retained coast
+   edge buffered by two local elements, minus the base's water, 7.44 km2 here
+   -- is now filtered together with the OSM land, so a gap between the two is
+   closed by the same rule. It lies outside the hole.
+2. **The coarse transition.** Applied in every band, the 0.5 x h rule kept a
+   200 m spike of OSM land 3 km west of the port. The spike reached the
+   frozen interface, whose edges are 440-600 m, and left elements of 17.8 and
+   28.0 deg with two C4 jumps between them. The interface is open water on
+   both sides, so no closing can remove that gap. The rule is therefore kept
+   to bands 0-1 (elements up to 2 h0 = 60 m), where the structures the
+   owner asked about are; the coarser bands keep 2 x h. The owner agreed
+   (2026-09-24).
+3. **A wall judged against the target.** The Futtsu coast recipe (§17) kept
+   a 108 m stub wall among 150-250 m transition elements, which made an
+   element of 27.3 deg. A wall piece clipped to the hole is now judged
+   against the LOCAL element at its midpoint, like the width filter and the
+   extraction, not against the target.
+
+### 15.5 Result (job 115724) and FVCOM (jobs 115731-115735)
+
+| | §13 (115612) | §15 (115724) |
+|---|---:|---:|
+| QA | 20/22 | 20/22 |
+| violations introduced by the patch | 0 | 0 |
+| nodes / elements | 6,058 / 10,958 | 6,018 / 10,862 |
+| wall pieces / edges | 18 / 46 | 9 / 17 |
+| water within 1.25x of target | 100.0 % | 100.0 % |
+| finished-mesh external step | 1.0 s | 1.25 s |
+
+The two gates that fail are the base's own element 2101 (29.0 deg) and
+min_depth, which is reported and not gated on this branch.
+
+M2, 20 days, against the base:
+
+- **Both runs:** complete (TADA) and finite.
+- **At the five gauges:** walled minus base is -0.2 to -0.4 mm in
+  amplitude and +0.013 deg in phase.
+- **In the harbour:** the amplitude is 0.437-0.442 m, with no frozen node.
+  The long breakwater separates a sheltered basin at 0.442 m.
+
+## 16. Figures: one colour for every solid boundary (commit 56a503c)
+
+Mesh figures had drawn the coast blue and walls red in one notebook, black
+and red in another, and not at all in a third. `plotting` now fixes the
+colours for every mesh figure:
+
+- `SOLID_BOUNDARY_COLOR` (black): every solid boundary edge -- coastline,
+  quay, and a wall represented as a line alike, since a wall is boundary on
+  both of its sides;
+- `OPEN_BOUNDARY_COLOR` (red): the open boundary;
+- `MESH_EDGE_COLOR`: thin interior edges.
+
+`draw_mesh`, `boundary_segments` and `boundary_legend` apply them; notebooks
+429, 431, 432 and 433 use them, and `notebooks/434_final_mesh.py` draws the
+delivered mesh alone at `MESH_PNG_DPI` -- the whole patch, plus any close-ups
+given in `FMESH_VIEWS` (`name:x0:x1:y0:y1`, plus-separated).
+
+## 17. The other recipes, after §14-§16 (jobs 115717-115725)
+
+Rebuilt to check that nothing else moved:
+
+| recipe | branch | before §14 | first run (115717-115719) | after §15.4 item 3 (115723-115725) |
+|---|---|---|---|---|
+| `futtsu_coast_hires` | hires, coast in the region | 0 introduced | **3 introduced** (27.3 deg) | **0 introduced**, QA 20/22 |
+| `futtsu_nori_hires` | hires, offshore region | -- | 0 introduced | 0 introduced, QA 20/22 |
+| `futtsu_nori` | default (no hires) | 0 introduced, QA 20/21 | 0 introduced, QA 21/22 | (not affected) |
+| `kimitsu_port_hires` | hires, port | -- | -- | 0 introduced, QA 20/22 |
+
+The default branch shares only `improve_patch`'s new flip veto and the new
+QA gate with this work, and passes both. On every hires recipe the two gates
+that fail are the base's element 2101 and min_depth, which is reported only.
+
+## 18. What is left
+
+- **Depths.** The minimum depth and the r-factor smoothing are the next step
+  (`refine_coast_and_bathy_design.md`). The FVCOM runs above were finished
+  with `fmesh-refine-depths` at a 3 m floor and r <= 0.2 as a stand-in.
+- **Structures hugging the coast.** A structure within 0.4 of an element of
+  the coast is still not represented as a wall; since §15 one wider than
+  half an element is land instead.
+- **OSM `man_made` lines.** They are not used (§6 item 4).
