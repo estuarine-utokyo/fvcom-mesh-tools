@@ -90,3 +90,12 @@ def test_a_failed_recheck_removes_the_old_marker(tmp_path):
     assert main([str(run), "--marker", str(marker)]) == 0 and marker.exists()
     (run / "fvcom.log").write_text("STOP: integration ended early\n")
     assert main([str(run), "--marker", str(marker)]) == 1 and not marker.exists()
+
+
+def test_fortran_reals_and_cycles_are_read_as_fvcom_does():
+    from fvcom_mesh_tools.cli.check_run import _fortran_float, _interval
+
+    assert _fortran_float("1.") == 1.0 and _fortran_float("1.5d0") == 1.5
+    nml = " EXTSTEP_SECONDS = 2.0d0, ISPLIT = 10,\n"
+    assert _interval("cycles = 180", nml).total_seconds() == 3600.0
+    assert _interval("days = 0.5", nml).total_seconds() == 43200.0

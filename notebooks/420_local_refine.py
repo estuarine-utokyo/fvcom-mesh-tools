@@ -87,7 +87,21 @@ t0 = time.time()
 recipe = Path(sys.argv[1] if len(sys.argv) > 1
               else "recipes/refine/futtsu_nori.yaml").resolve()
 OUT = Path(os.environ.get("LR_OUT", f"outputs/refine_{recipe.stem}")).resolve()
-OUT.mkdir(parents=True, exist_ok=True)
+# One run per output directory. fmesh-refine reserves it and passes its token;
+# run any other way (job 417), the generator reserves it itself. Two runs
+# started together used to write over each other (review 3, T4).
+_res = OUT / ".reserved"
+_token = os.environ.get("LR_RESERVATION")
+if _token and _res.exists() and _res.read_text().strip() == _token:
+    pass
+else:
+    OUT.mkdir(parents=True, exist_ok=True)
+    try:
+        _fd = os.open(_res, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        raise SystemExit(f"{OUT} is reserved by another run ({_res}); move it aside")
+    with os.fdopen(_fd, "w") as _f:
+        _f.write(f"{os.uname().nodename}:{os.getpid()}:{time.time_ns()}\n")
 LAND = Path(os.environ.get("FMESH_LAND",
                            "outputs/sample_repro/land_channel_adj.shp")).resolve()
 

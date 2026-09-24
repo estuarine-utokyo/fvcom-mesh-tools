@@ -26,6 +26,27 @@ DEFAULT_LAND = ("{DATA_DIR}/geodata/OSM/coastmask_cache/"
                 "custom_139.55_34.9_140.3_35.75_minarea1e-05/land.shp")
 
 
+RESERVATION = ".reserved"
+
+
+def reserve_output(out: Path, token: str | None = None) -> str:
+    """Claim ``out`` for one run, atomically; raise FileExistsError if taken.
+
+    The claim is a file created with O_EXCL, holding a token the run passes
+    on (``LR_RESERVATION``). It stays after the run, so the directory is not
+    empty and a later run is refused until it is moved aside.
+    """
+    import socket
+    import time as _time
+
+    out.mkdir(parents=True, exist_ok=True)
+    token = token or f"{socket.gethostname()}:{os.getpid()}:{_time.time_ns()}"
+    fd = os.open(out / RESERVATION, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(token + "\n")
+    return token
+
+
 def repo_root() -> Path:
     """The repository this package is installed from (an editable install)."""
     root = Path(__file__).resolve().parents[3]
@@ -87,6 +108,16 @@ def main(argv: list[str] | None = None) -> int:
           f"  FMESH_LAND={land}", flush=True)
     if args.dry_run:
         return 0
+    # RESERVE the directory before anything runs: the check above and the
+    # generator's own mkdir are not exclusive, and two runs started together
+    # both passed them and wrote over each other (review 3, T4). Creating
+    # .reserved with O_EXCL is atomic; the generator honours the token.
+    try:
+        token = reserve_output(out)
+    except FileExistsError:
+        print(f"fmesh-refine: {out} is reserved by another run", file=sys.stderr)
+        return 2
+    env["LR_RESERVATION"] = token
     return subprocess.call(cmd, env=env, cwd=root)
 
 

@@ -306,6 +306,9 @@ The run log ends with lines like these:
   diagnosis, but no `ACCEPTED`, so the chain goes no further.
 - **An output directory that is not empty** is refused (`fmesh-refine`, job
   417, `refine_workflow.sh`). Move it aside first.
+- **One run per output directory.** A run claims its directory by creating
+  `.reserved` atomically, so of two runs started together, one is refused.
+  The file stays after the run.
 
 ---
 
@@ -360,8 +363,12 @@ too few `--rounds`, or a frozen depth the floor cannot meet -- the command
 writes nothing and exits 3. So a chain never stages an unfinished product.
 
 The limit is judged on every edge with at least one end the command may
-move. An edge between two frozen base nodes is the base's own; it is
-reported (`max_r_frozen_pair`) but does not decide convergence.
+move, and on every edge between two frozen nodes that the patch CREATED
+(`n_over_frozen_pair_new`). The patch may connect two retained nodes that
+were never neighbours. Only an edge the base mesh already had (read from
+the base named in `report.json`) is excused as the base's own
+(`n_over_frozen_pair_inherited`). When that base cannot be read, no frozen
+pair is excused.
 
 The output is `<case>_dep_min3m_rfac0p2_cap300.dat`, with a JSON report of
 what each step moved. From `TokyoBay_dep_m7001tp_raw.dat` it reproduces
@@ -384,10 +391,18 @@ Then:
 
   A zero exit code alone is not success: some FVCOM STOP paths return 0.
 
-  In detail, the history output (the NetCDF files with `zeta`) must also
-  carry `ua`, `va` and `Times`. Its records may not be further apart than
-  1.5 times the namelist's `NC_OUT_INTERVAL`. The last record must be within
-  one interval of `END_DATE` (one hour when no interval is given).
+  In detail, the history output is `<casename>_0001.nc`, `_0002.nc`, ...
+  numbered without a gap; restart and other files are not history. It must:
+  - carry `zeta`, `ua`, `va` and `Times`;
+  - have times that increase record by record, with no gap over 1.5 times
+    the namelist's `NC_OUT_INTERVAL` (seconds, minutes, hours, days, or
+    `cycles` of the internal step). A declaration that cannot be read fails;
+  - start at `NC_FIRST_OUT` (else `START_DATE`) and reach `END_DATE`, each
+    within one interval (one hour when none is declared).
+
+  `412_m2_run.sh` deletes the case's `output/*.nc` before it runs, so an
+  earlier attempt's output is never judged as this one's. Copy anything you
+  need from there first.
 
   A stage removes its own marker and every later one before it starts, and
   writes its own only on success. `RUN_OK` needs the solver's exit status

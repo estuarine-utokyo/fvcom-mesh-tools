@@ -48,7 +48,7 @@ from pathlib import Path
 
 import numpy as np
 
-from fvcom_mesh_tools.cli.refine_depths import _read_cor, finish_depths
+from fvcom_mesh_tools.cli.refine_depths import _read_cor, finish_depths, inherited_edges_of
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case
 
 
@@ -149,9 +149,14 @@ def main(argv: list[str] | None = None) -> int:
     mesh = read_fvcom_case(grd, dep, obc if obc.exists() else None)
 
     movable = np.ones(mesh.n_nodes, dtype=bool)
+    inherited = None
     if refinement and not args.whole_mesh:
         node_map = np.load(src / "node_map.npy")
         movable[node_map[node_map >= 0]] = False
+        inherited = inherited_edges_of(src, node_map)
+        if inherited is None:
+            print("[finish] the base mesh named in report.json cannot be read: no "
+                  "frozen-pair edge is excused as the base's own", file=sys.stderr)
     scope = "patch nodes only" if not movable.all() else "every node"
     rf = args.rfactor if args.rfactor > 0 else None
     tag = args.tag or variant_tag(args.hmin, args.hmax, rf)
@@ -160,7 +165,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         depths, rep = finish_depths(mesh.depths, mesh.elements, movable,
                                     hmin=args.hmin, hmax=args.hmax, rfactor=rf,
-                                    rounds=args.rounds, method=args.method)
+                                    rounds=args.rounds, method=args.method,
+                                    inherited_edges=inherited)
     except ValueError as exc:
         print(f"[finish] {exc}", file=sys.stderr)
         return 2
@@ -187,8 +193,9 @@ def main(argv: list[str] | None = None) -> int:
         # write nothing, unless asked to for diagnosis (review F7).
         print(f"[finish] NOT CONVERGED: the r-factor limit is not met on "
               f"{rep.get('n_over_movable_at_tolerance', '?')} edge(s) with a movable "
-              f"end (max r {rep.get('max_r_movable', float('nan')):.6f}). Raise "
-              "--rounds, or look for a frozen depth the floor cannot reach"
+              f"end (max r {rep.get('max_r_movable', float('nan')):.6f}) and on "
+              f"{rep.get('n_over_frozen_pair_new', 0)} frozen pair(s) the base did not "
+              "have. Raise --rounds, or look for a frozen depth the floor cannot reach"
               + ("" if args.allow_unconverged else "; nothing written"),
               file=sys.stderr)
         if not args.allow_unconverged:

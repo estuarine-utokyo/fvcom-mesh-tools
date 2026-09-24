@@ -44,8 +44,37 @@ def _read_cor(path: Path) -> np.ndarray:
     return np.array([float(r[-1]) for r in rows], dtype=float)
 
 
+def inherited_edges_of(root: Path, node_map: np.ndarray):
+    """The edges of a refined mesh that the BASE mesh already had.
+
+    An edge between two frozen nodes that no step may move is excused only if
+    the base had it: a patch can connect two retained nodes that were never
+    neighbours, and an over-limit edge of that kind is the patch's, not the
+    base's (review 3, T5). The base is the one named in the refinement's
+    report.json. Returns a set of sorted refined-node pairs, or None when the
+    base cannot be read -- and then no frozen pair is excused.
+    """
+    try:
+        rep = json.loads((root / "report.json").read_text())
+        base = Path(rep["base_mesh"])
+        if base.suffix == ".dat":
+            from fvcom_mesh_tools.io.fvcom_native import read_grd
+            _, tri = read_grd(base)
+        else:
+            from fvcom_mesh_tools.io import read_fort14
+            tri = read_fort14(base).elements
+    except (OSError, KeyError, ValueError):
+        return None
+    tri = np.asarray(tri, dtype=np.int64)
+    e = np.unique(np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]),
+                          axis=1), axis=0)
+    a, b = node_map[e[:, 0]], node_map[e[:, 1]]
+    keep = (a >= 0) & (b >= 0)
+    return {tuple(sorted(x)) for x in zip(a[keep].tolist(), b[keep].tolist())}
+
+
 def finish_depths(depths, elements, movable, *, hmin, hmax, rfactor, rounds=200,
-                  method="limit"):
+                  method="limit", inherited_edges=None):
     """Floor, cap, then smooth -- and report each separately.
 
     The three are reported apart because they are three different claims
@@ -139,7 +168,15 @@ def finish_depths(depths, elements, movable, *, hmin, hmax, rfactor, rounds=200,
     report["max_r_frozen_pair"] = float(r[~touched].max()) if (~touched).any() else 0.0
     report["n_over_movable_at_tolerance"] = int((over & touched).sum())
     report["n_over_frozen_pair_at_tolerance"] = int((over & ~touched).sum())
-    report["converged_at_write_precision"] = bool(not (over & touched).any())
+    # A frozen pair over the limit is excused only as an edge the base had
+    # (``inherited_edges``); without that provenance none is (review 3, T5).
+    inh = inherited_edges or set()
+    frozen_over = np.flatnonzero(over & ~touched)
+    new_frozen = [k for k in frozen_over if tuple(sorted(e[k].tolist())) not in inh]
+    report["n_over_frozen_pair_inherited"] = int(len(frozen_over) - len(new_frozen))
+    report["n_over_frozen_pair_new"] = int(len(new_frozen))
+    report["converged_at_write_precision"] = bool(not (over & touched).any()
+                                                  and not new_frozen)
     report["n_floored_after_smoothing"] = int((free & (out <= hmin + 1e-9)).sum())
     report["n_capped_after_smoothing"] = int((free & (out >= hmax - 1e-9)).sum())
     moved = np.abs(out - h0)
@@ -192,7 +229,8 @@ def main(argv: list[str] | None = None) -> int:
 
     depths, rep = finish_depths(mesh.depths, mesh.elements, movable,
                                 hmin=args.hmin, hmax=args.hmax,
-                                rfactor=args.rfactor)
+                                rfactor=args.rfactor,
+                                inherited_edges=inherited_edges_of(root, node_map))
     r = rep["rfactor_report"]
     print(f"[finish] floor {args.hmin:g} m: {rep['n_floored']:,} node(s) "
           f"({100 * rep['floored_fraction_of_movable']:.0f} % of the patch), "
