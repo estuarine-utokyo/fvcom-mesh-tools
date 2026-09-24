@@ -18,6 +18,9 @@
 # Required: FMESH_RUN_ROOT.  Optional: FMESH_DAYS (2), FMESH_RANKS (64).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
+# INVALIDATE first, before anything that can fail (review 2, R1)
+rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/SMOKE_OK" \
+      "$FMESH_RUN_ROOT/base/RUN_OK" "$FMESH_RUN_ROOT/refined/RUN_OK"
 . jobs/octopus/common.sh 423_m2_smoke 1
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
@@ -26,7 +29,6 @@ RANKS=${FMESH_RANKS:-64}
 FVCOM=/octfs/work/G16445/v61021/Github/FVCOM/src/fvcom
 SMOKE=$RUN_ROOT/smoke
 [ -f "$RUN_ROOT/STAGED" ] || { echo "not staged: $RUN_ROOT (no STAGED marker)"; exit 2; }
-rm -f "$RUN_ROOT/SMOKE_OK"
 python - "$RUN_ROOT" "$SMOKE" "$DAYS" <<'PY'
 import re, shutil, sys
 from datetime import datetime, timedelta

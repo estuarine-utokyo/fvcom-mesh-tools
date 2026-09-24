@@ -40,7 +40,8 @@ jobs:
       - name: Pre-commit hooks
         run: pre-commit run --all-files --show-diff-on-failure
       - name: CLI smoke checks
-        # Confirm every console-script entry point is importable and
+        # Confirm every console-script entry point (all of
+        # [project.scripts]) is importable and
         # the parsers wire up correctly. argparse exits with 0 on
         # --help, so any failure here is a regression in pyproject
         # entry points or argparse construction.
@@ -58,3 +59,9 @@ jobs:
           fmesh-finish-depths --help > /dev/null
           fmesh-plot-views --help > /dev/null
           fmesh-check-run --help > /dev/null
+          fmesh-prep-shoreline --help > /dev/null
+          fmesh-pipeline --help > /dev/null
+          fmesh-export-fvcom --help > /dev/null
+          fmesh-plot-mesh --help > /dev/null
+          fmesh-renumber --help > /dev/null
+          fmesh-refine-depths --help > /dev/null

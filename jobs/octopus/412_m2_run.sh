@@ -13,6 +13,8 @@
 # Required: FMESH_RUN_ROOT, FMESH_CASE.
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
+# INVALIDATE first, before anything that can fail (review 2, R1)
+rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/${FMESH_CASE:?set FMESH_CASE}/RUN_OK"
 . jobs/octopus/common.sh "412_m2_run" 1
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
@@ -25,7 +27,6 @@ FVCOM=/octfs/work/G16445/v61021/Github/FVCOM/src/fvcom
 if [ "${FMESH_REQUIRE_SMOKE:-0}" = 1 ] && [ ! -f "$RUN_ROOT/SMOKE_OK" ]; then
     echo "smoke test did not pass: no $RUN_ROOT/SMOKE_OK"; exit 2
 fi
-rm -f "$RUN_ROOT/$CASE/RUN_OK"
 set +u
 conda deactivate
 set -u
@@ -43,6 +44,8 @@ export LD_LIBRARY_PATH="$INSTALLDIR/lib:$INSTALLDIR/lib64:${LD_LIBRARY_PATH:-}"
 ulimit -s unlimited
 echo "case=$CASE ranks=$RANKS cores=$(nproc) start=$(date -Is)"
 status=0
+# an earlier attempt's output must not be judged as this attempt's (review 2, R2)
+rm -f "$RUN_ROOT/$CASE/output/"*.nc
 ( cd "$RUN_ROOT/$CASE" && mpiexec -np "$RANKS" "$FVCOM" --casename=m2 > fvcom.log 2>&1 ) || status=1
 tail -20 "$RUN_ROOT/$CASE/fvcom.log"
 # Some Fortran STOP paths return zero: a clean exit is not enough.
@@ -54,7 +57,13 @@ fi
 module purge
 unset LD_LIBRARY_PATH
 set +u; conda activate "${FMESH_ENV:-oceanmesh-bench}"; set -u
-python -m fvcom_mesh_tools.cli.check_run "$RUN_ROOT/$CASE" \
-    --marker "$RUN_ROOT/$CASE/RUN_OK" || status=1
+# RUN_OK only when the solver's own exit AND the output check both pass
+# (review 2, R2); the check always runs, for its diagnosis
+if [ "$status" -eq 0 ]; then
+    python -m fvcom_mesh_tools.cli.check_run "$RUN_ROOT/$CASE" \
+        --marker "$RUN_ROOT/$CASE/RUN_OK" || status=1
+else
+    python -m fvcom_mesh_tools.cli.check_run "$RUN_ROOT/$CASE" || true
+fi
 echo "case=$CASE end=$(date -Is) status=$status"
 exit "$status"

@@ -130,14 +130,18 @@ M7001 is licensed survey data and is not public. The depth ladder
 
 ### 2.5 What the base mesh must be
 
-Two limits of the generator, checked before any meshing and refused with a
-reason:
+Two limits of the generator:
 
 - **Coordinates in UTM zone 54N metres (EPSG:32654).** The generator
   projects OSM, the regions and the depth products into that frame. A base
-  in another CRS must be reprojected first.
+  in another CRS must be reprojected first. **Making sure of this is the
+  user's responsibility.** The files carry bare numbers, so the check before
+  meshing can only refuse coordinates that are implausible read as
+  EPSG:32654 (degrees, or a centre far from 136-146 E). A base in a
+  neighbouring UTM zone looks plausible and is not caught.
 - **Exactly one open-boundary arc.** The boundary lists of the refined mesh
-  are rebuilt around a single arc.
+  are rebuilt around a single arc. This one is checked before meshing, and
+  a base with zero or several arcs is refused.
 
 Lifting either is future work, not a setting.
 
@@ -277,7 +281,7 @@ A port-sized region takes 5-10 minutes on one core.
 | `fvcom/` | the FVCOM case (grd, dep, obc, cor), depths as the source gives them |
 | `fvcom_finished/` | after `fmesh-finish-depths`: the case with finished depths, plus `<case>_dep_<variant>.dat` |
 | `node_map.npy` | base node -> refined node, the frozen contract's evidence |
-| `<base>_<name>_walls.json` | the node pairs a wall duplicated on purpose, bound to the `.14` by its SHA-256; `fmesh-mesh-qa` reads it, so the delivered mesh gets the same verdict when checked again |
+| `<base>_<name>_walls.json` | the node pairs a wall duplicated on purpose, bound to the `.14` by its SHA-256; `fmesh-mesh-qa` reads it, so the delivered mesh gets the same verdict when checked again. Copy or rename it together with the mesh, or point to it with `--wall-pairs`. A renumbered mesh needs the pairs mapped through the new numbering and written again (`walls.write_wall_pairs`); the old file is refused |
 | `ACCEPTED` | written last, only when every gate passed (§3) |
 | `shoreline_filtered.shp` | the OSM land after the width filter |
 | `fill_constraints.npz`, `walls_stages.npz` | the rim and walls the mesher was given, for inspection |
@@ -355,6 +359,10 @@ fmesh-finish-depths ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat \
 too few `--rounds`, or a frozen depth the floor cannot meet -- the command
 writes nothing and exits 3. So a chain never stages an unfinished product.
 
+The limit is judged on every edge with at least one end the command may
+move. An edge between two frozen base nodes is the base's own; it is
+reported (`max_r_frozen_pair`) but does not decide convergence.
+
 The output is `<case>_dep_min3m_rfac0p2_cap300.dat`, with a JSON report of
 what each step moved. From `TokyoBay_dep_m7001tp_raw.dat` it reproduces
 `TokyoBay_dep_m7001tp_rfac0p2_cap300.dat` at every node.
@@ -375,6 +383,16 @@ Then:
   - finite `zeta`, `ua` and `va` in every record.
 
   A zero exit code alone is not success: some FVCOM STOP paths return 0.
+
+  In detail, the history output (the NetCDF files with `zeta`) must also
+  carry `ua`, `va` and `Times`. Its records may not be further apart than
+  1.5 times the namelist's `NC_OUT_INTERVAL`. The last record must be within
+  one interval of `END_DATE` (one hour when no interval is given).
+
+  A stage removes its own marker and every later one before it starts, and
+  writes its own only on success. `RUN_OK` needs the solver's exit status
+  and the check to pass. A marker left over from an earlier attempt in the
+  same directory therefore never lets the next stage start.
 - **`412_m2_run.sh` x 2 + `413_m2_analysis.sh`** run 20 days of M2 and
   compare the amplitude and phase at the tide gauges.
 

@@ -14,6 +14,12 @@
 #           FMESH_METHOD (equal = TB-FVCOM's smoother; limit = the refinement's).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
+# INVALIDATE first -- this stage's marker and every later one -- before
+# anything that can fail, including the environment set-up: a marker left
+# from an earlier attempt in a reused run root would let the next stage
+# start on this attempt's failure (review 2, R1).
+rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/STAGED" "$FMESH_RUN_ROOT/SMOKE_OK" \
+      "$FMESH_RUN_ROOT/base/RUN_OK" "$FMESH_RUN_ROOT/refined/RUN_OK"
 . jobs/octopus/common.sh 421_finish_and_run 8
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 OUTDIR=${FMESH_OUT:?set FMESH_OUT}
@@ -21,7 +27,6 @@ RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
 # NQSV starts this when the refinement ENDS, whatever its outcome; only an
 # accepted product may be finished and staged (review F5).
 [ -f "$OUTDIR/ACCEPTED" ] || { echo "not accepted: $OUTDIR (no ACCEPTED marker)"; exit 2; }
-rm -f "$RUN_ROOT/STAGED"
 # exits 3 -- and stops this job -- when the r-factor limit is not reached
 python -m fvcom_mesh_tools.cli.finish_depths "$OUTDIR" \
     --hmin "${FMESH_HMIN:-3}" --hmax "${FMESH_HMAX:-300}" \

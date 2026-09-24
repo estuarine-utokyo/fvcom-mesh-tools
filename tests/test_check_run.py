@@ -15,7 +15,8 @@ def _run(tmp_path, *, tada=True, times=("2020-01-01T00:00:00.000000",
          zeta=0.1, end="2020-01-02 00:00:00", extra_log=""):
     run = tmp_path / "run"
     (run / "output").mkdir(parents=True)
-    (run / "m2_run.nml").write_text(f" END_DATE = '{end}',\n")
+    (run / "m2_run.nml").write_text(f" END_DATE = '{end}',\n"
+                                    " NC_OUT_INTERVAL = 'seconds = 86400.0',\n")
     (run / "fvcom.log").write_text("step ...\n" + extra_log + ("TADA!\n" if tada else ""))
     with netCDF4.Dataset(run / "output" / "m2_0001.nc", "w") as ds:
         ds.createDimension("time", None)
@@ -23,9 +24,13 @@ def _run(tmp_path, *, tada=True, times=("2020-01-01T00:00:00.000000",
         ds.createDimension("node", 3)
         t = ds.createVariable("Times", "S1", ("time", "DateStrLen"))
         z = ds.createVariable("zeta", "f4", ("time", "node"))
+        u = ds.createVariable("ua", "f4", ("time", "node"))
+        v = ds.createVariable("va", "f4", ("time", "node"))
         for k, s in enumerate(times):
             t[k] = np.array(list(s.ljust(26)), dtype="S1")
             z[k] = np.full(3, zeta)
+            u[k] = np.zeros(3)
+            v[k] = np.zeros(3)
     return run
 
 
@@ -64,3 +69,24 @@ def test_an_unreadable_placeholder_fails(tmp_path):
 def test_a_fatal_word_in_the_log_fails(tmp_path):
     run = _run(tmp_path, extra_log="forrtl: severe (174): SIGSEGV, segmentation fault\n")
     assert any("segmentation" in r for r in check_run(run)["reasons"])
+
+
+def test_a_gap_in_the_output_fails_against_the_declared_interval(tmp_path):
+    run = _run(tmp_path, times=("2020-01-01T00:00:00.000000", "2020-01-03T00:00:00.000000"),
+               end="2020-01-03 00:00:00")
+    assert any("gap" in r for r in check_run(run)["reasons"])
+
+
+def test_the_history_output_must_carry_ua_and_va(tmp_path):
+    run = _run(tmp_path)
+    with netCDF4.Dataset(run / "output" / "m2_0001.nc", "a") as ds:
+        ds.renameVariable("ua", "u_other")
+    assert any("lacks ua" in r for r in check_run(run)["reasons"])
+
+
+def test_a_failed_recheck_removes_the_old_marker(tmp_path):
+    run = _run(tmp_path)
+    marker = tmp_path / "RUN_OK"
+    assert main([str(run), "--marker", str(marker)]) == 0 and marker.exists()
+    (run / "fvcom.log").write_text("STOP: integration ended early\n")
+    assert main([str(run), "--marker", str(marker)]) == 1 and not marker.exists()

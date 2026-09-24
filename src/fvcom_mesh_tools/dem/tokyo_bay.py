@@ -107,9 +107,31 @@ def _interp(rung: str, lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
     return np.asarray(f(np.column_stack([lat, lon])), dtype=float)
 
 
+_R_EARTH = _M_PER_DEG * 180.0 / np.pi       # the sphere _M_PER_DEG implies
+
+
+def _xyz(lon, lat) -> np.ndarray:
+    """Points on the sphere, in metres: a distance between two of them does not
+    depend on which OTHER points are being asked about (review 2, R5 -- a
+    planar metric scaled by the batch's mean latitude changed one point's
+    answer from 20 m to 10 m when another point was added)."""
+    lo, la = np.radians(np.asarray(lon, float)), np.radians(np.asarray(lat, float))
+    return _R_EARTH * np.column_stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo),
+                                       np.sin(la)])
+
+
+def _pad_needed(d_m: float, lat_lo: float, lat_hi: float) -> float:
+    """Degrees of box margin that hold a circle of radius ``d_m`` in any direction."""
+    c = float(np.cos(np.radians(min(89.0, max(abs(lat_lo), abs(lat_hi))))))
+    return d_m / (_M_PER_DEG * max(c, 1e-6))
+
+
 def _nearest_finite(rung: str, lon: np.ndarray, lat: np.ndarray,
                     lat0: float) -> tuple[np.ndarray, np.ndarray]:
     """Nearest finite cell of one rung: its elevation and the distance in metres.
+
+    Distances are on the sphere, one query at a time; ``lat0`` is no longer
+    used and is kept for callers.
 
     The candidate set is restricted to a box around the queries and widened
     until it holds something, because the 30 m grid has 4.9 million cells and
@@ -119,8 +141,7 @@ def _nearest_finite(rung: str, lon: np.ndarray, lat: np.ndarray,
     from scipy.spatial import cKDTree
 
     glat, glon, z = _grid(rung)
-    kx = _M_PER_DEG * float(np.cos(np.radians(lat0)))
-    query = np.column_stack([lon * kx, lat * _M_PER_DEG])
+    query = _xyz(lon, lat)
     pad = 0.02
     while True:
         # Past a few degrees the box has stopped being an optimisation, so
@@ -137,13 +158,13 @@ def _nearest_finite(rung: str, lon: np.ndarray, lat: np.ndarray,
             ok = np.isfinite(sub)
             if ok.any():
                 jj, ii = np.nonzero(ok)
-                pts = np.column_stack([glon[ilon][ii] * kx, glat[ilat][jj] * _M_PER_DEG])
+                pts = _xyz(glon[ilon][ii], glat[ilat][jj])
                 d, k = cKDTree(pts).query(query)
                 # The nearest cell INSIDE the box is the nearest cell only if
                 # the circle of that radius fits in the box; otherwise a nearer
                 # one may lie outside it, and the answer would depend on which
                 # other points were asked in the same call (review F9).
-                need = float(d.max()) / min(kx, _M_PER_DEG)
+                need = _pad_needed(float(d.max()), lat.min() - pad, lat.max() + pad)
                 if whole or need <= pad:
                     return sub[jj[k], ii[k]], d
                 pad = max(2.0 * pad, 1.01 * need)
@@ -223,8 +244,7 @@ def sounding_distance(lon, lat) -> np.ndarray:
     if not path.exists():
         raise FileNotFoundError(path)
     df = pd.read_parquet(path, columns=["lon", "lat", "z_tp"])
-    kx = _M_PER_DEG * float(np.cos(np.radians(float(np.mean(lat)))))
-    q = np.column_stack([lon * kx, lat * _M_PER_DEG])
+    q = _xyz(lon, lat)
     pad = 0.05
     while True:
         m = (np.isfinite(df["z_tp"].to_numpy())
@@ -233,11 +253,10 @@ def sounding_distance(lon, lat) -> np.ndarray:
              & (df["lat"].to_numpy() >= lat.min() - pad)
              & (df["lat"].to_numpy() <= lat.max() + pad))
         if m.any():
-            pts = np.column_stack([df["lon"].to_numpy()[m] * kx,
-                                   df["lat"].to_numpy()[m] * _M_PER_DEG])
+            pts = _xyz(df["lon"].to_numpy()[m], df["lat"].to_numpy()[m])
             d, _ = cKDTree(pts).query(q)
             # complete only when every nearest-distance circle fits in the box
-            need = float(d.max()) / min(kx, _M_PER_DEG)
+            need = _pad_needed(float(d.max()), lat.min() - pad, lat.max() + pad)
             if need <= pad or pad > 20.0:
                 return np.asarray(d, dtype=float)
             pad = max(2.0 * pad, 1.01 * need)
