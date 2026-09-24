@@ -1039,10 +1039,14 @@ def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
     (already simplified) line is a candidate; an edge under half an element
     loses the end that turns less, never a stretch's own two ends; then
 
+    * a STEP of under 0.75 of an element -- an edge whose ends turn by more
+      than 60 deg in OPPOSITE directions -- also becomes one point;
     * a TIP -- an edge under 0.75 of an element whose two ends both turn by
       more than 60 deg the same way, the end of a pier 15-22 m wide at a
       30 m size -- becomes one point at its midpoint (owner, 2026-09-24):
       an end that short puts an element under 30 deg beside it;
+    * a SPIKE -- a vertex whose two edges are both under 0.75 of an element
+      and which turns by more than 60 deg -- goes;
     * long edges are subdivided, every vertex kept.
 
     ``closed`` treats ``pts`` as a ring (not repeated at the end) and
@@ -1071,6 +1075,7 @@ def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
         n = len(pts)
         return [(k, (k + 1) % n) for k in range(n if closed else n - 1)]
 
+    made: set = set()
     changed = True
     while changed and len(pts) > (3 if closed else 2):
         changed = False
@@ -1107,6 +1112,15 @@ def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
             h = float(_size_at(size, 0.5 * (pts[i] + pts[j])[None])[0])
             ti, tj = turn(i), turn(j)
             if L < 0.75 * h and abs(ti) > 60.0 and abs(tj) > 60.0 \
+                    and np.sign(ti) != np.sign(tj):
+                # a STEP of up to 0.75 of an element: a 19.6 m jog in an
+                # Odaiba quay left an element of 29.7 deg at 30 m. The two
+                # corners become one point between them.
+                pts[i] = 0.5 * (pts[i] + pts[j])
+                pts = np.delete(pts, j, axis=0)
+                changed = True
+                break
+            if L < 0.75 * h and abs(ti) > 60.0 and abs(tj) > 60.0 \
                     and np.sign(ti) == np.sign(tj):
                 # The sides stay parallel up to half an element short of the
                 # end and close from there onto the end's midpoint.  Joining
@@ -1122,10 +1136,27 @@ def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
                     back.append(pts[c_] + side / max(ls, 1e-12) * d)
                 mid = 0.5 * (pts[i] + pts[j])
                 new = [back[0], mid, back[1]]
+                made.update(tuple(q) for q in new)   # a gable is not a spike
                 if j == 0:                      # the end wraps round a ring
                     pts = np.vstack([pts[1:i], new])
                 else:
                     pts = np.vstack([pts[:i], new, pts[j + 1:]])
+                changed = True
+                break
+        if changed:
+            continue
+        # spikes: one vertex with two short edges, turning sharply -- a small
+        # triangular bump of 16 and 20 m on the Odaiba coast made an element
+        # of 29.7 deg at 30 m. The vertex goes, the chord replaces it.
+        n = len(pts)
+        for k in range(n):
+            if fixed(k) or (not closed and k in (0, n - 1)) or tuple(pts[k]) in made:
+                continue
+            a_ = float(np.linalg.norm(pts[k] - pts[k - 1]))
+            b_ = float(np.linalg.norm(pts[(k + 1) % n] - pts[k]))
+            h = float(_size_at(size, pts[k][None])[0])
+            if a_ < 0.75 * h and b_ < 0.75 * h and abs(turn(k)) > 60.0:
+                pts = np.delete(pts, k, axis=0)
                 changed = True
                 break
     if closed:
@@ -1237,20 +1268,88 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0)
         def free(k):
             return pfix_base[k] < 0 and len(nbrs.get(k, [])) == 2
 
+        def bend(k, prev):
+            nxt = [q for q in nbrs[k] if q != prev][0]
+            a, b = pfix[k] - pfix[prev], pfix[nxt] - pfix[k]
+            return float(np.degrees(np.arccos(np.clip(
+                a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12), -1, 1))))
+
         def walk(v, first, d):
-            """Walk from v through `first` for arc length d; (point, stop, passed)."""
+            """Walk from v through `first` for arc length d.
+
+            Returns (point, stop, passed, at_vertex). The walk stops AT a
+            corner (a bend over 30 deg) it reaches: passing one put the chord
+            over land on the far side of it, and the Odaiba 57 deg corner was
+            left uncut because of it.
+            """
             prev, cur, left, passed = v, first, d, []
             while True:
                 seg = float(np.linalg.norm(pfix[cur] - pfix[prev]))
                 if seg >= left or not free(cur):
                     t = min(left, 0.9 * seg) / seg
-                    return pfix[prev] + t * (pfix[cur] - pfix[prev]), cur, passed
+                    return pfix[prev] + t * (pfix[cur] - pfix[prev]), cur, passed, False
+                if bend(cur, prev) > 30.0:
+                    return pfix[cur].copy(), cur, passed, True
                 left -= seg
                 passed.append(cur)
                 nxt = [k for k in nbrs[cur] if k != prev][0]
                 prev, cur = cur, nxt
 
+        def water_angle(v, p, n):
+            up, un = pfix[p] - pfix[v], pfix[n] - pfix[v]
+            lp, ln = float(np.linalg.norm(up)), float(np.linalg.norm(un))
+            if lp <= 0 or ln <= 0:
+                return None
+            ang = float(np.degrees(np.arccos(np.clip(up @ un / (lp * ln), -1, 1))))
+            bis = up / lp + un / ln
+            if np.linalg.norm(bis) < 1e-9:
+                return None
+            probe = pfix[v] + bis / np.linalg.norm(bis) * 0.05 * min(lp, ln)
+            return ang if water.contains(shapely.Point(probe)) else 360.0 - ang
+
+        def open_frozen(v):
+            nonlocal pfix, egfix, pfix_base
+            p, n = nbrs[v]
+            ang = water_angle(v, p, n)
+            if ang is None or ang >= min_angle_deg:
+                return None
+            for drop, keep in ((p, n), (n, p)):
+                if not free(drop):
+                    continue
+                nxt = [k for k in nbrs[drop] if k != v][0]
+                if nxt == keep:
+                    continue
+                chord = shapely.LineString([pfix[v], pfix[nxt]])
+                # Opening the angle gives the triangle v-drop-nxt to the
+                # water, so the chord runs over land by construction; what it
+                # may not do is cross another stretch of the rim.
+                others = [shapely.LineString(pfix[[a, b]]) for a, b in egfix.tolist()
+                          if not ({a, b} & {v, drop, nxt})]
+                if others and shapely.MultiLineString(others).intersects(chord):
+                    continue
+                opened = water_angle(v, nxt, keep)
+                if opened is None or opened < min_angle_deg:
+                    continue            # a point on a straight run opens nothing
+                keep_e = ~np.isin(egfix, [drop]).any(axis=1)
+                egfix = np.vstack([egfix[keep_e], [[v, nxt]]])
+                live = np.setdiff1d(np.arange(len(pfix)), [drop])
+                remap = np.full(len(pfix), -1, dtype=np.int64)
+                remap[live] = np.arange(len(live))
+                pfix, pfix_base, egfix = pfix[live], pfix_base[live], remap[egfix]
+                return ang, pfix[remap[v]].copy(), float(chord.length), 1
+            return None
+
         for v in range(len(pfix)):
+            if pfix_base[v] >= 0 and len(nbrs.get(v, [])) == 2:
+                # A FROZEN corner cannot be cut, but its angle can be opened:
+                # where resolved coast meets frozen coast at under 60 deg, the
+                # free point next to the junction goes and the junction joins
+                # the point after it (Odaiba: 57 deg -> 115 deg; left alone
+                # the corner held one element, split into two of 28.5 deg).
+                got = open_frozen(v)
+                if got is not None:
+                    return got
+                continue
             if not free(v):
                 continue
             p, n = nbrs[v]
@@ -1268,20 +1367,38 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0)
             if not water.contains(shapely.Point(probe)):
                 continue
             d = float(size(pfix[v][None])[0])
-            a_xy, a_stop, a_pass = walk(v, p, d)
-            b_xy, b_stop, b_pass = walk(v, n, d)
+            a_xy, a_stop, a_pass, a_at = walk(v, p, d)
+            b_xy, b_stop, b_pass, b_at = walk(v, n, d)
             removed = {v, *a_pass, *b_pass}
             if a_stop in removed or b_stop in removed or a_stop == b_stop:
                 continue
             chord = shapely.LineString([a_xy, b_xy])
             if not water.buffer(1e-6).contains(chord):
                 continue
+            # a chord end AT a corner is that corner, not a new point beside it
             ia = len(pfix)
+            new_xy, ends = [], []
+            for xy_, stop_, at_ in ((a_xy, a_stop, a_at), (b_xy, b_stop, b_at)):
+                if at_:
+                    ends.append((stop_, None))
+                else:
+                    ends.append((stop_, ia + len(new_xy)))
+                    new_xy.append(xy_)
+            path = []
+            for stop_, idx in ends:
+                path.append(idx if idx is not None else stop_)
+            new_e = []
+            (sa, ia_), (sb, ib_) = ends
+            if ia_ is not None:
+                new_e.append([sa, ia_])
+            new_e.append([path[0], path[1]])
+            if ib_ is not None:
+                new_e.append([ib_, sb])
             keep_e = ~np.isin(egfix, list(removed)).any(axis=1)
-            egfix = np.vstack([egfix[keep_e],
-                               [[a_stop, ia], [ia, ia + 1], [ia + 1, b_stop]]])
-            pfix = np.vstack([pfix, [a_xy, b_xy]])
-            pfix_base = np.concatenate([pfix_base, [-1, -1]])
+            egfix = np.vstack([egfix[keep_e], np.asarray(new_e, dtype=np.int64)])
+            if new_xy:
+                pfix = np.vstack([pfix, np.asarray(new_xy)])
+                pfix_base = np.concatenate([pfix_base, np.full(len(new_xy), -1)])
             live = np.setdiff1d(np.arange(len(pfix)), list(removed))
             remap = np.full(len(pfix), -1, dtype=np.int64)
             remap[live] = np.arange(len(live))

@@ -1,0 +1,36 @@
+# TOKYO PORT, Odaiba: a second port, harder than Kimitsu.
+#
+# Surveyed before this was written (notebooks/423_site_survey.py, job 116408,
+# a 1.2 km disc at the same centre):
+#
+#   * 11.0 km of OSM shoreline, 258 vertices, 12 land rings touched -- the
+#     Odaiba seaside park, the Daiba forts (small islands), piers and a
+#     breakwater.
+#   * the base mesh has 7 coastline edges here, 391-519 m, and 19 elements
+#     with a median edge of 449 m: it represents none of the port.
+#   * 47 % of the disc is water; an 80 m erosion splits it into 5 parts, so
+#     channels of 80-160 m wide are common and some narrower ones close at
+#     a 30 m target (water narrower than two elements is closed).
+#   * depths -3.9 to 14.8 m, median 6.8; M7001 answers 43 %, the 30 m grid
+#     the rest; the nearest real sounding is 31 m away on the median.
+#
+# The outline is a DEMONSTRATION circle over the port, not a port limit.
+base_mesh: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
+base_depth: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
+base_obc: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
+
+dt_expected_s: 4.5
+gradation: 0.165
+
+hires:
+  coastline: resolve
+  bathymetry: tokyo_bay
+  scope: hole
+  blend: ramp
+
+refine:
+  - name: tokyo_odaiba
+    geometry:
+      circle: {center: [139.7750, 35.6250], radius_m: 1000}
+    target_h_m: 30
+    priority: 0

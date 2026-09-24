@@ -1885,3 +1885,63 @@ def test_filter_shoreline_local_keeps_narrow_land_only_in_the_fine_bands():
                                       land_width_factor=0.5, land_width_max_band=1)
     assert out.contains(shapely.Point(220, 140))          # 40 m >= 0.5 x 30
     assert not out.contains(shapely.Point(1620, 140))     # band 2 keeps 2 h
+
+
+def test_corner_walk_removes_a_small_spike():
+    from fvcom_mesh_tools.patch import _corner_walk
+
+    # a straight coast with a 16/20 m triangular bump at x = 100
+    line = np.array([[0.0, 0.0], [90.0, 0.0], [100.0, 13.0], [110.0, 0.0], [240.0, 0.0]])
+    out = _corner_walk(line, lambda xy: np.full(len(xy), 30.0))
+    assert not np.any(np.all(np.isclose(out, [100.0, 13.0]), axis=1))
+
+
+def test_blunt_opens_an_acute_corner_at_a_frozen_point():
+    from fvcom_mesh_tools.patch import blunt_acute_corners, hole_polygon
+
+    # the Odaiba junction, relative to the frozen corner 0: the frozen coast
+    # runs south to 6, the free coast leaves at 57 deg through point 1, then
+    # turns north-west to 2; water lies in the wedge and beyond, to the south
+    pfix = np.array([[0.0, 0.0], [-31.5, -20.4], [-72.7, 34.6], [-400.0, 34.6],
+                     [-400.0, -400.0], [0.0, -400.0], [0.0, -64.9]])
+    egfix = np.array([[k, (k + 1) % 7] for k in range(7)])
+    base = np.array([10, -1, -1, 11, 12, 13, 14])
+    water = hole_polygon(pfix, egfix)
+    p, e, b, rep = blunt_acute_corners(pfix, egfix, base, water,
+                                       lambda xy: np.full(len(xy), 30.0))
+    ring = hole_polygon(p, e)
+    assert ring.is_valid and rep["n_corners_blunted"] == 1
+    assert 56.0 < rep["angles_deg"][0] < 58.0
+    for k in (0, 3, 4, 5, 6):                      # every frozen point stays
+        assert np.min(np.linalg.norm(p - pfix[k], axis=1)) < 1e-9
+    assert not np.any(np.all(np.isclose(p, pfix[1]), axis=1))
+    assert ring.area > water.area                  # the water gained the triangle
+
+
+def test_corner_walk_collapses_a_step_of_up_to_three_quarters_of_an_element():
+    import shapely
+
+    from fvcom_mesh_tools.patch import _corner_walk
+
+    # the Odaiba quay: a straight run that jogs sideways by 19.6 m
+    line = np.array([[0.0, 0.0], [120.0, 0.0], [120.0, 19.6], [260.0, 19.6]])
+    out = _corner_walk(line, lambda xy: np.full(len(xy), 30.0))
+    assert shapely.LineString(out).hausdorff_distance(shapely.LineString(line)) <= 9.8 + 1e-9
+    assert not any(np.all(np.isclose(out, c), axis=1).any() for c in ([120, 0], [120, 19.6]))
+
+
+def test_blunting_stops_at_a_corner_instead_of_cutting_over_land():
+    from fvcom_mesh_tools.patch import blunt_acute_corners, hole_polygon
+
+    # a free 57 deg water corner at the origin, whose one side turns a
+    # corner 37.6 m away: walking past it put the chord over land
+    pfix = np.array([[0.0, 0.0], [-31.5, -20.4], [-72.7, 34.6], [-400.0, 34.6],
+                     [-400.0, -400.0], [0.0, -400.0], [0.0, -64.9]])
+    egfix = np.array([[k, (k + 1) % 7] for k in range(7)])
+    base = np.array([-1, -1, -1, 11, 12, 13, 14])
+    water = hole_polygon(pfix, egfix)
+    p, e, b, rep = blunt_acute_corners(pfix, egfix, base, water,
+                                       lambda xy: np.full(len(xy), 60.0))
+    assert rep["n_corners_blunted"] == 1 and hole_polygon(p, e).is_valid
+    assert np.min(np.linalg.norm(p - pfix[1], axis=1)) < 1e-9   # the corner stays
+    assert np.min(np.linalg.norm(p - pfix[0], axis=1)) > 1.0    # the acute one goes
