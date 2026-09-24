@@ -183,3 +183,21 @@ def test_draw_mesh_uses_the_fixed_colours(tmp_path):
     assert tuple(np.round(to_rgba(SOLID_BOUNDARY_COLOR), 3)) in got
     assert tuple(np.round(to_rgba(OPEN_BOUNDARY_COLOR), 3)) in got
     plt.close(fig)
+
+
+def test_plot_mesh_views_writes_the_whole_mesh_and_each_close_up(tmp_path):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+    from fvcom_mesh_tools.plotting import plot_mesh_views
+
+    xy = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])
+    mesh = Fort14Mesh(title="t", nodes=xy, depths=np.ones(4),
+                      elements=np.array([[0, 1, 2], [0, 2, 3]]),
+                      open_boundaries=[np.array([3, 0])], land_boundaries=[])
+    out = plot_mesh_views(mesh, tmp_path, {"corner": (0.0, 5.0, 0.0, 5.0)}, dpi=50)
+    assert [p.name for p in out] == ["final_mesh_all.png", "final_mesh_corner.png"]
+    assert all(p.exists() and p.stat().st_size > 0 for p in out)

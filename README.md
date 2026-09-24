@@ -18,6 +18,39 @@ high-quality FVCOM-ready unstructured meshes (`fort.14`), with a focus on:
 The package wraps several mature mesh tools behind a common backend interface
 rather than reimplementing meshing algorithms from scratch.
 
+## Local refinement of an existing model -- start here
+
+To make one part of an existing FVCOM mesh finer -- a port, a fishery, a
+stretch of coast -- while everything else stays bit-for-bit unchanged, write a
+small recipe and run one command. With the `hires` option the region takes
+its coastline from OSM and its depths from the M7001 survey. Piers and
+breakwaters are handled by the mesh size:
+
+- structures at least half an element wide become land;
+- thinner ones become walls, which water cannot cross.
+
+```bash
+# on an OCTOPUS login node, from the repository root
+bash jobs/octopus/refine_workflow.sh recipes/refine/kimitsu_port_hires.yaml
+```
+
+That submits the refinement, the figures, the depth finishing and a 2-day
+FVCOM test as a chain of batch jobs. The steps also exist as commands:
+
+| command | what it does |
+|---|---|
+| `fmesh-refine RECIPE` | refine the region (QA-gated; the frozen part is verified unchanged) |
+| `fmesh-finish-depths OUT --hmin 3 --hmax 300 --rfactor 0.2` | floor, cap and r-factor-smooth the depths into a TB-FVCOM-style `<case>_dep_min3m_rfac0p2_cap300.dat` (also works on any FVCOM case) |
+| `fmesh-plot-views OUT --view name:x0:x1:y0:y1` | mesh figures; every solid boundary (coast, quay, wall) in black |
+
+**Read [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)** for:
+
+- the rules, and how to write a recipe;
+- how to read the outputs and check the mesh;
+- how to finish the depths and test in FVCOM;
+- how to improve the tool with an AI assistant when a new mesh shows it a
+  case it cannot handle yet.
+
 ## v5 pipeline (recipe-driven, one command)
 
 The end-to-end Tokyo Bay construction (see `docs/DESIGN_HISTORY.md`
@@ -448,6 +481,9 @@ Installed when `pip install -e .` is run.
 
 | CLI | Purpose |
 |-----|---------|
+| `fmesh-refine RECIPE [--out DIR] [--seeds 0,1,2] [--land SHP]` | Local refinement of an existing FVCOM mesh from a recipe (runs the GPL-side generator `notebooks/420_local_refine.py` as a subprocess). See `docs/USER_GUIDE.md`. |
+| `fmesh-finish-depths SOURCE --hmin M [--hmax M] [--rfactor R] [--method equal\|limit]` | Floor, r-factor-smooth and cap depths into a TB-FVCOM-style `<case>_dep_min<h>m_rfac<r>_cap<H>.dat`; SOURCE is a refinement output (patch nodes only, unless `--whole-mesh`) or any FVCOM `_grd.dat` (`--dep` picks the starting depth file). |
+| `fmesh-plot-views MESH [--view NAME:x0:x1:y0:y1 ...]` | The mesh whole and in close-ups, every solid boundary (coast, quay, wall) in black, the open boundary red. |
 | `fmesh-buildmesh DEM out.14 [--engine oceanmesh\|ocsmesh]` | Single-shot DEM → fort.14. Default engine `oceanmesh` (OceanMesh2D Python port; alpha~0.96). `--engine ocsmesh` is **deprecated** (alpha~0.85, max valence 26; PoC #30 ruled out a Triangle replacement) and slated for removal — see `docs/engine_complementarity.md`. Shared post-processing: depth interp, bbox-based open/land split, river inflow, perpfix. |
 | `fmesh-perpfix in.14 out.14`  | Stand-alone open-boundary first-ring perpendicularity correction. |
 | `fmesh-subset-dem SRC OUT --bbox MINLON MINLAT MAXLON MAXLAT [--src-var z]` | Clip a global DEM (SRTM15+, GEBCO, GeoTIFF, ...) to a lon/lat bbox and emit a CF-tagged GeoTIFF for `fmesh-buildmesh`. Two read paths: rasterio (CRS-tagged inputs) and netCDF4 (lon/lat NetCDF without CRS, selected by `--src-var`). |

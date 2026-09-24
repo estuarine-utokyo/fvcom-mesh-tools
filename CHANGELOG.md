@@ -8,6 +8,26 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Added -- local refinement for users (2026-09-24)
+
+- **`fmesh-refine`**: local refinement from a recipe.
+  - The `hires` option takes the region's coastline from OSM and its depths
+    from the M7001 ladder.
+  - Structures at least half an element wide become land; thinner ones
+    become walls (split mesh edges).
+  - Water under two elements wide is closed.
+- **`fmesh-finish-depths`**: TB-FVCOM's depth products with `--hmin`,
+  `--hmax` and `--rfactor` as options. From `TokyoBay_dep_m7001tp_raw.dat`
+  it reproduces `TokyoBay_dep_m7001tp_rfac0p2_cap300.dat` at every node.
+- **`fmesh-plot-views`** and `plotting.draw_mesh`: fixed colours in every
+  mesh figure (every solid boundary black, the open boundary red).
+- **`jobs/octopus/refine_workflow.sh`**: refine, figures, depths and an
+  FVCOM smoke test as one chain of batch jobs.
+- **QA gate `no_lone_corner_nodes`**: fails a node in a single element,
+  which FVCOM never updates.
+- **`docs/USER_GUIDE.md`**: the workflow for users, and how to improve the
+  tool with an AI assistant.
+
 ### Highlights
 
 A complete `clean → measure → loop` toolchain for FVCOM mesh quality

@@ -10,15 +10,17 @@
 #PBS -r n
 # Finish a hires refinement's depths and stage an M2 pair against the base.
 # Required: FMESH_OUT (a refinement output dir), FMESH_RUN_ROOT.
-# Optional: FMESH_HMIN (3), FMESH_RFACTOR (0.2).
+# Optional: FMESH_HMIN (3), FMESH_HMAX (300), FMESH_RFACTOR (0.2),
+#           FMESH_METHOD (equal = TB-FVCOM's smoother; limit = the refinement's).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 421_finish_and_run 8
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 OUTDIR=${FMESH_OUT:?set FMESH_OUT}
 RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
-python -m fvcom_mesh_tools.cli.refine_depths "$OUTDIR" \
-    --hmin "${FMESH_HMIN:-3}" --rfactor "${FMESH_RFACTOR:-0.2}"
+python -m fvcom_mesh_tools.cli.finish_depths "$OUTDIR" \
+    --hmin "${FMESH_HMIN:-3}" --hmax "${FMESH_HMAX:-300}" \
+    --rfactor "${FMESH_RFACTOR:-0.2}" --method "${FMESH_METHOD:-equal}"
 FIN=$(ls "$OUTDIR"/fvcom_finished/*_grd.dat)
 FIN=${FIN%_grd.dat}
 echo "finished case = $FIN"

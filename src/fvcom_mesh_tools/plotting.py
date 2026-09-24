@@ -409,6 +409,42 @@ def add_atlas_grid(ax, crs: str = "EPSG:4326", grid=None,
                         path_effects=halo)
 
 
+def plot_mesh_views(mesh, out_dir, views=None, *, prefix: str = "final_mesh",
+                    dpi: int = MESH_PNG_DPI, pad_frac: float = 0.02):
+    """One PNG per view of a mesh, in the fixed boundary colours.
+
+    ``views`` maps a name to ``(x0, x1, y0, y1)``; a view called ``"all"``
+    covering the whole mesh is always drawn first.  Returns the PNG paths.
+    """
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    xy = np.asarray(mesh.nodes, dtype=float)[:, :2]
+    lo, hi = xy.min(axis=0), xy.max(axis=0)
+    pad = pad_frac * float(max(hi - lo))
+    todo = {"all": (lo[0] - pad, hi[0] + pad, lo[1] - pad, hi[1] + pad)}
+    todo.update(views or {})
+    written = []
+    for name, (x0, x1, y0, y1) in todo.items():
+        fig, ax = plt.subplots(figsize=(9, 9 * (y1 - y0) / (x1 - x0)))
+        n = draw_mesh(ax, xy, mesh.elements, mesh.open_boundaries,
+                      mesh_lw=0.1 if name == "all" else 0.25,
+                      boundary_lw=0.8 if name == "all" else 1.4)
+        ax.set_xlim(x0, x1)
+        ax.set_ylim(y0, y1)
+        ax.set_aspect("equal")
+        ax.set_title(f"{mesh.title}  NP={len(xy):,} NE={len(mesh.elements):,}  [{name}]",
+                     fontsize=9)
+        boundary_legend(ax, open_boundary=n["n_open"] > 0, loc="upper right", fontsize=8)
+        fig.tight_layout()
+        png = out_dir / f"{prefix}_{name}.png"
+        fig.savefig(png, dpi=dpi)
+        plt.close(fig)
+        written.append(png)
+    return written
+
+
 def plot_mesh_overview(
     mesh: Fort14Mesh,
     out_png: str | Path,
@@ -517,4 +553,5 @@ __all__ = [
     "boundary_segments",
     "draw_mesh",
     "plot_mesh_overview",
+    "plot_mesh_views",
 ]
