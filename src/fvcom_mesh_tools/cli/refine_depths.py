@@ -36,7 +36,7 @@ from pathlib import Path
 import numpy as np
 
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case
-from fvcom_mesh_tools.refine import limit_rfactor
+from fvcom_mesh_tools.refine import limit_rfactor, smooth_rfactor_equal
 
 
 def _read_cor(path: Path) -> np.ndarray:
@@ -44,7 +44,8 @@ def _read_cor(path: Path) -> np.ndarray:
     return np.array([float(r[-1]) for r in rows], dtype=float)
 
 
-def finish_depths(depths, elements, movable, *, hmin, hmax, rfactor):
+def finish_depths(depths, elements, movable, *, hmin, hmax, rfactor, rounds=200,
+                  method="limit"):
     """Floor, cap, then smooth -- and report each separately.
 
     The three are reported apart because they are three different claims
@@ -67,7 +68,8 @@ def finish_depths(depths, elements, movable, *, hmin, hmax, rfactor):
     clipped[lo] = hmin
     clipped[hi] = hmax
     report = {
-        "hmin_m": float(hmin), "hmax_m": float(hmax), "rfactor": float(rfactor),
+        "hmin_m": float(hmin), "hmax_m": float(hmax),
+        "rfactor": None if rfactor is None else float(rfactor),
         "n_movable": int(free.sum()),
         "n_floored": int(lo.sum()), "n_capped": int(hi.sum()),
         "floored_fraction_of_movable": float(lo.sum() / max(free.sum(), 1)),
@@ -91,8 +93,32 @@ def finish_depths(depths, elements, movable, *, hmin, hmax, rfactor):
             "frozen depth, so the base mesh itself would have to be floored "
             "first -- which is a change to the model, not to the patch")
 
-    out, rinfo = limit_rfactor(elements, clipped, free, float(rfactor),
-                               depth_min=float(hmin), depth_max=float(hmax))
+    if rfactor is None or float(rfactor) <= 0:
+        # floor and cap only -- the `min3m_cap300` kind of product
+        out = clipped
+        report["rfactor_report"] = {"skipped": True, "n_depths_changed": 0,
+                                    "max_depth_change_m": 0.0, "rounds": 0}
+        report["max_change_m"] = float(np.abs(out - h0).max())
+        report["max_frozen_change_m"] = float(np.abs(out - h0)[~free].max()) \
+            if (~free).any() else 0.0
+        report["converged_at_write_precision"] = True
+        report["final_min_m"] = float(out.min())
+        report["final_max_m"] = float(out.max())
+        return out, report
+    if method == "equal":
+        # TB-FVCOM's order: floor, smooth the UNCAPPED field, then cap.
+        floored = h0.copy()
+        floored[lo] = hmin
+        smooth, rinfo = smooth_rfactor_equal(elements, floored, free, float(rfactor),
+                                             depth_min=float(hmin), maxit=int(rounds))
+        out = np.where(free, np.minimum(smooth, hmax), smooth)
+    elif method == "limit":
+        out, rinfo = limit_rfactor(elements, clipped, free, float(rfactor),
+                                   depth_min=float(hmin), depth_max=float(hmax),
+                                   rounds=int(rounds))
+    else:
+        raise ValueError(f"unknown smoothing method {method!r}")
+    report["method"] = method
     report["rfactor_report"] = rinfo
     # `limit_rfactor` judges at 1e-9, which is tighter than the depth file it
     # will be written to.  `TokyoBay_dep_m7001tp_rfac0p2_cap300.dat` has a

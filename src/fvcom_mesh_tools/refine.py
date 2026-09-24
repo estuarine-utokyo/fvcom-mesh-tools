@@ -644,6 +644,59 @@ def frozen_changes(base_nodes, new_nodes, affected_mask, tol_m: float = 1e-6) ->
     }
 
 
+def smooth_rfactor_equal(elements, depths, movable, rmax: float, *,
+                         depth_min: float, maxit: int = 2000):
+    """The r-factor smoother that made TB-FVCOM's run-ready depth files.
+
+    A port of ``TB-FVCOM/hydro/analysis/build_bathy_variants.py``: every edge
+    with ``|hi-hj|/(hi+hj) > rmax`` asks its deeper end to rise and its
+    shallower end to sink by the same amount, ``(|hi-hj| - rmax(hi+hj))/2``;
+    a node's moves are averaged over its violating edges, all edges are
+    updated at once (Jacobi), and the floor is put back after every sweep.
+    Equal-and-opposite moves keep the sum of the two depths, so the smoothing
+    spreads a deep channel into its banks rather than filling it -- which is
+    why it is run on the UNCAPPED field and the cap comes after.
+
+    Only ``movable`` nodes move (every node, for a whole-mesh product); a
+    violating edge with one frozen end moves only the other. Returns
+    ``(depths, report)``.
+    """
+    h = np.asarray(depths, dtype=np.float64).copy()
+    free = np.asarray(movable, dtype=bool)
+    tri = np.asarray(elements, dtype=np.int64)
+    e = np.unique(np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]),
+                          axis=1), axis=0)
+    ei, ej = e[:, 0], e[:, 1]
+    h_in = h.copy()
+    it = 0
+    for it in range(int(maxit)):
+        hi, hj = h[ei], h[ej]
+        r = np.abs(hi - hj) / (hi + hj)
+        bad = (r > rmax + 1e-9) & (free[ei] | free[ej])
+        if not bad.any():
+            break
+        delta = np.where(bad, np.maximum((np.abs(hi - hj) - rmax * (hi + hj)) / 2.0, 0.0),
+                         0.0)
+        sgn = np.sign(hi - hj)
+        add = np.zeros_like(h)
+        cnt = np.zeros_like(h)
+        np.add.at(add, ei, -sgn * delta)
+        np.add.at(cnt, ei, bad.astype(float))
+        np.add.at(add, ej, +sgn * delta)
+        np.add.at(cnt, ej, bad.astype(float))
+        step = add / np.where(cnt > 0, cnt, 1.0)
+        h = np.where(free, np.maximum(h + step, depth_min), h)
+    else:
+        it = int(maxit)
+    hi, hj = h[ei], h[ej]
+    r = np.abs(hi - hj) / (hi + hj)
+    moved = np.abs(h - h_in)
+    return h, {"method": "equal", "rounds": int(it), "converged": bool(it < int(maxit)),
+               "max_r": float(r.max()) if len(r) else 0.0,
+               "n_depths_changed": int((moved > 0).sum()),
+               "max_depth_change_m": float(moved.max()) if len(moved) else 0.0}
+
+
 def limit_rfactor(elements, depths, movable, rmax: float, *,
                   depth_min: float | None = None, depth_max: float | None = None,
                   rounds: int = 200):
