@@ -81,6 +81,7 @@ def test_widen_choke_sections_noop_on_clean_lattice():
     # choke and legitimately fires since the water-fringe rule,
     # owner 2026-07-14)
     import shapely
+
     from fvcom_mesh_tools.algorithms.obc_finish import (
         widen_choke_sections,
     )

@@ -42,7 +42,8 @@ def angles(k):
     out = []
     for i in range(3):
         a, b = p[(i + 1) % 3] - p[i], p[(i + 2) % 3] - p[i]
-        out.append(np.degrees(np.arccos(np.clip(a @ b / np.linalg.norm(a) / np.linalg.norm(b), -1, 1))))
+        c = a @ b / np.linalg.norm(a) / np.linalg.norm(b)
+        out.append(np.degrees(np.arccos(np.clip(c, -1, 1))))
     return out
 
 fails = [ch for ch in qa["checks"] if ch.get("status") == "fail"]
@@ -61,8 +62,10 @@ for ch in fails:
             kinds["node on a wall" if wall[int(off["id"])] else "node off walls"] += 1
     print(f"  {ch['check_id']}: {dict(kinds)}")
     if ch["check_id"] != "min_depth_clip":
-        ks = sorted({int(k) for off in (ch.get("offender_ids") or ch.get("offenders") or [])
-                     for k in (off.get("elements") or ([off["id"]] if off.get("kind") == "element" else []))
+        offs = ch.get("offender_ids") or ch.get("offenders") or []
+        ks = sorted({int(k) for off in offs
+                     for k in (off.get("elements")
+                               or ([off["id"]] if off.get("kind") == "element" else []))
                      if int(k) < len(tri)})
         for k in ks[:8]:
             cc = xy[tri[k]].mean(axis=0)

@@ -2928,5 +2928,3 @@ def _ccw(xy, t: np.ndarray) -> np.ndarray:
     """Vertex order with positive area; fort.14 wants counter-clockwise."""
     u, v = xy[t[1]] - xy[t[0]], xy[t[2]] - xy[t[0]]
     return t if (u[0] * v[1] - u[1] * v[0]) > 0 else t[[0, 2, 1]]
-
-

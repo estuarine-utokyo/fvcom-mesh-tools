@@ -284,9 +284,9 @@ def resolve_narrow_channels(
                 nbr.add(int(lab[pb]))
             elif clab[pb] == c and lab[pa] >= 0:
                 nbr.add(int(lab[pa]))
-        nonmain = [l for l in nbr if l != main]
-        big = [l for l in nonmain if sizes[l] >= min_basin_elements]
-        small = [l for l in nonmain if sizes[l] < min_basin_elements]
+        nonmain = [lb for lb in nbr if lb != main]
+        big = [lb for lb in nonmain if sizes[lb] >= min_basin_elements]
+        small = [lb for lb in nonmain if sizes[lb] < min_basin_elements]
         if allow:
             action = "keep"
         elif (0 < small_cluster_delete
@@ -297,23 +297,23 @@ def resolve_narrow_channels(
             # mouths -- nibble them off (sample look)
             action = "delete"
             delete[members] = True
-            for l in small:
-                delete[lab == l] = True
+            for lb in small:
+                delete[lab == lb] = True
         elif (main in nbr and not nonmain) or big:
             action = "widen"
             widen[members] = True
         else:
             action = "delete"
             delete[members] = True
-            for l in small:
-                delete[lab == l] = True
+            for lb in small:
+                delete[lab == lb] = True
         wvals = chinfo["channel_width_m"][members]
         wvals = wvals[np.isfinite(wvals)]
         clusters.append({
             "n_members": int(len(members)),
             "action": action,
             "neighbor_sizes": sorted(
-                int(sizes[l]) for l in nonmain),
+                int(sizes[lb]) for lb in nonmain),
             "centroids": mesh.nodes[els[members]].mean(axis=1),
             "width_m": float(np.median(wvals)) if wvals.size
             else float("nan"),
@@ -348,7 +348,6 @@ def resolve_narrow_channels(
         els_fixed, n_pinch_del = _fix_pinch_nodes(mesh.elements)
         if n_pinch_del:
             import dataclasses
-            keep2 = np.ones(len(mesh.elements), dtype=bool)
             # _fix_pinch_nodes returns the surviving element array;
             # rebuild the widen mask by matching rows
             mesh = dataclasses.replace(mesh, elements=els_fixed)

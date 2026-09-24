@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from fvcom_mesh_tools.io import Fort14Mesh
 from fvcom_mesh_tools.mesh_clean import (
@@ -879,6 +880,7 @@ def _square_with_offcenter_node() -> Fort14Mesh:
     )
 
 
+@pytest.mark.needs_oceanmesh
 def test_smooth_mesh_laplacian_pulls_interior_node_to_centre() -> None:
     """The off-centre interior node should move toward (0.5, 0.5);
     the four boundary corners must not move at all.
@@ -938,6 +940,7 @@ def test_clean_mesh_phase_g_default_off() -> None:
     np.testing.assert_array_equal(cleaned.nodes[4], mesh.nodes[4])
 
 
+@pytest.mark.needs_oceanmesh
 def test_clean_mesh_phase_g_explicit_smooths_interior() -> None:
     mesh = _square_with_offcenter_node()
     cleaned, info = clean_mesh(
@@ -1025,6 +1028,7 @@ def test_repair_flipped_elements_full_rollback_safety_net() -> None:
     assert info["n_flipped_after_repair"] == 0
 
 
+@pytest.mark.needs_oceanmesh
 def test_smooth_mesh_laplacian_emits_repair_info_keys() -> None:
     """Even on a non-flipping fixture, the new info keys are present."""
     mesh = _square_with_offcenter_node()
@@ -1039,6 +1043,7 @@ def test_smooth_mesh_laplacian_emits_repair_info_keys() -> None:
     assert info["n_flipped_after_repair"] == 0
 
 
+@pytest.mark.needs_oceanmesh
 def test_smooth_mesh_laplacian_repair_off_keeps_flips() -> None:
     """Synthetic test: monkey-patch oceanmesh.laplacian2 to return
     flipped vertices, and verify ``repair_flipped=False`` surfaces

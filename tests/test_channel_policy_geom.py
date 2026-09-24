@@ -1,6 +1,5 @@
 """Tests for the geometry-stage narrow-channel policy."""
 
-import numpy as np
 import pytest
 from shapely.geometry import Point, box
 from shapely.ops import unary_union

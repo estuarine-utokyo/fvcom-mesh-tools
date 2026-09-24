@@ -127,8 +127,7 @@ class TestCorridor:
 
 class TestChannelPolicyHelpers:
     def test_dual_adjacency_and_components(self):
-        from fvcom_mesh_tools.channel_policy import (
-            _components, _dual_adjacency)
+        from fvcom_mesh_tools.channel_policy import _components, _dual_adjacency
         # two triangles sharing an edge + one detached
         els = np.array([[0, 1, 2], [1, 3, 2], [4, 5, 6]])
         pairs = _dual_adjacency(els, 7)

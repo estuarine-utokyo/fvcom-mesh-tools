@@ -6,11 +6,11 @@ import pytest
 
 pytest.importorskip("shapely")
 pytest.importorskip("skimage")
-from shapely.geometry import Polygon, box
-from shapely.ops import unary_union
+from shapely.geometry import Polygon, box  # noqa: E402
+from shapely.ops import unary_union  # noqa: E402
 
-from fvcom_mesh_tools.coverage import coverage_gaps
-from fvcom_mesh_tools.io import Fort14Mesh
+from fvcom_mesh_tools.coverage import coverage_gaps  # noqa: E402
+from fvcom_mesh_tools.io import Fort14Mesh  # noqa: E402
 
 
 @pytest.fixture

@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("oceanmesh")
-from fvcom_mesh_tools.mesh_engine.oceanmesh import courant_sizing_function
+from fvcom_mesh_tools.mesh_engine.oceanmesh import courant_sizing_function  # noqa: E402
 
 GRAVITY = 9.81
 

@@ -75,6 +75,7 @@ def test_max_patches_cap():
     assert "note" in patches[-1]
 
 
+@pytest.mark.needs_oceanmesh
 def test_directive_refine_and_obc_protection():
     import types
 

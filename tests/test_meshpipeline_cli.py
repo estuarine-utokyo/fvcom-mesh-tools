@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pytest
 
 from fvcom_mesh_tools.cli import meshpipeline
 from fvcom_mesh_tools.io import Fort14Mesh, write_fort14
@@ -31,6 +32,7 @@ def _write(path) -> None:
     write_fort14(_square_mesh(), path)
 
 
+@pytest.mark.needs_oceanmesh
 def test_pipeline_no_thresholds_runs_all_rungs_and_exits_zero(tmp_path) -> None:
     src = tmp_path / "in.14"
     out = tmp_path / "out.14"
@@ -76,6 +78,7 @@ def test_pipeline_stops_at_first_passing_rung(tmp_path) -> None:
     assert payload["final"]["passed"] is True
 
 
+@pytest.mark.needs_oceanmesh
 def test_pipeline_threshold_failure_exits_one(tmp_path) -> None:
     """Demand alpha >= 0.95; the unit-square mesh has alpha ≈ 0.866,
     so no rung will satisfy it. Pipeline must exhaust all 3 rungs and
@@ -114,6 +117,7 @@ def test_pipeline_max_iters_caps_attempts(tmp_path) -> None:
     assert len(payload["history"]) == 1
 
 
+@pytest.mark.needs_oceanmesh
 def test_pipeline_writes_output_fort14(tmp_path) -> None:
     src = tmp_path / "in.14"
     out = tmp_path / "out.14"
@@ -146,6 +150,7 @@ def test_pipeline_missing_input_returns_2(tmp_path) -> None:
     assert rc == 2
 
 
+@pytest.mark.needs_oceanmesh
 def test_pipeline_history_records_phases_per_rung(tmp_path) -> None:
     """The rung 0 history entry should list only A+B+C phases; rung 1
     adds D, F, G; rung 2 also adds E. Verifies that the rung overlay
@@ -303,6 +308,7 @@ def test_select_rung_best_handles_nan_alpha() -> None:
     assert idx == 1
 
 
+@pytest.mark.needs_oceanmesh
 def test_pipeline_best_rung_runs_every_rung_and_records_selection(
     tmp_path,
 ) -> None:

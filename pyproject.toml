@@ -84,6 +84,17 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# notebooks/ holds the research scripts of each proof of concept (sys.path
+# set-up before imports, one-liners): not held to the package's lint. The
+# maintained ones -- the local-refinement generator and its figure and check
+# scripts, notebooks/42*.py and 43*.py -- are linted explicitly by CI.
+# docs/ holds review probes that fail by design.
+extend-exclude = ["notebooks", "docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+# the package's tests only: notebooks/ holds research scripts, some named
+# *_test.py, and docs/ holds review probes that fail by design
+testpaths = ["tests"]

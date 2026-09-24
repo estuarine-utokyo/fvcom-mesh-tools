@@ -23,6 +23,7 @@ from __future__ import annotations
 import importlib
 
 import numpy as np
+import pytest
 
 from fvcom_mesh_tools.mesh_clean import repair_flipped_elements
 
@@ -60,6 +61,7 @@ def test_repair_flipped_elements_clears_synthetic_flip() -> None:
     assert info["n_flipped_after_repair"] == 0
 
 
+@pytest.mark.needs_oceanmesh
 def test_oceanmesh_build_wraps_laplacian2_with_safety_net(monkeypatch) -> None:
     """Replace ``oceanmesh.laplacian2`` with a fake that returns
     vertices flipping every triangle of a hand-crafted mesh, drive

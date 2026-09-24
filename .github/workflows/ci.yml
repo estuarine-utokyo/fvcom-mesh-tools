@@ -9,22 +9,32 @@ on:
 jobs:
   lint-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
     strategy:
       matrix:
         python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      # The scientific stack comes from conda-forge, as it does on the
+      # laboratory's machines (environment.yml); pip installs only this
+      # repository, editable. The oceanmesh fork is not installed here, so
+      # the tests marked needs_oceanmesh are skipped (tests/conftest.py).
+      - name: Set up the conda-forge environment
+        uses: mamba-org/setup-micromamba@v2
         with:
-          python-version: ${{ matrix.python-version }}
+          environment-file: environment.yml
+          environment-name: fvcom-mesh
+          create-args: pre-commit
+          cache-environment: true
       - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          pip install pre-commit
+        run: pip install -e . --no-deps --no-build-isolation
       - name: Lint
-        run: ruff check .
+        run: |
+          ruff check .
+          # the maintained notebooks (the refinement generator and its tools)
+          ruff check notebooks/42*.py notebooks/43*.py
       - name: Test
         run: pytest -q
       - name: Pre-commit hooks
@@ -43,3 +53,8 @@ jobs:
           fmesh-mesh-clean --help > /dev/null
           fmesh-mesh-quality --help > /dev/null
           fmesh-mesh-pipeline --help > /dev/null
+          fmesh-mesh-qa --help > /dev/null
+          fmesh-refine --help > /dev/null
+          fmesh-finish-depths --help > /dev/null
+          fmesh-plot-views --help > /dev/null
+          fmesh-check-run --help > /dev/null

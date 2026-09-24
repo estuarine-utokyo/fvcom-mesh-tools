@@ -190,13 +190,13 @@ mshopts = meshgen(...
 mshopts = mshopts.build;
 % Save mesh generation progress
 if ENABLE_PLOTTING
-    fprog = figure('Visible','off'); 
-    axp = axes('Parent',fprog); 
+    fprog = figure('Visible','off');
+    axp = axes('Parent',fprog);
     hold(axp,'on');
     axes(axp);
     h = triplot(mshopts.grd.t, mshopts.grd.p(:,1), mshopts.grd.p(:,2), 'k-');
     set(h, 'Color', 'k');
-    axis(axp,'equal'); 
+    axis(axp,'equal');
     axis(axp,'tight');
     title(axp,'Mesh generation progress (final mesh)');
     drawnow;
@@ -220,7 +220,7 @@ if ENABLE_PLOTTING
 else
     % Close all figures without saving
     close all;
-end 
+end
 
 %% Plot and save the msh class object/write to fort.14
 m = mshopts.grd; % get out the msh object
@@ -229,7 +229,7 @@ m = make_bc(m,'auto',gdat_01,'both');
 
 %% Save mesh data
 mesh_name = 'tb_varres_3regions';
-save(fullfile(meshdir, mesh_name),'m');  
+save(fullfile(meshdir, mesh_name),'m');
 write(m, fullfile(meshdir, mesh_name));
 fprintf('Mesh saved as: %s\n', mesh_name);
 
@@ -308,10 +308,10 @@ try
     xx = gdat_01.bbox(1,1):stride:gdat_01.bbox(1,2);
     yy = gdat_01.bbox(2,1):stride:gdat_01.bbox(2,2);
     [demx, demy] = meshgrid(xx, yy);
-    
+
     % Interpolate bathymetry onto grid
     demz = gdat_01.Fb(demx, demy);
-    
+
     % Plot using pcolor
     pcolor(demx, demy, demz);
     shading flat;
@@ -466,10 +466,10 @@ else
 end
 
 % Calculate mesh quality metrics (always needed for statistics)
-points = m.p;  
+points = m.p;
 triangles = m.t;
 % Use the OceanMesh2D built-in triangleAngles function
-angles = triangleAngles(points, triangles); 
+angles = triangleAngles(points, triangles);
 min_angle_per_tri = min(angles, [], 2);
 
 if ENABLE_PLOTTING
@@ -487,7 +487,7 @@ title('Mesh Quality: Distribution of Minimum Triangle Angles');
     edges  = [0, 20, 30, 40, 180];
     labels = {'< 20', '20-30', '30-40', '> 40'};
     counts = histcounts(min_angle_per_tri, edges);
-    
+
     figure(7);
 pie(counts, labels);
 title('Minimum Triangle Angle Distribution (Pie Chart)');
@@ -512,7 +512,7 @@ if ~isempty(region_nodes)
     % Find triangles that have at least one node in the region
     region_tri_mask = any(ismember(m.t, region_nodes), 2);
     region_tri = m.t(region_tri_mask, :);
-    
+
     triplot(region_tri, m.p(:,1), m.p(:,2), 'b-', 'LineWidth', 0.8);
     xlim(trans_x); ylim(trans_y);
     axis equal;
@@ -588,32 +588,32 @@ try
     x_range = linspace(min(m.p(:,1)), max(m.p(:,1)), 300);
     y_range = linspace(min(m.p(:,2)), max(m.p(:,2)), 300);
     [X, Y] = meshgrid(x_range, y_range);
-    
+
     % Interpolate bathymetry to regular grid
     F = scatteredInterpolant(m.p(:,1), m.p(:,2), m.b, 'natural', 'none');
     Z = F(X, Y);
-    
+
     % Define depth levels for contours
     depth_levels = [-100:5:0];  % Every 5m from -100m to 0m
-    
+
     % Create filled contour plot
     [C, h] = contourf(X, Y, Z, depth_levels);
-    
+
     % Add contour lines on top
     hold on;
     [C2, h2] = contour(X, Y, Z, depth_levels, 'k-', 'LineWidth', 0.3);
-    
+
     % Add labels to major contour lines
     major_depths = [-100:20:0];  % Label every 20m
     [C3, h3] = contour(X, Y, Z, major_depths, 'k-', 'LineWidth', 1);
     clabel(C3, h3, 'LabelSpacing', 300, 'FontSize', 8, 'Color', 'k');
-    
+
     % Customize colormap and appearance
     colormap(flipud(parula));  % Flip colormap for depth (blue=deep)
     c = colorbar;
     ylabel(c, 'Depth (m)');
     caxis([min(m.b) 0]);  % Set color limits
-    
+
     axis equal;
     axis tight;
     title('Tokyo Bay Variable Resolution - Depth Contours (m)');
@@ -647,7 +647,7 @@ try
     nodes_r1 = sum(m.p(:,1) < 138.5);  % Pacific nodes
     nodes_r2 = sum(m.p(:,1) >= 138.5 & m.p(:,1) < 139.8);  % Mid resolution
     nodes_r3 = sum(m.p(:,1) >= 139.8);  % High resolution
-    
+
     node_counts = [nodes_r1, nodes_r2, nodes_r3];
     bar(node_counts);
     set(gca, 'XTickLabel', region_names);
