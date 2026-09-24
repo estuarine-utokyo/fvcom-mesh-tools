@@ -17,5 +17,5 @@ case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 OUTDIR=${FMESH_OUT:?set FMESH_OUT}
 [ -d "$OUTDIR" ] || { echo "no such directory: $OUTDIR"; exit 2; }
 export FMESH_LAND=${FMESH_LAND:-"$DATA_DIR/geodata/OSM/coastmask_cache/custom_139.55_34.9_140.3_35.75_minarea1e-05/land.shp"}
-python notebooks/${FMESH_SCRIPT:-421_hires_coastline_check.py} "$OUTDIR"
+python notebooks/${FMESH_SCRIPT:-421_hires_coastline_check.py} "$OUTDIR" ${FMESH_ARG2:+"$FMESH_ARG2"}
 echo "end=$(date -Is)"

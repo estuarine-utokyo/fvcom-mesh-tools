@@ -998,6 +998,84 @@ def _push(pts: list, base_id: list, q, bid: int) -> int:
     return len(pts) - 1
 
 
+def _ring_at_size(ring: np.ndarray, size) -> np.ndarray:
+    """A closed ring resampled at the local size, its corners kept.
+
+    Douglas-Peucker at a tenth of the local element drops the wiggles; then
+    any edge under half an element loses the end that turns less (a corner of
+    a quay stays, a vertex on a straight run goes); then long edges are
+    subdivided.  Returns the points once each, not closed.
+    """
+    import shapely
+
+    ring = np.asarray(ring, dtype=float)[:, :2]
+    h_min = float(np.min(_size_at(size, ring)))
+    g = shapely.simplify(shapely.LinearRing(ring), 0.1 * h_min)
+    pts = np.asarray(g.coords, dtype=float)[:-1]
+
+    def turn(k):
+        a, b = pts[k] - pts[k - 1], pts[(k + 1) % len(pts)] - pts[k]
+        return float(np.arccos(np.clip(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)
+                                               + 1e-12), -1, 1)))
+
+    while len(pts) > 3:
+        lens = np.linalg.norm(np.roll(pts, -1, axis=0) - pts, axis=1)
+        h = _size_at(size, 0.5 * (pts + np.roll(pts, -1, axis=0)))
+        short = np.flatnonzero(lens < 0.5 * h)
+        if not len(short):
+            break
+        k = int(short[np.argmin(lens[short] / h[short])])
+        j = (k + 1) % len(pts)
+        pts = np.delete(pts, k if turn(k) <= turn(j) else j, axis=0)
+    closed = np.vstack([pts, pts[:1]])
+    return _subdivide(closed, size)[:-1]
+
+
+def island_rings(land, water, size, clearance_factor=0.5):
+    """The land wholly inside the water the patch meshes, as rings to add.
+
+    The rim is cut from the BASE mesh's coastline, re-drawn along the source
+    where the source runs; land the base never had -- a quay block standing
+    in the harbour, left detached when the width filter turned the narrow
+    pier that joined it to the shore into a wall -- has no stretch to be
+    re-drawn from, and was meshed as water.  Every polygon of ``land`` that
+    lies inside ``water`` with at least ``clearance_factor`` of a local
+    element to spare is returned as a closed ring at the local size; one
+    closer to the rim than that is reported and left out, since the gap
+    between them could not carry an element.
+
+    Returns ``(rings, report)``; each ring is an (n, 2) array, not closed.
+    """
+    import shapely
+
+    rings, skipped = [], []
+    edge = shapely.boundary(water)
+    for g in getattr(land, "geoms", [land]):
+        if g.is_empty or not shapely.intersects(water, g):
+            continue
+        c = np.asarray(g.representative_point().coords)[0]
+        if not shapely.within(g, water):
+            if shapely.area(shapely.intersection(water, g)) > 0:
+                skipped.append({"at": [round(float(c[0]), 1), round(float(c[1]), 1)],
+                                "why": "crosses the rim"})
+            continue
+        ext = np.asarray(g.exterior.coords, dtype=float)[:-1, :2]
+        gap = float(shapely.distance(edge, g.exterior))
+        h = float(np.min(_size_at(size, ext)))
+        if gap < clearance_factor * h:
+            skipped.append({"at": [round(float(c[0]), 1), round(float(c[1]), 1)],
+                            "why": f"{gap:.1f} m from the rim"})
+            continue
+        r = _ring_at_size(ext, size)
+        if len(r) >= 3 and shapely.Polygon(r).is_valid:
+            rings.append(r)
+        else:
+            skipped.append({"at": [round(float(c[0]), 1), round(float(c[1]), 1)],
+                            "why": "no valid ring at the local size"})
+    return rings, {"n_islands_added": len(rings), "skipped": skipped,
+                   "n_island_points": int(sum(len(r) for r in rings))}
+
+
 def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0):
     """Cut off every coastline corner sharper than ``min_angle_deg`` on the water side.
 

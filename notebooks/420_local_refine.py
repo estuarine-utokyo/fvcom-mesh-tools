@@ -48,6 +48,7 @@ from fvcom_mesh_tools.patch import (
     hole_polygon,
     improve_patch,
     introduced_violations,
+    island_rings,
     patch_sizing,
     refresh_depths,
     region_conflicts,
@@ -67,6 +68,7 @@ from fvcom_mesh_tools.walls import (  # noqa: E402
     extract_walls,
     node_walls,
     open_lone_corners,
+    rejoin_copies,
     split_along_walls,
 )
 
@@ -482,6 +484,31 @@ if rc["curves"]:
                 for k, c in enumerate(rc["curves"]) if len(c) > 1})
 
 hole = hole_polygon(rc["pfix"], rc["egfix"])
+if HIRES is not None and _shl is not None:
+    # Land the base never had is not on the rim: the rim re-draws the BASE
+    # coastline along the source, and a quay block standing in the Kimitsu
+    # harbour -- detached once the filter made the pier that joined it to the
+    # shore a wall -- was meshed as water.  Every filtered land polygon inside
+    # the hole becomes an island of the rim.
+    _isl, _irep = island_rings(_filtered, hole, h_achieved)
+    reports["islands_added"] = _irep
+    if _isl:
+        _p, _e = np.asarray(rc["pfix"], dtype=float), np.asarray(rc["egfix"], dtype=np.int64)
+        _b = np.asarray(rc["pfix_base"], dtype=np.int64)
+        for _r in _isl:
+            _k0 = len(_p)
+            _n = len(_r)
+            _p = np.vstack([_p, _r])
+            _b = np.concatenate([_b, np.full(_n, -1, dtype=np.int64)])
+            _e = np.vstack([_e, np.column_stack([_k0 + np.arange(_n),
+                                                 _k0 + (np.arange(_n) + 1) % _n])])
+            rc["curves"].append(np.vstack([_r, _r[:1]]))
+        rc["pfix"], rc["egfix"], rc["pfix_base"] = _p, _e, _b
+        hole = hole_polygon(rc["pfix"], rc["egfix"])
+    say(f"islands: {_irep['n_islands_added']} land polygon(s) inside the hole added "
+        f"to the rim ({_irep['n_island_points']} point(s))"
+        + (f"; {len(_irep['skipped'])} left out, e.g. {_irep['skipped'][:3]}"
+           if _irep["skipped"] else ""))
 if HIRES is not None:
     # A resolved coastline follows OSM into every corner, and a corner under
     # 60 deg holds one element: its node is then in that element alone, and
@@ -526,8 +553,19 @@ if HIRES is not None and _shl is not None and _walls_src:
     for w in _walls_src:
         g = shapely.intersection(w, _room)
         for q in getattr(g, "geoms", [g]):
-            if q.geom_type == "LineString" and q.length >= target:
+            if q.geom_type != "LineString" or q.is_empty:
+                continue
+            # An end cut back from the coast is rooted to it again below, and
+            # gets the clearance back; judged without it, a 43 m pier off a
+            # quay block came out at 29 m and was dropped.
+            _back = sum(float(shapely.distance(_coast, shapely.Point(q.coords[e])))
+                        <= 0.4 * target + 1.0 for e in (0, -1))
+            if q.length + 0.4 * target * _back >= target:
                 _pieces.append(np.asarray(q.coords)[:, :2])
+    # the walls as extracted and as clipped to the hole, for inspection
+    np.savez(OUT / "walls_stages.npz",
+             **{f"src{k}": np.asarray(w.coords)[:, :2] for k, w in enumerate(_walls_src)},
+             **{f"piece{k}": c for k, c in enumerate(_pieces)})
     rim_xy = np.asarray(rc["pfix"], dtype=float)
     rim_eg = np.asarray(rc["egfix"], dtype=np.int64)
     rim_base = np.asarray(rc["pfix_base"], dtype=np.int64)
@@ -745,80 +783,113 @@ if HIRES is not None and _shl is not None and _walls_src:
     # needs a node inside it.
     _all_xy = np.vstack([rim_xy, WALL_PTS])
     _rim_set = {tuple(sorted(e)) for e in rim_eg.tolist()}
-    n_acute = 0
-    while len(WALL_SEGS):
-        inc: dict = {}
-        for k, (a, b) in enumerate(WALL_SEGS.tolist()):
-            inc.setdefault(a, []).append(("w", k, b))
-            inc.setdefault(b, []).append(("w", k, a))
-        for a, b in rim_eg.tolist():
-            if a in inc:
-                inc[a].append(("r", -1, b))
-            if b in inc:
-                inc[b].append(("r", -1, a))
-        drop = None
-        for v, lst in inc.items():
-            for i in range(len(lst)):
-                for j in range(i + 1, len(lst)):
-                    if lst[i][0] == "r" and lst[j][0] == "r":
-                        continue
-                    u1 = _all_xy[lst[i][2]] - _all_xy[v]
-                    u2 = _all_xy[lst[j][2]] - _all_xy[v]
-                    ang = np.degrees(np.arccos(np.clip(
-                        u1 @ u2 / (np.linalg.norm(u1) * np.linalg.norm(u2) + 1e-12), -1, 1)))
-                    if ang < 60.0:
-                        drop = lst[i][1] if lst[i][0] == "w" else lst[j][1]
-                        if lst[i][0] == "w" and lst[j][0] == "w":
-                            li = np.linalg.norm(u1)
-                            lj = np.linalg.norm(u2)
-                            drop = lst[i][1] if li <= lj else lst[j][1]
+    n_acute = n_close_tips = n_joined = 0
+    for _pass in range(6):
+        while len(WALL_SEGS):
+            inc: dict = {}
+            for k, (a, b) in enumerate(WALL_SEGS.tolist()):
+                inc.setdefault(a, []).append(("w", k, b))
+                inc.setdefault(b, []).append(("w", k, a))
+            for a, b in rim_eg.tolist():
+                if a in inc:
+                    inc[a].append(("r", -1, b))
+                if b in inc:
+                    inc[b].append(("r", -1, a))
+            drop = None
+            for v, lst in inc.items():
+                for i in range(len(lst)):
+                    for j in range(i + 1, len(lst)):
+                        if lst[i][0] == "r" and lst[j][0] == "r":
+                            continue
+                        u1 = _all_xy[lst[i][2]] - _all_xy[v]
+                        u2 = _all_xy[lst[j][2]] - _all_xy[v]
+                        ang = np.degrees(np.arccos(np.clip(
+                            u1 @ u2 / (np.linalg.norm(u1) * np.linalg.norm(u2) + 1e-12), -1, 1)))
+                        if ang < 60.0:
+                            drop = lst[i][1] if lst[i][0] == "w" else lst[j][1]
+                            if lst[i][0] == "w" and lst[j][0] == "w":
+                                li = np.linalg.norm(u1)
+                                lj = np.linalg.norm(u2)
+                                drop = lst[i][1] if li <= lj else lst[j][1]
+                            break
+                    if drop is not None:
                         break
                 if drop is not None:
                     break
-            if drop is not None:
+            if drop is None:
                 break
-        if drop is None:
-            break
-        WALL_SEGS = np.delete(WALL_SEGS, drop, axis=0)
-        n_acute += 1
-        # a lone edge whose ends touch nothing else and are not on the rim
-        deg = np.bincount(WALL_SEGS.ravel(), minlength=len(_all_xy)) if len(WALL_SEGS) \
-            else np.zeros(len(_all_xy), int)
-        lone = [k for k, (a, b) in enumerate(WALL_SEGS.tolist())
-                if deg[a] == 1 and deg[b] == 1 and a >= n_rim and b >= n_rim]
-        if lone:
-            WALL_SEGS = np.delete(WALL_SEGS, lone, axis=0)
-    # A free tip left close to another line is a gap of a few metres, and
-    # the mesh fills it with slivers: dropping the crossing of an L-shaped
-    # breakwater for its acute angle left one wall's tip 4.4 m from the
-    # other wall, and the 3.1 and 4.8 deg elements stayed where they were.
-    # A tip within half an element of any line it is not part of loses its
-    # last edge, until none is.
-    n_close_tips = 0
-    for _ in range(200):
-        if not len(WALL_SEGS):
-            break
-        deg = np.bincount(WALL_SEGS.ravel(), minlength=len(_all_xy))
-        lines = [(a, b) for a, b in rim_eg.tolist()] + [tuple(e) for e in WALL_SEGS.tolist()]
-        drop = None
-        for k, (a, b) in enumerate(WALL_SEGS.tolist()):
-            for tip, other in ((a, b), (b, a)):
-                if tip < n_rim or deg[tip] != 1:
-                    continue
-                h_t = float(h_achieved(np.asarray([_all_xy[tip]]))[0])
-                pt = shapely.Point(_all_xy[tip])
-                near = [shapely.LineString(_all_xy[[i, j]]) for i, j in lines
-                        if tip not in (i, j) and other not in (i, j)]
-                if near and float(shapely.distance(shapely.MultiLineString(near), pt)) \
-                        < 0.5 * h_t:
-                    drop = k
+            WALL_SEGS = np.delete(WALL_SEGS, drop, axis=0)
+            n_acute += 1
+            # a lone edge whose ends touch nothing else and are not on the rim
+            deg = np.bincount(WALL_SEGS.ravel(), minlength=len(_all_xy)) if len(WALL_SEGS) \
+                else np.zeros(len(_all_xy), int)
+            lone = [k for k, (a, b) in enumerate(WALL_SEGS.tolist())
+                    if deg[a] == 1 and deg[b] == 1 and a >= n_rim and b >= n_rim]
+            if lone:
+                WALL_SEGS = np.delete(WALL_SEGS, lone, axis=0)
+        # A free tip left close to another line is a gap of a few metres, and
+        # the mesh fills it with slivers: dropping the crossing of an L-shaped
+        # breakwater for its acute angle left one wall's tip 4.4 m from the
+        # other wall, and the 3.1 and 4.8 deg elements stayed where they were.
+        # Dropping the tip's edge instead, as the first version did, opened a
+        # 15 m gap between the two arms of an L-shaped pier that OSM draws as
+        # one structure.  So the tip JOINS the line: a vertex of it within half
+        # an element takes the tip, a wall edge is otherwise split at the foot,
+        # and only a tip beside the coast with no rim vertex within reach still
+        # loses its edge.  The angles the join makes go back through the rule
+        # above.
+        snapped = False
+        for _ in range(200):
+            if not len(WALL_SEGS):
+                break
+            deg = np.bincount(WALL_SEGS.ravel(), minlength=len(_all_xy))
+            rim_lines = [tuple(e) for e in rim_eg.tolist()]
+            wall_lines = [tuple(e) for e in WALL_SEGS.tolist()]
+            act = None
+            for k, (a, b) in enumerate(WALL_SEGS.tolist()):
+                for tip, other in ((a, b), (b, a)):
+                    if tip < n_rim or deg[tip] != 1:
+                        continue
+                    h_t = float(h_achieved(np.asarray([_all_xy[tip]]))[0])
+                    pt = _all_xy[tip]
+                    best = None
+                    for kind, lines in (("rim", rim_lines), ("wall", wall_lines)):
+                        for li, (i, j) in enumerate(lines):
+                            if tip in (i, j) or other in (i, j):
+                                continue
+                            ab = _all_xy[j] - _all_xy[i]
+                            t_ = float(np.clip((pt - _all_xy[i]) @ ab / max(ab @ ab, 1e-12), 0, 1))
+                            foot = _all_xy[i] + t_ * ab
+                            d_ = float(np.linalg.norm(pt - foot))
+                            if d_ < 0.5 * h_t and (best is None or d_ < best[0]):
+                                best = (d_, kind, li, i, j, foot)
+                    if best is not None:
+                        act = (k, tip, other, h_t, best)
+                        break
+                if act is not None:
                     break
-            if drop is not None:
+            if act is None:
                 break
-        if drop is None:
+            k, tip, other, h_t, (_, kind, li, i, j, foot) = act
+            near_v = min((i, j), key=lambda v: float(np.linalg.norm(_all_xy[v] - foot)))
+            reach = 0.5 * h_t if kind == "wall" else 0.75 * h_t
+            if float(np.linalg.norm(_all_xy[near_v] - _all_xy[tip])) < reach \
+                    and near_v != other:
+                WALL_SEGS[k] = [near_v, other]
+                n_joined += 1
+            elif kind == "wall":
+                _all_xy[tip] = foot
+                w = [tuple(e) for e in WALL_SEGS.tolist()].index((i, j))
+                WALL_SEGS = np.vstack([np.delete(WALL_SEGS, w, axis=0), [[i, tip], [tip, j]]])
+                n_joined += 1
+            else:
+                WALL_SEGS = np.delete(WALL_SEGS, k, axis=0)
+                n_close_tips += 1
+            WALL_SEGS = np.unique(np.sort(WALL_SEGS, axis=1), axis=0)
+            WALL_SEGS = WALL_SEGS[WALL_SEGS[:, 0] != WALL_SEGS[:, 1]]
+            snapped = True
+        if not snapped:
             break
-        WALL_SEGS = np.delete(WALL_SEGS, drop, axis=0)
-        n_close_tips += 1
     # A wall point no edge uses any more would be a lone fixed point in the
     # water -- not a wall, and a small element waiting to happen.
     _used = np.unique(WALL_SEGS[WALL_SEGS >= n_rim]) if len(WALL_SEGS) else \
@@ -837,12 +908,14 @@ if HIRES is not None and _shl is not None and _walls_src:
                         "n_short_coast_edges_folded_into_a_root": len(_folded),
                         "n_wall_edges_dropped_for_an_acute_angle": n_acute,
                         "n_wall_edges_dropped_for_a_tip_too_close": n_close_tips,
+                        "n_tips_joined_to_a_nearby_line": n_joined,
                         "n_wall_points": int(len(WALL_PTS)),
                         "n_wall_edges": int(len(WALL_SEGS))}
     say(f"walls in the hole: {len(_pieces)} piece(s), {n_rooted} end(s) rooted on "
         f"the coast, {len(WALL_PTS)} constrained point(s), {len(WALL_SEGS)} edge(s); "
         f"{n_acute} dropped for meeting another line at under 60 deg, "
-        f"{n_close_tips} for a tip within half an element of another line")
+        f"{n_close_tips} for a tip within half an element of the coast, "
+        f"{n_joined} tip(s) joined to a line within half an element")
 PFIX_ALL = np.vstack([np.asarray(rc["pfix"], dtype=float), WALL_PTS])
 # What the fill was given, kept so a wall's geometry can be inspected
 # without re-running the whole cut.
@@ -1294,6 +1367,16 @@ def attempt(seed):
             slide_on=slide_on, only_below=only_below, soft=True)
         imp = {**imp2, "n_flips": imp["n_flips"] + imp2["n_flips"],
                "n_moves": imp["n_moves"] + imp2["n_moves"], "soft_pass": True}
+    # The copies of a split node slide independently in the repair, and came
+    # apart by up to 7 m along a wall and 1 m across a bent one: the two
+    # sides of the wall no longer met.  They are put back at one position.
+    nodes, _rj = rejoin_copies(nodes, elements, copy_of)
+    imp["rejoined_copies"] = _rj
+    if _rj["n_groups_rejoined"] or _rj["left_apart_at"]:
+        say(f"wall copies rejoined: {_rj['n_groups_rejoined']} group(s), "
+            f"largest gap {_rj['max_gap_m']:.2f} m"
+            + (f", {len(_rj['left_apart_at'])} LEFT APART at {_rj['left_apart_at']}"
+               if _rj["left_apart_at"] else ""))
     # The repair may not leave a node in one element either; if it ever did,
     # it is opened here too, without the smoothing the first opening gets.
     nodes, elements, _par, mutable_faces, _lone2 = open_lone_corners(

@@ -283,3 +283,31 @@ def test_open_lone_corners_is_a_no_op_on_a_mesh_without_one():
     p, t, par, _, rep = open_lone_corners(xy, tri)
     assert rep["n_lone_nodes"] == 0 and len(par) == 0
     assert np.array_equal(p, xy) and np.array_equal(t, tri)
+
+
+def test_rejoin_copies_puts_split_nodes_back_together():
+    from fvcom_mesh_tools.walls import rejoin_copies, split_along_walls
+
+    # a 3x3 grid; a wall along the middle column from the bottom edge up
+    xy = np.array([[i, j] for j in range(3) for i in range(3)], dtype=float)
+    tri = []
+    for j in range(2):
+        for i in range(2):
+            a = j * 3 + i
+            tri += [[a, a + 1, a + 4], [a, a + 4, a + 3]]
+    tri = np.array(tri)
+    p, t, copy_of, _ = split_along_walls(xy, tri, np.array([[1, 4]]))
+    moved = p.copy()
+    k = np.flatnonzero(copy_of == 1)            # the root, on the bottom edge
+    moved[k[1]] += [0.0, 0.1]                   # one copy slid along the wall
+    back, rep = rejoin_copies(moved, t, copy_of)
+    assert rep["n_groups_rejoined"] == 1 and np.isclose(rep["max_gap_m"], 0.1)
+    assert np.allclose(back[k[0]], back[k[1]])
+
+
+def test_rejoin_copies_leaves_a_mesh_without_gaps_alone():
+    from fvcom_mesh_tools.walls import rejoin_copies
+
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    back, rep = rejoin_copies(xy, np.array([[0, 1, 2]]), np.arange(3))
+    assert rep["n_groups_rejoined"] == 0 and np.array_equal(back, xy)

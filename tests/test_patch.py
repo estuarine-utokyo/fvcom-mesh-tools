@@ -1754,3 +1754,40 @@ def test_blunt_acute_corners_walks_past_short_edges():
     assert rep["chord_m"][0] > 20.0
     ring = hole_polygon(p, e)
     assert ring.is_valid and len(p) == 4
+
+
+def test_island_rings_adds_land_inside_the_water_only():
+    import shapely
+
+    from fvcom_mesh_tools.patch import island_rings
+
+    water = shapely.box(0, 0, 1000, 1000)
+    inside = shapely.box(300, 300, 500, 420)              # a quay block
+    near_rim = shapely.box(5, 400, 60, 600)               # 5 m from the rim
+    across = shapely.box(900, 100, 1100, 300)             # part of the shore
+    land = shapely.MultiPolygon([inside, near_rim, across])
+    rings, rep = island_rings(land, water, lambda xy: np.full(len(xy), 30.0))
+    assert rep["n_islands_added"] == 1 and len(rings) == 1
+    ring = shapely.Polygon(rings[0])
+    assert ring.is_valid and abs(ring.area - inside.area) < 1.0
+    # corners kept, spacing about the local size
+    r = rings[0]
+    for corner in [(300, 300), (500, 300), (500, 420), (300, 420)]:
+        assert np.min(np.linalg.norm(r - corner, axis=1)) < 1e-6
+    seg = np.linalg.norm(np.roll(r, -1, axis=0) - r, axis=1)
+    assert seg.min() >= 15.0 and seg.max() <= 31.0
+    whys = sorted(x["why"] for x in rep["skipped"])
+    assert whys == ["5.0 m from the rim", "crosses the rim"]
+
+
+def test_ring_at_size_drops_a_short_edge_but_keeps_the_corner():
+    from fvcom_mesh_tools.patch import _ring_at_size
+
+    # a rectangle with a 4 m jog on its top side: the jog goes, corners stay
+    ring = np.array([[0, 0], [200, 0], [200, 100], [104, 100], [100, 104],
+                     [0, 104]], dtype=float)
+    r = _ring_at_size(ring, lambda xy: np.full(len(xy), 30.0))
+    seg = np.linalg.norm(np.roll(r, -1, axis=0) - r, axis=1)
+    assert seg.min() >= 15.0
+    for corner in [(0, 0), (200, 0), (200, 100)]:
+        assert np.min(np.linalg.norm(r - corner, axis=1)) < 1e-6

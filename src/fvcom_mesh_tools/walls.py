@@ -486,3 +486,70 @@ def open_lone_corners(nodes, elements, mutable=None):
               "unresolved": unresolved}
     return nodes, elements, np.asarray(parents, dtype=np.int64).reshape(-1, 2), \
         mutable, report
+
+
+def _min_angle_and_area(nodes, elements):
+    p = nodes[elements]
+    area2 = ((p[:, 1, 0] - p[:, 0, 0]) * (p[:, 2, 1] - p[:, 0, 1])
+             - (p[:, 2, 0] - p[:, 0, 0]) * (p[:, 1, 1] - p[:, 0, 1]))
+    ang = []
+    for i in range(3):
+        u = p[:, (i + 1) % 3] - p[:, i]
+        v = p[:, (i + 2) % 3] - p[:, i]
+        c = np.einsum("ij,ij->i", u, v) / (np.linalg.norm(u, axis=1)
+                                            * np.linalg.norm(v, axis=1) + 1e-300)
+        ang.append(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
+    return np.min(np.column_stack(ang), axis=1), area2
+
+
+def rejoin_copies(nodes, elements, copy_of):
+    """Put the copies of every split node back at one position.
+
+    The repair slides a wall node along its wall, and it slides the two
+    copies of a node independently: on the Kimitsu port they came apart by
+    up to 7 m along a straight wall and by 1 m across a bent one, so the two
+    sides no longer met -- a wall with a sliver of nothing inside it.  For
+    each group of copies the position that keeps the worst incident angle
+    highest is chosen among the copies' own positions and their mean, and no
+    candidate that would invert an element is taken; a group with no such
+    candidate is left apart and reported.
+
+    Returns ``(nodes, report)``.
+    """
+    nodes = np.asarray(nodes, dtype=float).copy()
+    elements = np.asarray(elements, dtype=np.int64)
+    copy_of = np.asarray(copy_of, dtype=np.int64)
+    groups: dict = {}
+    for k, o in enumerate(copy_of.tolist()):
+        groups.setdefault(o, []).append(k)
+    incident: dict = {}
+    for f, tri in enumerate(elements.tolist()):
+        for v in tri:
+            incident.setdefault(v, []).append(f)
+    n_rejoined, apart, worst_gap = 0, [], 0.0
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        pos = nodes[members]
+        gap = float(np.max(np.linalg.norm(pos - pos[0], axis=1)))
+        if gap == 0.0:
+            continue
+        worst_gap = max(worst_gap, gap)
+        faces = sorted({f for v in members for f in incident.get(v, [])})
+        best = None
+        for cand in [*pos, pos.mean(axis=0)]:
+            trial = nodes.copy()
+            trial[members] = cand
+            ang, area2 = _min_angle_and_area(trial, elements[faces])
+            if (area2 <= 0).any():
+                continue
+            score = float(ang.min())
+            if best is None or score > best[0]:
+                best = (score, cand)
+        if best is None:
+            apart.append([round(float(x), 1) for x in pos[0]])
+            continue
+        nodes[members] = best[1]
+        n_rejoined += 1
+    return nodes, {"n_groups_rejoined": n_rejoined, "max_gap_m": round(worst_gap, 3),
+                   "left_apart_at": apart}
