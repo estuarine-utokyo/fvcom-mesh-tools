@@ -26,6 +26,15 @@ u, c = np.unique(e, axis=0, return_counts=True)
 bnd_node = np.zeros(len(xy), bool)
 bnd_node[np.unique(u[c == 1])] = True
 el_on_wall = wall[tri].any(axis=1)
+# A wall EDGE is a boundary segment met from both sides, i.e. present twice
+# by position.  Judging it by its two nodes being duplicated drew the edge
+# to a free tip -- whose tip is NOT duplicated -- as coastline.
+_b = u[c == 1]
+_key = np.round(np.sort(np.stack([xy[_b[:, 0]], xy[_b[:, 1]]], axis=1)
+                        .view([("x", float), ("y", float)]), axis=1)
+                .view(float).reshape(len(_b), 4), 3)
+_, _kinv, _kc = np.unique(_key, axis=0, return_inverse=True, return_counts=True)
+wall_edge = _kc[_kinv.ravel()] == 2
 
 def angles(k):
     p = xy[tri[k]]
@@ -67,8 +76,8 @@ fig, axes = plt.subplots(1, 2, figsize=(17, 8.5))
 for ax, half in zip(axes, (1100.0, 350.0)):
     cx, cy = (393010.0, 3909480.0) if half > 500 else (392500.0, 3909000.0)
     ax.triplot(xy[:, 0], xy[:, 1], tri, lw=0.25, color="0.6")
-    for i, j in u[c == 1]:
-        col = "tab:red" if (wall[i] and wall[j]) else "tab:blue"
+    for (i, j), w in zip(_b, wall_edge):
+        col = "tab:red" if w else "tab:blue"
         ax.plot(xy[[i, j], 0], xy[[i, j], 1], color=col, lw=1.2)
     ax.plot(cen[bad_el, 0], cen[bad_el, 1], "x", color="tab:orange", ms=8, mew=2)
     ax.set_xlim(cx - half, cx + half)
