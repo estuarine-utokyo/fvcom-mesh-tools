@@ -47,6 +47,29 @@ def _parse_time(text: str) -> datetime:
     raise ValueError(f"cannot read a time from {text!r}")
 
 
+def _strip_comments(text: str) -> str:
+    """A namelist without its ``!`` comments -- those outside quotes only.
+
+    A commented-out setting read as the active one made incomplete history
+    pass: ``! NC_OUT_INTERVAL = 'days = 1'`` above the real hourly interval
+    widened the gap gate to a day (review 4, U1).
+    """
+    out = []
+    for line in text.splitlines():
+        quote, cut = None, len(line)
+        for i, ch in enumerate(line):
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in "'\"":
+                quote = ch
+            elif ch == "!":
+                cut = i
+                break
+        out.append(line[:cut])
+    return "\n".join(out)
+
+
 def _nml_value(text: str, key: str) -> str | None:
     """A namelist value, single- or double-quoted or bare; None when absent."""
     m = re.search(rf"\b{key}\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|([^,\s/]+))", text,
@@ -110,7 +133,7 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
     if not nml_path.exists():
         reasons.append(f"no namelist {nml}")
     else:
-        nml_text = nml_path.read_text()
+        nml_text = _strip_comments(nml_path.read_text())
         v = _nml_value(nml_text, "END_DATE")
         end = _parse_time(v) if v else None
         v = _nml_value(nml_text, "NC_FIRST_OUT") or _nml_value(nml_text, "START_DATE")
@@ -169,9 +192,10 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
         # in file order, never re-sorted: a reversed or overlapping stack is
         # a defect to report, not to repair (T2)
         steps = np.diff(np.array(stamps, dtype="datetime64[s]")).astype(float)
-        if (steps <= 0).any():
+        # one record has no cadence to judge; its coverage still is (U2)
+        if steps.size and (steps <= 0).any():
             reasons.append("the history times do not increase record by record")
-        elif interval is not None and steps.max() > 1.5 * tol.total_seconds():
+        elif steps.size and interval is not None and steps.max() > 1.5 * tol.total_seconds():
             reasons.append(f"the output has a gap of {steps.max() / 3600:.2f} h against "
                            f"an interval of {tol.total_seconds() / 3600:.2f} h")
         if first is not None and abs(stamps[0] - first) > tol:

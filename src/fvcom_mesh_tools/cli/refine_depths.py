@@ -51,12 +51,23 @@ def inherited_edges_of(root: Path, node_map: np.ndarray):
     the base had it: a patch can connect two retained nodes that were never
     neighbours, and an over-limit edge of that kind is the patch's, not the
     base's (review 3, T5). The base is the one named in the refinement's
-    report.json. Returns a set of sorted refined-node pairs, or None when the
-    base cannot be read -- and then no frozen pair is excused.
+    report.json, and it must still be the same file (its SHA-256, recorded
+    there by the refinement). Returns a set of sorted refined-node pairs, or
+    None when the base cannot be read or has changed -- and then no frozen
+    pair is excused.
     """
     try:
         rep = json.loads((root / "report.json").read_text())
         base = Path(rep["base_mesh"])
+        # A path is not an identity: a base replaced at the same path would
+        # excuse edges the refined mesh never inherited (review 4, U3). The
+        # refinement records the base's SHA-256; without a match -- or in an
+        # older report without one -- nothing is excused.
+        import hashlib
+
+        want = rep.get("base_mesh_sha256")
+        if not want or hashlib.sha256(base.read_bytes()).hexdigest() != want:
+            return None
         if base.suffix == ".dat":
             from fvcom_mesh_tools.io.fvcom_native import read_grd
             _, tri = read_grd(base)

@@ -92,9 +92,14 @@ OUT = Path(os.environ.get("LR_OUT", f"outputs/refine_{recipe.stem}")).resolve()
 # started together used to write over each other (review 3, T4).
 _res = OUT / ".reserved"
 _token = os.environ.get("LR_RESERVATION")
-if _token and _res.exists() and _res.read_text().strip() == _token:
-    pass
+if _token:
+    # a delegated claim must be the one that is there, and nothing else
+    # (review 4, U4): a stale token may not reserve the directory afresh
+    if not (_res.exists() and _res.read_text().strip() == _token):
+        raise SystemExit(f"{OUT}: LR_RESERVATION does not match {_res}; not starting")
 else:
+    if OUT.exists() and any(OUT.iterdir()):
+        raise SystemExit(f"{OUT} is not empty; move it aside")
     OUT.mkdir(parents=True, exist_ok=True)
     try:
         _fd = os.open(_res, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
@@ -281,6 +286,10 @@ regions_report = [
      "xy": np.asarray(g.exterior.coords).round(3).tolist()}
     for g, r in regions_m]
 reports = {"recipe": str(recipe), "base_mesh": str(cfg["base_mesh"]),
+           # the base's identity, for fmesh-finish-depths to excuse only the
+           # edges this base really had (review 4, U3)
+           "base_mesh_sha256": __import__("hashlib").sha256(
+               Path(cfg["base_mesh"]).read_bytes()).hexdigest(),
            "regions": regions_report,
            "base_depth": str(cfg["base_depth"]) if cfg["base_depth"] else None,
            "base_obc": str(cfg["base_obc"]) if cfg["base_obc"] else None,

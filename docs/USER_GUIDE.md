@@ -308,7 +308,9 @@ The run log ends with lines like these:
   417, `refine_workflow.sh`). Move it aside first.
 - **One run per output directory.** A run claims its directory by creating
   `.reserved` atomically, so of two runs started together, one is refused.
-  The file stays after the run.
+  The file stays after the run. If a run crashed, recover like this: make
+  sure it has stopped, then move the WHOLE directory aside (keep it for
+  diagnosis) and start again. Do not delete only `.reserved`.
 
 ---
 
@@ -367,8 +369,11 @@ move, and on every edge between two frozen nodes that the patch CREATED
 (`n_over_frozen_pair_new`). The patch may connect two retained nodes that
 were never neighbours. Only an edge the base mesh already had (read from
 the base named in `report.json`) is excused as the base's own
-(`n_over_frozen_pair_inherited`). When that base cannot be read, no frozen
-pair is excused.
+(`n_over_frozen_pair_inherited`). The base is identified by the SHA-256
+recorded in `report.json` when the refinement ran. When that base cannot be
+read, has changed since, or the report is older and has no hash, no frozen
+pair is excused. So keep the base files as they were: do not overwrite a
+base that a refinement used.
 
 The output is `<case>_dep_min3m_rfac0p2_cap300.dat`, with a JSON report of
 what each step moved. From `TokyoBay_dep_m7001tp_raw.dat` it reproduces
@@ -399,6 +404,10 @@ Then:
     `cycles` of the internal step). A declaration that cannot be read fails;
   - start at `NC_FIRST_OUT` (else `START_DATE`) and reach `END_DATE`, each
     within one interval (one hour when none is declared).
+
+  Namelist comments (`!` outside quotes) are ignored. A hot start is judged
+  from its own START_DATE and NC_FIRST_OUT. That is a check of the checker,
+  not a tested hot-start workflow.
 
   `412_m2_run.sh` deletes the case's `output/*.nc` before it runs, so an
   earlier attempt's output is never judged as this one's. Copy anything you

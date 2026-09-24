@@ -99,3 +99,14 @@ def test_fortran_reals_and_cycles_are_read_as_fvcom_does():
     nml = " EXTSTEP_SECONDS = 2.0d0, ISPLIT = 10,\n"
     assert _interval("cycles = 180", nml).total_seconds() == 3600.0
     assert _interval("days = 0.5", nml).total_seconds() == 43200.0
+
+
+def test_comments_are_stripped_outside_quotes_only():
+    from fvcom_mesh_tools.cli.check_run import _nml_value, _strip_comments
+
+    text = (" ! NC_OUT_INTERVAL = 'days = 1',\n"
+            " NC_OUT_INTERVAL = 'seconds = 3600.', ! hourly\n"
+            " CASE_TITLE = 'a ! inside quotes',\n")
+    clean = _strip_comments(text)
+    assert _nml_value(clean, "NC_OUT_INTERVAL") == "seconds = 3600."
+    assert _nml_value(clean, "CASE_TITLE") == "a ! inside quotes"
