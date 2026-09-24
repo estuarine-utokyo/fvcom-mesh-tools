@@ -33,7 +33,11 @@ io-vector = ["shapely>=2.0", "geopandas>=0.14", "fiona>=1.9"]
 prep = ["fvcom-mesh-tools[io-vector]", "scikit-image>=0.22"]
 pipeline = ["fvcom-mesh-tools[prep,dem,viz]", "pyyaml>=6.0"]
 dem = ["rasterio>=1.3", "netCDF4>=1.6", "pyproj>=3.6"]
-oceanmesh = ["oceanmesh", "fvcom-mesh-tools[dem,io-vector]"]
+# The laboratory's fork, not PyPI's oceanmesh: local refinement needs its
+# constrained pfix/egfix meshing (fork README §6.3). Install it editable from
+# a clone at ~/Github/oceanmesh (docs/USER_GUIDE.md §2).
+oceanmesh = ["oceanmesh @ git+https://github.com/estuarine-utokyo/oceanmesh.git@main",
+             "fvcom-mesh-tools[dem,io-vector]"]
 ocsmesh = ["ocsmesh", "gmsh", "fvcom-mesh-tools[dem,io-vector]"]
 meshkernel = ["meshkernel"]
 jigsaw = ["jigsawpy"]

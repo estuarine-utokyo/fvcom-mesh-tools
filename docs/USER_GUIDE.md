@@ -55,31 +55,78 @@ at 29.0 deg), and the refinement must add none.
 
 ---
 
-## 2. Setup
+## 2. Requirements
 
-- **Python environment:** the conda env `oceanmesh-bench`
-  (`/octfs/work/G16445/v61021/miniforge3`), with this repository installed
-  editable:
+### 2.1 Repositories
 
-  ```bash
-  pip install -e . --no-deps --no-build-isolation
-  ```
+| what | where | access | needed for |
+|---|---|---|---|
+| **fvcom-mesh-tools** (this repository, Apache-2.0) | https://github.com/estuarine-utokyo/fvcom-mesh-tools | public | everything |
+| **oceanmesh, the laboratory's fork** (GPL-3.0) | https://github.com/estuarine-utokyo/oceanmesh, branch `main` (tested at `76903e3`) | public | the fill in `fmesh-refine` |
+| **xcoast** | https://github.com/estuarine-utokyo/xcoast | public | making the OSM land polygons for a new area (§2.3); land in some figures |
+| **a base FVCOM model** | e.g. `TB-FVCOM` (`input/goto2023/grid/`), the laboratory's model repository | laboratory only | the recipe's `base_mesh`, `base_depth`, `base_obc` -- any FVCOM grd/dep/obc works |
+| **FVCOM** | the laboratory's `FVCOM` repository, branch `uk-fabm/v5.1.0-dev`, built | laboratory only | the FVCOM tests (§9) only |
 
-  The oceanmesh fork is installed the same way. Scientific packages come from
-  conda-forge only (`mamba install -c conda-forge ...`).
-- **Data**, under `DATA_DIR=/octfs/work/G16445/share/Data`:
-  - OSM land polygons (`geodata/OSM/coastmask_cache/...`);
-  - M7001 and the Tokyo Bay grids.
-- **Base model:** the FVCOM grid, depth and open-boundary files, e.g.
-  `~/Github/TB-FVCOM/input/goto2023/grid/`.
-- **OCTOPUS:**
-  - *Login nodes* have the network and no heavy computing: install, clone and
-    submit there.
-  - *Compute nodes* run everything else, through `qsub`. The job scripts are
-    in `jobs/octopus/`.
-  - Start a monitor after every `qsub` and read the log when it ends.
+**The oceanmesh fork is required.** The oceanmesh on PyPI or conda-forge, and
+the upstream CHLNDDEV repository, will not work. The refinement hands the
+mesher fixed points and fixed edges (`pfix` / `egfix`: the coastline rim and
+the walls), and only the fork forces those through a constrained Delaunay
+triangulation (its README §6.3). The generator also looks for the fork at
+**`~/Github/oceanmesh`** first (`notebooks/420_local_refine.py`), so clone it
+there.
 
----
+### 2.2 Environment
+
+Python 3.12 in a conda environment built from this repository's
+`environment.yml`, conda-forge only. The three repositories above are
+installed editable, without letting pip fetch anything:
+
+```bash
+# on a login node (compute nodes have no network)
+mamba env create -n oceanmesh-bench -f environment.yml
+mamba activate oceanmesh-bench
+git clone https://github.com/estuarine-utokyo/oceanmesh.git ~/Github/oceanmesh
+git clone https://github.com/estuarine-utokyo/xcoast.git ~/Github/xcoast
+(cd ~/Github/oceanmesh && pip install -e . --no-deps --no-build-isolation)  # compiles C++
+(cd ~/Github/xcoast && pip install -e . --no-deps --no-build-isolation)
+pip install -e . --no-deps --no-build-isolation                          # this repository
+```
+
+- **Compiling oceanmesh:** it compiles C++ (CGAL). On OCTOPUS,
+  `qsub jobs/octopus/build_env.sh` does the compile step as a batch job.
+- **Other packages:** add them with `mamba install -c conda-forge ...`,
+  never with pip. The `pip install -e` lines above are the only use of pip.
+- **Editable install:** `fmesh-refine` needs this repository installed
+  editable, because it runs `notebooks/420_local_refine.py` from the
+  checkout.
+
+### 2.3 Data
+
+Everything below is read from `DATA_DIR` (on OCTOPUS
+`/octfs/work/G16445/share/Data`, the laboratory's shared data area):
+
+| data | path under `DATA_DIR` | used for | without it |
+|---|---|---|---|
+| OSM land polygons | `geodata/OSM/coastmask_cache/<area>/land.shp`, made by xcoast (OSM, ODbL) | the coastline, the width filter, walls | `fmesh-refine` stops; build the cache for a new area with xcoast, or pass `--land` |
+| M7001 (JHA) on T.P. | `geodata/bathymetry/M7001/TP/M7001_dem_tokyobay.nc`, `M7001_TP.parquet` | `hires.bathymetry: tokyo_bay` | use `bathymetry: base` (inherit the base's depths) |
+| Tokyo Bay 30 m grid, Kanto blend | `geodata/bathymetry/tokyo_bay/...` | the same depth ladder | as above |
+
+M7001 is licensed survey data and is not public. The depth ladder
+(`fvcom_mesh_tools.dem.tokyo_bay`) covers Tokyo Bay only. Another area needs
+`bathymetry: base`, or a ladder of its own.
+
+### 2.4 OCTOPUS
+
+- **Login nodes** have the network and no heavy computing: install, clone
+  and submit there.
+- **Compute nodes** run everything else, through `qsub`. The job scripts are
+  in `jobs/octopus/`.
+- **Paths in the job scripts are this account's.** The accounting group is
+  `G16445`; the FVCOM binary is
+  `/octfs/work/G16445/v61021/Github/FVCOM/src/fvcom`; the scratch directory is
+  under `/octfs/work/G16445/v61021/scratch`. Another user edits them.
+- **Monitoring:** start a monitor after every `qsub`, and read the log when
+  the job ends.
 
 ## 3. Quick start (OCTOPUS)
 

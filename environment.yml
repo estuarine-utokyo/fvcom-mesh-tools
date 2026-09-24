@@ -46,11 +46,13 @@ dependencies:
   # oceanmesh is GPL-3.0-or-later and NOT on conda-forge/PyPI —
   # install our fork (constrained Delaunay / pfix / egfix) from a
   # local clone after env creation:
-  #   git clone <fork> ../oceanmesh && cd ../oceanmesh
+  #   git clone https://github.com/estuarine-utokyo/oceanmesh.git ~/Github/oceanmesh
+  #   cd ~/Github/oceanmesh   (the refinement generator looks there first)
   #   pip install -e . --no-deps --no-build-isolation      # GNU toolchain
   #   CC=icx CXX=icpx pip install -e . --no-deps --no-build-isolation
   # (-static-intel is applied automatically; see oceanmesh README 3.4)
-  # Then this repo (and ../xcoast the same way):
+  # Then this repo, and xcoast
+  # (https://github.com/estuarine-utokyo/xcoast) the same way:
   #   pip install --no-deps --no-build-isolation -e .
   # --no-build-isolation keeps pip from fetching build deps from PyPI;
   # every dependency comes from conda-forge.

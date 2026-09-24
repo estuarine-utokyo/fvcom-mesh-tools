@@ -43,6 +43,20 @@ FVCOM test as a chain of batch jobs. The steps also exist as commands:
 | `fmesh-finish-depths OUT --hmin 3 --hmax 300 --rfactor 0.2` | floor, cap and r-factor-smooth the depths into a TB-FVCOM-style `<case>_dep_min3m_rfac0p2_cap300.dat` (also works on any FVCOM case) |
 | `fmesh-plot-views OUT --view name:x0:x1:y0:y1` | mesh figures; every solid boundary (coast, quay, wall) in black |
 
+**Requirements** (full list in `docs/USER_GUIDE.md` §2):
+
+- **the laboratory's oceanmesh fork**,
+  https://github.com/estuarine-utokyo/oceanmesh (public, GPL-3.0), cloned to
+  `~/Github/oceanmesh`. The PyPI / upstream oceanmesh lacks the constrained
+  `pfix`/`egfix` meshing the refinement needs.
+- **xcoast**, https://github.com/estuarine-utokyo/xcoast, which makes the
+  OSM land polygons.
+- **a conda env** from `environment.yml`.
+- **`DATA_DIR`**, holding the OSM land cache and, for Tokyo Bay depths,
+  M7001.
+- **a base FVCOM model**, and for the FVCOM tests the laboratory's FVCOM
+  build.
+
 **Read [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)** for:
 
 - the rules, and how to write a recipe;
@@ -107,7 +121,9 @@ compiled scientific stack from conda-forge or a pip-only setup.
 mamba env create -n oceanmesh-bench -f environment.yml   # conda-forge only
 mamba activate oceanmesh-bench
 # Local repositories only; --no-build-isolation keeps pip off PyPI.
-(cd ../oceanmesh && pip install -e . --no-deps --no-build-isolation)  # our fork, GPL-3.0-or-later
+# our fork, GPL-3.0-or-later: https://github.com/estuarine-utokyo/oceanmesh
+# (clone it to ~/Github/oceanmesh; the PyPI/upstream oceanmesh lacks pfix/egfix CDT)
+(cd ../oceanmesh && pip install -e . --no-deps --no-build-isolation)
 pip install -e . --no-deps --no-build-isolation                        # this package
 (cd ../xcoast && pip install -e . --no-deps --no-build-isolation)     # coastline plotting
 ```
