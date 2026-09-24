@@ -311,3 +311,29 @@ def test_rejoin_copies_leaves_a_mesh_without_gaps_alone():
     xy = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
     back, rep = rejoin_copies(xy, np.array([[0, 1, 2]]), np.arange(3))
     assert rep["n_groups_rejoined"] == 0 and np.array_equal(back, xy)
+
+
+def test_straighten_walls_takes_the_pier_off_its_bent_root():
+    import shapely
+
+    from fvcom_mesh_tools.walls import straighten_walls
+
+    # a 90 m pier along +y whose axis bends 12 m sideways over its last 10 m
+    bent = shapely.LineString([(0, 0), (0, 80), (12, 90)])
+    dog = shapely.LineString([(0, 0), (0, 60), (60, 120)])    # a real bend
+    out, rep = straighten_walls([bent, dog], lambda xy: np.full(len(xy), 30.0))
+    c = np.asarray(out[0].coords)
+    assert len(c) == 2 and np.allclose(c[:, 0], 0.0, atol=0.1)
+    assert np.isclose(c[0, 1], 0.0, atol=0.1) and np.isclose(c[1, 1], 90.0, atol=0.1)
+    assert out[1] is dog
+    assert rep["n_straightened"] == 1
+
+
+def test_straighten_walls_leaves_a_two_point_wall():
+    import shapely
+
+    from fvcom_mesh_tools.walls import straighten_walls
+
+    w = shapely.LineString([(0, 0), (50, 10)])
+    out, rep = straighten_walls([w], lambda xy: np.full(len(xy), 30.0))
+    assert out[0] is w and rep["n_straightened"] == 0

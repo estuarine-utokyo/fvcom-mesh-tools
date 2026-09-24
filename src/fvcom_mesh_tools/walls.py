@@ -553,3 +553,50 @@ def rejoin_copies(nodes, elements, copy_of):
         n_rejoined += 1
     return nodes, {"n_groups_rejoined": n_rejoined, "max_gap_m": round(worst_gap, 3),
                    "left_apart_at": apart}
+
+
+def straighten_walls(walls, size, *, trim_factor=0.5, tol_factor=0.1):
+    """Replace a nearly straight wall by the straight line it follows.
+
+    A pier is a rectangle standing on a quay, and the medial axis of the land
+    it came from bends at the pier's root, where the axis branches into the
+    corners of the junction.  Walked as it stands, that bend tilted the red
+    line off the pier by 11-19 deg on the Kimitsu harbour (measured against
+    the long axis of each pier's OSM footprint).  So each wall is fitted
+    with a line over its middle -- half an element (``trim_factor``) or a
+    quarter of its length, whichever is less, taken off each end -- and if
+    every point of that middle lies within ``tol_factor`` of an element of
+    the line, the wall BECOMES the line, between the projections of its two
+    ends.  A wall that bends in its middle (an L, a dog-leg breakwater) is
+    left as it is.
+
+    ``size`` maps (n, 2) points to the local element size.  Returns
+    ``(walls, report)``.
+    """
+    import shapely
+
+    out, turned = [], []
+    for w in walls:
+        c = np.asarray(w.coords, dtype=float)[:, :2]
+        if len(c) <= 2 or w.length <= 0:
+            out.append(w)
+            continue
+        mid = np.asarray(w.interpolate(0.5, normalized=True).coords)[0]
+        h = float(np.asarray(size(mid[None]), dtype=float)[0])
+        a = min(trim_factor * h, 0.25 * w.length)
+        s = np.linspace(a, w.length - a, max(8, int((w.length - 2 * a) / 1.0)))
+        dense = np.asarray([np.asarray(w.interpolate(x).coords)[0][:2] for x in s])
+        centre = dense.mean(axis=0)
+        u = np.linalg.svd(dense - centre)[2][0]
+        normal = np.array([-u[1], u[0]])
+        if float(np.max(np.abs((dense - centre) @ normal))) > tol_factor * h:
+            out.append(w)
+            continue
+        ends = [centre + ((c[k] - centre) @ u) * u for k in (0, -1)]
+        new = shapely.LineString(ends)
+        before = c[-1] - c[0]
+        ang = float(np.degrees(np.arccos(np.clip(
+            abs(before @ u) / (np.linalg.norm(before) + 1e-12), 0.0, 1.0))))
+        turned.append(round(ang, 1))
+        out.append(new)
+    return out, {"n_straightened": len(turned), "end_to_end_turn_deg": turned}

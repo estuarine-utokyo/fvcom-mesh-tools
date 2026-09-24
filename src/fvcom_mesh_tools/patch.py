@@ -642,7 +642,8 @@ def _unusable_replacement(new: np.ndarray, xy: np.ndarray, idx,
     return None
 
 
-def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0):
+def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0,
+                     land_width_factor: float | None = None):
     """Remove what a mesh of size ``h0`` cannot resolve, and say what went.
 
     This is the judgement the declared grid size implies, and it has to be
@@ -665,6 +666,14 @@ def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0):
     channel, and it is the smallest number that leaves an element with
     neighbours on both sides.
 
+    ``land_width_factor``, when given, sets the LAND threshold on its own:
+    land narrower than ``land_width_factor * h0`` goes, while water keeps
+    ``elements_per_feature``.  The mesh lives in the water, so a narrow pier
+    can still be meshed round as land: its outline is a coastline, and the
+    only thing its width limits is the edge across its end, which C1 needs
+    at half an element or more (owner, 2026-09-24).  ``None`` keeps one
+    threshold for both, as before.
+
     Returns ``(filtered, report)``.  The report is the point: a coastline
     that quietly lost its piers is worse than one that says it did.
     """
@@ -674,13 +683,17 @@ def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0):
         raise ValueError("h0 must be finite and positive")
     if not (np.isfinite(elements_per_feature) and elements_per_feature > 0):
         raise ValueError("elements_per_feature must be finite and positive")
+    if land_width_factor is not None and not (
+            np.isfinite(land_width_factor) and land_width_factor > 0):
+        raise ValueError("land_width_factor must be finite and positive")
     r = 0.5 * float(elements_per_feature) * float(h0)
+    r_land = r if land_width_factor is None else 0.5 * float(land_width_factor) * float(h0)
     before = shapely.union_all(
         [land] if hasattr(land, "geom_type") else list(land))
     # MITRE joins: a port is rectilinear, and round joins shave every convex
     # corner of a quay into a crescent -- land lost that was never narrow,
     # and a sliver that the wall extraction would read as a structure.
-    opened = before.buffer(-r, join_style="mitre").buffer(r, join_style="mitre")
+    opened = before.buffer(-r_land, join_style="mitre").buffer(r_land, join_style="mitre")
     closed = opened.buffer(r, join_style="mitre").buffer(-r, join_style="mitre")
     out = shapely.make_valid(closed)
 
@@ -692,6 +705,8 @@ def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0):
         "h0_m": float(h0),
         "elements_per_feature": float(elements_per_feature),
         "removes_features_narrower_than_m": float(2.0 * r),
+        "removes_land_narrower_than_m": float(2.0 * r_land),
+        "fills_water_narrower_than_m": float(2.0 * r),
         "area_before_m2": float(before.area),
         "area_after_m2": float(out.area),
         "area_removed_m2": float(before.area - out.area),
@@ -709,6 +724,8 @@ def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0):
 
 def filter_shoreline_local(land, size_field, h0: float, footprint, *,
                            elements_per_feature: float = 2.0,
+                           land_width_factor: float | None = None,
+                           land_width_max_band: int | None = None,
                            spacing: float | None = None):
     """:func:`filter_shoreline` at the LOCAL element size, not one size.
 
@@ -724,6 +741,12 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
     carry.  The pieces are joined and filtered once more at ``h0``, which
     removes the slivers a seam between two bands leaves and nothing else --
     every band already removed more than that.
+
+    ``land_width_factor`` applies in bands up to ``land_width_max_band``
+    (all bands when None); coarser bands keep one threshold for land and
+    water.  Out in the coarse transition, land kept down to half a 240 m
+    element put a 200 m spike of OSM land against the frozen interface's
+    440-600 m edges, and an element of 17.8 deg between them.
 
     Returns ``(filtered, report)`` with a line per band.
     """
@@ -750,16 +773,22 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
         zone = shapely.intersection(shapely.union_all(zones[k]), footprint)
         if zone.is_empty:
             continue
-        fk, rk = filter_shoreline(land, hk, elements_per_feature=elements_per_feature)
+        lw = land_width_factor if (land_width_max_band is None
+                                   or k <= land_width_max_band) else None
+        fk, rk = filter_shoreline(land, hk, elements_per_feature=elements_per_feature,
+                                  land_width_factor=lw)
         part = shapely.intersection(fk, zone)
         pieces.append(part)
         rows.append({"band": k, "h_m": hk, "zone_km2": float(zone.area / 1e6),
-                     "removes_narrower_than_m": rk["removes_features_narrower_than_m"]})
+                     "removes_narrower_than_m": rk["removes_features_narrower_than_m"],
+                     "removes_land_narrower_than_m": rk["removes_land_narrower_than_m"]})
     # land outside the sampled footprint is kept exactly as the finest band has it
-    f0, _ = filter_shoreline(land, h0, elements_per_feature=elements_per_feature)
+    f0, _ = filter_shoreline(land, h0, elements_per_feature=elements_per_feature,
+                             land_width_factor=land_width_factor)
     pieces.append(shapely.difference(f0, footprint))
     joined = shapely.union_all([q for q in pieces if not q.is_empty])
-    out, rep = filter_shoreline(joined, h0, elements_per_feature=elements_per_feature)
+    out, rep = filter_shoreline(joined, h0, elements_per_feature=elements_per_feature,
+                                land_width_factor=land_width_factor)
     before = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
     rep = {**rep, "bands": rows,
            "land_lost_m2": float(shapely.difference(before, out).area),
@@ -850,7 +879,9 @@ def _resample_on_source(pts: np.ndarray, shoreline, size,
             dtype=float)[:, :2]
         out.extend((simple if len(simple) >= 2 else run)[1:])
     out = np.asarray(out, dtype=float)
-    return _walk(out if len(out) >= 2 else coords, size)
+    # corners kept: an arc-length walk cut across every pier narrower than
+    # two elements, and piers down to half an element are land now
+    return _corner_walk(out if len(out) >= 2 else coords, size)
 
 
 def rim_constraints(
@@ -998,37 +1029,120 @@ def _push(pts: list, base_id: list, q, bid: int) -> int:
     return len(pts) - 1
 
 
+def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
+    """Resample a polyline at the local size, keeping its corners.
+
+    ``_walk`` places stations by arc length and so cuts every corner it
+    passes, which on a pier narrower than two elements cuts across the pier:
+    its stations go out along one side and come back along the other, and
+    the chord between them runs over the tip.  Here every vertex of the
+    (already simplified) line is a candidate; an edge under half an element
+    loses the end that turns less, never a stretch's own two ends; then
+
+    * a TIP -- an edge under 0.75 of an element whose two ends both turn by
+      more than 60 deg the same way, the end of a pier 15-22 m wide at a
+      30 m size -- becomes one point at its midpoint (owner, 2026-09-24):
+      an end that short puts an element under 30 deg beside it;
+    * long edges are subdivided, every vertex kept.
+
+    ``closed`` treats ``pts`` as a ring (not repeated at the end) and
+    returns it the same way.
+    """
+    pts = np.asarray(pts, dtype=float)[:, :2].copy()
+    if closed and len(pts) > 1 and np.allclose(pts[0], pts[-1]):
+        pts = pts[:-1]
+
+    def fixed(k):
+        return not closed and k in (0, len(pts) - 1)
+
+    def turn(k):
+        """Signed turn at vertex k, in degrees (nan at an open end)."""
+        if fixed(k):
+            return np.nan
+        a = pts[k] - pts[k - 1]
+        b = pts[(k + 1) % len(pts)] - pts[k]
+        cr = a[0] * b[1] - a[1] * b[0]
+        return float(np.degrees(np.arctan2(cr, a @ b)))
+
+    def edges():
+        n = len(pts)
+        return [(k, (k + 1) % n) for k in range(n if closed else n - 1)]
+
+    changed = True
+    while changed and len(pts) > (3 if closed else 2):
+        changed = False
+        # short edges: drop the end that turns less
+        cand = []
+        for i, j in edges():
+            L = float(np.linalg.norm(pts[j] - pts[i]))
+            h = float(_size_at(size, 0.5 * (pts[i] + pts[j])[None])[0])
+            if L < 0.5 * h and not (fixed(i) and fixed(j)):
+                cand.append((L / h, i, j))
+        if cand:
+            _, i, j = min(cand)
+            if fixed(i):
+                drop = j
+            elif fixed(j):
+                drop = i
+            elif min(abs(turn(i)), abs(turn(j))) < 20.0:
+                # one end is on a straight run: it goes, and the shape with it
+                drop = i if abs(turn(i)) <= abs(turn(j)) else j
+            else:
+                # a STEP, both ends corners: dropping either cut a 14 m step
+                # in a quay into a 165 m chord across the water beside it.
+                # The two become one point between them instead.
+                pts[i] = 0.5 * (pts[i] + pts[j])
+                drop = j
+            pts = np.delete(pts, drop, axis=0)
+            changed = True
+            continue
+        # tips: a short end between two turns the same way
+        for i, j in edges():
+            if fixed(i) or fixed(j):
+                continue
+            L = float(np.linalg.norm(pts[j] - pts[i]))
+            h = float(_size_at(size, 0.5 * (pts[i] + pts[j])[None])[0])
+            ti, tj = turn(i), turn(j)
+            if L < 0.75 * h and abs(ti) > 60.0 and abs(tj) > 60.0 \
+                    and np.sign(ti) == np.sign(tj):
+                # The sides stay parallel up to half an element short of the
+                # end and close from there onto the end's midpoint.  Joining
+                # the root corners straight to the midpoint turned a 20 x 70 m
+                # pier into a triangle.
+                n = len(pts)
+                p_, q_ = (i - 1) % n, (j + 1) % n
+                back = []
+                for c_, o_ in ((i, p_), (j, q_)):
+                    side = pts[o_] - pts[c_]
+                    ls = float(np.linalg.norm(side))
+                    d = min(0.5 * h, 0.5 * ls)
+                    back.append(pts[c_] + side / max(ls, 1e-12) * d)
+                mid = 0.5 * (pts[i] + pts[j])
+                new = [back[0], mid, back[1]]
+                if j == 0:                      # the end wraps round a ring
+                    pts = np.vstack([pts[1:i], new])
+                else:
+                    pts = np.vstack([pts[:i], new, pts[j + 1:]])
+                changed = True
+                break
+    if closed:
+        return _subdivide(np.vstack([pts, pts[:1]]), size)[:-1]
+    return _subdivide(pts, size)
+
+
 def _ring_at_size(ring: np.ndarray, size) -> np.ndarray:
     """A closed ring resampled at the local size, its corners kept.
 
-    Douglas-Peucker at a tenth of the local element drops the wiggles; then
-    any edge under half an element loses the end that turns less (a corner of
-    a quay stays, a vertex on a straight run goes); then long edges are
-    subdivided.  Returns the points once each, not closed.
+    Douglas-Peucker at a tenth of the local element drops the wiggles, then
+    :func:`_corner_walk` merges short edges, points narrow tips and
+    subdivides.  Returns the points once each, not closed.
     """
     import shapely
 
     ring = np.asarray(ring, dtype=float)[:, :2]
     h_min = float(np.min(_size_at(size, ring)))
     g = shapely.simplify(shapely.LinearRing(ring), 0.1 * h_min)
-    pts = np.asarray(g.coords, dtype=float)[:-1]
-
-    def turn(k):
-        a, b = pts[k] - pts[k - 1], pts[(k + 1) % len(pts)] - pts[k]
-        return float(np.arccos(np.clip(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)
-                                               + 1e-12), -1, 1)))
-
-    while len(pts) > 3:
-        lens = np.linalg.norm(np.roll(pts, -1, axis=0) - pts, axis=1)
-        h = _size_at(size, 0.5 * (pts + np.roll(pts, -1, axis=0)))
-        short = np.flatnonzero(lens < 0.5 * h)
-        if not len(short):
-            break
-        k = int(short[np.argmin(lens[short] / h[short])])
-        j = (k + 1) % len(pts)
-        pts = np.delete(pts, k if turn(k) <= turn(j) else j, axis=0)
-    closed = np.vstack([pts, pts[:1]])
-    return _subdivide(closed, size)[:-1]
+    return _corner_walk(np.asarray(g.coords, dtype=float)[:-1], size, closed=True)
 
 
 def island_rings(land, water, size, clearance_factor=0.5):

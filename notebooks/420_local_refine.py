@@ -70,6 +70,7 @@ from fvcom_mesh_tools.walls import (  # noqa: E402
     open_lone_corners,
     rejoin_copies,
     split_along_walls,
+    straighten_walls,
 )
 
 # The base's CRS. fort.14 and FVCOM's _grd.dat both carry bare numbers, so
@@ -377,8 +378,49 @@ if HIRES is not None and cfg["coastline"] == "resolve" and shore:
     # were the worst elements left in the port mesh.
     _h_local = patch_sizing(base.nodes, base.elements, sized, distmesh_scale=1.0,
                             outside="nearest")
-    _filtered, _frep = filter_shoreline_local(_keep, _h_local, _h0, _foot,
-                                              elements_per_feature=2)
+    # Land down to HALF an element stays land (owner, 2026-09-24): the mesh
+    # is in the water, a narrow pier can be meshed round, and only the edge
+    # across its end needs room.  Water keeps two elements.  Only where the
+    # elements are up to 2 h0 (bands 0-1): further out, the kept land met
+    # the frozen interface's coarse edges at 17.8 deg.
+    # The water a patch meshes is bounded by OSM land AND by the frozen
+    # mesh's own coast, and the rule "water narrower than two elements is
+    # closed" has to see both.  Filtering OSM alone left a spike of OSM land
+    # 207 m from a frozen coast node among 440-600 m elements in the
+    # transition -- a gap the filter never saw, and an element of 17.8 deg.
+    # So the base's LAND beside its frozen coast (each retained coast edge
+    # buffered by two local elements, minus the base's water) is filtered
+    # with the OSM land; it lies outside the hole, where nothing is meshed.
+    _be = np.sort(np.vstack([base.elements[:, [0, 1]], base.elements[:, [1, 2]],
+                             base.elements[:, [2, 0]]]), axis=1)
+    _bu, _bc = np.unique(_be, axis=0, return_counts=True)
+    # sel.retained holds the retained faces themselves, not their ids
+    _rt = np.asarray(sel.retained, dtype=np.int64)
+    _ret = np.unique(np.sort(np.vstack([_rt[:, [0, 1]], _rt[:, [1, 2]], _rt[:, [2, 0]]]),
+                             axis=1), axis=0)
+    _bset = {tuple(e) for e in _bu[_bc == 1].tolist()}
+    _obc = set(np.concatenate([np.asarray(o) for o in base.open_boundaries]).tolist()) \
+        if base.open_boundaries else set()
+    _fc = [e for e in _ret.tolist() if tuple(e) in _bset
+           and not (e[0] in _obc and e[1] in _obc)]
+    _fc_lines = [shapely.LineString(base.nodes[e, :2]) for e in _fc
+                 if shapely.intersects(_foot, shapely.LineString(base.nodes[e, :2]))]
+    _frozen_land = shapely.Polygon()
+    if _fc_lines:
+        _mids = np.asarray([ln.interpolate(0.5, normalized=True).coords[0]
+                            for ln in _fc_lines])
+        _hm = np.asarray(_h_local(_mids), dtype=float)
+        _band = shapely.union_all([ln.buffer(2.0 * h_, join_style="mitre")
+                                   for ln, h_ in zip(_fc_lines, _hm)])
+        _base_water = shapely.union_all(shapely.polygons(base.nodes[base.elements, :2]))
+        _frozen_land = shapely.intersection(shapely.difference(_band, _base_water), _foot)
+    reports["frozen_land_in_filter_km2"] = float(_frozen_land.area / 1e6)
+    _filtered, _frep = filter_shoreline_local(_keep + ([_frozen_land] if not _frozen_land.is_empty
+                                                       else []),
+                                              _h_local, _h0, _foot,
+                                              elements_per_feature=2,
+                                              land_width_factor=0.5,
+                                              land_width_max_band=1)
     reports["shoreline_filter"] = _frep
     for _b in _frep["bands"]:
         say(f"    band {_b['band']}: h {_b['h_m']:g} m over {_b['zone_km2']:.2f} km2, "
@@ -390,6 +432,8 @@ if HIRES is not None and cfg["coastline"] == "resolve" and shore:
                   if w.length >= float(_h_local(np.asarray(
                       [w.interpolate(0.5, normalized=True).coords[0]]))[0])]
     _wrep["n_dropped_shorter_than_local_size"] = _n_before - len(_walls_src)
+    _walls_src, _srep = straighten_walls(_walls_src, _h_local)
+    _wrep["straightened"] = _srep
     _walls_src = node_walls(_walls_src, snap_m=_h0)
     reports["walls_extracted"] = {k: v for k, v in _wrep.items() if k != "dropped"}
     say(f"walls: {_wrep['n_walls']} extracted, {_wrep['wall_length_m'] / 1000:.2f} km, "
@@ -601,7 +645,23 @@ if HIRES is not None and _shl is not None and _walls_src:
         di = float(np.linalg.norm(foot[k] - rim_xy[i]))
         dj = float(np.linalg.norm(foot[k] - rim_xy[j]))
         if min(di, dj) < 0.5 * h_here:
-            return _blunt(int(i if di <= dj else j), h_here)
+            v = int(i if di <= dj else j)
+            # Taking the vertex moved the WALL sideways by up to half an
+            # element, and a 70 m pier came out 11 deg off its OSM axis.
+            # Where the coast runs straight through the vertex, the vertex
+            # moves to the wall instead: along the same line, so the coast
+            # keeps its shape.  At a corner the corner still takes the root.
+            nb = [int(b if a == v else a) for a, b in rim_eg.tolist() if v in (a, b)]
+            if len(nb) == 2 and rim_base[v] < 0 \
+                    and all(("rim", v) not in e for e in _segs):
+                u1 = rim_xy[v] - rim_xy[nb[0]]
+                u2 = rim_xy[nb[1]] - rim_xy[v]
+                bend = np.degrees(np.arccos(np.clip(
+                    u1 @ u2 / (np.linalg.norm(u1) * np.linalg.norm(u2) + 1e-12), -1, 1)))
+                if bend < 15.0:
+                    rim_xy[v] = foot[k]
+                    _moved.append(v)
+            return _blunt(v, h_here)
         new = len(rim_xy)
         rim_xy = np.vstack([rim_xy, foot[k]])
         rim_base = np.append(rim_base, -1)
@@ -662,6 +722,7 @@ if HIRES is not None and _shl is not None and _walls_src:
         return np.asarray(out, dtype=float)
 
     _folded: list = []
+    _moved: list = []
     _keep = _protected()
     _pieces = [_simplify(np.asarray(c, dtype=float), _keep) for c in _pieces]
     for c in _pieces:
@@ -669,7 +730,24 @@ if HIRES is not None and _shl is not None and _walls_src:
         for e in (0, -1):
             h_e = float(h_achieved(np.asarray([c[e]]))[0])
             if float(shapely.distance(_coast, shapely.Point(c[e]))) <= 0.5 * h_e:
-                ends.append(_root(c[e]))
+                # Rooted where the wall, carried on straight, meets the coast
+                # -- not at the nearest point of the coast, which for a pier
+                # whose end was cut back beside a quay corner is off to the
+                # side.  The nearest point stays the fallback.
+                q_ = c[1] if e == 0 else c[-2]
+                d_ = c[e] - q_
+                d_ = d_ / (np.linalg.norm(d_) + 1e-12)
+                ray = shapely.LineString([c[e], c[e] + d_ * (0.5 * h_e + 0.4 * target + 1.0)])
+                rim_ml = shapely.MultiLineString(
+                    [rim_xy[[a_, b_]] for a_, b_ in rim_eg.tolist()])
+                hit = shapely.intersection(ray, rim_ml)
+                aim = c[e]
+                if not hit.is_empty:
+                    hp = np.asarray([g_.coords[0] for g_ in getattr(hit, "geoms", [hit])
+                                     if not g_.is_empty])
+                    if len(hp):
+                        aim = hp[np.argmin(np.linalg.norm(hp - c[e], axis=1))]
+                ends.append(_root(aim))
                 n_rooted += 1
             else:
                 ends.append(None)
@@ -751,7 +829,7 @@ if HIRES is not None and _shl is not None and _walls_src:
                  for e in _segs]
         _segs = [e for e in _segs if e[0] != e[1]]
     rc["pfix"], rc["egfix"], rc["pfix_base"] = rim_xy, rim_eg, rim_base
-    if _folded:
+    if _folded or _moved:
         hole = hole_polygon(rc["pfix"], rc["egfix"])
     n_rim = len(rim_xy)
     WALL_PTS = np.asarray(_pts, dtype=float).reshape(-1, 2)
@@ -906,6 +984,7 @@ if HIRES is not None and _shl is not None and _walls_src:
     WALL_LINES = [shapely.LineString(c) for c in _pieces if len(c) > 1]
     reports["wall_constraints"] = {"n_pieces_in_hole": len(_pieces), "n_rooted_ends": n_rooted,
                         "n_short_coast_edges_folded_into_a_root": len(_folded),
+                        "n_coast_points_moved_to_a_root": len(_moved),
                         "n_wall_edges_dropped_for_an_acute_angle": n_acute,
                         "n_wall_edges_dropped_for_a_tip_too_close": n_close_tips,
                         "n_tips_joined_to_a_nearby_line": n_joined,
@@ -1335,7 +1414,12 @@ def attempt(seed):
     # the wall nodes pinned, the 14 elements left under 30 deg all sat at
     # wall roots and tips where the repair could not reach.
     movable = is_new & ~on_boundary & ~wall_node
-    slidable = is_new & on_boundary
+    # ...but not a node with a COPY: the repair slides each copy on its
+    # own, and with straight walls they drifted up to 37 m apart before
+    # rejoin_copies pulled them together, bending the elements on one side.
+    # A tip, which has no copy, still slides.
+    _grp = np.bincount(copy_of, minlength=len(nodes))
+    slidable = is_new & on_boundary & ~(_grp[copy_of] > 1)
     mutable_faces = np.arange(len(elements)) >= len(sel.retained)
     _before_repair = nodes.copy()
     # The curves new boundary nodes may slide along are the ones rim_constraints

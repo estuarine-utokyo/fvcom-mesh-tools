@@ -1791,3 +1791,97 @@ def test_ring_at_size_drops_a_short_edge_but_keeps_the_corner():
     assert seg.min() >= 15.0
     for corner in [(0, 0), (200, 0), (200, 100)]:
         assert np.min(np.linalg.norm(r - corner, axis=1)) < 1e-6
+
+
+def _pier_line(width):
+    """A quay along y=0 with a 90 m pier of the given width sticking up."""
+    return np.array([[0.0, 0.0], [100.0, 0.0], [100.0, 90.0], [100.0 + width, 90.0],
+                     [100.0 + width, 0.0], [300.0, 0.0]])
+
+
+def test_corner_walk_points_a_narrow_tip():
+    from fvcom_mesh_tools.patch import _corner_walk
+
+    out = _corner_walk(_pier_line(18.0), lambda xy: np.full(len(xy), 30.0))
+    # the 18 m end (0.6 h) became one point at its middle, and the sides stay
+    # parallel up to half an element short of it
+    assert np.min(np.linalg.norm(out - [109.0, 90.0], axis=1)) < 1e-9
+    assert not np.any(np.all(np.isclose(out, [100.0, 90.0]), axis=1))
+    assert np.min(np.linalg.norm(out - [100.0, 75.0], axis=1)) < 1e-9
+    assert np.min(np.linalg.norm(out - [118.0, 75.0], axis=1)) < 1e-9
+    seg = np.linalg.norm(np.diff(out, axis=0), axis=1)
+    assert seg.min() >= 15.0
+    # both sides of the pier are still there, 18 m apart at the root
+    assert np.any(np.all(np.isclose(out, [100.0, 0.0]), axis=1))
+    assert np.any(np.all(np.isclose(out, [118.0, 0.0]), axis=1))
+
+
+def test_corner_walk_keeps_a_wide_tip_square():
+    from fvcom_mesh_tools.patch import _corner_walk
+
+    out = _corner_walk(_pier_line(25.0), lambda xy: np.full(len(xy), 30.0))
+    for corner in ([100.0, 90.0], [125.0, 90.0]):          # 25 m >= 0.75 h
+        assert np.min(np.linalg.norm(out - corner, axis=1)) < 1e-9
+    assert np.allclose(out[0], [0.0, 0.0]) and np.allclose(out[-1], [300.0, 0.0])
+
+
+def test_corner_walk_drops_a_notch_but_never_an_end():
+    from fvcom_mesh_tools.patch import _corner_walk
+
+    line = np.array([[0.0, 0.0], [5.0, 0.0], [5.0, 4.0], [120.0, 4.0]])
+    out = _corner_walk(line, lambda xy: np.full(len(xy), 30.0))
+    assert np.allclose(out[0], [0.0, 0.0]) and np.allclose(out[-1], [120.0, 4.0])
+    assert np.linalg.norm(np.diff(out, axis=0), axis=1).min() >= 15.0
+
+
+def test_filter_shoreline_land_and_water_thresholds_are_separate():
+    import shapely
+
+    from fvcom_mesh_tools.patch import filter_shoreline
+
+    quay = shapely.box(0, -200, 400, 0)
+    pier20 = shapely.box(100, 0, 120, 100)        # 20 m: land at 0.5 h
+    pier10 = shapely.box(250, 0, 260, 100)        # 10 m: not
+    land = shapely.union_all([quay, pier20, pier10])
+    out, rep = filter_shoreline(land, 30.0, elements_per_feature=2,
+                                land_width_factor=0.5)
+    assert rep["removes_land_narrower_than_m"] == 15.0
+    assert rep["fills_water_narrower_than_m"] == 60.0
+    assert out.contains(shapely.Point(110, 90))
+    assert not out.contains(shapely.Point(255, 90))
+    same, _ = filter_shoreline(land, 30.0, elements_per_feature=2)
+    assert not same.contains(shapely.Point(110, 90))          # the old rule
+    with pytest.raises(ValueError, match="land_width_factor"):
+        filter_shoreline(land, 30.0, land_width_factor=0.0)
+
+
+def test_corner_walk_collapses_a_step_instead_of_cutting_across_it():
+    from fvcom_mesh_tools.patch import _corner_walk
+
+    # a quay with a 14 m step: 0..100 at y=14, then 100..265 at y=0
+    line = np.array([[0.0, 14.0], [100.0, 14.0], [100.0, 0.0], [265.0, 0.0]])
+    out = _corner_walk(line, lambda xy: np.full(len(xy), 30.0))
+    import shapely
+
+    walked = shapely.LineString(out)
+    src = shapely.LineString(line)
+    # nothing of the walked line is more than half the step from the quay
+    assert walked.hausdorff_distance(src) <= 7.0 + 1e-9
+
+
+def test_filter_shoreline_local_keeps_narrow_land_only_in_the_fine_bands():
+    import shapely
+
+    from fvcom_mesh_tools.patch import filter_shoreline_local
+
+    # a quay with two 40 m piers: one where the size is 30 m, one where it is 120 m
+    quay = shapely.box(0, -300, 2000, 0)
+    fine = shapely.box(200, 0, 240, 150)
+    coarse = shapely.box(1600, 0, 1640, 150)
+    land = shapely.union_all([quay, fine, coarse])
+    size = lambda xy: np.where(np.asarray(xy)[:, 0] < 1000, 30.0, 120.0)  # noqa: E731
+    foot = shapely.box(-100, -400, 2100, 400)
+    out, rep = filter_shoreline_local([land], size, 30.0, foot, elements_per_feature=2,
+                                      land_width_factor=0.5, land_width_max_band=1)
+    assert out.contains(shapely.Point(220, 140))          # 40 m >= 0.5 x 30
+    assert not out.contains(shapely.Point(1620, 140))     # band 2 keeps 2 h
