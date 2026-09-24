@@ -136,3 +136,50 @@ def test_cli_plot_bad_alias(tmp_path):
     f14 = tmp_path / "m.14"
     write_fort14(_mesh(), f14)
     assert meshplot.main([str(f14), "--alias", "broken"]) == 2
+
+
+def test_boundary_segments_splits_solid_open_and_counts_a_wall_twice():
+    import numpy as np
+
+    from fvcom_mesh_tools.plotting import boundary_segments
+    from fvcom_mesh_tools.walls import split_along_walls
+
+    xy = np.array([[i, j] for j in range(3) for i in range(3)], dtype=float)
+    tri = []
+    for j in range(2):
+        for i in range(2):
+            a = j * 3 + i
+            tri += [[a, a + 1, a + 4], [a, a + 4, a + 3]]
+    tri = np.array(tri)
+    solid, opened = boundary_segments(xy, tri, open_boundaries=[[0, 3, 6]])
+    assert len(opened) == 2 and len(solid) == 6
+    # a wall from the bottom edge up the middle: both sides are solid
+    p, t, _, _ = split_along_walls(xy, tri, np.array([[1, 4]]))
+    solid2, opened2 = boundary_segments(p, t, open_boundaries=[[0, 3, 6]])
+    assert len(opened2) == 2 and len(solid2) == 8
+
+
+def test_draw_mesh_uses_the_fixed_colours(tmp_path):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.colors import to_rgba
+
+    from fvcom_mesh_tools.plotting import (
+        OPEN_BOUNDARY_COLOR,
+        SOLID_BOUNDARY_COLOR,
+        draw_mesh,
+    )
+
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+    tri = np.array([[0, 1, 2], [0, 2, 3]])
+    fig, ax = plt.subplots()
+    n = draw_mesh(ax, xy, tri, open_boundaries=[[3, 0]])
+    assert n == {"n_solid": 3, "n_open": 1}
+    cols = [c for c in ax.collections]
+    got = {tuple(np.round(c.get_colors()[0], 3)) for c in cols}
+    assert tuple(np.round(to_rgba(SOLID_BOUNDARY_COLOR), 3)) in got
+    assert tuple(np.round(to_rgba(OPEN_BOUNDARY_COLOR), 3)) in got
+    plt.close(fig)

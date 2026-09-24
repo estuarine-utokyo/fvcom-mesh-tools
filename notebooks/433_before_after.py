@@ -1,7 +1,8 @@
 # Before and after: two refinements of the same port drawn over the raw OSM.
 #
-# Each column is one refinement output directory.  Grey is the raw OSM land,
-# blue the mesh coast, red the mesh walls, thin grey the mesh.  Where a run
+# Each column is one refinement output directory.  Grey is the raw OSM land;
+# the mesh is drawn by plotting.draw_mesh: thin grey edges, every solid
+# boundary (coast, quay, wall) black, the open boundary red.  Where a run
 # saved its wall stages (walls_stages.npz), the centrelines extracted from
 # OSM are dashed orange and the pieces kept inside the hole dotted purple,
 # so a wall that is missing can be traced to the stage that lost it.
@@ -22,6 +23,11 @@ from matplotlib.collections import LineCollection  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from fvcom_mesh_tools.io.fort14 import read_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import (  # noqa: E402
+    OPEN_BOUNDARY_COLOR,
+    SOLID_BOUNDARY_COLOR,
+    draw_mesh,
+)
 
 MESH_EPSG = 32654
 VIEWS = [(393010.0, 3909480.0, 1100.0), (392500.0, 3909000.0, 350.0),
@@ -98,9 +104,7 @@ for col, d in enumerate(dirs):
         if (d / "shoreline_filtered.shp").exists():
             gpd.read_file(d / "shoreline_filtered.shp").boundary.plot(
                 ax=ax, color="tab:green", lw=0.8, ls="--", zorder=2)
-        ax.triplot(m.nodes[:, 0], m.nodes[:, 1], m.elements, lw=0.2, color="0.5", zorder=1)
-        ax.add_collection(LineCollection(seg[~wall], colors="tab:blue", lw=1.2, zorder=3))
-        ax.add_collection(LineCollection(seg[wall], colors="tab:red", lw=2.2, zorder=4))
+        draw_mesh(ax, m.nodes, m.elements, m.open_boundaries, zorder=3)
         if stages is not None:
             src = [stages[k] for k in stages.files if k.startswith("src")]
             pcs = [stages[k] for k in stages.files if k.startswith("piece")]
@@ -116,8 +120,9 @@ for col, d in enumerate(dirs):
 ax = axes[0, 0]
 ax.plot([], [], color="0.8", lw=6, label="OSM land (raw)")
 ax.plot([], [], color="tab:green", ls="--", label="land after the width filter")
-ax.plot([], [], color="tab:blue", label="mesh coast")
-ax.plot([], [], color="tab:red", lw=2, label="mesh wall")
+ax.plot([], [], color=SOLID_BOUNDARY_COLOR, lw=1.4,
+        label="solid boundary (coast, quay, wall)")
+ax.plot([], [], color=OPEN_BOUNDARY_COLOR, lw=1.8, label="open boundary")
 ax.plot([], [], color="tab:orange", ls="--", label="wall centreline from OSM")
 ax.plot([], [], color="tab:purple", ls=":", label="wall piece kept in the hole")
 ax.legend(loc="upper right", fontsize=9)

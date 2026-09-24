@@ -13,6 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from fvcom_mesh_tools.io.fort14 import read_fort14  # noqa: E402
+from fvcom_mesh_tools.plotting import boundary_legend, draw_mesh  # noqa: E402
 
 OUT = Path(sys.argv[1]).resolve()
 m = read_fort14(next(OUT.glob("*.14")))
@@ -75,18 +76,13 @@ c0 = cen[bad_el].mean(axis=0) if len(bad_el) else xy.mean(axis=0)
 fig, axes = plt.subplots(1, 2, figsize=(17, 8.5))
 for ax, half in zip(axes, (1100.0, 350.0)):
     cx, cy = (393010.0, 3909480.0) if half > 500 else (392500.0, 3909000.0)
-    ax.triplot(xy[:, 0], xy[:, 1], tri, lw=0.25, color="0.6")
-    for (i, j), w in zip(_b, wall_edge):
-        col = "tab:red" if w else "tab:blue"
-        ax.plot(xy[[i, j], 0], xy[[i, j], 1], color=col, lw=1.2)
+    draw_mesh(ax, xy, tri, m.open_boundaries, mesh_lw=0.25)
     ax.plot(cen[bad_el, 0], cen[bad_el, 1], "x", color="tab:orange", ms=8, mew=2)
     ax.set_xlim(cx - half, cx + half)
     ax.set_ylim(cy - half, cy + half)
     ax.set_aspect("equal")
-axes[0].plot([], [], color="tab:blue", label="coast (boundary)")
-axes[0].plot([], [], color="tab:red", label="wall (split)")
 axes[0].plot([], [], "x", color="tab:orange", label=f"QA offender ({len(bad_el)})")
-axes[0].legend(loc="upper right", fontsize=9)
+boundary_legend(axes[0], loc="upper right", fontsize=9)
 fig.tight_layout()
 fig.savefig(OUT / "walls_qa.png", dpi=150)
 print(f"wrote {OUT / 'walls_qa.png'}")

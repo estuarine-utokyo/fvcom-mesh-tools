@@ -41,7 +41,75 @@ matplotlib default. Pass this value explicitly to
 the call site and consistent across notebooks and scripts.
 """
 
+SOLID_BOUNDARY_COLOR: str = "black"
+"""Every solid boundary edge -- coastline, quay, and a wall drawn as a line.
+
+One colour in every mesh figure, whatever the figure is about, so a reader
+can tell at a glance where water cannot pass.  A wall is boundary on both
+of its sides, exactly like a coastline, and is drawn the same way."""
+
+OPEN_BOUNDARY_COLOR: str = "red"
+"""The open (tidal) boundary."""
+
+MESH_EDGE_COLOR: str = "0.6"
+"""Interior mesh edges, drawn thin so the boundaries stand out."""
+
 _REF_RE = re.compile(r"^([A-Z]+)([1-9][0-9]*)$")
+
+
+def boundary_segments(nodes, elements, open_boundaries=None):
+    """The mesh's boundary edges as segments, split into solid and open.
+
+    A boundary edge is an edge of exactly one element.  An edge whose two
+    nodes are consecutive on an open boundary is open; every other boundary
+    edge -- coastline, quay, either side of a split wall -- is solid.
+    Returns ``(solid, open)``, each an ``(n, 2, 2)`` array of end points.
+    """
+    xy = np.asarray(nodes, dtype=float)[:, :2]
+    tri = np.asarray(elements, dtype=np.int64)
+    e = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]), axis=1)
+    u, c = np.unique(e, axis=0, return_counts=True)
+    b = u[c == 1]
+    open_pairs = set()
+    for seg in open_boundaries or []:
+        seg = np.asarray(seg, dtype=np.int64)
+        open_pairs.update(tuple(sorted(p)) for p in zip(seg[:-1].tolist(), seg[1:].tolist()))
+    is_open = np.array([tuple(r) in open_pairs for r in b.tolist()], dtype=bool) \
+        if len(b) else np.zeros(0, dtype=bool)
+    seg = np.stack([xy[b[:, 0]], xy[b[:, 1]]], axis=1) if len(b) \
+        else np.zeros((0, 2, 2))
+    return seg[~is_open], seg[is_open]
+
+
+def draw_mesh(ax, nodes, elements, open_boundaries=None, *, mesh_color=MESH_EDGE_COLOR,
+              mesh_lw: float = 0.2, boundary_lw: float = 1.4, zorder: float = 2.0):
+    """Draw a mesh with its boundaries in the project's fixed colours.
+
+    Interior edges thin in ``mesh_color``; solid boundary edges in
+    :data:`SOLID_BOUNDARY_COLOR`; open boundary edges in
+    :data:`OPEN_BOUNDARY_COLOR`.  Returns ``{"n_solid": ..., "n_open": ...}``.
+    """
+    from matplotlib.collections import LineCollection
+
+    xy = np.asarray(nodes, dtype=float)
+    ax.triplot(xy[:, 0], xy[:, 1], np.asarray(elements), color=mesh_color,
+               lw=mesh_lw, zorder=zorder)
+    solid, opened = boundary_segments(nodes, elements, open_boundaries)
+    ax.add_collection(LineCollection(solid, colors=SOLID_BOUNDARY_COLOR,
+                                     lw=boundary_lw, zorder=zorder + 1))
+    if len(opened):
+        ax.add_collection(LineCollection(opened, colors=OPEN_BOUNDARY_COLOR,
+                                         lw=boundary_lw * 1.3, zorder=zorder + 1))
+    return {"n_solid": int(len(solid)), "n_open": int(len(opened))}
+
+
+def boundary_legend(ax, *, open_boundary: bool = True, **kw):
+    """Legend entries for :func:`draw_mesh`'s fixed colours."""
+    ax.plot([], [], color=SOLID_BOUNDARY_COLOR, lw=1.4,
+            label="solid boundary (coast, quay, wall)")
+    if open_boundary:
+        ax.plot([], [], color=OPEN_BOUNDARY_COLOR, lw=1.8, label="open boundary")
+    return ax.legend(**kw)
 
 
 def use_readable_style() -> None:
@@ -379,11 +447,16 @@ def plot_mesh_overview(
         mesh.nodes[:, 0], mesh.nodes[:, 1], mesh.elements,
         color="#33658a", lw=0.12, zorder=2,
     )
+    from matplotlib.collections import LineCollection
+
+    solid, _ = boundary_segments(mesh.nodes, mesh.elements, mesh.open_boundaries)
+    ax.add_collection(LineCollection(solid, colors=SOLID_BOUNDARY_COLOR, lw=0.9,
+                                     zorder=3))
     for seg in mesh.open_boundaries:
         seg = np.asarray(seg, dtype=np.int64)
         ax.plot(
             mesh.nodes[seg, 0], mesh.nodes[seg, 1],
-            color="red", lw=1.8, zorder=4, label="open boundary",
+            color=OPEN_BOUNDARY_COLOR, lw=1.8, zorder=4, label="open boundary",
         )
     if grid is not None:
         _add_reference_grid(ax, grid)
@@ -435,7 +508,13 @@ def plot_mesh_overview(
 
 
 __all__ = [
+    "MESH_EDGE_COLOR",
     "MESH_PNG_DPI",
+    "OPEN_BOUNDARY_COLOR",
     "ReferenceGrid",
+    "SOLID_BOUNDARY_COLOR",
+    "boundary_legend",
+    "boundary_segments",
+    "draw_mesh",
     "plot_mesh_overview",
 ]

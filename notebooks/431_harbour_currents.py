@@ -2,8 +2,9 @@
 # breakwaters, from the 20-day M2 runs of the two port meshes.
 #
 # The meshes differ, so nothing is interpolated from one to the other: each
-# run is drawn on its own mesh, and the walls are found from the grid itself
-# (a split wall is a segment that is boundary TWICE, once from each side).
+# run is drawn on its own mesh.  Every solid boundary -- coast, quay, wall --
+# is black (plotting.draw_mesh); a split wall is still counted, as a segment
+# that is boundary TWICE, once from each side.
 #
 #   FMESH_NOWALL=<run dir> FMESH_WALL=<run dir> \
 #       python notebooks/431_harbour_currents.py <output dir>
@@ -17,8 +18,10 @@ import numpy as np
 os.environ.setdefault("MPLBACKEND", "Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import netCDF4  # noqa: E402
-from matplotlib.collections import LineCollection  # noqa: E402
 from matplotlib.tri import Triangulation  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from fvcom_mesh_tools.plotting import draw_mesh  # noqa: E402
 
 BOX = (391900.0, 394100.0, 3908350.0, 3910600.0)   # the Kimitsu port, UTM 54N
 PERIOD = 12.4206012 * 3600.0
@@ -86,9 +89,8 @@ def main(out: Path):
                 pc = ax.tripcolor(tri, d["amp"], shading="gouraud",
                                   vmin=float(np.percentile(v, 1)),
                                   vmax=float(np.percentile(v, 99)), cmap=kw["cmap"])
-            ax.triplot(tri, color="w", lw=0.15, alpha=0.6)
-            ax.add_collection(LineCollection(coast, colors="k", lw=0.8))
-            ax.add_collection(LineCollection(walls, colors="r", lw=1.6))
+            draw_mesh(ax, np.column_stack([d["x"], d["y"]]), d["nv"], mesh_color="w", mesh_lw=0.15,
+                      boundary_lw=1.2, zorder=3)
             ax.set_xlim(x0, x1)
             ax.set_ylim(y0, y1)
             ax.set_aspect("equal")
