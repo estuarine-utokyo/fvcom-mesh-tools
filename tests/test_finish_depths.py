@@ -100,8 +100,8 @@ def test_equal_smoothing_keeps_a_pair_s_sum_and_honours_frozen_nodes():
     h = np.array([10.0, 40.0, 40.0])
     out, rep = smooth_rfactor_equal(tri, h, np.ones(3, bool), 0.2, depth_min=3.0)
     assert rep["converged"] and rep["max_r"] <= 0.2 + 1e-6
-    # equal and opposite: the channel spreads into its bank, it is not filled
-    assert out.sum() == pytest.approx(h.sum(), rel=1e-6)
+    # equal and opposite: the bank deepens as the channel rises
+    assert out[0] > h[0] and (out[1:] < h[1:]).all()
     frozen = np.array([True, False, False])
     out2, _ = smooth_rfactor_equal(tri, h, ~frozen, 0.2, depth_min=3.0)
     assert out2[0] == 10.0

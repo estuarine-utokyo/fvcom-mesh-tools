@@ -653,9 +653,10 @@ def smooth_rfactor_equal(elements, depths, movable, rmax: float, *,
     shallower end to sink by the same amount, ``(|hi-hj| - rmax(hi+hj))/2``;
     a node's moves are averaged over its violating edges, all edges are
     updated at once (Jacobi), and the floor is put back after every sweep.
-    Equal-and-opposite moves keep the sum of the two depths, so the smoothing
-    spreads a deep channel into its banks rather than filling it -- which is
-    why it is run on the UNCAPPED field and the cap comes after.
+    Each edge asks for an equal-and-opposite move, so a deep channel is
+    spread into its banks (the banks deepen) rather than only lifted -- which
+    is why it is run on the UNCAPPED field and the cap comes after.  The
+    per-node averaging means the total volume is not conserved exactly.
 
     Only ``movable`` nodes move (every node, for a whole-mesh product); a
     violating edge with one frozen end moves only the other. Returns
