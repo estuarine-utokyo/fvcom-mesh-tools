@@ -30,8 +30,13 @@ from fvcom_mesh_tools.plotting import (  # noqa: E402
 )
 
 MESH_EPSG = 32654
+# square views (centre x, centre y, half width); the Kimitsu port by default,
+# or FMESH_SQUARES="x:y:half+x:y:half..." (plus-separated for qsub -v)
 VIEWS = [(393010.0, 3909480.0, 1100.0), (392500.0, 3909000.0, 350.0),
          (392460.0, 3908790.0, 150.0)]
+if os.environ.get("FMESH_SQUARES"):
+    VIEWS = [tuple(float(v) for v in item.split(":"))
+             for item in os.environ["FMESH_SQUARES"].split("+") if item]
 
 
 def boundary(m):
@@ -92,7 +97,8 @@ land = gpd.read_file(os.environ["FMESH_LAND"]).to_crs(MESH_EPSG)
 land = land[land.intersects(box)]
 land_raw = shapely.union_all(land.geometry.values).intersection(box)
 
-fig, axes = plt.subplots(3, 2, figsize=(17, 25.5), constrained_layout=True)
+fig, axes = plt.subplots(len(VIEWS), 2, figsize=(17, 8.5 * len(VIEWS)),
+                         constrained_layout=True, squeeze=False)
 for col, d in enumerate(dirs):
     m = read_fort14(next(d.glob("*.14")))
     seg, wall = boundary(m)

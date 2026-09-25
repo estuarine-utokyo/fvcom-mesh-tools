@@ -448,9 +448,11 @@ package and have unit tests.
 
 ## 11. Known limits
 
-- Tested on the Futtsu and Kimitsu coast of Tokyo Bay, one base mesh: a port,
-  a coastal region, an offshore fishery, and the default branch. A new place
-  will find new cases (§12).
+- Tested on one base mesh (goto2023): the Kimitsu port, the Futtsu coast, an
+  offshore fishery, the default branch, and the Tokyo port at Odaiba
+  (`recipes/refine/tokyo_odaiba_hires.yaml`, with the Daiba islands). Odaiba
+  needed two coastline rules Kimitsu had not shown -- a new place will find
+  new cases (§12).
 - A structure hugging the coast within 0.4 element, thinner than half an
   element, is not represented.
 - OSM `man_made` lines (breakwaters mapped only as lines) are not used.
