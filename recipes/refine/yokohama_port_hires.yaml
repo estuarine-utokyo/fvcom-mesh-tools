@@ -1,0 +1,45 @@
+# YOKOHAMA PORT, the inner harbour: the fourth port example.
+#
+# Surveyed before this was written (notebooks/423_site_survey.py, job 116891,
+# three discs):
+#
+#   * 139.645 35.452, r 1.2 km: Osanbashi, the Shinko and Yamashita piers
+#     and the Minato Mirai waterfront. 50 % water, 7 land rings, 13.8 km of
+#     OSM shoreline (556 vertices); an 80 m erosion splits the water into 2
+#     parts.
+#   * the base mesh has 6 coastline edges here, 429-485 m, and 20 elements
+#     with a median edge of 450 m: it represents none of the inner harbour.
+#   * depths -7.1 to 13.8 m, median 11.3; M7001 answers 65 %, the 30 m grid
+#     the rest; 4 % at or above the datum.
+#   * 139.660 35.435 (Honmoku, 10 % water) and 139.655 35.460 (the outer
+#     harbour, 87 % water, few structures) were not chosen.
+#
+# The base mesh draws a straight coast across the harbour mouth, and the
+# OSM coast between its two ends runs outside a 1.2 km (and 1.8 km) hole, so
+# those resolved stretches were refused and the boundary contract broke.
+# This recipe is centred on the harbour and 2.3 km wide, which takes the
+# whole inner harbour (and the Daikoku pier, 4.5 km east, into the
+# transition). Accepted with all five opt-in rules (seed 3, 0 introduced
+# violations, NP 15,153, dt 1.18 s); without them the best seed had 39.
+#
+# The outline is a DEMONSTRATION circle over the port, not a port limit.
+base_mesh: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
+base_depth: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
+base_obc: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
+
+dt_expected_s: 4.5
+gradation: 0.165
+
+hires:
+  coastline: resolve
+  bathymetry: tokyo_bay
+  scope: hole
+  blend: ramp
+  experimental: [water_wedges, wall_pockets, short_chords, rim_repair, seam_water]
+
+refine:
+  - name: yokohama_port
+    geometry:
+      circle: {center: [139.6479, 35.4546], radius_m: 2300}
+    target_h_m: 30
+    priority: 0

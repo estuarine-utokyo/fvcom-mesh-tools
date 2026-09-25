@@ -2064,3 +2064,78 @@ def test_source_substring_takes_the_arc_of_a_ring_that_fits_the_stretch():
     got = _source_substring(round_[::-1].copy(), ring)
     assert np.allclose(got[0], [100, 100]) and np.allclose(got[-1], [100, 0])
     assert shapely.LineString(got).length == pytest.approx(300.0)
+
+
+def _rim_square_with_residual():
+    # a 300 m square of water whose bottom side carries a point 3 m from its
+    # corner -- the residual blunting leaves at 0.9 of a 30 m edge
+    pfix = np.array([[0.0, 0.0], [297.0, 0.0], [300.0, 0.0], [300.0, 300.0], [0.0, 300.0]])
+    egfix = np.array([[k, (k + 1) % 5] for k in range(5)])
+    return pfix, egfix
+
+
+def test_rim_repair_removes_the_point_beside_a_short_edge():
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    pfix, egfix = _rim_square_with_residual()
+    base = np.array([-1, -1, -1, 7, 8])
+    water = hole_polygon(pfix, egfix)
+    p, e, b, remap, rep = rim_repair(pfix, egfix, base, water,
+                                     lambda xy: np.full(len(xy), 30.0))
+    assert rep["n_points_removed"] == 1 and rep["n_short_edges_left"] == 0
+    assert len(p) == 4 and (remap == [0, -1, 1, 2, 3]).all()
+    assert hole_polygon(p, e).symmetric_difference(water).area < 1e-6
+    assert (b == [-1, -1, 7, 8]).all()
+
+
+def test_rim_repair_keeps_protected_and_frozen_points():
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    pfix, egfix = _rim_square_with_residual()
+    water = hole_polygon(pfix, egfix)
+    size = lambda xy: np.full(len(xy), 30.0)  # noqa: E731
+    # the residual point is a wall root, and the corner beyond it is frozen
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.array([-1, -1, 5, 7, 8]), water, size,
+                                     protect={1})
+    assert rep["n_points_removed"] == 0 and rep["n_short_edges_left"] == 1
+    assert len(p) == 5
+
+
+def test_rim_repair_refuses_a_removal_that_moves_the_coast():
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    # the short edge ends at a spike 40 m deep: removing its point would
+    # hand far more than the edge's own width to the water
+    pfix = np.array([[0.0, 0.0], [150.0, 0.0], [153.0, -40.0], [300.0, 0.0],
+                     [300.0, 300.0], [0.0, 300.0]])
+    egfix = np.array([[k, (k + 1) % 6] for k in range(6)])
+    water = hole_polygon(pfix, egfix)
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(6, -1), water,
+                                     lambda xy: np.full(len(xy), 30.0))
+    assert rep["n_points_removed"] == 0 and len(p) == 6
+
+
+def test_seam_water_closes_the_strip_a_band_join_leaves():
+    # A 200 m channel with a band seam along its middle: the coarse band
+    # (above) closes it, the fine one (below) keeps it, and the join leaves a
+    # 100 m strip -- narrower than the fine band's own 120 m threshold.
+    from fvcom_mesh_tools.patch import filter_shoreline_local
+
+    box = shapely.box(-1500, -1500, 1500, 1500)
+    land = shapely.difference(box, shapely.box(-1500, -100, 1500, 100))
+
+    def size(p):
+        p = np.atleast_2d(p)
+        return np.where(p[:, 1] > 0, 240.0, 60.0)
+
+    off, rep_off = filter_shoreline_local(land, size, 30.0, box, spacing=30.0)
+    assert not shapely.contains(off, shapely.Point(0, -50))    # the strip survives
+    on, rep_on = filter_shoreline_local(land, size, 30.0, box, spacing=30.0,
+                                        close_seam_water=True)
+    assert rep_on["n_seam_water_closed"] >= 1
+    assert shapely.contains(on, shapely.Point(0, -50))          # and is closed
+    # water the join did not narrow is untouched
+    wide = shapely.difference(box, shapely.box(-1500, -400, 1500, 100))
+    a, _ = filter_shoreline_local(wide, size, 30.0, box, spacing=30.0)
+    b, _ = filter_shoreline_local(wide, size, 30.0, box, spacing=30.0, close_seam_water=True)
+    assert shapely.symmetric_difference(a, b).area < 1.0

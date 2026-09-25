@@ -116,7 +116,8 @@ HIRES_BLEND = ("ramp", "none")
 # transition and broke Kimitsu, Futtsu and Odaiba when applied to every
 # recipe (2026-09-25), so they are opt-in until the band-seam artefact they
 # work around is fixed at its source (docs/USER_GUIDE.md, known limits).
-HIRES_EXPERIMENTAL = ("water_wedges", "wall_pockets", "short_chords")
+HIRES_EXPERIMENTAL = ("water_wedges", "wall_pockets", "short_chords", "rim_repair",
+                      "seam_water")
 
 GRAVITY_M_S2 = 9.81
 

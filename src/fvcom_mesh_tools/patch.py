@@ -782,7 +782,8 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
                            land_width_factor: float | None = None,
                            land_width_max_band: int | None = None,
                            spacing: float | None = None,
-                           close_wedges: bool = False):
+                           close_wedges: bool = False,
+                           close_seam_water: bool = False):
     """:func:`filter_shoreline` at the LOCAL element size, not one size.
 
     One size for the whole hole let 60-90 m features and walls survive where
@@ -825,7 +826,7 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
     zones: dict[int, list] = {}
     for geom, value in features.shapes(band, transform=transform):
         zones.setdefault(int(value), []).append(shapely.geometry.shape(geom))
-    pieces, rows = [], []
+    pieces, rows, zone_list = [], [], []
     for k in sorted(zones):
         hk = h0 * 2.0 ** k
         zone = shapely.intersection(shapely.union_all(zones[k]), footprint)
@@ -837,6 +838,7 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
                                   land_width_factor=lw, close_wedges=close_wedges)
         part = shapely.intersection(fk, zone)
         pieces.append(part)
+        zone_list.append((zone, hk))
         rows.append({"band": k, "h_m": hk, "zone_km2": float(zone.area / 1e6),
                      "removes_narrower_than_m": rk["removes_features_narrower_than_m"],
                      "removes_land_narrower_than_m": rk["removes_land_narrower_than_m"]})
@@ -845,11 +847,32 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
                              land_width_factor=land_width_factor, close_wedges=close_wedges)
     pieces.append(shapely.difference(f0, footprint))
     joined = shapely.union_all([q for q in pieces if not q.is_empty])
+    n_seam = 0
+    if close_seam_water:
+        # Where one band closes water and the next keeps it, the join leaves
+        # a strip between the kept bank and the cut that neither band saw
+        # (Yokohama: a channel end 100-170 m wide among 235 m elements, a
+        # 50 m coast edge left in it, and 29 deg elements in every seed).
+        # The joined land is closed once more, band by band at that band's
+        # own threshold; a piece it adds is taken whole if it touches the
+        # band's zone.
+        r_of = 0.5 * float(elements_per_feature)
+        add = []
+        for zone, hk in zone_list:
+            r = r_of * hk
+            closed = joined.buffer(r, join_style="mitre").buffer(-r, join_style="mitre")
+            gained = shapely.difference(closed, joined)
+            add.extend(g for g in getattr(gained, "geoms", [gained])
+                       if g.geom_type == "Polygon" and g.area > 1.0
+                       and shapely.intersection(g, zone).area > 1.0)
+        if add:
+            n_seam = len(add)
+            joined = shapely.union_all([joined, *add])
     out, rep = filter_shoreline(joined, h0, elements_per_feature=elements_per_feature,
                                 land_width_factor=land_width_factor,
                                 close_wedges=close_wedges)
     before = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
-    rep = {**rep, "bands": rows,
+    rep = {**rep, "bands": rows, "n_seam_water_closed": n_seam,
            "land_lost_m2": float(shapely.difference(before, out).area),
            "water_lost_m2": float(shapely.difference(out, before).area),
            "area_before_m2": float(before.area), "area_after_m2": float(out.area)}
@@ -1248,6 +1271,120 @@ def _ring_at_size(ring: np.ndarray, size, *, fine_h=None) -> np.ndarray:
     g = shapely.simplify(shapely.LinearRing(ring), 0.1 * h_min)
     return _corner_walk(np.asarray(g.coords, dtype=float)[:-1], size, closed=True,
                         fine_h=fine_h)
+
+
+def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
+               min_edge_factor=0.5, min_angle_deg=60.0, max_iter=None):
+    """Check the finished rim against the local size and repair what fails.
+
+    Each rule upstream (the filter, the corner walk, blunting, rooting) is
+    right on the geometry it was given, but a later one can leave what an
+    earlier one would have refused: at Yokohama blunting stopped its walk at
+    0.9 of a quay edge and left a 3.0 m edge beside its cap, where the
+    element is 30 m, and the elements there came out at 13.1 and 19.5 deg.
+    This pass looks at the rim as the fill will get it.
+
+    Operation 1, short edges: an edge shorter than ``min_edge_factor`` of the
+    local element loses one of its ends -- a free point (not frozen, two
+    constrained edges, not in ``protect``) whose two neighbours are joined
+    instead.  A removal is taken only if the new edge crosses no other rim
+    edge, the triangle it hands between land and water is no wider than the
+    short edge (``area <= L_short * h / 2``), and the water keeps
+    ``min_angle_deg`` at both neighbours or does not lose angle there.  Of
+    the two ends the one moving less area goes.  Edges that no removal can
+    repair are reported, not forced.
+
+    ``water`` is the hole the rim bounds; ``size`` maps (n, 2) points to the
+    local element size.  Returns ``(pfix, egfix, pfix_base, remap, report)``;
+    ``remap[old] = new`` (-1 for a removed point) so that references into
+    the rim (wall roots) can follow it.
+    """
+    import shapely
+
+    pfix = np.asarray(pfix, dtype=float)[:, :2].copy()
+    egfix = np.asarray(egfix, dtype=np.int64).copy()
+    pfix_base = np.asarray(pfix_base, dtype=np.int64).copy()
+    keep = np.ones(len(pfix), dtype=bool)
+    protect = set(int(k) for k in protect)
+    removed, refused = [], []
+
+    def nbrs_of():
+        nb: dict = {}
+        for a, b in egfix.tolist():
+            nb.setdefault(a, []).append(b)
+            nb.setdefault(b, []).append(a)
+        return nb
+
+    def angle_at(xy, p_xy, n_xy):
+        up, un = p_xy - xy, n_xy - xy
+        lp, ln = float(np.linalg.norm(up)), float(np.linalg.norm(un))
+        if lp <= 0 or ln <= 0:
+            return None
+        ang = float(np.degrees(np.arccos(np.clip(up @ un / (lp * ln), -1, 1))))
+        bis = up / lp + un / ln
+        if np.linalg.norm(bis) < 1e-9:
+            return 180.0
+        probe = xy + bis / np.linalg.norm(bis) * 0.05 * min(lp, ln)
+        return ang if water.contains(shapely.Point(probe)) else 360.0 - ang
+
+    def try_remove(x, nb, L_short, h):
+        if x in protect or pfix_base[x] >= 0 or len(nb.get(x, [])) != 2:
+            return None
+        u, w = nb[x]
+        if u == w:
+            return None
+        du, dw = pfix[u] - pfix[x], pfix[w] - pfix[x]
+        tri = abs(float(du[0] * dw[1] - du[1] * dw[0])) / 2.0
+        if tri > 0.5 * L_short * h:
+            return None
+        new = shapely.LineString([pfix[u], pfix[w]])
+        others = [shapely.LineString(pfix[[a, b]]) for a, b in egfix.tolist()
+                  if not ({a, b} & {x, u, w})]
+        if others and shapely.MultiLineString(others).intersects(new):
+            return None
+        for y, far in ((u, w), (w, u)):
+            other = [q for q in nb.get(y, []) if q != x]
+            if len(other) != 1:
+                continue            # a junction: its sectors are checked elsewhere
+            before = angle_at(pfix[y], pfix[other[0]], pfix[x])
+            after = angle_at(pfix[y], pfix[other[0]], pfix[far])
+            if after is None or (after < min_angle_deg and
+                                 (before is None or after < before - 1e-6)):
+                return None
+        return tri, u, w
+
+    n_iter = max_iter if max_iter is not None else len(pfix)
+    for _ in range(n_iter):
+        nb = nbrs_of()
+        live_e = egfix
+        L = np.linalg.norm(pfix[live_e[:, 0]] - pfix[live_e[:, 1]], axis=1)
+        mid = 0.5 * (pfix[live_e[:, 0]] + pfix[live_e[:, 1]])
+        h = np.asarray(size(mid), dtype=float)
+        bad = [k for k in np.argsort(L / h) if L[k] < min_edge_factor * h[k]]
+        bad = [k for k in bad if tuple(sorted(live_e[k])) not in
+               {tuple(sorted(r["edge"])) for r in refused}]
+        if not bad:
+            break
+        k = bad[0]
+        a, b = int(live_e[k, 0]), int(live_e[k, 1])
+        options = [(r, x) for x in (a, b)
+                   if (r := try_remove(x, nb, float(L[k]), float(h[k]))) is not None]
+        if not options:
+            refused.append({"edge": [a, b], "length_m": round(float(L[k]), 2),
+                            "h_m": round(float(h[k]), 1),
+                            "at": [round(float(v), 1) for v in mid[k]]})
+            continue
+        (tri, u, w), x = min(options, key=lambda o: o[0][0])
+        egfix = np.vstack([egfix[~np.isin(egfix, [x]).any(axis=1)], [[u, w]]])
+        keep[x] = False
+        removed.append({"at": [round(float(v), 1) for v in pfix[x]],
+                        "edge_m": round(float(L[k]), 2), "h_m": round(float(h[k]), 1),
+                        "area_m2": round(tri, 1)})
+    remap = np.full(len(pfix), -1, dtype=np.int64)
+    remap[keep] = np.arange(int(keep.sum()))
+    report = {"n_points_removed": len(removed), "removed": removed[:50],
+              "n_short_edges_left": len(refused), "short_edges_left": refused[:50]}
+    return pfix[keep], remap[egfix], pfix_base[keep], remap, report
 
 
 def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):

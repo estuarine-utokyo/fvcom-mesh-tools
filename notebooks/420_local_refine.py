@@ -53,6 +53,7 @@ from fvcom_mesh_tools.patch import (
     refresh_depths,
     region_conflicts,
     rim_constraints,
+    rim_repair,
     select_patch,
     stitch_patch,
     verify_patch,
@@ -493,7 +494,8 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
                                               elements_per_feature=2,
                                               land_width_factor=0.5,
                                               land_width_max_band=1,
-                                              close_wedges="water_wedges" in EXPERIMENTAL)
+                                              close_wedges="water_wedges" in EXPERIMENTAL,
+                                              close_seam_water="seam_water" in EXPERIMENTAL)
     reports["shoreline_filter"] = _frep
     for _b in _frep["bands"]:
         say(f"    band {_b['band']}: h {_b['h_m']:g} m over {_b['zone_km2']:.2f} km2, "
@@ -1150,6 +1152,24 @@ if HIRES is not None and _land_filtered and _walls_src:
         f"{n_acute} dropped for meeting another line at under 60 deg, "
         f"{n_close_tips} for a tip within half an element of the coast, "
         f"{n_joined} tip(s) joined to a line within half an element")
+if "rim_repair" in EXPERIMENTAL:
+    # The rim as the fill will get it, checked against the local size and
+    # repaired (patch.rim_repair).  Frozen points and wall roots stay.
+    _n_rim = len(rc["pfix"])
+    _roots = set(np.unique(WALL_SEGS[WALL_SEGS < _n_rim]).tolist()) if len(WALL_SEGS) else set()
+    _p, _e, _b, _remap, _rrep = rim_repair(rc["pfix"], rc["egfix"], rc["pfix_base"],
+                                           hole, h_achieved, protect=_roots)
+    rc["pfix"], rc["egfix"], rc["pfix_base"] = _p, _e, _b
+    if len(WALL_SEGS):
+        WALL_SEGS = np.where(WALL_SEGS < _n_rim, _remap[np.minimum(WALL_SEGS, _n_rim - 1)],
+                             WALL_SEGS - _n_rim + len(_p))
+        if (WALL_SEGS < 0).any():
+            raise RuntimeError("rim_repair removed a point a wall is rooted on")
+    hole = hole_polygon(rc["pfix"], rc["egfix"])
+    reports["rim_repair"] = _rrep
+    say(f"rim repair: {_rrep['n_points_removed']} point(s) removed beside edges under "
+        f"half an element; {_rrep['n_short_edges_left']} short edge(s) left, "
+        f"e.g. {_rrep['short_edges_left'][:3]}")
 PFIX_ALL = np.vstack([np.asarray(rc["pfix"], dtype=float), WALL_PTS])
 # What the fill was given, kept so a wall's geometry can be inspected
 # without re-running the whole cut.
