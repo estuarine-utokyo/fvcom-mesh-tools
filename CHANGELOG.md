@@ -8,6 +8,18 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Added -- Funabashi port and opt-in coastline rules (2026-09-25)
+
+- `recipes/refine/funabashi_port_hires.yaml`, the third port example.
+- `hires.experimental: [water_wedges, wall_pockets, short_chords]`:
+  coastline rules for a coarse transition, switched on per recipe. Applied
+  to every recipe they broke Kimitsu, Futtsu and Odaiba; off, the five
+  earlier recipes rebuild with identical boundaries.
+- `walls.close_wall_pockets`; `patch.filter_shoreline(close_wedges=)`;
+  `patch.blunt_acute_corners(fine_h=)`.
+- The generator writes `frozen_land.shp` next to `shoreline_filtered.shp`.
+- USER_GUIDE §4 and §11: the rules, and the band-seam limit they work around.
+
 ### Added -- local refinement for users (2026-09-24)
 
 - **`fmesh-refine`**: local refinement from a recipe.

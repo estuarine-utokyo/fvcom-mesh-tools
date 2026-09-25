@@ -214,6 +214,7 @@ hires:
   bathymetry: tokyo_bay # tokyo_bay (M7001 ladder) | base (inherit)
   scope: hole           # hole (region + transition) | core
   blend: ramp           # ramp | none -- how new depths meet the frozen ones
+  # experimental: [water_wedges, wall_pockets, short_chords]   # opt-in, see below
 
 refine:
   - name: my_port
@@ -231,6 +232,7 @@ refine:
 | `dt_expected_s` | yes | the model's external step; a region too fine for it raises an **alert**, not an error |
 | `gradation` | yes | the size growth rate outside the region; it sets the transition width |
 | `hires` | no | present = the coastline/bathymetry branch above; absent = the default branch, which keeps the base coastline and depths (`coastline: preserve/resample/spline`, `rfactor_limit`, `coastline_tolerance_m` apply there). `hires.coastline: resolve` follows OSM (sharp corners cut, islands and walls added); `preserve` keeps the base coastline exactly |
+| `hires.experimental` | no | opt-in coastline rules, by name (below); none by default |
 | `refine` | yes | one or more regions |
 | `refine[].geometry` | yes | `circle: {center: [lon, lat], radius_m}`, a `bbox`, a GeoJSON `Polygon`, or `{file: area.geojson, where: {...}, buffer_m: 25}` |
 | `refine[].target_h_m` | yes | the target element size, m |
@@ -239,6 +241,21 @@ refine:
 Unknown keys are errors, and relative paths resolve against the recipe's own
 directory. Before meshing, the run checks each region (depth, dryness, time
 step) and prints what it found.
+
+**Opt-in coastline rules (`hires.experimental`).** These were written for
+the Funabashi port (`recipes/refine/funabashi_port_hires.yaml`), where river
+mouths and a curled breakwater 1-2 km from the region meet transition
+elements of 120-240 m. Applied to every recipe they broke Kimitsu, Futtsu and
+Odaiba, so a recipe names the ones it needs:
+
+| rule | what it does |
+|---|---|
+| `water_wedges` | closes the narrow end of an acute water wedge (about 60 deg or sharper), which the ordinary "water under two elements is closed" filter keeps whole |
+| `wall_pockets` | water shut in by walls alone, narrower than two elements, off the coast and in the coarse zone (h > 2x target), becomes an island; its walls come back if the rim refuses the island |
+| `short_chords` | in the coarse zone, a corner-cutting chord shorter than 0.75 of an element becomes one point, if that only gives water to land and keeps 60 deg |
+
+Try them when a run fails in the transition at a river mouth or a curled
+structure, and compare boundaries with notebook 435 (§12).
 
 **Choosing a target.** The external time step scales with the smallest element
 over the square root of the depth. The run tells you the step the target
@@ -449,12 +466,24 @@ package and have unit tests.
 ## 11. Known limits
 
 - Tested on one base mesh (goto2023): the Kimitsu port, the Futtsu coast, an
-  offshore fishery, the default branch, and the Tokyo port at Odaiba
-  (`recipes/refine/tokyo_odaiba_hires.yaml`, with the Daiba islands). Odaiba
+  offshore fishery, the default branch, the Tokyo port at Odaiba
+  (`recipes/refine/tokyo_odaiba_hires.yaml`, with the Daiba islands) and
+  Funabashi port (`recipes/refine/funabashi_port_hires.yaml`, with the opt-in
+  rules). Odaiba
   needed two coastline rules Kimitsu had not shown -- a new place will find
   new cases (§12).
 - A structure hugging the coast within 0.4 element, thinner than half an
   element, is not represented.
+- **Band seams.** The coastline filter judges width in octave bands of the
+  element size, each at its LOWER bound, so water two lower bounds wide --
+  only one element where the elements are twice the bound -- survives. Where the next band closes a
+  channel that this band keeps, the join is a straight cut across the
+  channel, and its corners can be acute (Funabashi, 1.4 km west of the
+  region). The opt-in rules above work around it; the fix at the source --
+  judging each channel at its own local size -- is future work (review 5,
+  2026-09-25). Quarter-octave bands were tried and moved the Kimitsu
+  transition coast by 211 m. A recipe can also avoid it by making the region
+  cover the channel mouths, so the element there is fine enough.
 - OSM `man_made` lines (breakwaters mapped only as lines) are not used.
 - The result depends on the DistMesh seed; the best of several is kept.
 - The M2 staging in job 421 is specific to the Tokyo Bay goto2023 base.

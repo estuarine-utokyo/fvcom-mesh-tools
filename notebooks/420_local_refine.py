@@ -880,6 +880,31 @@ if HIRES is not None and _land_filtered and _walls_src:
                 walk = np.delete(walk, k_, axis=0)
             else:
                 k_ += 1
+        # Nor between two CORNERS: the dog-leg at the end of an L-shaped
+        # pier kept a 10.6 m edge between its two bends among 30 m elements
+        # at Funabashi, and the element in the L came out at 27.6 deg in
+        # every seed.  Two interior corners under half an element apart
+        # become one, where the edges either side of them meet (their
+        # midpoint if that is further than half an element off).
+        # Junctions with other walls are kept.
+        k_ = 1
+        while k_ < len(walk) - 2:
+            h_k = float(h_achieved(np.asarray([walk[k_]]))[0])
+            if (np.linalg.norm(walk[k_ + 1] - walk[k_]) >= 0.5 * h_k
+                    or _key(walk[k_]) in _keep or _key(walk[k_ + 1]) in _keep):
+                k_ += 1
+                continue
+            mid = 0.5 * (walk[k_] + walk[k_ + 1])
+            d1, d2 = walk[k_] - walk[k_ - 1], walk[k_ + 2] - walk[k_ + 1]
+            den = d1[0] * d2[1] - d1[1] * d2[0]
+            meet = mid
+            if abs(den) > 1e-9 * np.linalg.norm(d1) * np.linalg.norm(d2):
+                w_ = walk[k_ + 1] - walk[k_ - 1]
+                t_ = (w_[0] * d2[1] - w_[1] * d2[0]) / den
+                x_ = walk[k_ - 1] + t_ * d1
+                if np.linalg.norm(x_ - mid) <= 0.5 * h_k:
+                    meet = x_
+            walk = np.vstack([walk[:k_], meet[None], walk[k_ + 2:]])
         ids = []
         for k_, xy in enumerate(walk):
             if k_ == 0 and ends[0] is not None:

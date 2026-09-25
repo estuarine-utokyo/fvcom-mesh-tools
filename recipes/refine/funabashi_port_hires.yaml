@@ -4,9 +4,14 @@
 # two 1.2 km discs):
 #
 #   * A, 139.985 35.685: 21 % water, 4 land rings, 7.1 km of shoreline.
-#   * B, 139.975 35.680 (this recipe): 35 % water, 3 land rings, 10.4 km of
-#     shoreline -- the port basin, the quays of the reclaimed land and the
-#     mouth of the river channel on the west side.
+#   * B, 139.975 35.680: 35 % water, 3 land rings, 10.4 km of shoreline --
+#     the port basin, the quays of the reclaimed land and the mouth of the
+#     river channel on the west side.
+#
+# This recipe is B moved 330 m north-east and widened to 1.4 km: at 1.2 km
+# the dock basin in the north-east corner of the port sat on the edge of the
+# circle, among 30-96 m elements, and a wall root there failed QA in every
+# one of ten seeds.
 #   * the base mesh has 6 coastline edges in B, and 13 elements with a
 #     median edge of 615 m: it represents none of the basin.
 #   * depths -3.7 to 14.3 m; 7 % of the disc at or above datum.
@@ -34,6 +39,6 @@ hires:
 refine:
   - name: funabashi_port
     geometry:
-      circle: {center: [139.9750, 35.6800], radius_m: 1200}
+      circle: {center: [139.9780, 35.6820], radius_m: 1400}
     target_h_m: 30
     priority: 0
