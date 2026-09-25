@@ -284,6 +284,23 @@ In order:
 
 A port-sized region takes 5-10 minutes on one core.
 
+**Reproducibility.** The seeds are fixed (`LR_SEEDS`, default 0-4), and the
+oceanmesh fork seeds its random generator with them, so the same inputs give
+the same mesh: rebuilding the five port recipes on 2026-09-25 gave
+byte-identical fort.14 files, and a run of seed 3 alone gave the same mesh as
+a search over 0-4 that chose 3. "The same inputs" means more than the seed.
+`report.json` records it all under `provenance`:
+- the commit of this repository and of the oceanmesh fork, with any
+  uncommitted files (the run also warns about them);
+- SHA-256 of the recipe, base mesh, depth and OBC files and the OSM
+  shapefile;
+- the Python and library versions, and `LR_SEEDS` / `LR_MAX_ITER`.
+
+To remake a mesh, check out both commits, use the same inputs and set
+`LR_SEEDS` to the accepted `seed`. Identical results across machines or
+library versions are not guaranteed: floating-point differences can move a
+node.
+
 ---
 
 ## 6. Outputs and how to read them

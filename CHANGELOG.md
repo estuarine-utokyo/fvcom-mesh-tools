@@ -19,6 +19,9 @@ will only ship with a major bump (Semantic Versioning).
   `patch.blunt_acute_corners(fine_h=)`.
 - The generator writes `frozen_land.shp` next to `shoreline_filtered.shp`.
 - USER_GUIDE §4 and §11: the rules, and the band-seam limit they work around.
+- `fvcom_mesh_tools.provenance`: `report.json` records the code commits
+  (with uncommitted files), input file hashes and library versions next to
+  the seed, so a mesh can be remade (USER_GUIDE §5).
 
 ### Added -- local refinement for users (2026-09-24)
 

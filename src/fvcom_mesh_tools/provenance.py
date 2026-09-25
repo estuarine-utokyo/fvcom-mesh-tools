@@ -1,0 +1,100 @@
+"""What a mesh was made from, so that it can be made again.
+
+A refinement is reproducible from its seed only if everything else is the
+same too: the code of this package and of the oceanmesh fork, the input
+files, and the libraries that do the floating-point work.  Rebuilding the
+five port recipes gave byte-identical meshes (2026-09-25), but the report
+recorded only the seed, the recipe and the base mesh's hash -- not the code
+or the OSM coastline it was cut from.  :func:`collect` records the rest.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib
+import platform
+import subprocess
+from pathlib import Path
+from typing import Any
+
+__all__ = ["collect", "file_sha256", "git_state"]
+
+# the libraries whose arithmetic or geometry decides the mesh
+LIBRARIES = ("numpy", "scipy", "shapely", "geopandas", "pyproj", "rasterio",
+             "matplotlib", "netCDF4", "oceanmesh")
+
+
+def file_sha256(path) -> str | None:
+    """SHA-256 of a file, or None when it cannot be read."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def git_state(path) -> dict[str, Any] | None:
+    """The commit a source tree is at, and whether it has local changes.
+
+    ``dirty`` lists the changed tracked files: a mesh made from uncommitted
+    code cannot be remade from the commit alone, and saying so is the point.
+    Returns None outside a git work tree or without git.
+    """
+    root = Path(path).resolve()
+    if root.is_file():
+        root = root.parent
+
+    def run(*args):
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+                              text=True, timeout=30, check=True).stdout
+
+    try:
+        top = run("rev-parse", "--show-toplevel").strip()
+        commit = run("rev-parse", "HEAD").strip()
+        # porcelain lines are "XY path"; the leading status column may be a
+        # space, so the output is not stripped before slicing
+        changed = [ln[3:] for ln in run("status", "--porcelain", "--untracked-files=no")
+                   .splitlines() if ln.strip()]
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {"root": top, "commit": commit, "dirty": changed}
+
+
+def _version(name: str) -> str | None:
+    try:
+        mod = importlib.import_module(name)
+    except Exception:  # noqa: BLE001 -- an absent or broken library is recorded as None
+        return None
+    return str(getattr(mod, "__version__", None) or "unknown")
+
+
+def collect(*, code: dict[str, Any] | None = None,
+            files: dict[str, Any] | None = None,
+            libraries=LIBRARIES) -> dict[str, Any]:
+    """A provenance record for ``report.json``.
+
+    ``code`` maps a name to a path inside a git tree (``{"fvcom_mesh_tools":
+    __file__, "oceanmesh": oceanmesh.__file__}``); ``files`` maps a name to a
+    file, or to a list of files hashed together in order (a shapefile and its
+    sidecars).  Missing files hash to None rather than failing the run.
+    """
+    out: dict[str, Any] = {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "libraries": {name: _version(name) for name in libraries},
+        "code": {name: git_state(p) for name, p in (code or {}).items()},
+        "files": {},
+    }
+    for name, p in (files or {}).items():
+        if isinstance(p, (list, tuple)):
+            parts = [file_sha256(q) for q in p]
+            out["files"][name] = {
+                "paths": [str(q) for q in p],
+                "sha256": None if any(x is None for x in parts)
+                else hashlib.sha256("".join(parts).encode()).hexdigest()}
+        else:
+            out["files"][name] = {"path": str(p), "sha256": file_sha256(p)}
+    return out

@@ -64,6 +64,7 @@ from fvcom_mesh_tools.refine import (
     preflight,
     transition_width_m,
 )
+from fvcom_mesh_tools.provenance import collect as collect_provenance  # noqa: E402
 from fvcom_mesh_tools.walls import (  # noqa: E402
     close_wall_pockets,
     extract_walls,
@@ -299,6 +300,22 @@ reports = {"recipe": str(recipe), "base_mesh": str(cfg["base_mesh"]),
            "base_obc": str(cfg["base_obc"]) if cfg["base_obc"] else None,
            "base_rmax": base_rmax, "preflight": [],
            "land": str(LAND) if land_m is not None else None}
+# Everything besides the seed that decides the mesh (provenance.py): the
+# code of both trees, the input files, and the libraries.
+reports["provenance"] = collect_provenance(
+    code={"fvcom_mesh_tools": Path(__file__).resolve(),
+          "oceanmesh": Path(om.__file__).resolve()},
+    files={"recipe": recipe, "base_mesh": cfg["base_mesh"],
+           **({"base_depth": cfg["base_depth"]} if cfg["base_depth"] else {}),
+           **({"base_obc": cfg["base_obc"]} if cfg["base_obc"] else {}),
+           **({"land": [LAND.with_suffix(x) for x in (".shp", ".shx", ".dbf", ".prj")]}
+              if land_m is not None else {})})
+reports["provenance"]["seeds"] = os.environ.get("LR_SEEDS", "0,1,2,3,4")
+reports["provenance"]["max_iter"] = int(os.environ.get("LR_MAX_ITER", 100))
+_dirty = {k: v["dirty"] for k, v in reports["provenance"]["code"].items() if v and v["dirty"]}
+if _dirty:
+    say(f"provenance: uncommitted changes in {_dirty}; this mesh cannot be remade "
+        "from the commits alone")
 for geom, region in regions_m:
     pf = preflight(region, gradation=cfg["gradation"],
                    dt_expected_s=cfg["dt_expected_s"],
