@@ -1,0 +1,39 @@
+# FUNABASHI PORT: the third port example (after Kimitsu and Odaiba).
+#
+# Surveyed before this was written (notebooks/423_site_survey.py, job 116463,
+# two 1.2 km discs):
+#
+#   * A, 139.985 35.685: 21 % water, 4 land rings, 7.1 km of shoreline.
+#   * B, 139.975 35.680 (this recipe): 35 % water, 3 land rings, 10.4 km of
+#     shoreline -- the port basin, the quays of the reclaimed land and the
+#     mouth of the river channel on the west side.
+#   * the base mesh has 6 coastline edges in B, and 13 elements with a
+#     median edge of 615 m: it represents none of the basin.
+#   * depths -3.7 to 14.3 m; 7 % of the disc at or above datum.
+#
+# The outline is a DEMONSTRATION circle over the port, not a port limit.
+base_mesh: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
+base_depth: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
+base_obc: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
+
+dt_expected_s: 4.5
+gradation: 0.165
+
+hires:
+  coastline: resolve
+  bathymetry: tokyo_bay
+  scope: hole
+  blend: ramp
+  # Opt-in coastline rules (docs/USER_GUIDE.md): two river mouths 1-2 km west
+  # of the circle meet the coarse transition (h 120-240 m) as acute wedges,
+  # and a curled breakwater there shuts in a 400 x 230 m pocket. Without
+  # these the patch introduced 20 QA violations; applied to every recipe
+  # they broke Kimitsu, Futtsu and Odaiba, so only this recipe names them.
+  experimental: [water_wedges, wall_pockets, short_chords]
+
+refine:
+  - name: funabashi_port
+    geometry:
+      circle: {center: [139.9750, 35.6800], radius_m: 1200}
+    target_h_m: 30
+    priority: 0

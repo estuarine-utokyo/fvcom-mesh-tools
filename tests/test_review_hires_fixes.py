@@ -87,7 +87,7 @@ def test_f4_hires_preserve_does_not_blunt_the_coast():
                "pfix_base": np.full(3, -1)},
         "hole": water, "h_achieved": lambda q: np.full(len(q), 10.0),
         "blunt_acute_corners": blunt_acute_corners, "hole_polygon": hole_polygon,
-        "reports": {}, "say": lambda *args: None,
+        "reports": {}, "say": lambda *args: None, "FINE_H": 60.0, "EXPERIMENTAL": set(),
     }
     exec(compile(ast.Module(body=[block], type_ignores=[]), "<driver block>", "exec"), env)
     assert env["hole"].symmetric_difference(water).area < 1e-8

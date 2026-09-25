@@ -369,3 +369,85 @@ def test_wall_pairs_travel_with_their_mesh_and_only_theirs(tmp_path):
     # a changed mesh no longer matches its declaration
     f14.write_text(f14.read_text() + "\n")
     assert qa_main([str(f14), "--no-channel", "--quiet"]) == 2
+
+
+def _const(h):
+    return lambda p: np.full(len(p), float(h))
+
+
+def test_close_wall_pockets_fills_a_curl_too_narrow_for_two_elements():
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    land = shapely.box(-2000, -2000, 2000, 0)
+    # a breakwater rooted on the coast that curls round 150 m out; its end
+    # stops 40 m short of its own side, shutting in a 400 x 230 m pocket
+    curl = shapely.LineString([(0, 0), (0, 380), (400, 380), (400, 150), (40, 150)])
+    added, kept, rep = close_wall_pockets([curl], land, _const(200.0))
+    assert rep["n_pockets_closed"] == 1
+    assert added.area == pytest.approx(360 * 230, rel=0.2)
+    # the walls round the pocket are its coast now; only the root stays a wall
+    assert sum(w.length for w in kept) < 200.0
+
+
+def test_close_wall_pockets_leaves_a_pocket_next_to_the_coast():
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    land = shapely.box(-2000, -2000, 2000, 0)
+    # the same curl 70 m off the coast: merged into it, it would take away
+    # the coast component the rim is resolved from
+    curl = shapely.LineString([(0, 0), (0, 300), (400, 300), (400, 70), (40, 70)])
+    added, kept, rep = close_wall_pockets([curl], land, _const(200.0))
+    assert rep["n_pockets_closed"] == 0
+
+
+def test_close_wall_pockets_leaves_a_pocket_two_elements_can_cross():
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    land = shapely.box(-2000, -2000, 2000, 0)
+    curl = shapely.LineString([(0, 0), (0, 300), (400, 300), (400, 70), (40, 70)])
+    added, kept, rep = close_wall_pockets([curl], land, _const(30.0))
+    assert rep["n_pockets_closed"] == 0
+    assert added.is_empty
+    assert sum(w.length for w in kept) == pytest.approx(curl.length)
+
+
+def test_close_wall_pockets_ignores_a_pier_that_shuts_nothing_in():
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    land = shapely.box(-2000, -2000, 2000, 0)
+    pier = shapely.LineString([(0, 0), (0, 500)])
+    added, kept, rep = close_wall_pockets([pier], land, _const(200.0))
+    assert rep["n_pockets_closed"] == 0 and len(kept) == 1
+
+
+def test_close_wall_pockets_leaves_the_face_between_a_pier_axis_and_the_coast():
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    # the axis of a removed pier, rooted at both ends on a bent quay: the face
+    # between them is the pier's footprint, made water on purpose
+    land = shapely.Polygon([(-2000, -2000), (2000, -2000), (2000, 0), (300, 0),
+                            (300, 100), (0, 100), (0, 0), (-2000, 0)])
+    axis = shapely.LineString([(0, 100), (0, 150), (300, 150), (300, 100)])
+    added, kept, rep = close_wall_pockets([axis], land, _const(200.0))
+    assert rep["n_pockets_closed"] == 0 and added.is_empty
+
+
+def test_close_wall_pockets_stays_out_of_the_fine_zone():
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    land = shapely.box(-2000, -2000, 2000, 0)
+    curl = shapely.LineString([(0, 0), (0, 300), (400, 300), (400, 70), (40, 70)])
+    added, kept, rep = close_wall_pockets([curl], land, _const(200.0), min_h=200.0)
+    assert rep["n_pockets_closed"] == 0

@@ -753,10 +753,20 @@ def test_a_recipe_without_hires_is_untouched(tmp_path):
 def test_hires_defaults_to_resolving_the_coastline_on_the_ladder(tmp_path):
     cfg = load_refine(_hires_recipe(tmp_path, "hires: {}\n"))
     assert cfg["hires"] == {"coastline": "resolve", "bathymetry": "tokyo_bay",
-                            "scope": "hole", "blend": "ramp"}
+                            "scope": "hole", "blend": "ramp", "experimental": []}
     # the branch drives the coastline, and `resolve` has no departure veto
     assert cfg["coastline"] == "resolve"
     assert cfg["coastline_tolerance_m"] == float("inf")
+
+
+def test_hires_experimental_rules_are_opt_in_by_name(tmp_path):
+    cfg = load_refine(_hires_recipe(
+        tmp_path, "hires: {experimental: [wall_pockets, water_wedges, wall_pockets]}\n"))
+    assert cfg["hires"]["experimental"] == ["wall_pockets", "water_wedges"]
+    with pytest.raises(ValueError, match="experimental"):
+        load_refine(_hires_recipe(tmp_path, "hires: {experimental: [round_corners]}\n"))
+    with pytest.raises(ValueError, match="experimental"):
+        load_refine(_hires_recipe(tmp_path, "hires: {experimental: water_wedges}\n"))
 
 
 def test_hires_can_keep_the_coastline_and_still_replace_the_depths(tmp_path):

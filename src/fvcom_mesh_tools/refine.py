@@ -112,6 +112,11 @@ HIRES_BATHYMETRY = ("tokyo_bay", "base")
 
 HIRES_SCOPE = ("hole", "core")
 HIRES_BLEND = ("ramp", "none")
+# Coastline rules a recipe may switch on by name.  They fixed the Funabashi
+# transition and broke Kimitsu, Futtsu and Odaiba when applied to every
+# recipe (2026-09-25), so they are opt-in until the band-seam artefact they
+# work around is fixed at its source (docs/USER_GUIDE.md, known limits).
+HIRES_EXPERIMENTAL = ("water_wedges", "wall_pockets", "short_chords")
 
 GRAVITY_M_S2 = 9.81
 
@@ -320,13 +325,19 @@ def _hires(spec, cfg) -> dict[str, Any] | None:
                 "source on purpose, which is what "
                 f"{'coastline_tolerance_m' if key.endswith('_m') else key} exists "
                 "to refuse")
-    _keys(spec, [], ["coastline", "bathymetry", "scope", "blend"])
+    _keys(spec, [], ["coastline", "bathymetry", "scope", "blend", "experimental"])
     out = {
         "coastline": spec.get("coastline", "resolve"),
         "bathymetry": spec.get("bathymetry", "tokyo_bay"),
         "scope": spec.get("scope", "hole"),
         "blend": spec.get("blend", "ramp"),
+        "experimental": spec.get("experimental", []) or [],
     }
+    exp = out["experimental"]
+    if not isinstance(exp, list) or any(x not in HIRES_EXPERIMENTAL for x in exp):
+        raise ValueError(f"hires.experimental must be a list drawn from "
+                         f"{HIRES_EXPERIMENTAL}, got {exp!r}")
+    out["experimental"] = sorted(set(exp))
     for key, allowed in (("coastline", HIRES_COASTLINE),
                          ("bathymetry", HIRES_BATHYMETRY),
                          ("scope", HIRES_SCOPE), ("blend", HIRES_BLEND)):

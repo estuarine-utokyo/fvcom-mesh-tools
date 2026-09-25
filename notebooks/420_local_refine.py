@@ -65,6 +65,7 @@ from fvcom_mesh_tools.refine import (
     transition_width_m,
 )
 from fvcom_mesh_tools.walls import (  # noqa: E402
+    close_wall_pockets,
     extract_walls,
     node_walls,
     open_lone_corners,
@@ -249,9 +250,12 @@ def base_depth_of(lon, lat):
 # ONE `if`, taken here (owner, 2026-09-23).  `hires` absent and nothing below
 # is reached; everything the recipe did before it existed, it still does.
 HIRES = cfg["hires"]
+# opt-in coastline rules (refine.HIRES_EXPERIMENTAL); none unless named
+EXPERIMENTAL = set(HIRES.get("experimental", [])) if HIRES is not None else set()
 if HIRES is not None:
     say(f"hires: coastline {HIRES['coastline']}, bathymetry "
-        f"{HIRES['bathymetry']}, scope {HIRES['scope']}, blend {HIRES['blend']}")
+        f"{HIRES['bathymetry']}, scope {HIRES['scope']}, blend {HIRES['blend']}"
+        + (f", experimental {sorted(EXPERIMENTAL)}" if EXPERIMENTAL else ""))
     if HIRES["bathymetry"] == "tokyo_bay":
         say("hires: depths come from the ladder, NOT from the base mesh. "
             "Nothing is floored, capped or smoothed here -- the minimum depth "
@@ -471,7 +475,8 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
                                               _h_local, _h0, _foot,
                                               elements_per_feature=2,
                                               land_width_factor=0.5,
-                                              land_width_max_band=1)
+                                              land_width_max_band=1,
+                                              close_wedges="water_wedges" in EXPERIMENTAL)
     reports["shoreline_filter"] = _frep
     for _b in _frep["bands"]:
         say(f"    band {_b['band']}: h {_b['h_m']:g} m over {_b['zone_km2']:.2f} km2, "
@@ -486,6 +491,20 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
     _walls_src, _srep = straighten_walls(_walls_src, _h_local)
     _wrep["straightened"] = _srep
     _walls_src = node_walls(_walls_src, snap_m=_h0)
+    # water the walls shut in, too narrow to mesh, is land like any other
+    # (opt-in).  The walls are kept aside until the pocket is on the rim as
+    # an island: island_rings may refuse it, and then the walls come back.
+    _walls_before_pockets = list(_walls_src)
+    _prep = {"n_pockets_closed": 0, "at": []}
+    if "wall_pockets" in EXPERIMENTAL:
+        _pockets, _walls_src, _prep = close_wall_pockets(_walls_src, _filtered, _h_local,
+                                                         min_h=2.0 * _h0 + 1e-6)
+    _wrep["pockets_closed"] = _prep
+    if _prep["n_pockets_closed"]:
+        _filtered = shapely.make_valid(shapely.union_all([_filtered, _pockets]))
+        say(f"walls: {_prep['n_pockets_closed']} pocket(s) shut in by walls and narrower "
+            f"than two local elements made land ({_prep['area_m2'] / 1e6:.4f} km2), "
+            f"at {_prep['at']}")
     reports["walls_extracted"] = {k: v for k, v in _wrep.items() if k != "dropped"}
     say(f"walls: {_wrep['n_walls']} extracted, {_wrep['wall_length_m'] / 1000:.2f} km, "
         f"{_wrep['n_dropped']} piece(s) dropped as shorter than {_h0:g} m; "
@@ -498,6 +517,10 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
         f"{_frep['perimeter_before_m'] / 1000:.2f} -> "
         f"{_frep['perimeter_after_m'] / 1000:.2f} km")
     _shp = OUT / "shoreline_filtered.shp"
+    if not _frozen_land.is_empty:
+        # what the filter saw besides OSM, for inspection
+        gpd.GeoDataFrame(geometry=[_frozen_land], crs=MESH_EPSG).explode(
+            index_parts=False).to_file(OUT / "frozen_land.shp")
     gpd.GeoDataFrame(geometry=[_filtered], crs=MESH_EPSG).explode(
         index_parts=False).to_file(_shp)
     if not _filtered.is_empty:
@@ -611,6 +634,14 @@ if HIRES is not None and _land_filtered:
         f"to the rim ({_irep['n_island_points']} point(s))"
         + (f"; {len(_irep['skipped'])} left out, e.g. {_irep['skipped'][:3]}"
            if _irep["skipped"] else ""))
+    # a wall pocket the rim did not take is still water: give its walls back
+    _lost = [xy for xy in reports.get("walls_extracted", {}).get("pockets_closed", {})
+             .get("at", []) if hole.contains(shapely.Point(xy))]
+    if _lost:
+        _walls_src = _walls_before_pockets
+        reports["walls_extracted"]["pockets_closed"]["walls_restored_for"] = _lost
+        say(f"walls: {len(_lost)} pocket(s) not taken as islands ({_lost}); "
+            "their walls are kept")
 if HIRES is not None:
     # A resolved coastline follows OSM into every corner, and a corner under
     # 60 deg holds one element: its node is then in that element alone, and
@@ -621,7 +652,8 @@ if HIRES is not None:
     # owner 2026-09-24); a lone node left by one is opened by the mesh repair
     # and the QA gate says if that failed.
     _p, _e, _b, _brep = blunt_acute_corners(
-        rc["pfix"], rc["egfix"], rc["pfix_base"], hole, h_achieved)
+        rc["pfix"], rc["egfix"], rc["pfix_base"], hole, h_achieved,
+        fine_h=FINE_H if "short_chords" in EXPERIMENTAL else None)
     if HIRES["coastline"] != "resolve":
         reports["acute_corners_kept"] = {k: _brep[k] for k in
                                          ("n_corners_blunted", "angles_deg", "at")}

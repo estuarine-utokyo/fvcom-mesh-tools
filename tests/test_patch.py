@@ -1960,3 +1960,85 @@ def test_step_and_spike_rules_stay_out_of_the_coarse_transition():
     small = line * 0.15
     out2 = _corner_walk(small, lambda xy: np.full(len(xy), 30.0), fine_h=60.0)
     assert not np.any(np.all(np.isclose(out2, small[1]), axis=1))
+
+
+def _wedge_land(theta_deg, depth=500.0):
+    """Land with a water wedge of ``theta_deg`` opening onto open water."""
+    t = np.radians(theta_deg / 2)
+    wedge = shapely.Polygon([(0, 0), (-depth * np.tan(t), depth), (depth * np.tan(t), depth)])
+    water = shapely.union_all([wedge, shapely.box(-1000, depth, 1000, 1000)])
+    return shapely.difference(shapely.box(-1000, -1000, 1000, 1000), water)
+
+
+def test_filter_shoreline_closes_the_narrow_end_of_an_acute_water_wedge():
+    # A mitre closing rebuilds the corner it rounds, so a 30 deg wedge came
+    # through whole; its narrow end is water no disc of radius r fits in.
+    land = _wedge_land(30.0)
+    from fvcom_mesh_tools.patch import filter_shoreline
+
+    out, rep = filter_shoreline(land, 30.0, elements_per_feature=2, close_wedges=True)
+    gained = shapely.difference(out, land)
+    r = 30.0
+    assert rep["n_water_wedges_closed"] == 1
+    assert gained.area == pytest.approx(r * r * (1 / np.tan(np.radians(15)) - np.radians(150) / 2),
+                                        rel=0.02)
+    # filled from the apex to the tangent points of a disc of radius r (y 108)
+    assert shapely.intersects(gained, shapely.Point(0, 1.0))
+    assert shapely.intersection(gained, shapely.box(-1000, 120, 1000, 1000)).area < 1.0
+    # opt-in: off, the mitre closing keeps the wedge whole as before
+    off, rep_off = filter_shoreline(land, 30.0, elements_per_feature=2)
+    assert rep_off["n_water_wedges_closed"] == 0
+    assert shapely.symmetric_difference(off, land).area < 1e-6
+
+
+def test_filter_shoreline_keeps_right_angle_inner_corners_exact():
+    # the round closing's crescents in a quay's inner corners are not taken
+    land = shapely.difference(shapely.box(-1000, -1000, 1000, 1000),
+                              shapely.box(-200, -200, 200, 1000))
+    from fvcom_mesh_tools.patch import filter_shoreline
+
+    out, rep = filter_shoreline(land, 30.0, elements_per_feature=2, close_wedges=True)
+    assert rep["n_water_wedges_closed"] == 0
+    assert shapely.symmetric_difference(out, land).area < 1e-6
+
+
+
+
+def test_short_chord_collapse_never_makes_new_water():
+    # review 5: the stopped-corner fixture at h = 100 m, fine_h = 50, made
+    # 30.7 m2 of new water when the chord was collapsed to its midpoint
+    from fvcom_mesh_tools.patch import blunt_acute_corners, hole_polygon
+
+    pfix = np.array([[0.0, 0.0], [-31.5, -20.4], [-72.7, 34.6], [-400.0, 34.6],
+                     [-400.0, -400.0], [0.0, -400.0], [0.0, -64.9]])
+    egfix = np.array([[k, (k + 1) % 7] for k in range(7)])
+    base = np.array([-1, -1, -1, 11, 12, 13, 14])
+    water = hole_polygon(pfix, egfix)
+    p, e, b, rep = blunt_acute_corners(pfix, egfix, base, water,
+                                       lambda xy: np.full(len(xy), 100.0), fine_h=50.0)
+    after = hole_polygon(p, e)
+    assert after.is_valid
+    assert shapely.difference(after, water).area < 1e-6
+
+
+def test_short_chord_collapse_makes_one_point_in_the_coarse_zone():
+    from fvcom_mesh_tools.patch import blunt_acute_corners, hole_polygon
+
+    # a 40 deg water corner whose sides turn 80 m out into a wide V: the walk
+    # stops at those corners and leaves a chord shorter than 0.75 h
+    t = np.radians(20.0)
+    a = np.array([-80 * np.sin(t), 80 * np.cos(t)])
+    pfix = np.array([[0.0, 0.0], a, a + [-1000.0, 600.0], [-1000.0, 2000.0],
+                     [1000.0, 2000.0], [-a[0], a[1]] + np.array([1000.0, 600.0]),
+                     [-a[0], a[1]]])
+    egfix = np.array([[k, (k + 1) % 7] for k in range(7)])
+    base = np.array([-1, -1, 10, 11, 12, 13, -1])
+    water = hole_polygon(pfix, egfix)
+    size = lambda xy: np.full(len(xy), 200.0)  # noqa: E731
+    p, e, b, rep = blunt_acute_corners(pfix, egfix, base, water, size, fine_h=60.0)
+    assert rep["n_corners_blunted"] == 1 and rep["chord_m"] == [0.0]
+    after = hole_polygon(p, e)
+    assert after.is_valid and shapely.difference(after, water).area < 1e-6
+    # without fine_h the same corner is cut by a chord
+    p2, e2, b2, rep2 = blunt_acute_corners(pfix, egfix, base, water, size)
+    assert rep2["chord_m"][0] > 0.0

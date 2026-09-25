@@ -602,6 +602,108 @@ def straighten_walls(walls, size, *, trim_factor=0.5, tol_factor=0.1):
     return out, {"n_straightened": len(turned), "end_to_end_turn_deg": turned}
 
 
+def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
+    """Water that walls shut in, narrower than two local elements, is land.
+
+    The shoreline filter closes water narrower than two elements, but it
+    only sees land: a wall is a line.  On the Funabashi approach a curled
+    breakwater (1.2 km, its end 49 m from its own side) shut in a pocket of
+    400 x 230 m among 200 m elements; three elements went in and came out at
+    27 deg.  So the pockets are found here: the walls, the coast near them,
+    and a chord from each wall end to the nearest line within ``gap_factor``
+    of the local element (a mouth that narrow is water narrower than two
+    elements too) are polygonized, and a water face that the walls shut in
+    by themselves -- no coast on its outline, half of it or more wall, half
+    an element or more off the coast -- and that has no room for a disc of
+    one local element becomes land (an island).  The walls on its outline
+    go with it -- they are its coast now.
+
+    Only where the local element is coarser than ``min_h``.  In the fine
+    zone a pocket is a few elements across and the wall rules downstream
+    carry it; filling one there (a 100 m2 curl at Kimitsu, a 10,600 m2 one
+    at Odaiba) moved a quay the frozen contract then refused, and made 26
+    new bad elements at Kimitsu.
+
+    ``size`` maps (n, 2) points to the local element size.  Returns
+    ``(land_added, walls, report)``.
+    """
+    import shapely
+    from shapely.ops import nearest_points, polygonize, substring
+
+    lines = [shapely.LineString(np.asarray(w.coords)[:, :2]) for w in walls if w.length > 0]
+    empty = shapely.Polygon()
+    rep = {"n_pockets_closed": 0, "area_m2": 0.0, "at": []}
+    if not lines:
+        return empty, list(walls), rep
+    land = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
+    h_mid = np.asarray(size(np.asarray(
+        [w.interpolate(0.5, normalized=True).coords[0] for w in lines])), dtype=float)
+    near = shapely.union_all([w.buffer(2.0 * h) for w, h in zip(lines, h_mid)])
+    coast = shapely.intersection(land.boundary, near)
+    chords = []
+    for k, w in enumerate(lines):
+        for end in (0, 1):
+            p = shapely.Point(w.coords[-end])
+            h = float(np.asarray(size(np.asarray([p.coords[0]])), dtype=float)[0])
+            # the wall's own far part counts (a curl), its near part does not
+            own = (substring(w, h, w.length) if end == 0
+                   else substring(w, 0.0, w.length - h)) if w.length > h else None
+            others = [x for j, x in enumerate(lines) if j != k] + [coast]
+            if own is not None and own.length > 0:
+                others.append(own)
+            target = shapely.union_all([g for g in others if not g.is_empty])
+            if target.is_empty:
+                continue
+            d = float(shapely.distance(target, p))
+            if 0.0 < d <= gap_factor * h:
+                chords.append(shapely.LineString(
+                    [p.coords[0], nearest_points(target, p)[0].coords[0]]))
+    faces = list(polygonize(shapely.union_all([*lines, *chords, coast])))
+    wall_buf = shapely.union_all(lines).buffer(0.01)
+    coast_buf = coast.buffer(0.01) if not coast.is_empty else None
+    closed = []
+    for f in faces:
+        if f.area < 1.0:
+            continue  # two lines that touch along a stretch, not a pocket
+        if shapely.intersection(f, land).area > 0.5 * f.area:
+            continue  # a face of land, not a pocket
+        # Only a pocket the walls shut in THEMSELVES: none of its outline on
+        # the coast, and at least half of it wall (the rest is chords).  A
+        # face between the coast and the axis of a pier the filter removed
+        # is the pier's own footprint, which the filter made water on
+        # purpose; filling those put 0.45 km2 of land back into the Odaiba
+        # port and cut the coastline the rim is resolved from.
+        if coast_buf is not None and \
+                shapely.intersection(f.boundary, coast_buf).length > 1.0:
+            continue
+        if shapely.intersection(f.boundary, wall_buf).length < 0.5 * f.length:
+            continue
+        pt = f.representative_point()
+        # the finest element anywhere on it decides: a pocket reaching into
+        # finer elements may be resolvable there
+        probe = np.vstack([np.asarray(pt.coords)[:, :2],
+                           np.asarray(f.exterior.coords)[:, :2]])
+        h = float(np.min(np.asarray(size(probe), dtype=float)))
+        # ...and clear of the coast by half an element.  The rim is resolved
+        # from the land's own components, and a pocket that touched or
+        # nearly touched the coast merged into it and left a stretch with no
+        # source component (Odaiba, 387,650 3,945,700).
+        if h > min_h and f.buffer(-h).is_empty and \
+                float(shapely.distance(f, land)) >= 0.5 * h:
+            closed.append(f)
+            rep["at"].append([round(pt.x, 1), round(pt.y, 1)])
+    if not closed:
+        return empty, list(walls), rep
+    added = shapely.union_all(closed)
+    kept = []
+    for w in lines:
+        g = shapely.difference(w, added.buffer(0.01))
+        kept.extend(q for q in getattr(g, "geoms", [g])
+                    if q.geom_type == "LineString" and q.length > 0)
+    rep.update(n_pockets_closed=len(closed), area_m2=float(added.area))
+    return added, kept, rep
+
+
 def wall_pairs_path(mesh_path):
     """Where the wall pairs of a mesh are kept: ``<stem>_walls.json`` beside it."""
     from pathlib import Path
