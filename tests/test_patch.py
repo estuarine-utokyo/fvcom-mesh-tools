@@ -1945,3 +1945,18 @@ def test_blunting_stops_at_a_corner_instead_of_cutting_over_land():
     assert rep["n_corners_blunted"] == 1 and hole_polygon(p, e).is_valid
     assert np.min(np.linalg.norm(p - pfix[1], axis=1)) < 1e-9   # the corner stays
     assert np.min(np.linalg.norm(p - pfix[0], axis=1)) > 1.0    # the acute one goes
+
+
+def test_step_and_spike_rules_stay_out_of_the_coarse_transition():
+    from fvcom_mesh_tools.patch import _corner_walk
+
+    # a 130 m jog among 200 m elements (0.65 h): already meshable, kept when
+    # fine_h = 60
+    line = np.array([[0.0, 0.0], [800.0, 0.0], [800.0, 130.0], [1800.0, 130.0]])
+    out = _corner_walk(line, lambda xy: np.full(len(xy), 200.0), fine_h=60.0)
+    assert np.min(np.linalg.norm(out - [800.0, 0.0], axis=1)) < 1e-9
+    assert np.min(np.linalg.norm(out - [800.0, 130.0], axis=1)) < 1e-9
+    # the same jog at 30 m scale (19.5 m, also 0.65 h) is collapsed (Odaiba)
+    small = line * 0.15
+    out2 = _corner_walk(small, lambda xy: np.full(len(xy), 30.0), fine_h=60.0)
+    assert not np.any(np.all(np.isclose(out2, small[1]), axis=1))

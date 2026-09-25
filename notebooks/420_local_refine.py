@@ -541,9 +541,13 @@ h_achieved = patch_sizing(base.nodes, base.elements, sized, distmesh_scale=1.0,
 _ub, _cb = np.unique(np.sort(np.vstack(
     [base.elements[:, [0, 1]], base.elements[:, [1, 2]],
      base.elements[:, [2, 0]]]), axis=1), axis=0, return_counts=True)
+# The coastline rules that serve element quality at the target (steps and
+# spikes up to 0.75 of an element) act only where the elements are up to
+# 2 h0, like the half-element land rule; further out they cost fidelity.
+FINE_H = 2.0 * min(r.target_h_m for _, r in regions_m) + 1e-6
 rc = rim_constraints(base.nodes, sel, size=h_achieved,
                      coastline=cfg["coastline"], shoreline=shore,
-                     tolerance_m=cfg["coastline_tolerance_m"],
+                     tolerance_m=cfg["coastline_tolerance_m"], fine_h=FINE_H,
                      boundary_edges=_ub[_cb == 1])
 reports["rim"] = {k: v for k, v in rc.items()
                   if isinstance(v, (int, float, str, bool))}
@@ -588,7 +592,7 @@ if HIRES is not None and _land_filtered:
     # harbour -- detached once the filter made the pier that joined it to the
     # shore a wall -- was meshed as water.  Every filtered land polygon inside
     # the hole becomes an island of the rim.
-    _isl, _irep = island_rings(_filtered, hole, h_achieved)
+    _isl, _irep = island_rings(_filtered, hole, h_achieved, fine_h=FINE_H)
     reports["islands_added"] = _irep
     if _isl:
         _p, _e = np.asarray(rc["pfix"], dtype=float), np.asarray(rc["egfix"], dtype=np.int64)

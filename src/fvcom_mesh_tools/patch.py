@@ -367,6 +367,7 @@ def coastline_points(
     mode: str = "resample",
     shoreline=None,
     tolerance_m: float = 100.0,
+    fine_h: float | None = None,
 ) -> np.ndarray:
     """New boundary points along one free stretch of the coastline.
 
@@ -406,7 +407,7 @@ def coastline_points(
     if mode == "resolve":
         if shoreline is None:
             raise ValueError("coastline: resolve needs the source shoreline")
-        out = _resolve_stretch(pts, shoreline, size)
+        out = _resolve_stretch(pts, shoreline, size, fine_h=fine_h)
     elif mode == "resample":
         if shoreline is None:
             raise ValueError("coastline: resample needs the source shoreline")
@@ -806,7 +807,7 @@ def _base_spacing(pts: np.ndarray) -> np.ndarray:
                       np.concatenate([seg, [seg[-1]]]))
 
 
-def _resolve_stretch(pts: np.ndarray, shoreline, size) -> np.ndarray:
+def _resolve_stretch(pts: np.ndarray, shoreline, size, *, fine_h=None) -> np.ndarray:
     """Follow the source, over the whole stretch.
 
     An earlier version kept the base polyline wherever the local element size
@@ -822,13 +823,14 @@ def _resolve_stretch(pts: np.ndarray, shoreline, size) -> np.ndarray:
     applied to the source before any of this, at the declared grid size.
     """
     return _resample_on_source(np.asarray(pts, dtype=float)[:, :2], shoreline,
-                               size, pointwise=True, require=True)
+                               size, pointwise=True, require=True, fine_h=fine_h)
 
 
 def _resample_on_source(pts: np.ndarray, shoreline, size,
                         simplify_frac: float = 0.25, *,
                         pointwise: bool = False,
-                        require: bool = False) -> np.ndarray:
+                        require: bool = False,
+                        fine_h: float | None = None) -> np.ndarray:
     """Re-space one stretch along the source shoreline between its endpoints.
 
     The source is simplified to a fraction of the LOCAL element size first.
@@ -881,7 +883,7 @@ def _resample_on_source(pts: np.ndarray, shoreline, size,
     out = np.asarray(out, dtype=float)
     # corners kept: an arc-length walk cut across every pier narrower than
     # two elements, and piers down to half an element are land now
-    return _corner_walk(out if len(out) >= 2 else coords, size)
+    return _corner_walk(out if len(out) >= 2 else coords, size, fine_h=fine_h)
 
 
 def rim_constraints(
@@ -893,6 +895,7 @@ def rim_constraints(
     boundary_edges=None,
     shoreline=None,
     tolerance_m: float = 100.0,
+    fine_h: float | None = None,
 ) -> dict[str, Any]:
     """Build the fixed points and constrained segments the filler needs.
 
@@ -966,7 +969,7 @@ def rim_constraints(
                     j += 1
                 if run:
                     idx = np.concatenate([[ring[v]], ring[run], [ring[order[j % m]]]])
-                    new = coastline_points(xy[idx], size, mode=coastline,
+                    new = coastline_points(xy[idx], size, mode=coastline, fine_h=fine_h,
                                            shoreline=shoreline,
                                            tolerance_m=tolerance_m)
                     why = _unusable_replacement(new, xy, idx, boundary_edges,
@@ -1029,7 +1032,8 @@ def _push(pts: list, base_id: list, q, bid: int) -> int:
     return len(pts) - 1
 
 
-def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
+def _corner_walk(pts: np.ndarray, size, *, closed: bool = False,
+                 fine_h: float | None = None) -> np.ndarray:
     """Resample a polyline at the local size, keeping its corners.
 
     ``_walk`` places stations by arc length and so cuts every corner it
@@ -1050,7 +1054,8 @@ def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
     * long edges are subdivided, every vertex kept.
 
     ``closed`` treats ``pts`` as a ring (not repeated at the end) and
-    returns it the same way.
+    returns it the same way. ``fine_h`` limits the step (0.5-0.75 h) and
+    spike rules to where the local size is at most ``fine_h``.
     """
     pts = np.asarray(pts, dtype=float)[:, :2].copy()
     # EXACT repetition only: allclose's relative tolerance at a UTM northing
@@ -1074,6 +1079,13 @@ def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
     def edges():
         n = len(pts)
         return [(k, (k + 1) % n) for k in range(n if closed else n - 1)]
+
+    def fine(h):
+        # The step and spike rules serve element quality at the TARGET size.
+        # Applied in the coarse transition they collapsed 100 m jogs among
+        # 200 m elements that already met QA, and moved the Futtsu coast up
+        # to 47 m off OSM for nothing. ``fine_h`` bounds where they act.
+        return fine_h is None or h <= fine_h
 
     made: set = set()
     changed = True
@@ -1112,7 +1124,7 @@ def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
             h = float(_size_at(size, 0.5 * (pts[i] + pts[j])[None])[0])
             ti, tj = turn(i), turn(j)
             if L < 0.75 * h and abs(ti) > 60.0 and abs(tj) > 60.0 \
-                    and np.sign(ti) != np.sign(tj):
+                    and np.sign(ti) != np.sign(tj) and fine(h):
                 # a STEP of up to 0.75 of an element: a 19.6 m jog in an
                 # Odaiba quay left an element of 29.7 deg at 30 m. The two
                 # corners become one point between them.
@@ -1155,7 +1167,7 @@ def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
             a_ = float(np.linalg.norm(pts[k] - pts[k - 1]))
             b_ = float(np.linalg.norm(pts[(k + 1) % n] - pts[k]))
             h = float(_size_at(size, pts[k][None])[0])
-            if a_ < 0.75 * h and b_ < 0.75 * h and abs(turn(k)) > 60.0:
+            if a_ < 0.75 * h and b_ < 0.75 * h and abs(turn(k)) > 60.0 and fine(h):
                 pts = np.delete(pts, k, axis=0)
                 changed = True
                 break
@@ -1164,7 +1176,7 @@ def _corner_walk(pts: np.ndarray, size, *, closed: bool = False) -> np.ndarray:
     return _subdivide(pts, size)
 
 
-def _ring_at_size(ring: np.ndarray, size) -> np.ndarray:
+def _ring_at_size(ring: np.ndarray, size, *, fine_h=None) -> np.ndarray:
     """A closed ring resampled at the local size, its corners kept.
 
     Douglas-Peucker at a tenth of the local element drops the wiggles, then
@@ -1176,10 +1188,11 @@ def _ring_at_size(ring: np.ndarray, size) -> np.ndarray:
     ring = np.asarray(ring, dtype=float)[:, :2]
     h_min = float(np.min(_size_at(size, ring)))
     g = shapely.simplify(shapely.LinearRing(ring), 0.1 * h_min)
-    return _corner_walk(np.asarray(g.coords, dtype=float)[:-1], size, closed=True)
+    return _corner_walk(np.asarray(g.coords, dtype=float)[:-1], size, closed=True,
+                        fine_h=fine_h)
 
 
-def island_rings(land, water, size, clearance_factor=0.5):
+def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
     """The land wholly inside the water the patch meshes, as rings to add.
 
     The rim is cut from the BASE mesh's coastline, re-drawn along the source
@@ -1214,7 +1227,7 @@ def island_rings(land, water, size, clearance_factor=0.5):
             skipped.append({"at": [round(float(c[0]), 1), round(float(c[1]), 1)],
                             "why": f"{gap:.1f} m from the rim"})
             continue
-        r = _ring_at_size(ext, size)
+        r = _ring_at_size(ext, size, fine_h=fine_h)
         if len(r) >= 3 and shapely.Polygon(r).is_valid:
             rings.append(r)
         else:

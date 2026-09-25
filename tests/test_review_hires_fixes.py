@@ -173,6 +173,7 @@ def test_f11_the_land_filter_does_not_wait_for_a_base_coastline():
     water = shapely.box(0, 0, 1000, 1000)
     land = shapely.box(400, 400, 600, 600)
     env = {"HIRES": {"coastline": "resolve"}, "_land_filtered": True, "_filtered": land,
+           "FINE_H": 60.0,
            "hole": water, "reports": {}, "island_rings": island_rings,
            "h_achieved": lambda q: np.full(len(q), 30.0), "hole_polygon": hole_polygon,
            "rc": {"pfix": np.zeros((0, 2)), "egfix": np.zeros((0, 2), dtype=np.int64),
