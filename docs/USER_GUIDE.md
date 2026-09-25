@@ -494,6 +494,20 @@ What worked:
    - Then rebuild **every** recipe in `recipes/refine/` and compare "violations
      introduced" with the previous results. A fix that helps one mesh has
      broken another more than once.
+   - Compare the coastlines too, not only QA. A rule added for one port can
+     move another port's coastline and still pass every gate: the Odaiba
+     step rule moved the Futtsu coast up to 47 m off OSM with 0 violations.
+     Keep the previous output (move it aside, e.g. `refine_x.before`) and run
+
+     ```bash
+     python notebooks/435_compare_boundaries.py outputs/refine_x.before outputs/refine_x
+     ```
+
+     It prints the largest movement of the solid boundary. For each place
+     that changed, it also prints the distance to the filtered OSM coast
+     before and after. "identical" is the expected answer for recipes the
+     change was not aimed at. A movement elsewhere is either intended, and
+     then stated in the commit message, or a regression to fix.
    - For a change that matters, run the FVCOM smoke test too.
 5. **Get a second opinion** on larger changes: an adversarial review by
    another model, given the design and the diff (for example
