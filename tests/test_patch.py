@@ -2042,3 +2042,25 @@ def test_short_chord_collapse_makes_one_point_in_the_coarse_zone():
     # without fine_h the same corner is cut by a chord
     p2, e2, b2, rep2 = blunt_acute_corners(pfix, egfix, base, water, size)
     assert rep2["chord_m"][0] > 0.0
+
+
+def test_source_substring_takes_the_arc_of_a_ring_that_fits_the_stretch():
+    # Yokohama: a base island kept one coast edge in the frozen zone, and the
+    # rest of its coast ran from one end of that edge round to the other.
+    # The direct arc between the ends is that edge; the stretch is the rest.
+    from fvcom_mesh_tools.patch import _source_substring
+
+    ring = shapely.LineString([(0, 0), (100, 0), (100, 100), (0, 100), (0, 0)])
+    round_ = np.array([[100.0, 0.0], [50.0, -2.0], [0.0, 0.0], [-2.0, 50.0],
+                       [0.0, 100.0], [50.0, 102.0], [100.0, 100.0]])
+    got = _source_substring(round_, ring)
+    assert np.allclose(got[0], [100, 0]) and np.allclose(got[-1], [100, 100])
+    assert shapely.LineString(got).length == pytest.approx(300.0)
+    # a stretch along the direct arc keeps it
+    side = np.array([[100.0, 0.0], [101.0, 50.0], [100.0, 100.0]])
+    got = _source_substring(side, ring)
+    assert shapely.LineString(got).length == pytest.approx(100.0)
+    # and the same the other way round
+    got = _source_substring(round_[::-1].copy(), ring)
+    assert np.allclose(got[0], [100, 100]) and np.allclose(got[-1], [100, 0])
+    assert shapely.LineString(got).length == pytest.approx(300.0)

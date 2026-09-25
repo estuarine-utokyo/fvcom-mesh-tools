@@ -651,6 +651,13 @@ if HIRES is not None and _land_filtered:
         f"to the rim ({_irep['n_island_points']} point(s))"
         + (f"; {len(_irep['skipped'])} left out, e.g. {_irep['skipped'][:3]}"
            if _irep["skipped"] else ""))
+    # Land left out for crossing the rim is meshed as water where it is in
+    # the hole.  A sliver is harmless; a block of land is not (Yokohama: a
+    # 1.6 km2 pier block, found only because a boundary edge went missing).
+    _wet = [x for x in _irep["skipped"]
+            if x.get("area_inside_m2", 0.0) > (2.0 * FINE_H) ** 2]
+    if _wet:
+        say(f"WARNING: land crossing the rim is meshed as water here: {_wet}")
     # a wall pocket the rim did not take is still water: give its walls back
     _lost = [xy for xy in reports.get("walls_extracted", {}).get("pockets_closed", {})
              .get("at", []) if hole.contains(shapely.Point(xy))]
@@ -1792,6 +1799,11 @@ def attempt(seed):
     out["verify"] = ver
     say("verify: " + json.dumps(ver))
     if not ver["ok"]:
+        # kept for inspection only: it broke the contract, so it is never
+        # the result (and no marker is written for it)
+        np.savez_compressed(OUT / f"rejected_seed{seed}.npz", nodes=nodes,
+                            elements=elements, want_boundary=np.asarray(
+                                sorted(tuple(sorted(e)) for e in want_boundary)))
         return None, out
     return (nodes, elements, depths, node_map), out
 

@@ -586,6 +586,27 @@ def _source_substring(pts: np.ndarray, shoreline):
     if s0 == s1:
         return None
     piece = substring(line, s0, s1)
+    # A closed ring has two arcs between the endpoints, and the stretch may
+    # be the long one.  At Yokohama a base island (the Daikoku pier) kept
+    # one coast edge in the frozen zone; the rest of its coast was one
+    # stretch from one end of that edge round to the other, and the direct
+    # arc between them was that edge itself -- so the island vanished from
+    # the rim and was meshed as water.  The arc that FITS the stretch is the
+    # one it replaces; the other one is taken only when it fits clearly
+    # better, so a stretch that the direct arc follows is unchanged.
+    if line.is_closed and line.length > 0:
+        L = line.length
+        if s0 < s1:
+            other = [substring(line, s0, 0.0), substring(line, L, s1)]
+        else:
+            other = [substring(line, s0, L), substring(line, 0.0, s1)]
+        oc = [np.asarray(g.coords, dtype=float)[:, :2] for g in other if g.length > 0]
+        if oc:
+            wrap = shapely.LineString(np.vstack([oc[0], *[c[1:] for c in oc[1:]]]))
+            fit_direct = float(shapely.distance(probe, piece).max())
+            fit_wrap = float(shapely.distance(probe, wrap).max())
+            if fit_wrap < 0.5 * fit_direct:
+                piece = wrap
     coords = np.asarray(piece.coords, dtype=float)[:, :2]
     if len(coords) < 2:
         return None
@@ -1253,9 +1274,12 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
             continue
         c = np.asarray(g.representative_point().coords)[0]
         if not shapely.within(g, water):
-            if shapely.area(shapely.intersection(water, g)) > 0:
+            inside = float(shapely.area(shapely.intersection(water, g)))
+            if inside > 0:
+                # this land is meshed as WATER where it lies inside the hole;
+                # the area says whether that is a sliver or a pier block
                 skipped.append({"at": [round(float(c[0]), 1), round(float(c[1]), 1)],
-                                "why": "crosses the rim"})
+                                "why": "crosses the rim", "area_inside_m2": round(inside, 1)})
             continue
         ext = np.asarray(g.exterior.coords, dtype=float)[:-1, :2]
         gap = float(shapely.distance(edge, g.exterior))
@@ -2661,6 +2685,12 @@ def verify_patch(
         "boundary_checked": bool(expected_boundary is not None),
         "n_unexpected_boundary_edges": int(len(unexpected)),
         "n_missing_boundary_edges": int(len(absent)),
+        # where, so a failed contract can be looked at: the counts alone
+        # sent Yokohama's one missing edge per seed to a guessing game
+        "unexpected_boundary_edges_at": [
+            new_xy[list(e)].mean(axis=0).round(1).tolist() for e in sorted(unexpected)[:10]],
+        "missing_boundary_edges_at": [
+            new_xy[list(e)].mean(axis=0).round(1).tolist() for e in sorted(absent)[:10]],
         "n_extra_faces": int(extra),
         "n_nonmanifold_edges": nonmanifold,
         "frozen_exact": frozen_exact,
