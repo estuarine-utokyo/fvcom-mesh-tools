@@ -1,0 +1,50 @@
+# Review 5 (gpt-6-astra): Funabashi coarse-transition coastline
+
+Requested 2026-09-25 while the Funabashi recipe failed in the transition.
+Outcome: the three rules became opt-in (`hires.experimental`), the
+collapse bug found below was fixed, the transactional wall restore and the
+minimum-h pocket test were added, and the band-seam fix at the source is
+recorded as future work in USER_GUIDE section 11.
+
+
+The primary failure is a coastline-construction artefact, not seed selection. `src/fvcom_mesh_tools/patch.py:797` quantises h; line 812 clips independently filtered land to raster zones; line 822 cleans the join only at h0. This directly permits the artificial cross-channel boundary visible in `fb_src.png` and `fb_zoom2.png`. A 77° water sector permits two ≥30° angles at its vertex, but guarantees neither acceptable triangle shapes nor C4. More blunting cannot establish either guarantee.
+
+## Ranked general fixes
+
+**1. Repair only channel closures created by band seams, using geometric provenance.** Best first experiment for regression containment. At `patch.py:810–821`, retain adjacent band results and label boundary portions created by zone clipping. Locate disagreements that cross a water branch; distinguish clipping edges from OSM-derived and frozen constraints explicitly, rather than identifying everything distant from OSM as artificial. Trace the branch towards open water, sample opposing-bank cross-sections and actual h, and replace the seam cut with a transverse cap near the first transition to width ≥2h. Construct meshable bank junctions, check resulting topology/edge lengths, and constrain the modification to that branch inside the editable hole. Reject candidates that require moving frozen boundaries or cannot be represented safely; do not force a cap.
+
+At Funabashi this should remove the vertical raster segment and its acute bank intersection, probably closing more of the unresolved mouth towards the bay. The exact cap location needs measurement. Risk: moderate within affected branches, relatively low elsewhere because unchanged band boundaries remain untouched. Preserve the existing land-opening policy; separate water closure from land removal before implementing this. Record changed area, cut provenance and movement. QA improvement is a hypothesis, not assured.
+
+**2. Feature-level closure for seam-crossing branches.** Partition channel water into branches between mouths/junctions and bottlenecks, not connected water polygons—the latter includes the bay. Use local cross-sections or a medial graph to identify unresolved intervals and apply one consistent closure decision across each interval, with caps at geometric cross-sections. Hook this into `filter_shoreline_local` before the union at `patch.py:821`, initially only for branches touched by seams.
+
+This avoids partially retaining the Funabashi river just because it straddles 240 m. Risk: moderate/high; branch segmentation and tidal-basin connectivity become explicit modelling choices. **Do not judge an entire river by h at its narrowest point:** a fine upstream throat says little about a coarse mouth, and closing a throat does not automatically justify filling a wide basin behind it. Compare width/h along the branch and report disconnected water separately.
+
+**3. Continuous, variable-size water opening.** Longer-term, most faithful to the stated local-size rule. Within bounded candidate windows, compute water clearance and medial branches using existing scipy/shapely machinery; retain admissible water represented by discs whose radii meet local h, then reconstruct its boundary. A raw pointwise distance-to-land ≥h mask is only an erosion: it must be reconstructed, otherwise it removes valid bank-adjacent water. Account for h varying across each disc and preserve hard frozen constraints.
+
+This removes octave discontinuities and should classify 150–300 m channels at h≈238 m as unresolved. Risk: highest geographic reach; continuous h is almost twice the current lower-band bound near each upper boundary. Roll out first on seam candidates, with grid-resolution/translation convergence tests. Medial-axis noise, estuary branching and reconstructed endpoint quality need explicit handling.
+
+**4. Blend band signed-distance fields across an overlap strip.** Easy prototype around `patch.py:812`: interpolate signed distances and take the zero contour, retaining protected geometry. It can soften the raster kink here, but may merely produce a smooth, still-unmeshable V. Risk: uncontrolled closure position, topology changes and displacement of valid banks. Ordinary vertex smoothing has the same weakness. Rank below width-aware methods; quarter-octave bands simply relocate discontinuities and already have reported regressions.
+
+## Review of the working changes
+
+**1. Wedge filling (`patch.py:646–660`, `713–726`).** Useful targeted morphology, but component area is not a reliable corner-angle classifier. For an isolated ideal wedge of angle θ, added area/r² is cot(θ/2)−(π−θ)/2: 0.685 at 60°, versus the selected 0.6. A short calculation with the implementation accepts 63° and rejects 64°. Describe this as an approximate heuristic or use measured angle plus geometric validation. Nearby crescents can merge into a large component; intersections can split a genuinely acute wedge below the cutoff. Finite wedge length and default mitre limits also affect classification. Round closing is not equivalent to globally deleting every channel narrower than 2h, especially after selectively retaining its difference components.
+
+The change applies to all bands and the final cleanup, including fine geometry. Kimitsu’s reported 36.9 m movement needs explicit acceptance even if QA passes (`docs/USER_GUIDE.md:497–510`). Per-band wedge counts are discarded at `patch.py:814`, so the final count does not audit all changes. Add angle/scale sweeps, neighbouring corners, short wedges, holes, repeat-application tests and seam-crossing channels; retain wedge locations and added areas per stage.
+
+**2. Wall-pocket closure (`walls.py:605–700`).** Disc erosion is a defensible constant-h unresolved-pocket criterion. However, h is sampled only at one representative point (`681–688`): a pocket crossing fine/coarse zones can be filled despite locally resolvable water. Evaluate spatial h, or conservatively refuse mixed-size candidates. The 0.5h coast clearance, ≥50% wall perimeter, one-h endpoint gap, and h>2h0 gate are regression guards, not proofs of meshability. A half-element exterior gap is especially not evidence of two-element water clearance. Distinguish their purposes from the land-width policy in `docs/linear_structures_design.md:441–448`.
+
+Integration risk: walls are removed immediately (`walls.py:696`), before `island_rings` may reject the replacement land for crossing/approaching the rim (`patch.py:1249–1259`; driver `420_local_refine.py:491,609`). Then neither wall nor island may survive. Make replacement transactional: remove wall segments only after the island is accepted into the actual hole. Test this path, variable-h pockets, multiple gaps, nested islands, differently segmented/reversed walls, and endpoint reconnection after the 0.01 m buffered deletion. Report perimeter/area changes and rejection reasons. Existing pocket tests mainly exercise constant h.
+
+**3. Short-chord collapse (`patch.py:1375–1416`, `1483–1489`).** A reproduced correctness concern: containment is tested for a–b, but collapse installs e0–midpoint–e1, potentially beyond stopped corners. Using the seven-point fixture from `tests/test_patch.py:1933`, changing constant h to 100 m and setting `fine_h=50`, produced a valid polygon with **30.66 m² newly made water** and 960.10 m² removed. The ordinary h=60 chord added zero water. Thus this can cut across land while presented as blunting water corners.
+
+Validate the replacement edges and changed polygon, allowing land removal only under an explicit policy. Intersection checks exclude every edge incident to either surviving endpoint (`1395–1396`), potentially missing overlap; angle checks silently skip non-degree-two neighbours (`1403`). Angle orientation also uses the original water polygon throughout successive edits (`1373`). Test overlap, junctions, adjacent edits, frozen endpoints and area-direction invariants. No dedicated `fine_h` collapse regression appears in the diff.
+
+The 0.75h trigger is borrowed from pier-end treatment, not derived for these water caps; h>2h0 contains impact but creates another discontinuity. Neither threshold establishes C4. Keep this independent of the seam fix and separately diagnose the seed-sensitive fine-zone wall-root cluster.
+
+## Recipe and documentation
+
+A scientifically justified polygon or additional refinement region that resolves both mouths is the most honest immediate workaround, with no global change to the five accepted recipes. Choose h≤width/2 along the needed channel, then grade out smoothly. Moving/shrinking the circle may merely relocate closure or exclude required port water. Lower gradation broadens the transition and reduces h at a given distance; higher gradation narrows it but may worsen C4. Neither guarantees success.
+
+Document octave lower-bound filtering as an approximation to `USER_GUIDE.md:41`, seam failures under known limits, and region/transition selection under §4. Report altered waterways and scientific coverage, not only QA. Keep the zero-introduced-violations requirement; follow §12’s boundary comparisons and all-recipe reruns before adopting a global rule.
+
+Verification: read-only source/diff/docs and supplied images; two short `python -B` geometry snippets using the specified environment, with bytecode disabled. `git diff --check` reported an existing extra EOF blank line at `tests/test_patch.py:1999`. No repository changes, tests, mesh generation or batch jobs. Funabashi QA figures and Kimitsu movement above are supplied context; no new node/element counts or implied dt were measured. No report destination was supplied, so this report is saved outside the repository.
