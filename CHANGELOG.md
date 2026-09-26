@@ -21,6 +21,12 @@ will only ship with a major bump (Semantic Versioning).
   earlier recipe when switched on alone (outputs of the trial are listed
   in USER_GUIDE §11).
 - `LR_EXPERIMENTAL` overrides a recipe's opt-in rules, for trials.
+- `continuous_width` (opt-in; `patch.unresolvable_water`,
+  `filter_shoreline_local(continuous_width=)`): water in the coarse zone
+  judged at the local element size by a distance transform, instead of at
+  an octave band's lower bound -- the fix at the source for band seams.
+  Takes Funabashi through on its own; not yet safe on Futtsu coast, Odaiba
+  or Yokohama (USER_GUIDE §11).
 
 ### Added -- Funabashi port and opt-in coastline rules (2026-09-25)
 

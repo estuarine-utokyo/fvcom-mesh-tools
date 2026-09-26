@@ -277,6 +277,7 @@ Odaiba, so a recipe names the ones it needs:
 | `wall_pockets` | water shut in by walls alone, narrower than two elements, off the coast and in the coarse zone (h > 2x target), becomes an island; its walls come back if the rim refuses the island |
 | `short_chords` | in the coarse zone, a corner-cutting chord shorter than 0.75 of an element becomes one point, if that only gives water to land and keeps 60 deg |
 | `keep_base_land` | in the coarse bands, where land and water are both narrower than two elements, land that the source and the base mesh both have stays land (otherwise it is removed first and becomes water); the narrow water round it is closed. Owner's choice, 2026-09-26 |
+| `continuous_width` | in the coarse zone (h > 2x target), water is judged at the local element size itself rather than at the lower bound of an octave band: kept only where a disc of one local element fits, computed by a distance transform on a 10 m raster, smoothed. The fix at the source for the band seams (§11), still experimental |
 | `seam_water` | after the octave bands are joined, each band closes the joined land once more at its own threshold, so a strip left between one band's cut and another band's kept bank is closed |
 
 Try them when a run fails in the transition at a river mouth or a curled
@@ -538,8 +539,13 @@ package and have unit tests.
   channel that this band keeps, the join is a straight cut across the
   channel, and its corners can be acute (Funabashi, 1.4 km west of the
   region). The opt-in rules above work around it; the fix at the source --
-  judging each channel at its own local size -- is future work (review 5,
-  2026-09-25). Quarter-octave bands were tried and moved the Kimitsu
+  judging each channel at its own local size -- is `continuous_width`
+  (2026-09-26), still opt-in: on its own (with rim repair) it takes
+  Funabashi through without the three rules it names, and Kimitsu and
+  Futtsu nori stay accepted, but Futtsu coast fails with 5 violations,
+  Odaiba cannot resolve a stretch, Yokohama is left with 8, and at
+  Funabashi part of the coast then sits up to 609 m off the filtered OSM
+  coast -- to be understood before it can be the default. Quarter-octave bands were tried and moved the Kimitsu
   transition coast by 211 m. A recipe can also avoid it by making the region
   cover the channel mouths, so the element there is fine enough.
 - OSM `man_made` lines (breakwaters mapped only as lines) are not used.
