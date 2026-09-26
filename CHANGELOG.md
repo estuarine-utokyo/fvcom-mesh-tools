@@ -8,6 +8,20 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Changed -- rim repair on by default (2026-09-26)
+
+- `hires.rim_repair` (default `true`): the finished coastline is checked
+  against the element size and repaired -- short edges, short caps, slits
+  and pier tips too close to a quay, water corners under 60 deg -- with
+  one retry near the offenders when every seed fails. All seven recipes
+  are accepted with it; Kimitsu, Futtsu (x2) and Yokohama keep their
+  coastline, Funabashi moves by up to 54 m and Odaiba by up to 169 m in the
+  transition. `rim_repair: false` restores the earlier behaviour exactly.
+- The other five coastline rules stay opt-in: each broke at least one
+  earlier recipe when switched on alone (outputs of the trial are listed
+  in USER_GUIDE §11).
+- `LR_EXPERIMENTAL` overrides a recipe's opt-in rules, for trials.
+
 ### Added -- Funabashi port and opt-in coastline rules (2026-09-25)
 
 - `recipes/refine/funabashi_port_hires.yaml`, the third port example.

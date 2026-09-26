@@ -326,14 +326,21 @@ def _hires(spec, cfg) -> dict[str, Any] | None:
                 "source on purpose, which is what "
                 f"{'coastline_tolerance_m' if key.endswith('_m') else key} exists "
                 "to refuse")
-    _keys(spec, [], ["coastline", "bathymetry", "scope", "blend", "experimental"])
+    _keys(spec, [], ["coastline", "bathymetry", "scope", "blend", "experimental",
+                     "rim_repair"])
     out = {
         "coastline": spec.get("coastline", "resolve"),
         "bathymetry": spec.get("bathymetry", "tokyo_bay"),
         "scope": spec.get("scope", "hole"),
         "blend": spec.get("blend", "ramp"),
         "experimental": spec.get("experimental", []) or [],
+        # on by default since 2026-09-26: accepted on every recipe, and 39 ->
+        # 5 introduced violations at Yokohama on its own; false restores the
+        # behaviour before it exactly
+        "rim_repair": spec.get("rim_repair", True),
     }
+    if not isinstance(out["rim_repair"], bool):
+        raise ValueError("hires.rim_repair must be true or false")
     exp = out["experimental"]
     if not isinstance(exp, list) or any(x not in HIRES_EXPERIMENTAL for x in exp):
         raise ValueError(f"hires.experimental must be a list drawn from "

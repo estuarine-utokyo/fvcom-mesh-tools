@@ -214,6 +214,7 @@ hires:
   bathymetry: tokyo_bay # tokyo_bay (M7001 ladder) | base (inherit)
   scope: hole           # hole (region + transition) | core
   blend: ramp           # ramp | none -- how new depths meet the frozen ones
+  # rim_repair: true      # default; false restores the pre-2026-09-26 behaviour
   # experimental: [water_wedges, wall_pockets, short_chords]   # opt-in, see below
 
 refine:
@@ -232,6 +233,7 @@ refine:
 | `dt_expected_s` | yes | the model's external step; a region too fine for it raises an **alert**, not an error |
 | `gradation` | yes | the size growth rate outside the region; it sets the transition width |
 | `hires` | no | present = the coastline/bathymetry branch above; absent = the default branch, which keeps the base coastline and depths (`coastline: preserve/resample/spline`, `rfactor_limit`, `coastline_tolerance_m` apply there). `hires.coastline: resolve` follows OSM (sharp corners cut, islands and walls added); `preserve` keeps the base coastline exactly |
+| `hires.rim_repair` | no | check and repair the finished coastline against the element size (below); `true` by default |
 | `hires.experimental` | no | opt-in coastline rules, by name (below); none by default |
 | `refine` | yes | one or more regions |
 | `refine[].geometry` | yes | `circle: {center: [lon, lat], radius_m}`, a `bbox`, a GeoJSON `Polygon`, or `{file: area.geojson, where: {...}, buffer_m: 25}` |
@@ -241,6 +243,27 @@ refine:
 Unknown keys are errors, and relative paths resolve against the recipe's own
 directory. Before meshing, the run checks each region (depth, dryness, time
 step) and prints what it found.
+
+**Rim repair (`hires.rim_repair`, on by default).** Before the fill, the
+finished coastline -- walls rooted, islands added -- is checked against the
+local element size and repaired by a fixed set of operations, in order, up
+to two rounds (`patch.rim_repair`):
+
+1. a point beside an edge shorter than half an element is removed, or both
+   ends of a short cap between two corners merge into its midpoint, when
+   that crosses nothing, moves little and sharpens no water angle below
+   60 deg;
+2. a point closer than half an element to a coast it is not next to is a
+   throat: the dead end beyond it becomes land if no element fits in it,
+   and otherwise (a pier tip nearly touching the quay across) the tip steps
+   back until the gap is one element;
+3. water corners under 60 deg are cut once more.
+
+Frozen points and wall roots are never moved. If every seed still fails,
+the rim is repaired once more near the best seed's offenders with looser
+thresholds and the seeds are tried again. Accepted on all seven recipes;
+at Yokohama it takes the best seed from 39 violations to 5 on its own.
+`rim_repair: false` restores the behaviour before 2026-09-26 exactly.
 
 **Opt-in coastline rules (`hires.experimental`).** These were written for
 the Funabashi port (`recipes/refine/funabashi_port_hires.yaml`), where river
@@ -253,7 +276,6 @@ Odaiba, so a recipe names the ones it needs:
 | `water_wedges` | closes the narrow end of an acute water wedge (about 60 deg or sharper), which the ordinary "water under two elements is closed" filter keeps whole |
 | `wall_pockets` | water shut in by walls alone, narrower than two elements, off the coast and in the coarse zone (h > 2x target), becomes an island; its walls come back if the rim refuses the island |
 | `short_chords` | in the coarse zone, a corner-cutting chord shorter than 0.75 of an element becomes one point, if that only gives water to land and keeps 60 deg |
-| `rim_repair` | the finished rim is checked against the local size: a point beside an edge shorter than half an element is removed if that crosses nothing, moves little and does not sharpen a water angle below 60 deg (Yokohama: 39 -> 21 violations on its own) |
 | `keep_base_land` | in the coarse bands, where land and water are both narrower than two elements, land that the source and the base mesh both have stays land (otherwise it is removed first and becomes water); the narrow water round it is closed. Owner's choice, 2026-09-26 |
 | `seam_water` | after the octave bands are joined, each band closes the joined land once more at its own threshold, so a strip left between one band's cut and another band's kept bank is closed |
 
@@ -490,11 +512,26 @@ package and have unit tests.
   (`recipes/refine/tokyo_odaiba_hires.yaml`, with the Daiba islands) and
   Funabashi port (`recipes/refine/funabashi_port_hires.yaml`, with the opt-in
   rules) and Yokohama inner harbour (`recipes/refine/yokohama_port_hires.yaml`,
-  six opt-in rules, a 2.3 km circle). Odaiba
+  rim repair and five opt-in rules, a 2.3 km circle). Odaiba
   needed two coastline rules Kimitsu had not shown -- a new place will find
   new cases (§12).
 - A structure hugging the coast within 0.4 element, thinner than half an
   element, is not represented.
+- **Opt-in rules and earlier recipes.** Each rule was switched on alone for
+  the four earlier hires recipes (2026-09-26; ACC = accepted, H = largest
+  coastline move against the recipe's own result, by notebook 435):
+
+  | rule | Kimitsu | Futtsu coast | Futtsu nori | Odaiba |
+  |---|---|---|---|---|
+  | `rim_repair` (now default) | ACC, H 0 | ACC, H 0 | ACC, identical | ACC, H 169 m |
+  | `short_chords` | ACC, identical | ACC, identical | ACC, identical | ACC, H 172 m |
+  | `water_wedges` | ACC, H 22 m | ACC, identical | ACC, identical | no mesh |
+  | `seam_water` | 3 violations | ACC, H 0 | ACC, H 4 m | ACC, H 901 m |
+  | `wall_pockets` | 24 violations | 5 violations | 2 violations | ACC, identical |
+  | `keep_base_land` | 2 violations | 10 violations | 7 violations | ACC, H 241 m |
+
+  So a rule that a new port needs is named in that port's recipe, and the
+  earlier recipes keep what they had.
 - **Band seams.** The coastline filter judges width in octave bands of the
   element size, each at its LOWER bound, so water two lower bounds wide --
   only one element where the elements are twice the bound -- survives. Where the next band closes a
