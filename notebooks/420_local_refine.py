@@ -58,6 +58,7 @@ from fvcom_mesh_tools.patch import (
     stitch_patch,
     verify_patch,
 )
+from fvcom_mesh_tools.provenance import collect as collect_provenance  # noqa: E402
 from fvcom_mesh_tools.qa import run_qa
 from fvcom_mesh_tools.refine import (
     limit_rfactor,
@@ -65,7 +66,6 @@ from fvcom_mesh_tools.refine import (
     preflight,
     transition_width_m,
 )
-from fvcom_mesh_tools.provenance import collect as collect_provenance  # noqa: E402
 from fvcom_mesh_tools.walls import (  # noqa: E402
     close_wall_pockets,
     extract_walls,
@@ -1170,33 +1170,47 @@ if HIRES is not None and _land_filtered and _walls_src:
         f"{n_acute} dropped for meeting another line at under 60 deg, "
         f"{n_close_tips} for a tip within half an element of the coast, "
         f"{n_joined} tip(s) joined to a line within half an element")
-if "rim_repair" in EXPERIMENTAL:
-    # The rim as the fill will get it, checked against the local size and
-    # repaired (patch.rim_repair).  Frozen points and wall roots stay.
-    _n_rim = len(rc["pfix"])
-    _roots = set(np.unique(WALL_SEGS[WALL_SEGS < _n_rim]).tolist()) if len(WALL_SEGS) else set()
-    _p, _e, _b, _remap, _rrep = rim_repair(rc["pfix"], rc["egfix"], rc["pfix_base"],
-                                           hole, h_achieved, protect=_roots)
-    rc["pfix"], rc["egfix"], rc["pfix_base"] = _p, _e, _b
+def apply_rim_repair(tag="rim repair", **kw):
+    """patch.rim_repair on the current rim; walls follow, the hole is redrawn."""
+    global WALL_SEGS, hole
+    n_rim = len(rc["pfix"])
+    roots = set(np.unique(WALL_SEGS[WALL_SEGS < n_rim]).tolist()) if len(WALL_SEGS) else set()
+    p_, e_, b_, remap_, rep_ = rim_repair(rc["pfix"], rc["egfix"], rc["pfix_base"],
+                                          hole, h_achieved, protect=roots, **kw)
+    rc["pfix"], rc["egfix"], rc["pfix_base"] = p_, e_, b_
     if len(WALL_SEGS):
-        WALL_SEGS = np.where(WALL_SEGS < _n_rim, _remap[np.minimum(WALL_SEGS, _n_rim - 1)],
-                             WALL_SEGS - _n_rim + len(_p))
+        WALL_SEGS = np.where(WALL_SEGS < n_rim, remap_[np.minimum(WALL_SEGS, n_rim - 1)],
+                             WALL_SEGS - n_rim + len(p_))
         if (WALL_SEGS < 0).any():
             raise RuntimeError("rim_repair removed a point a wall is rooted on")
     hole = hole_polygon(rc["pfix"], rc["egfix"])
-    reports["rim_repair"] = _rrep
-    say(f"rim repair: {_rrep['n_points_removed']} point(s) removed beside edges under "
-        f"half an element; {_rrep['n_short_edges_left']} short edge(s) left, "
-        f"e.g. {_rrep['short_edges_left'][:3]}")
-PFIX_ALL = np.vstack([np.asarray(rc["pfix"], dtype=float), WALL_PTS])
-# What the fill was given, kept so a wall's geometry can be inspected
-# without re-running the whole cut.
-np.savez(OUT / "fill_constraints.npz", pfix=PFIX_ALL,
-         egfix=np.vstack([np.asarray(rc["egfix"], dtype=np.int64), WALL_SEGS]),
-         n_rim=len(rc["pfix"]))
-EGFIX_ALL = np.vstack([np.asarray(rc["egfix"], dtype=np.int64), WALL_SEGS])
-PFIX_BASE_ALL = np.concatenate([np.asarray(rc["pfix_base"], dtype=np.int64),
-                                np.full(len(WALL_PTS), -1, dtype=np.int64)])
+    say(f"{tag}: {rep_['n_points_removed']} point(s) removed beside edges under "
+        f"half an element, {rep_['n_edges_merged']} edge(s) merged to a point, "
+        f"{rep_['n_slits_closed']} slit(s) closed, "
+        f"{rep_['n_tips_stepped_back']} tip(s) stepped back, "
+        f"{rep_['n_corners_blunted']} corner(s) blunted; "
+        f"{rep_['n_short_edges_left']} short edge(s) left "
+        f"{rep_['short_edges_left'][:3]}, slits left {rep_['slits_left'][:3]}")
+    return rep_
+
+
+def assemble_constraints():
+    """What the fill is given: the rim, then the walls."""
+    global PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL
+    PFIX_ALL = np.vstack([np.asarray(rc["pfix"], dtype=float), WALL_PTS])
+    EGFIX_ALL = np.vstack([np.asarray(rc["egfix"], dtype=np.int64), WALL_SEGS])
+    PFIX_BASE_ALL = np.concatenate([np.asarray(rc["pfix_base"], dtype=np.int64),
+                                    np.full(len(WALL_PTS), -1, dtype=np.int64)])
+    # kept so a wall's geometry can be inspected without re-running the cut
+    np.savez(OUT / "fill_constraints.npz", pfix=PFIX_ALL, egfix=EGFIX_ALL,
+             n_rim=len(rc["pfix"]))
+
+
+if "rim_repair" in EXPERIMENTAL:
+    # The rim as the fill will get it, checked against the local size and
+    # repaired (patch.rim_repair).  Frozen points and wall roots stay.
+    reports["rim_repair"] = apply_rim_repair()
+assemble_constraints()
 
 # The slope the field actually has, measured on the hole it will be meshed
 # in -- not the per-region formula, which omits the ambient term and says
@@ -1921,72 +1935,106 @@ def save_report():
     (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
 
 
-for seed in seeds:
-    say(f"--- seed {seed}")
-    try:
-        candidate, out = attempt(seed)
-    except ValueError as exc:
-        # A candidate that cannot be built is one seed's problem, not the
-        # search's: stitch_patch raises when the fill loses a constrained
-        # point, and a bad first seed used to end the whole run (second
-        # review, finding 5).  Anything that is not a candidate failure --
-        # a bad recipe, a coding error -- still propagates.
-        say(f"    seed {seed}: {exc}")
-        reports["attempts"].append({"seed": seed, "error": str(exc)})
-        save_report()
-        continue
-    if candidate is None:
+def seed_search(seed_list):
+    """Try each seed; the best candidate, or None."""
+    best = None
+    for seed in seeds:
+        say(f"--- seed {seed}")
+        try:
+            candidate, out = attempt(seed)
+        except ValueError as exc:
+            # A candidate that cannot be built is one seed's problem, not the
+            # search's: stitch_patch raises when the fill loses a constrained
+            # point, and a bad first seed used to end the whole run (second
+            # review, finding 5).  Anything that is not a candidate failure --
+            # a bad recipe, a coding error -- still propagates.
+            say(f"    seed {seed}: {exc}")
+            reports["attempts"].append({"seed": seed, "error": str(exc)})
+            save_report()
+            continue
+        if candidate is None:
+            reports["attempts"].append({k: v for k, v in out.items()
+                                        if k not in ("want_boundary", "copy_of")})
+            save_report()
+            continue
+        written, mesh = serialise(candidate, out, out14)
+        if written is None:
+            reports["attempts"].append({k: v for k, v in out.items()
+                                        if k not in ("want_boundary", "copy_of")})
+            save_report()
+            continue
+        qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000,
+                    allowed_duplicate_pairs=wall_pairs(out))
+        # What the patch is answerable for. A refinement may not be held to a
+        # standard its base does not meet: the goto2023 production mesh fails C1
+        # at one element 18 km from Futtsu, the contract freezes that element,
+        # and an absolute gate blamed every seed for it.
+        new_bad, _n_shallow = patch_violations(qa.checks, written)
+        out["min_depth_reported_not_gated"] = _n_shallow
+        if _n_shallow:
+            say(f"    seed {seed}: min-depth is REPORTED not gated on this branch "
+                f"-- {_n_shallow} offender(s), minimum {written.depths.min():.2f} m")
+        per_region, missed = achieved_per_region(written)
+        out["achieved_per_region"] = per_region
+        for _name in missed:
+            say(f"    seed {seed}: {_name} did not get what it asked for -- "
+                f"{per_region[_name]['miss']}")
+        out["qa"] = {"n_gate_total": qa.n_gate_total,
+                     "n_gate_failed": qa.n_gate_failed,
+                     "n_introduced": len(new_bad),
+                     "introduced": new_bad[:20],
+                     "failed": [{"check": c.check_id, "requirement": c.requirement,
+                                 "observed": c.observed} for c in qa.checks
+                                if c.status == "fail"]}
         reports["attempts"].append({k: v for k, v in out.items()
                                     if k not in ("want_boundary", "copy_of")})
         save_report()
-        continue
-    written, mesh = serialise(candidate, out, out14)
-    if written is None:
-        reports["attempts"].append({k: v for k, v in out.items()
-                                    if k not in ("want_boundary", "copy_of")})
-        save_report()
-        continue
-    qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000,
-                allowed_duplicate_pairs=wall_pairs(out))
-    # What the patch is answerable for. A refinement may not be held to a
-    # standard its base does not meet: the goto2023 production mesh fails C1
-    # at one element 18 km from Futtsu, the contract freezes that element,
-    # and an absolute gate blamed every seed for it.
-    new_bad, _n_shallow = patch_violations(qa.checks, written)
-    out["min_depth_reported_not_gated"] = _n_shallow
-    if _n_shallow:
-        say(f"    seed {seed}: min-depth is REPORTED not gated on this branch "
-            f"-- {_n_shallow} offender(s), minimum {written.depths.min():.2f} m")
-    per_region, missed = achieved_per_region(written)
-    out["achieved_per_region"] = per_region
-    for _name in missed:
-        say(f"    seed {seed}: {_name} did not get what it asked for -- "
-            f"{per_region[_name]['miss']}")
-    out["qa"] = {"n_gate_total": qa.n_gate_total,
-                 "n_gate_failed": qa.n_gate_failed,
-                 "n_introduced": len(new_bad),
-                 "introduced": new_bad[:20],
-                 "failed": [{"check": c.check_id, "requirement": c.requirement,
-                             "observed": c.observed} for c in qa.checks
-                            if c.status == "fail"]}
-    reports["attempts"].append({k: v for k, v in out.items()
-                                if k not in ("want_boundary", "copy_of")})
-    save_report()
-    say(f"    seed {seed}: QA {qa.n_gate_total - qa.n_gate_failed}/"
-        f"{qa.n_gate_total}, {len(new_bad)} introduced by the patch"
-        + ("" if not new_bad else "  " + "; ".join(
-            f"{v['check']} at {v['kind']} {v.get('id', v.get('elements'))}"
-            for v in new_bad[:4])))
-    if best is None or (len(missed), len(new_bad)) < best[:2]:
-        best = (len(missed), len(new_bad), seed, candidate, out, written, qa)
-    if not new_bad and not missed:
-        break
+        say(f"    seed {seed}: QA {qa.n_gate_total - qa.n_gate_failed}/"
+            f"{qa.n_gate_total}, {len(new_bad)} introduced by the patch"
+            + ("" if not new_bad else "  " + "; ".join(
+                f"{v['check']} at {v['kind']} {v.get('id', v.get('elements'))}"
+                for v in new_bad[:4])))
+        if best is None or (len(missed), len(new_bad)) < best[:2]:
+            best = (len(missed), len(new_bad), seed, candidate, out, written, qa, new_bad)
+        if not new_bad and not missed:
+            break
+    return best
+
+
+best = seed_search(seeds)
+# One retry, only with rim_repair: every seed failed QA, so the rim is
+# repaired again near where the best seed's elements failed, with looser
+# thresholds, and the seeds are tried once more (review 6: a bounded
+# QA-feedback loop, offenders first, nothing touched elsewhere).
+if ("rim_repair" in EXPERIMENTAL and best is not None and best[1] > 0
+        and not best[0]):
+    _focus = [(v["x"], v["y"]) for v in best[7] if "x" in v]
+    # everything the retry changes, to put back if it does no better
+    _saved = ({k: np.array(rc[k], copy=True) for k in ("pfix", "egfix", "pfix_base")},
+              WALL_SEGS.copy(), hole, PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL, boundary)
+    _rrep2 = apply_rim_repair("rim repair, retry near the offenders",
+                              min_edge_factor=0.75, gap_factor=0.75,
+                              focus=_focus, rounds=1)
+    reports["rim_repair_retry"] = _rrep2
+    if _rrep2["n_points_removed"] or _rrep2["n_slits_closed"]:
+        assemble_constraints()
+        shapely.prepare(hole)
+        boundary = shapely.boundary(hole)
+        _best2 = seed_search(seeds)
+        if _best2 is not None and (_best2[0], _best2[1]) < (best[0], best[1]):
+            best = _best2
+        else:
+            say("    the retry did not do better; the first search's best stands")
+            _rc, WALL_SEGS, hole, PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL, boundary = _saved
+            rc.update(_rc)
+            np.savez(OUT / "fill_constraints.npz", pfix=PFIX_ALL, egfix=EGFIX_ALL,
+                     n_rim=len(rc["pfix"]))
 
 if best is None:
     save_report()
     raise SystemExit("no seed produced a mesh that keeps the frozen-zone "
                      f"contract; see attempts in {OUT / 'report.json'}")
-_n_missed, _, seed, candidate, out, written, qa = best
+_n_missed, _, seed, candidate, out, written, qa, _ = best
 if _n_missed:
     save_report()
     raise SystemExit(

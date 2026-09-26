@@ -1283,39 +1283,74 @@ def _ring_at_size(ring: np.ndarray, size, *, fine_h=None) -> np.ndarray:
 
 
 def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
-               min_edge_factor=0.5, min_angle_deg=60.0, max_iter=None):
+               min_edge_factor=0.5, gap_factor=0.5, min_angle_deg=60.0,
+               operations=("short_edges", "slits", "angles"), rounds=2,
+               focus=None, focus_factor=1.5):
     """Check the finished rim against the local size and repair what fails.
 
     Each rule upstream (the filter, the corner walk, blunting, rooting) is
     right on the geometry it was given, but a later one can leave what an
-    earlier one would have refused: at Yokohama blunting stopped its walk at
-    0.9 of a quay edge and left a 3.0 m edge beside its cap, where the
-    element is 30 m, and the elements there came out at 13.1 and 19.5 deg.
-    This pass looks at the rim as the fill will get it.
+    earlier one would have refused.  This pass looks at the rim as the fill
+    will get it, and repairs it by a fixed set of operations in a fixed
+    order, ``rounds`` times (review 6, 2026-09-25):
 
-    Operation 1, short edges: an edge shorter than ``min_edge_factor`` of the
-    local element loses one of its ends -- a free point (not frozen, two
-    constrained edges, not in ``protect``) whose two neighbours are joined
-    instead.  A removal is taken only if the new edge crosses no other rim
-    edge, the triangle it hands between land and water is no wider than the
-    short edge (``area <= L_short * h / 2``), and the water keeps
-    ``min_angle_deg`` at both neighbours or does not lose angle there.  Of
-    the two ends the one moving less area goes.  Edges that no removal can
-    repair are reported, not forced.
+    ``short_edges``  an edge shorter than ``min_edge_factor`` of the local
+        element loses one of its ends -- a free point (not frozen, two
+        constrained edges, not in ``protect``) whose neighbours are joined
+        instead -- if the new edge crosses no other rim edge, the triangle
+        handed between land and water is no wider than the short edge, and
+        no water angle is sharpened below ``min_angle_deg``.  (Yokohama:
+        blunting stopped at 0.9 of a quay edge and left 3.0 m beside its
+        cap among 30 m elements; 13.1 and 19.5 deg.)
+    ``slits``  a point closer than ``gap_factor`` of an element to a rim
+        edge it is not next to, across water, is a throat: the throat is
+        cut, and the dead end beyond it becomes land if no disc of one
+        element fits in it and nothing on its outline is frozen or a wall
+        root.  No angle rule sees this -- the pier corner at a 3.3 m slit
+        is a 311 deg water angle (Yokohama, review 6).
+    ``angles``  :func:`blunt_acute_corners` once more on the finished rim,
+        wall roots protected: rooting and the operations above can make a
+        water corner under ``min_angle_deg``.
 
-    ``water`` is the hole the rim bounds; ``size`` maps (n, 2) points to the
-    local element size.  Returns ``(pfix, egfix, pfix_base, remap, report)``;
-    ``remap[old] = new`` (-1 for a removed point) so that references into
-    the rim (wall roots) can follow it.
+    ``focus`` ((m, 2) points, e.g. the QA offenders of a failed seed)
+    limits the short-edge and slit operations to within ``focus_factor``
+    local elements of one of them, so a retry with looser thresholds touches
+    only where the mesh failed.
+
+    Nothing is forced: what no operation can repair is reported.  ``water``
+    is the hole the rim bounds; ``size`` maps (n, 2) points to the local
+    element size.  Returns ``(pfix, egfix, pfix_base, remap, report)``;
+    ``remap[old] = new`` (-1 for a removed point) for the input's points, so
+    that references into the rim (wall roots) can follow it.
     """
     import shapely
+    from shapely.ops import nearest_points
 
     pfix = np.asarray(pfix, dtype=float)[:, :2].copy()
     egfix = np.asarray(egfix, dtype=np.int64).copy()
     pfix_base = np.asarray(pfix_base, dtype=np.int64).copy()
-    keep = np.ones(len(pfix), dtype=bool)
+    n_in = len(pfix)
+    ident = np.arange(n_in)             # current index of each input point
     protect = set(int(k) for k in protect)
-    removed, refused = [], []
+    removed, refused, slits, slits_left, merged, retreated = [], [], [], [], [], []
+    angles_rep: list = []
+
+    def key(xy):
+        return (round(float(xy[0]), 6), round(float(xy[1]), 6))
+
+    protected_xy = {key(pfix[k]) for k in protect}
+    focus_pts = None if focus is None else np.asarray(focus, dtype=float).reshape(-1, 2)
+
+    def in_focus(xy):
+        if focus_pts is None:
+            return True
+        if not len(focus_pts):
+            return False
+        h = float(np.asarray(size(np.asarray([xy])), dtype=float)[0])
+        return bool(np.min(np.linalg.norm(focus_pts - xy, axis=1)) <= focus_factor * h)
+
+    def is_protected(k):
+        return key(pfix[k]) in protected_xy
 
     def nbrs_of():
         nb: dict = {}
@@ -1324,7 +1359,21 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
             nb.setdefault(b, []).append(a)
         return nb
 
-    def angle_at(xy, p_xy, n_xy):
+    def free(k, nb):
+        return pfix_base[k] < 0 and len(nb.get(k, [])) == 2 and not is_protected(k)
+
+    def compact(drop):
+        """Delete points ``drop``; keep ``ident`` in step."""
+        nonlocal pfix, egfix, pfix_base, ident
+        keep = np.ones(len(pfix), dtype=bool)
+        keep[list(drop)] = False
+        m = np.full(len(pfix), -1, dtype=np.int64)
+        m[keep] = np.arange(int(keep.sum()))
+        egfix = m[egfix]
+        pfix, pfix_base = pfix[keep], pfix_base[keep]
+        ident = np.where(ident >= 0, m[np.maximum(ident, 0)], -1)
+
+    def angle_at(xy, p_xy, n_xy, poly):
         up, un = p_xy - xy, n_xy - xy
         lp, ln = float(np.linalg.norm(up)), float(np.linalg.norm(un))
         if lp <= 0 or ln <= 0:
@@ -1334,66 +1383,301 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
         if np.linalg.norm(bis) < 1e-9:
             return 180.0
         probe = xy + bis / np.linalg.norm(bis) * 0.05 * min(lp, ln)
-        return ang if water.contains(shapely.Point(probe)) else 360.0 - ang
+        return ang if poly.contains(shapely.Point(probe)) else 360.0 - ang
 
-    def try_remove(x, nb, L_short, h):
-        if x in protect or pfix_base[x] >= 0 or len(nb.get(x, [])) != 2:
-            return None
-        u, w = nb[x]
-        if u == w:
-            return None
-        du, dw = pfix[u] - pfix[x], pfix[w] - pfix[x]
-        tri = abs(float(du[0] * dw[1] - du[1] * dw[0])) / 2.0
-        if tri > 0.5 * L_short * h:
-            return None
-        new = shapely.LineString([pfix[u], pfix[w]])
-        others = [shapely.LineString(pfix[[a, b]]) for a, b in egfix.tolist()
-                  if not ({a, b} & {x, u, w})]
+    def merge_ends(a, b, nb, L, h):
+        """Both ends of a short edge between two corners become its midpoint.
+
+        Removing either end of a cap between two corners moves the coast by
+        the whole cap (Yokohama: 11.8 and 13.7 m caps among 30 m elements);
+        their midpoint moves it by half the cap at most.  Taken only when
+        both ends are free, the two new edges cross nothing, the land/water
+        change is no wider than the edge, and no water angle there -- at the
+        midpoint or at the neighbours -- is sharpened below the limit.
+        """
+        nonlocal pfix, egfix, pfix_base
+        if not (free(a, nb) and free(b, nb)):
+            return False
+        ua = [x for x in nb[a] if x != b]
+        wb = [x for x in nb[b] if x != a]
+        if len(ua) != 1 or len(wb) != 1 or ua[0] == wb[0]:
+            return False
+        u, w = ua[0], wb[0]
+        m = 0.5 * (pfix[a] + pfix[b])
+        before = shapely.Polygon([pfix[u], pfix[a], pfix[b], pfix[w]])
+        after = shapely.Polygon([pfix[u], m, pfix[w]])
+        moved = shapely.symmetric_difference(shapely.make_valid(before),
+                                             shapely.make_valid(after)).area
+        if moved > 0.5 * L * h:
+            return False
+        new = shapely.MultiLineString([[pfix[u], m], [m, pfix[w]]])
+        others = [shapely.LineString(pfix[[c, d]]) for c, d in egfix.tolist()
+                  if not ({c, d} & {a, b, u, w})]
         if others and shapely.MultiLineString(others).intersects(new):
-            return None
-        for y, far in ((u, w), (w, u)):
-            other = [q for q in nb.get(y, []) if q != x]
+            return False
+        at_a = angle_at(pfix[a], pfix[u], pfix[b], water)
+        at_b = angle_at(pfix[b], pfix[a], pfix[w], water)
+        at_m = angle_at(m, pfix[u], pfix[w], water)
+        worst_before = min(x for x in (at_a, at_b) if x is not None) \
+            if (at_a is not None or at_b is not None) else None
+        if at_m is None or (at_m < min_angle_deg and
+                            (worst_before is None or at_m < worst_before - 1e-6)):
+            return False
+        for y, old, far in ((u, a, w), (w, b, u)):
+            other = [q for q in nb.get(y, []) if q != old]
             if len(other) != 1:
-                continue            # a junction: its sectors are checked elsewhere
-            before = angle_at(pfix[y], pfix[other[0]], pfix[x])
-            after = angle_at(pfix[y], pfix[other[0]], pfix[far])
-            if after is None or (after < min_angle_deg and
-                                 (before is None or after < before - 1e-6)):
-                return None
-        return tri, u, w
+                continue
+            ang0 = angle_at(pfix[y], pfix[other[0]], pfix[old], water)
+            ang1 = angle_at(pfix[y], pfix[other[0]], m, water)
+            if ang1 is None or (ang1 < min_angle_deg and
+                                (ang0 is None or ang1 < ang0 - 1e-6)):
+                return False
+        im = len(pfix)
+        pfix = np.vstack([pfix, m[None]])
+        pfix_base = np.concatenate([pfix_base, [-1]])
+        egfix = np.vstack([egfix[~np.isin(egfix, [a, b]).any(axis=1)], [[u, im], [im, w]]])
+        merged.append({"at": [round(float(c), 1) for c in m], "edge_m": round(L, 2),
+                       "h_m": round(h, 1), "area_m2": round(float(moved), 1)})
+        compact([a, b])
+        return True
 
-    n_iter = max_iter if max_iter is not None else len(pfix)
-    for _ in range(n_iter):
+    # ------------------------------------------------------------ short edges
+    def short_edges():
+        nonlocal egfix
+        done_refused = {tuple(sorted(r["edge_xy"])) for r in refused}
+        for _ in range(len(pfix)):
+            nb = nbrs_of()
+            L = np.linalg.norm(pfix[egfix[:, 0]] - pfix[egfix[:, 1]], axis=1)
+            mid = 0.5 * (pfix[egfix[:, 0]] + pfix[egfix[:, 1]])
+            h = np.asarray(size(mid), dtype=float)
+            order = [k for k in np.argsort(L / h) if L[k] < min_edge_factor * h[k]
+                     and in_focus(mid[k])]
+            order = [k for k in order
+                     if tuple(sorted((key(pfix[egfix[k, 0]]), key(pfix[egfix[k, 1]]))))
+                     not in done_refused]
+            if not order:
+                return
+            k = order[0]
+            a, b = int(egfix[k, 0]), int(egfix[k, 1])
+            options = []
+            for x in (a, b):
+                if not free(x, nb):
+                    continue
+                u, w = nb[x]
+                if u == w:
+                    continue
+                du, dw = pfix[u] - pfix[x], pfix[w] - pfix[x]
+                tri = abs(float(du[0] * dw[1] - du[1] * dw[0])) / 2.0
+                if tri > 0.5 * float(L[k]) * float(h[k]):
+                    continue
+                new = shapely.LineString([pfix[u], pfix[w]])
+                others = [shapely.LineString(pfix[[c, d]]) for c, d in egfix.tolist()
+                          if not ({c, d} & {x, u, w})]
+                if others and shapely.MultiLineString(others).intersects(new):
+                    continue
+                ok = True
+                for y, far in ((u, w), (w, u)):
+                    other = [q for q in nb.get(y, []) if q != x]
+                    if len(other) != 1:
+                        continue
+                    before = angle_at(pfix[y], pfix[other[0]], pfix[x], water)
+                    after = angle_at(pfix[y], pfix[other[0]], pfix[far], water)
+                    if after is None or (after < min_angle_deg and
+                                         (before is None or after < before - 1e-6)):
+                        ok = False
+                if ok:
+                    options.append((tri, x, u, w))
+            if not options and merge_ends(a, b, nb, float(L[k]), float(h[k])):
+                continue
+            if not options:
+                edge_xy = (key(pfix[a]), key(pfix[b]))
+                done_refused.add(tuple(sorted(edge_xy)))
+                refused.append({"edge_xy": edge_xy, "length_m": round(float(L[k]), 2),
+                                "h_m": round(float(h[k]), 1),
+                                "at": [round(float(v), 1) for v in mid[k]]})
+                continue
+            tri, x, u, w = min(options)
+            removed.append({"at": [round(float(v), 1) for v in pfix[x]],
+                            "edge_m": round(float(L[k]), 2), "h_m": round(float(h[k]), 1),
+                            "area_m2": round(tri, 1)})
+            egfix = np.vstack([egfix[~np.isin(egfix, [x]).any(axis=1)], [[u, w]]])
+            compact([x])
+
+    def retreat(v, q, h, nb, poly):
+        """Move point v straight away from q until it is ``h`` from it."""
+        nonlocal pfix
+        if not free(v, nb):
+            return False
+        d = pfix[v] - q
+        dist = float(np.linalg.norm(d))
+        if dist <= 0:
+            return False
+        new = q + d / dist * h
+        u, w = nb[v]
+        # it must go INTO the land (the pier), not into the water
+        if poly.contains(shapely.Point(new)):
+            return False
+        edges = shapely.MultiLineString([[pfix[u], new], [new, pfix[w]]])
+        others = [shapely.LineString(pfix[[c, e2]]) for c, e2 in egfix.tolist()
+                  if not ({c, e2} & {v, u, w})]
+        if others and shapely.MultiLineString(others).intersects(edges):
+            return False
+        for y, far in ((u, w), (w, u)):
+            other = [x for x in nb.get(y, []) if x != v]
+            if len(other) != 1:
+                continue
+            a0 = angle_at(pfix[y], pfix[other[0]], pfix[v], poly)
+            a1 = angle_at(pfix[y], pfix[other[0]], new, poly)
+            if a1 is None or (a1 < min_angle_deg and (a0 is None or a1 < a0 - 1e-6)):
+                return False
+        a0 = angle_at(pfix[v], pfix[u], pfix[w], poly)
+        a1 = angle_at(new, pfix[u], pfix[w], poly)
+        if a1 is None or (a1 < min_angle_deg and (a0 is None or a1 < a0 - 1e-6)):
+            return False
+        retreated.append({"at": [round(float(c), 1) for c in pfix[v]],
+                          "by_m": round(h - dist, 1), "gap_was_m": round(dist, 2)})
+        pfix = pfix.copy()
+        pfix[v] = new
+        return True
+
+    # ------------------------------------------------------------------ slits
+    def slit_once(poly):
+        """Close ONE slit; True if something changed."""
+        nonlocal pfix, egfix, pfix_base, ident
         nb = nbrs_of()
-        live_e = egfix
-        L = np.linalg.norm(pfix[live_e[:, 0]] - pfix[live_e[:, 1]], axis=1)
-        mid = 0.5 * (pfix[live_e[:, 0]] + pfix[live_e[:, 1]])
-        h = np.asarray(size(mid), dtype=float)
-        bad = [k for k in np.argsort(L / h) if L[k] < min_edge_factor * h[k]]
-        bad = [k for k in bad if tuple(sorted(live_e[k])) not in
-               {tuple(sorted(r["edge"])) for r in refused}]
-        if not bad:
+        segs = shapely.linestrings(np.stack([pfix[egfix[:, 0]], pfix[egfix[:, 1]]], axis=1))
+        tree = shapely.STRtree(segs)
+        h_all = np.asarray(size(pfix), dtype=float)
+        cands = []
+        for v in range(len(pfix)):
+            if len(nb.get(v, [])) != 2 or not in_focus(pfix[v]):
+                continue
+            near = {v, *nb[v]}
+            for u in list(nb[v]):
+                near.update(nb.get(u, []))
+            pt = shapely.Point(pfix[v])
+            for k in tree.query(pt.buffer(gap_factor * h_all[v])):
+                a, b = int(egfix[k, 0]), int(egfix[k, 1])
+                if a in near or b in near:
+                    continue
+                d = float(segs[k].distance(pt))
+                if d < gap_factor * h_all[v]:
+                    cands.append((d / h_all[v], v, k))
+        for _, v, k in sorted(cands):
+            a, b = int(egfix[k, 0]), int(egfix[k, 1])
+            q = np.asarray(nearest_points(segs[k], shapely.Point(pfix[v]))[0].coords[0])
+            throat = shapely.LineString([pfix[v], q])
+            if throat.length <= 0 or not poly.buffer(1e-6).contains(throat):
+                continue
+            # the two ways round from v to the edge (a, b): each, closed by
+            # the throat, bounds one side
+            sides = []
+            for first in nb[v]:
+                path, prev, cur = [v], v, first
+                while cur not in (a, b) and len(path) <= len(pfix):
+                    path.append(cur)
+                    nxt = [x for x in nb.get(cur, []) if x != prev]
+                    if len(nxt) != 1:
+                        path = None
+                        break
+                    prev, cur = cur, nxt[0]
+                if path is None or cur not in (a, b):
+                    continue
+                path.append(cur)
+                ring = np.vstack([pfix[path], q[None]])
+                g = shapely.make_valid(shapely.Polygon(ring))
+                sides.append((float(g.area), path, g))
+            if len(sides) != 2:
+                continue                    # not one loop: an island, or a junction
+            area, path, g = min(sides, key=lambda t: t[0])
+            inner = path[1:-1]              # the points that go
+            end = path[-1]                  # the edge end on the dead-end side
+            if not inner or shapely.difference(g, poly.buffer(1e-6)).area > 1e-6 * max(area, 1.0):
+                continue                    # the side is not water in the hole
+            h = float(np.min(h_all[path]))
+            if not g.buffer(-h).is_empty:
+                # Closing would cut off water an element fits in -- a pier
+                # whose tip nearly touches the quay across (Yokohama, 3.3 m).
+                # The tip steps back instead, straight away from the quay,
+                # until the gap is one element.
+                if retreat(v, q, float(h_all[v]), nb, poly):
+                    return True
+                slits_left.append({"at": [round(float(c), 1) for c in pfix[v]],
+                                   "why": "wide enough for an element, and the tip "
+                                          "could not step back"})
+                continue
+            if any(pfix_base[x] >= 0 or is_protected(x) for x in inner + [end]):
+                slits_left.append({"at": [round(float(c), 1) for c in pfix[v]],
+                                   "why": "frozen or wall root inside"})
+                continue
+            other_end = b if end == a else a
+            # q snaps to the far end when it is that close already
+            if float(np.linalg.norm(q - pfix[other_end])) <= 0.25 * h:
+                qi, new_pts = other_end, []
+            else:
+                qi, new_pts = len(pfix), [q]
+            drop = set(inner) | {end}
+            keep_e = ~np.isin(egfix, list(drop)).any(axis=1)
+            new_e = [[v, qi]] + ([[qi, other_end]] if qi != other_end else [])
+            egfix = np.vstack([egfix[keep_e], np.asarray(new_e, dtype=np.int64)])
+            if new_pts:
+                pfix = np.vstack([pfix, np.asarray(new_pts)])
+                pfix_base = np.concatenate([pfix_base, [-1]])
+            slits.append({"at": [round(float(c), 1) for c in pfix[v]],
+                          "throat_m": round(float(throat.length), 2),
+                          "area_m2": round(area, 1), "h_m": round(h, 1)})
+            compact(drop)
+            return True
+        return False
+
+    # ----------------------------------------------------------------- angles
+    def angles(poly):
+        nonlocal pfix, egfix, pfix_base, ident
+        prot = [k for k in range(len(pfix)) if is_protected(k)]
+        before = {key(pfix[k]): k for k in range(len(pfix))}
+        p2, e2, b2, rep = blunt_acute_corners(pfix, egfix, pfix_base, poly, size,
+                                              min_angle_deg, protect=prot)
+        if rep["n_corners_blunted"] == 0:
+            return
+        angles_rep.append(rep)
+        m = np.full(len(pfix), -1, dtype=np.int64)
+        for j, xy in enumerate(p2):
+            k = before.get(key(xy))
+            if k is not None:
+                m[k] = j
+        ident = np.where(ident >= 0, m[np.maximum(ident, 0)], -1)
+        pfix, egfix, pfix_base = np.asarray(p2, dtype=float)[:, :2], np.asarray(e2), \
+            np.asarray(b2)
+
+    def n_done():
+        return (len(removed), len(merged), len(slits), len(retreated),
+                sum(r["n_corners_blunted"] for r in angles_rep))
+
+    for _ in range(max(1, int(rounds))):
+        n_before = n_done()
+        if "short_edges" in operations:
+            short_edges()
+        if "slits" in operations:
+            for _i in range(len(pfix)):
+                if not slit_once(hole_polygon(pfix, egfix)):
+                    break
+        if "angles" in operations and focus_pts is None:
+            angles(hole_polygon(pfix, egfix))
+        if n_done() == n_before:
             break
-        k = bad[0]
-        a, b = int(live_e[k, 0]), int(live_e[k, 1])
-        options = [(r, x) for x in (a, b)
-                   if (r := try_remove(x, nb, float(L[k]), float(h[k]))) is not None]
-        if not options:
-            refused.append({"edge": [a, b], "length_m": round(float(L[k]), 2),
-                            "h_m": round(float(h[k]), 1),
-                            "at": [round(float(v), 1) for v in mid[k]]})
-            continue
-        (tri, u, w), x = min(options, key=lambda o: o[0][0])
-        egfix = np.vstack([egfix[~np.isin(egfix, [x]).any(axis=1)], [[u, w]]])
-        keep[x] = False
-        removed.append({"at": [round(float(v), 1) for v in pfix[x]],
-                        "edge_m": round(float(L[k]), 2), "h_m": round(float(h[k]), 1),
-                        "area_m2": round(tri, 1)})
-    remap = np.full(len(pfix), -1, dtype=np.int64)
-    remap[keep] = np.arange(int(keep.sum()))
+    if protect and (ident[sorted(protect)] < 0).any():
+        raise RuntimeError("rim_repair removed a protected point")
     report = {"n_points_removed": len(removed), "removed": removed[:50],
-              "n_short_edges_left": len(refused), "short_edges_left": refused[:50]}
-    return pfix[keep], remap[egfix], pfix_base[keep], remap, report
+              "n_edges_merged": len(merged), "merged": merged[:50],
+              "n_tips_stepped_back": len(retreated), "stepped_back": retreated[:50],
+              "n_short_edges_left": len(refused),
+              "short_edges_left": [{k: v for k, v in r.items() if k != "edge_xy"}
+                                   for r in refused[:50]],
+              "n_slits_closed": len(slits), "slits": slits[:50],
+              "slits_left": slits_left[:50],
+              "n_corners_blunted": sum(r["n_corners_blunted"] for r in angles_rep),
+              "corners": [a for r in angles_rep for a in r["at"]][:50]}
+    return pfix, egfix, pfix_base, ident, report
 
 
 def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
@@ -1445,7 +1729,7 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
 
 
 def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0, *,
-                        fine_h=None):
+                        fine_h=None, protect=()):
     """Cut off every coastline corner sharper than ``min_angle_deg`` on the water side.
 
     The water between two boundary lines that meet at under 60 degrees holds
@@ -1478,6 +1762,9 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
     pfix = np.asarray(pfix, dtype=float).copy()
     egfix = np.asarray(egfix, dtype=np.int64).copy()
     pfix_base = np.asarray(pfix_base, dtype=np.int64).copy()
+    # ``protect``: indices never removed (wall roots); held by position,
+    # because the indices shift as points go
+    protected = {tuple(np.round(pfix[int(k)], 6)) for k in protect}
 
     def cut_one():
         """Find ONE acute water corner in the current rim and cut it.
@@ -1494,7 +1781,8 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
             nbrs.setdefault(b, []).append(a)
 
         def free(k):
-            return pfix_base[k] < 0 and len(nbrs.get(k, [])) == 2
+            return (pfix_base[k] < 0 and len(nbrs.get(k, [])) == 2
+                    and tuple(np.round(pfix[k], 6)) not in protected)
 
         def bend(k, prev):
             nxt = [q for q in nbrs[k] if q != prev][0]

@@ -136,6 +136,8 @@ def seed_search_env(tmp_path, attempts, qa_failures, misses=None):
         # block reads its flag.  False is the default path: everything the
         # recipe did before the branch existed.
         "_LADDER": False,
+        # no opt-in rules: the QA-feedback retry belongs to rim_repair
+        "EXPERIMENTAL": set(),
     }
 
 

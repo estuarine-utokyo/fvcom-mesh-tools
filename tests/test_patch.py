@@ -2158,3 +2158,103 @@ def test_keep_land_holds_base_land_where_land_and_water_are_both_unresolvable():
     assert shapely.contains(on, shapely.Point(0, -110))        # kept
     assert shapely.contains(on, shapely.Point(0, -17))         # canal closed
     assert not shapely.contains(on, shapely.Point(0, -600))    # open water stays
+
+
+def _rim_with_slit(width=10.0, depth=100.0):
+    # 500 m of water with a slit going up from its top side
+    x0 = 200.0
+    ring = [(0, 0), (500, 0), (500, 500), (x0 + width, 500), (x0 + width, 500 + depth),
+            (x0, 500 + depth), (x0, 500), (0, 500)]
+    pfix = np.asarray(ring, dtype=float)
+    egfix = np.array([[k, (k + 1) % len(ring)] for k in range(len(ring))])
+    return pfix, egfix
+
+
+def test_rim_repair_closes_a_slit_no_element_fits_in():
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    pfix, egfix = _rim_with_slit()
+    water = hole_polygon(pfix, egfix)
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(len(pfix), -1), water,
+                                     lambda xy: np.full(len(xy), 30.0))
+    assert rep["n_slits_closed"] == 1
+    after = hole_polygon(p, e)
+    assert after.is_valid
+    assert after.area == pytest.approx(500 * 500, abs=1.0)     # the slit is land
+    assert shapely.difference(after, water).area < 1e-6        # no new water
+
+
+def test_rim_repair_leaves_a_slit_with_a_frozen_point_or_room_for_an_element():
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    size = lambda xy: np.full(len(xy), 30.0)  # noqa: E731
+    pfix, egfix = _rim_with_slit()
+    base = np.full(len(pfix), -1)
+    base[4] = 99                                   # the slit's far corner is frozen
+    water = hole_polygon(pfix, egfix)
+    p, e, b, remap, rep = rim_repair(pfix, egfix, base, water, size)
+    assert rep["n_slits_closed"] == 0 and len(p) == len(pfix)
+    # an inlet 80 m wide is not a slit at 30 m: no throat under half an element
+    pfix, egfix = _rim_with_slit(width=80.0)
+    water = hole_polygon(pfix, egfix)
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(len(pfix), -1), water, size)
+    assert rep["n_slits_closed"] == 0
+
+
+def test_rim_repair_blunts_an_acute_corner_but_not_at_a_wall_root():
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    # a 40 deg water corner at the origin
+    t = np.radians(20.0)
+    pfix = np.array([[0.0, 0.0], [600 * np.sin(t), 600 * np.cos(t)], [0.0, 900.0],
+                     [-600 * np.sin(t), 600 * np.cos(t)]])
+    egfix = np.array([[k, (k + 1) % 4] for k in range(4)])
+    water = hole_polygon(pfix, egfix)
+    size = lambda xy: np.full(len(xy), 30.0)  # noqa: E731
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(4, -1), water, size)
+    assert rep["n_corners_blunted"] == 1 and remap[0] == -1
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(4, -1), water, size, protect={0})
+    assert rep["n_corners_blunted"] == 0 and remap[0] == 0
+
+
+def test_rim_repair_merges_a_short_cap_between_two_corners():
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    # water below a coast with a 12 m cap between two 120-deg corners: taking
+    # either end away swings the coast by the whole cap
+    pfix = np.array([[0.0, 0.0], [600.0, 0.0], [600.0, 300.0], [330.0, 300.0],
+                     [306.0, 320.0], [294.0, 320.0], [270.0, 300.0], [0.0, 300.0]])
+    egfix = np.array([[k, (k + 1) % 8] for k in range(8)])
+    water = hole_polygon(pfix, egfix)
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(8, -1), water,
+                                     lambda xy: np.full(len(xy), 30.0))
+    assert rep["n_edges_merged"] + rep["n_points_removed"] >= 1
+    after = hole_polygon(p, e)
+    assert after.is_valid
+    L = np.linalg.norm(p[e[:, 0]] - p[e[:, 1]], axis=1)
+    assert L.min() >= 15.0                       # no edge under half an element left
+    assert abs(after.area - water.area) < 0.5 * 12.0 * 30.0 + 1.0
+
+
+def test_rim_repair_steps_a_pier_tip_back_from_the_quay_across():
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    # a pier 20 m wide from the bottom coast whose tip stops 3 m short of the
+    # top coast; both basins either side are wide open to each other round
+    # the far side, so closing the gap would cut water an element fits in
+    pfix = np.array([[0.0, 0.0], [190.0, 0.0], [190.0, 297.0], [200.0, 297.0],
+                     [210.0, 297.0], [210.0, 0.0], [600.0, 0.0], [600.0, 300.0],
+                     [0.0, 300.0]])
+    egfix = np.array([[k, (k + 1) % 9] for k in range(9)])
+    water = hole_polygon(pfix, egfix)
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(9, -1), water,
+                                     lambda xy: np.full(len(xy), 30.0))
+    after = hole_polygon(p, e)
+    assert after.is_valid
+    assert rep["n_slits_closed"] == 0
+    assert rep["n_tips_stepped_back"] >= 1
+    # every point of the pier is an element from the quay now (the middle
+    # tip point may have gone as a short edge), and the tip moved into it
+    pier = p[(p[:, 0] > 185) & (p[:, 0] < 215) & (p[:, 1] > 1)]
+    assert len(pier) and (300.0 - pier[:, 1]).min() >= 30.0 - 1e-6
+    assert after.area >= water.area - 1e-6
