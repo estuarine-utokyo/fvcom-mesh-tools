@@ -14,7 +14,7 @@
 # Memory, not cores, is what this needs: the ladder's 30 m grid is 2466 x 1982
 # and the M7001 sounding file is 3.95 million rows.  DistMesh is serial.
 #
-# Required: FMESH_RECIPE.  Optional: LR_OUT, LR_SEEDS, FMESH_LAND.
+# Required: FMESH_RECIPE.  Optional: LR_OUT, LR_SEEDS, LR_EXPERIMENTAL, FMESH_LAND.
 #
 # FMESH_LAND defaults to the xcoast "true land" product -- OSM land polygons
 # minus inland water, which DATA_INVENTORY.md records as coastline precedence

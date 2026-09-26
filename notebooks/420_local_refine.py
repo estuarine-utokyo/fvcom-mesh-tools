@@ -252,8 +252,17 @@ def base_depth_of(lon, lat):
 # ONE `if`, taken here (owner, 2026-09-23).  `hires` absent and nothing below
 # is reached; everything the recipe did before it existed, it still does.
 HIRES = cfg["hires"]
-# opt-in coastline rules (refine.HIRES_EXPERIMENTAL); none unless named
+# opt-in coastline rules (refine.HIRES_EXPERIMENTAL); none unless named.
+# LR_EXPERIMENTAL ("a:b", or "none" to clear the recipe's) overrides the
+# recipe, for trying a rule on recipes that do not name it; the report
+# records what was used.
 EXPERIMENTAL = set(HIRES.get("experimental", [])) if HIRES is not None else set()
+if HIRES is not None and os.environ.get("LR_EXPERIMENTAL"):
+    from fvcom_mesh_tools.refine import HIRES_EXPERIMENTAL as _HX
+    _ov = os.environ["LR_EXPERIMENTAL"].replace(",", ":")
+    EXPERIMENTAL = set() if _ov == "none" else {x for x in _ov.split(":") if x}
+    if EXPERIMENTAL - set(_HX):
+        raise SystemExit(f"LR_EXPERIMENTAL names unknown rule(s) {sorted(EXPERIMENTAL - set(_HX))}")
 if HIRES is not None:
     say(f"hires: coastline {HIRES['coastline']}, bathymetry "
         f"{HIRES['bathymetry']}, scope {HIRES['scope']}, blend {HIRES['blend']}"
@@ -313,6 +322,7 @@ reports["provenance"] = collect_provenance(
               if land_m is not None else {})})
 reports["provenance"]["seeds"] = os.environ.get("LR_SEEDS", "0,1,2,3,4")
 reports["provenance"]["max_iter"] = int(os.environ.get("LR_MAX_ITER", 100))
+reports["provenance"]["experimental"] = sorted(EXPERIMENTAL)
 _dirty = {k: v["dirty"] for k, v in reports["provenance"]["code"].items() if v and v["dirty"]}
 if _dirty:
     say(f"provenance: uncommitted changes in {_dirty}; this mesh cannot be remade "
