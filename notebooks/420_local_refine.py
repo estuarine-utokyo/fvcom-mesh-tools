@@ -519,7 +519,8 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
                                               land_width_max_band=1,
                                               close_wedges="water_wedges" in EXPERIMENTAL,
                                               close_seam_water="seam_water" in EXPERIMENTAL,
-                                              keep_land=_keep_land)
+                                              keep_land=_keep_land,
+                                              continuous_width="continuous_width" in EXPERIMENTAL)
     reports["shoreline_filter"] = _frep
     for _b in _frep["bands"]:
         say(f"    band {_b['band']}: h {_b['h_m']:g} m over {_b['zone_km2']:.2f} km2, "

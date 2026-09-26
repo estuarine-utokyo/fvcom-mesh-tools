@@ -777,6 +777,85 @@ def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0,
     return out, report
 
 
+def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
+                       min_h=0.0, spacing=10.0, levels_ratio=1.1):
+    """The water no disc of the LOCAL element size reaches, as polygons.
+
+    Water is kept where it is covered by a disc of radius
+    ``radius_factor * h(c)`` whose centre ``c`` is at least that far from
+    land; the rest is returned.  h is the local size itself, not the lower
+    bound of an octave band, so a channel is judged at the size of the
+    elements it will get and nothing is cut where two bands meet: the octave
+    bands leave water two lower bounds wide -- ONE element where the elements
+    are twice the bound -- and a straight cut where the next band closes it
+    (Funabashi, Yokohama; USER_GUIDE section 11, band seams).
+
+    Computed on a raster of cell ``spacing`` over ``footprint``: the distance
+    to land, the centres, and the discs re-grown from them in radius levels
+    ``levels_ratio`` apart (each level grown at its UPPER radius, so water is
+    kept rather than lost to the quantisation).  Only where ``h > min_h``.
+    The pieces are smoothed by one cell and simplified, so the coast they
+    make is not a staircase; pieces smaller than a disc of ``min_h`` go.
+    Returns ``(polygon, report)``.
+    """
+    import shapely
+    from rasterio import features
+    from rasterio.transform import from_origin
+    from scipy import ndimage
+
+    s = float(spacing)
+    x0, y0, x1, y1 = footprint.bounds
+    nx, ny = int(np.ceil((x1 - x0) / s)) + 1, int(np.ceil((y1 - y0) / s)) + 1
+    transform = from_origin(x0, y1, s, s)
+    land_u = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
+    is_land = features.rasterize([(land_u, 1)], out_shape=(ny, nx), transform=transform,
+                                 fill=0, all_touched=False, dtype="uint8").astype(bool)
+    inside = features.rasterize([(footprint, 1)], out_shape=(ny, nx), transform=transform,
+                                fill=0, dtype="uint8").astype(bool)
+    water = inside & ~is_land
+    gx = x0 + (np.arange(nx) + 0.5) * s
+    gy = y1 - (np.arange(ny) + 0.5) * s
+    mx, my = np.meshgrid(gx, gy)
+    h = np.asarray(size_field(np.column_stack([mx.ravel(), my.ravel()])),
+                   dtype=float).reshape(ny, nx)
+    r = radius_factor * h
+    # distance from each water cell to land; outside the footprint counts as
+    # water, so the footprint edge is not a coast
+    dist = ndimage.distance_transform_edt(~is_land) * s
+    centres = water & (dist >= r)
+    covered = np.zeros_like(water)
+    rmin, rmax = float(np.nanmin(r[water])) if water.any() else 0.0, \
+        float(np.nanmax(r[water])) if water.any() else 0.0
+    lo = max(rmin, s)
+    n_levels = 0
+    while lo <= rmax * levels_ratio and water.any():
+        hi = lo * levels_ratio
+        c = centres & (r >= lo) & (r < hi)
+        if c.any():
+            covered |= ndimage.distance_transform_edt(~c) * s <= hi
+            n_levels += 1
+        lo = hi
+    # centres whose radius is under one cell cover themselves
+    covered |= centres & (r < max(rmin, s))
+    lost = water & ~covered & (h > min_h)
+    empty = shapely.Polygon()
+    rep = {"spacing_m": s, "n_levels": n_levels, "lost_cells": int(lost.sum())}
+    if not lost.any():
+        rep["area_m2"] = 0.0
+        return empty, rep
+    polys = [shapely.geometry.shape(g) for g, v in
+             features.shapes(lost.astype("uint8"), mask=lost, transform=transform) if v == 1]
+    g = shapely.union_all(polys)
+    g = shapely.simplify(g.buffer(s, join_style="round").buffer(-s, join_style="round"), s)
+    min_area = np.pi * max(min_h, s) ** 2 / 4.0
+    pieces = [q for q in getattr(g, "geoms", [g]) if q.geom_type == "Polygon"
+              and q.area >= min_area]
+    out = shapely.union_all(pieces) if pieces else empty
+    rep["area_m2"] = float(out.area)
+    rep["n_pieces"] = len(pieces)
+    return out, rep
+
+
 def filter_shoreline_local(land, size_field, h0: float, footprint, *,
                            elements_per_feature: float = 2.0,
                            land_width_factor: float | None = None,
@@ -784,7 +863,8 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
                            spacing: float | None = None,
                            close_wedges: bool = False,
                            close_seam_water: bool = False,
-                           keep_land=None):
+                           keep_land=None,
+                           continuous_width: bool = False):
     """:func:`filter_shoreline` at the LOCAL element size, not one size.
 
     One size for the whole hole let 60-90 m features and walls survive where
@@ -877,11 +957,21 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
         if add:
             n_seam = len(add)
             joined = shapely.union_all([joined, *add])
+    cw_rep = None
+    if continuous_width:
+        # Water judged at the local size itself, in the coarse zone only
+        # (h > 2 h0): no octave lower bound and no band cut there.
+        cw, cw_rep = unresolvable_water(joined, size_field, footprint,
+                                        radius_factor=0.5 * float(elements_per_feature),
+                                        min_h=2.0 * h0, spacing=h0 / 3.0)
+        if not cw.is_empty:
+            joined = shapely.union_all([joined, cw])
     out, rep = filter_shoreline(joined, h0, elements_per_feature=elements_per_feature,
                                 land_width_factor=land_width_factor,
                                 close_wedges=close_wedges)
     before = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
     rep = {**rep, "bands": rows, "n_seam_water_closed": n_seam,
+           "continuous_width": cw_rep,
            "land_lost_m2": float(shapely.difference(before, out).area),
            "water_lost_m2": float(shapely.difference(out, before).area),
            "area_before_m2": float(before.area), "area_after_m2": float(out.area)}
