@@ -783,7 +783,8 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
                            land_width_max_band: int | None = None,
                            spacing: float | None = None,
                            close_wedges: bool = False,
-                           close_seam_water: bool = False):
+                           close_seam_water: bool = False,
+                           keep_land=None):
     """:func:`filter_shoreline` at the LOCAL element size, not one size.
 
     One size for the whole hole let 60-90 m features and walls survive where
@@ -836,6 +837,14 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
                                    or k <= land_width_max_band) else None
         fk, rk = filter_shoreline(land, hk, elements_per_feature=elements_per_feature,
                                   land_width_factor=lw, close_wedges=close_wedges)
+        if keep_land is not None and lw is None:
+            # In the coarse bands land under two elements goes like water
+            # does, and where both are unresolvable the order decides: at
+            # Yokohama two 150 m quay blocks the base mesh has as land went
+            # first and left 0.19 km2 of new water behind.  ``keep_land``
+            # (land in the source AND in the base) stays land there; the
+            # narrow water round it is closed by the h0 pass below.
+            fk = shapely.union(fk, keep_land)
         part = shapely.intersection(fk, zone)
         pieces.append(part)
         zone_list.append((zone, hk))

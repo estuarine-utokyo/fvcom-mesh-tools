@@ -254,6 +254,7 @@ Odaiba, so a recipe names the ones it needs:
 | `wall_pockets` | water shut in by walls alone, narrower than two elements, off the coast and in the coarse zone (h > 2x target), becomes an island; its walls come back if the rim refuses the island |
 | `short_chords` | in the coarse zone, a corner-cutting chord shorter than 0.75 of an element becomes one point, if that only gives water to land and keeps 60 deg |
 | `rim_repair` | the finished rim is checked against the local size: a point beside an edge shorter than half an element is removed if that crosses nothing, moves little and does not sharpen a water angle below 60 deg (Yokohama: 39 -> 21 violations on its own) |
+| `keep_base_land` | in the coarse bands, where land and water are both narrower than two elements, land that the source and the base mesh both have stays land (otherwise it is removed first and becomes water); the narrow water round it is closed. Owner's choice, 2026-09-26 |
 | `seam_water` | after the octave bands are joined, each band closes the joined land once more at its own threshold, so a strip left between one band's cut and another band's kept bank is closed |
 
 Try them when a run fails in the transition at a river mouth or a curled
@@ -489,7 +490,7 @@ package and have unit tests.
   (`recipes/refine/tokyo_odaiba_hires.yaml`, with the Daiba islands) and
   Funabashi port (`recipes/refine/funabashi_port_hires.yaml`, with the opt-in
   rules) and Yokohama inner harbour (`recipes/refine/yokohama_port_hires.yaml`,
-  all five opt-in rules, a 2.3 km circle). Odaiba
+  six opt-in rules, a 2.3 km circle). Odaiba
   needed two coastline rules Kimitsu had not shown -- a new place will find
   new cases (§12).
 - A structure hugging the coast within 0.4 element, thinner than half an

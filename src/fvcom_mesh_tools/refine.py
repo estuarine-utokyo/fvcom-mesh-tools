@@ -117,7 +117,7 @@ HIRES_BLEND = ("ramp", "none")
 # recipe (2026-09-25), so they are opt-in until the band-seam artefact they
 # work around is fixed at its source (docs/USER_GUIDE.md, known limits).
 HIRES_EXPERIMENTAL = ("water_wedges", "wall_pockets", "short_chords", "rim_repair",
-                      "seam_water")
+                      "seam_water", "keep_base_land")
 
 GRAVITY_M_S2 = 9.81
 

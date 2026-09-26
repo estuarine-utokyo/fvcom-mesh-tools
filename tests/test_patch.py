@@ -2139,3 +2139,22 @@ def test_seam_water_closes_the_strip_a_band_join_leaves():
     a, _ = filter_shoreline_local(wide, size, 30.0, box, spacing=30.0)
     b, _ = filter_shoreline_local(wide, size, 30.0, box, spacing=30.0, close_seam_water=True)
     assert shapely.symmetric_difference(a, b).area < 1.0
+
+
+def test_keep_land_holds_base_land_where_land_and_water_are_both_unresolvable():
+    # Yokohama: a 150 m quay block behind a 35 m canal among 240 m elements.
+    # The coarse band removes the block first and the canal is then part of
+    # wide water; kept, the block stays land and the canal is closed.
+    from fvcom_mesh_tools.patch import filter_shoreline_local
+
+    box = shapely.box(-1500, -1500, 1500, 1500)
+    mainland = shapely.box(-1500, 0, 1500, 1500)
+    block = shapely.box(-200, -185, 200, -35)                 # 150 m wide
+    land = shapely.union_all([mainland, block])               # canal y -35..0
+    size = lambda p: np.full(len(np.atleast_2d(p)), 240.0)  # noqa: E731
+    off, _ = filter_shoreline_local(land, size, 30.0, box, spacing=50.0)
+    assert not shapely.contains(off, shapely.Point(0, -110))   # the block went
+    on, _ = filter_shoreline_local(land, size, 30.0, box, spacing=50.0, keep_land=block)
+    assert shapely.contains(on, shapely.Point(0, -110))        # kept
+    assert shapely.contains(on, shapely.Point(0, -17))         # canal closed
+    assert not shapely.contains(on, shapely.Point(0, -600))    # open water stays

@@ -19,8 +19,12 @@
 # those resolved stretches were refused and the boundary contract broke.
 # This recipe is centred on the harbour and 2.3 km wide, which takes the
 # whole inner harbour (and the Daikoku pier, 4.5 km east, into the
-# transition). Accepted with all five opt-in rules (seed 3, 0 introduced
-# violations, NP 15,153, dt 1.18 s); without them the best seed had 39.
+# transition). Accepted with the six opt-in rules (seed 2, 0 introduced
+# violations, NP 14,982, dt 1.13 s); without them the best seed had 39.
+# keep_base_land (owner, 2026-09-26): where land and water are both too
+# narrow for the transition's elements, land the base mesh also has stays
+# land -- without it two 150 m quay blocks north of Minato Mirai became
+# water, 0.19 km2 in all; 0.06 km2 of coastline chords remain.
 #
 # The outline is a DEMONSTRATION circle over the port, not a port limit.
 base_mesh: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
@@ -35,7 +39,8 @@ hires:
   bathymetry: tokyo_bay
   scope: hole
   blend: ramp
-  experimental: [water_wedges, wall_pockets, short_chords, rim_repair, seam_water]
+  experimental: [water_wedges, wall_pockets, short_chords, rim_repair, seam_water,
+                 keep_base_land]
 
 refine:
   - name: yokohama_port

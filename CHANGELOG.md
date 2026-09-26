@@ -22,7 +22,9 @@ will only ship with a major bump (Semantic Versioning).
 - `recipes/refine/yokohama_port_hires.yaml`, the inner harbour of Yokohama,
   and two more opt-in rules it needed: `rim_repair` (`patch.rim_repair`, a
   check of the finished rim against the local size, operation 1: short
-  edges) and `seam_water` (`filter_shoreline_local(close_seam_water=)`).
+  edges), `seam_water` (`filter_shoreline_local(close_seam_water=)`) and
+  `keep_base_land` (`filter_shoreline_local(keep_land=)`: in the coarse
+  bands, land the source and the base both have is not removed).
 - `fvcom_mesh_tools.provenance`: `report.json` records the code commits
   (with uncommitted files), input file hashes and library versions next to
   the seed, so a mesh can be remade (USER_GUIDE §5).
