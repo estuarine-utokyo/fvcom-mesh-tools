@@ -2264,9 +2264,9 @@ def test_unresolvable_water_is_judged_at_the_local_size():
     from fvcom_mesh_tools.patch import unresolvable_water
 
     box = shapely.box(-1500, -1500, 1500, 1500)
-    # two channels: 200 m and 300 m wide, among 120 m elements (r = 120)
+    # two dead-end channels: 200 m and 300 m wide, among 120 m elements
     land = shapely.difference(box, shapely.union_all([
-        shapely.box(-1500, 400, 1500, 600), shapely.box(-1500, -650, 1500, -350)]))
+        shapely.box(-1500, 400, 1000, 600), shapely.box(-1500, -650, 1000, -350)]))
     size = lambda p: np.full(len(np.atleast_2d(p)), 120.0)  # noqa: E731
     lost, rep = unresolvable_water(land, size, box, min_h=60.0, spacing=10.0)
     assert shapely.contains(lost.buffer(1.0), shapely.Point(0, 500))       # 200 m: gone
@@ -2279,13 +2279,13 @@ def test_unresolvable_water_is_judged_at_the_local_size():
 
 def test_continuous_width_closes_a_channel_where_its_own_elements_are_too_big():
     # A 300 m channel through a size field that grows from 60 to 240 m.  Where
-    # h = 210 m the octave band's lower bound is 120 m, which keeps water
-    # 240 m wide or more, so the channel stays -- one and a half elements
-    # across.  Judged at h itself it is under two elements and closes.
+    # h = 225 m the octave band's lower bound is 120 m, which keeps water
+    # 240 m wide or more, so the channel stays -- 1.3 elements across.  Judged
+    # at h itself (1.5 elements, the bands' average) it closes.
     from fvcom_mesh_tools.patch import filter_shoreline_local
 
-    box = shapely.box(-1500, -1500, 1500, 1500)
-    land = shapely.difference(box, shapely.box(-1500, -150, 1500, 150))
+    box = shapely.box(-1500, -1500, 2500, 1500)
+    land = shapely.difference(box, shapely.box(-1500, -150, 1400, 150))   # a dead end
 
     def size(p):
         p = np.atleast_2d(p)
@@ -2294,7 +2294,21 @@ def test_continuous_width_closes_a_channel_where_its_own_elements_are_too_big():
     off, _ = filter_shoreline_local(land, size, 30.0, box, spacing=30.0)
     on, rep = filter_shoreline_local(land, size, 30.0, box, spacing=30.0,
                                      continuous_width=True)
-    assert not shapely.contains(off, shapely.Point(1000, 0))     # h 210: kept by bands
-    assert shapely.contains(on, shapely.Point(1000, 0))          # closed at h itself
+    assert not shapely.contains(off, shapely.Point(1250, 0))     # h 225: kept by bands
+    assert shapely.contains(on, shapely.Point(1250, 0))          # closed at h itself
     assert not shapely.contains(on, shapely.Point(-500, 0))      # h 120: open either way
     assert rep["continuous_width"]["area_m2"] > 0
+
+
+def test_unresolvable_water_leaves_a_strait_between_two_bodies_of_land():
+    from fvcom_mesh_tools.patch import unresolvable_water
+
+    box = shapely.box(-1500, -1500, 1500, 1500)
+    # an island 150 m off the coast: the strait joins nothing if it stays
+    coast = shapely.box(-1500, 0, 1500, 1500)
+    island = shapely.box(-400, -550, 400, -150)
+    size = lambda p: np.full(len(np.atleast_2d(p)), 120.0)  # noqa: E731
+    lost, rep = unresolvable_water(shapely.union_all([coast, island]), size, box,
+                                   min_h=60.0, spacing=10.0)
+    assert not shapely.intersects(lost, shapely.Point(0, -75))
+    assert rep["n_straits_left_open"] >= 1

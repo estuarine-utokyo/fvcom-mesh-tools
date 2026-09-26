@@ -277,7 +277,7 @@ Odaiba, so a recipe names the ones it needs:
 | `wall_pockets` | water shut in by walls alone, narrower than two elements, off the coast and in the coarse zone (h > 2x target), becomes an island; its walls come back if the rim refuses the island |
 | `short_chords` | in the coarse zone, a corner-cutting chord shorter than 0.75 of an element becomes one point, if that only gives water to land and keeps 60 deg |
 | `keep_base_land` | in the coarse bands, where land and water are both narrower than two elements, land that the source and the base mesh both have stays land (otherwise it is removed first and becomes water); the narrow water round it is closed. Owner's choice, 2026-09-26 |
-| `continuous_width` | in the coarse zone (h > 2x target), water is judged at the local element size itself rather than at the lower bound of an octave band: kept only where a disc of one local element fits, computed by a distance transform on a 10 m raster, smoothed. The fix at the source for the band seams (§11), still experimental |
+| `continuous_width` | in the coarse zone (h > 2x target), water is judged at the local element size itself rather than at the lower bound of an octave band: water narrower than 1.5 local elements (the bands' average) that ends at one body of land is closed -- a strait between two bodies is left. Distance transform on a 10 m raster, smoothed. The fix at the source for the band seams (§11); replaces `short_chords` and `seam_water` at Funabashi and Yokohama |
 | `seam_water` | after the octave bands are joined, each band closes the joined land once more at its own threshold, so a strip left between one band's cut and another band's kept bank is closed |
 
 Try them when a run fails in the transition at a river mouth or a curled
@@ -511,9 +511,9 @@ package and have unit tests.
 - Tested on one base mesh (goto2023): the Kimitsu port, the Futtsu coast, an
   offshore fishery, the default branch, the Tokyo port at Odaiba
   (`recipes/refine/tokyo_odaiba_hires.yaml`, with the Daiba islands) and
-  Funabashi port (`recipes/refine/funabashi_port_hires.yaml`, with the opt-in
-  rules) and Yokohama inner harbour (`recipes/refine/yokohama_port_hires.yaml`,
-  rim repair and five opt-in rules, a 2.3 km circle). Odaiba
+  Funabashi port (`recipes/refine/funabashi_port_hires.yaml`,
+  `continuous_width` and `wall_pockets`) and Yokohama inner harbour (`recipes/refine/yokohama_port_hires.yaml`,
+  rim repair and four opt-in rules, a 2.3 km circle). Odaiba
   needed two coastline rules Kimitsu had not shown -- a new place will find
   new cases (§12).
 - A structure hugging the coast within 0.4 element, thinner than half an
@@ -540,12 +540,13 @@ package and have unit tests.
   channel, and its corners can be acute (Funabashi, 1.4 km west of the
   region). The opt-in rules above work around it; the fix at the source --
   judging each channel at its own local size -- is `continuous_width`
-  (2026-09-26), still opt-in: on its own (with rim repair) it takes
-  Funabashi through without the three rules it names, and Kimitsu and
-  Futtsu nori stay accepted, but Futtsu coast fails with 5 violations,
-  Odaiba cannot resolve a stretch, Yokohama is left with 8, and at
-  Funabashi part of the coast then sits up to 609 m off the filtered OSM
-  coast -- to be understood before it can be the default. Quarter-octave bands were tried and moved the Kimitsu
+  (2026-09-27). Judged at two whole elements it closed 1.26 km2 of the
+  Odaiba port and broke Futtsu coast; at 1.5 elements (the bands' average),
+  leaving straits between two bodies of land open, it keeps Kimitsu and
+  Futtsu (x2) accepted and replaces `short_chords` / `seam_water` at
+  Funabashi and Yokohama, with slightly MORE water than those rules kept.
+  It is still opt-in: Odaiba breaks the boundary contract with it (a
+  missing coast edge near 388,600 3,940,250, not yet understood). Quarter-octave bands were tried and moved the Kimitsu
   transition coast by 211 m. A recipe can also avoid it by making the region
   cover the channel mouths, so the element there is fine enough.
 - OSM `man_made` lines (breakwaters mapped only as lines) are not used.

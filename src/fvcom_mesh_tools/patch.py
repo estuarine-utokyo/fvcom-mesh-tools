@@ -790,6 +790,9 @@ def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
     are twice the bound -- and a straight cut where the next band closes it
     (Funabashi, Yokohama; USER_GUIDE section 11, band seams).
 
+    Only water that touches ONE body of land is returned: water between two
+    is a strait, and closing it would join them.
+
     Computed on a raster of cell ``spacing`` over ``footprint``: the distance
     to land, the centres, and the discs re-grown from them in radius levels
     ``levels_ratio`` apart (each level grown at its UPPER radius, so water is
@@ -850,9 +853,24 @@ def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
     min_area = np.pi * max(min_h, s) ** 2 / 4.0
     pieces = [q for q in getattr(g, "geoms", [g]) if q.geom_type == "Polygon"
               and q.area >= min_area]
-    out = shapely.union_all(pieces) if pieces else empty
+    # Only water that ends at ONE body of land: a dead end, a strip along a
+    # bank.  Water between two bodies is a strait, and closing it joins them
+    # -- the rim is resolved from the land's own components, and at Odaiba a
+    # join left a stretch with no source component.
+    comps = [q for q in getattr(land_u, "geoms", [land_u]) if not q.is_empty]
+    tree = shapely.STRtree(comps)
+    kept, straits = [], 0
+    for q in pieces:
+        touching = [k for k in tree.query(q.buffer(2.0 * s))
+                    if shapely.intersects(comps[k], q.buffer(2.0 * s))]
+        if len(touching) <= 1:
+            kept.append(q)
+        else:
+            straits += 1
+    out = shapely.union_all(kept) if kept else empty
     rep["area_m2"] = float(out.area)
-    rep["n_pieces"] = len(pieces)
+    rep["n_pieces"] = len(kept)
+    rep["n_straits_left_open"] = straits
     return out, rep
 
 
@@ -960,9 +978,14 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
     cw_rep = None
     if continuous_width:
         # Water judged at the local size itself, in the coarse zone only
-        # (h > 2 h0): no octave lower bound and no band cut there.
+        # (h > 2 h0): no octave lower bound and no band cut there.  The bands
+        # close water under 2 hk, which is between h and 2 h of the elements
+        # actually there -- 1.5 h on average; judged at two whole elements
+        # it closed 1.26 km2 of the Odaiba port and 0.53 km2 of Yokohama's.
+        # So the continuous rule keeps the bands' average: water narrower than
+        # 0.75 of ``elements_per_feature`` elements goes.
         cw, cw_rep = unresolvable_water(joined, size_field, footprint,
-                                        radius_factor=0.5 * float(elements_per_feature),
+                                        radius_factor=0.375 * float(elements_per_feature),
                                         min_h=2.0 * h0, spacing=h0 / 3.0)
         if not cw.is_empty:
             joined = shapely.union_all([joined, cw])

@@ -25,8 +25,12 @@ will only ship with a major bump (Semantic Versioning).
   `filter_shoreline_local(continuous_width=)`): water in the coarse zone
   judged at the local element size by a distance transform, instead of at
   an octave band's lower bound -- the fix at the source for band seams.
-  Takes Funabashi through on its own; not yet safe on Futtsu coast, Odaiba
-  or Yokohama (USER_GUIDE §11).
+  Water under 1.5 local elements (the bands' average) that ends at one body
+  of land is closed; straits are left. Kimitsu and Futtsu (x2) stay
+  accepted with it; Funabashi now names `continuous_width, wall_pockets`
+  and Yokohama `continuous_width, wall_pockets, keep_base_land,
+  water_wedges` (short_chords and seam_water no longer needed); Odaiba
+  still breaks with it (USER_GUIDE §11).
 
 ### Added -- Funabashi port and opt-in coastline rules (2026-09-25)
 

@@ -19,8 +19,8 @@
 # those resolved stretches were refused and the boundary contract broke.
 # This recipe is centred on the harbour and 2.3 km wide, which takes the
 # whole inner harbour (and the Daikoku pier, 4.5 km east, into the
-# transition). Accepted with rim_repair (on by default) and five opt-in
-# rules (seed 2, 0 introduced violations, NP 14,982, dt 1.13 s); without
+# transition). Accepted with rim_repair (on by default) and four opt-in
+# rules (seed 0, 0 introduced violations, NP 15,071, dt 1.12 s); without
 # any of them the best seed had 39, with rim_repair alone 5.
 # keep_base_land (owner, 2026-09-26): where land and water are both too
 # narrow for the transition's elements, land the base mesh also has stays
@@ -40,8 +40,8 @@ hires:
   bathymetry: tokyo_bay
   scope: hole
   blend: ramp
-  experimental: [water_wedges, wall_pockets, short_chords, seam_water,
-                 keep_base_land]
+  # continuous_width replaces short_chords and seam_water (2026-09-27)
+  experimental: [continuous_width, wall_pockets, keep_base_land, water_wedges]
 
 refine:
   - name: yokohama_port
