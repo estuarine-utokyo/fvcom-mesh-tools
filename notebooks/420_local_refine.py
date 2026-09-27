@@ -1489,7 +1489,20 @@ def attempt(seed):
     # because stitch_patch checks each fixed point individually afterwards.
     cen = p[t].mean(axis=1)
     keep = np.asarray(shapely.contains(hole, shapely.points(cen[:, 0], cen[:, 1])))
-    say(f"outside-hole faces dropped: {int((~keep).sum()):,}")
+    # ...and a face of no area is not a face either.  Three rim points in a
+    # straight line can come back from the CDT as a sliver whose centroid is
+    # ON the coast, and rounding put it inside: the middle point then had a
+    # face on its land side, the repair took it for an interior node and
+    # moved it 240 m into the water, and the coast edge beside it went
+    # missing (Odaiba with continuous_width, 2026-09-27).
+    _u, _v = p[t[:, 1]] - p[t[:, 0]], p[t[:, 2]] - p[t[:, 0]]
+    _a2 = np.abs(_u[:, 0] * _v[:, 1] - _u[:, 1] * _v[:, 0])
+    _l2 = np.max(np.stack([np.sum(_u ** 2, axis=1), np.sum(_v ** 2, axis=1),
+                           np.sum((_v - _u) ** 2, axis=1)]), axis=0)
+    _flat = _a2 <= 1e-6 * _l2
+    say(f"outside-hole faces dropped: {int((~keep).sum()):,}; flat faces dropped: "
+        f"{int((keep & _flat).sum()):,}")
+    keep &= ~_flat
     t = t[keep]
     used = np.unique(t)
     remap = np.full(len(p), -1, dtype=np.int64)

@@ -545,8 +545,11 @@ package and have unit tests.
   leaving straits between two bodies of land open, it keeps Kimitsu and
   Futtsu (x2) accepted and replaces `short_chords` / `seam_water` at
   Funabashi and Yokohama, with slightly MORE water than those rules kept.
-  It is still opt-in: Odaiba breaks the boundary contract with it (a
-  missing coast edge near 388,600 3,940,250, not yet understood). Quarter-octave bands were tried and moved the Kimitsu
+  Odaiba broke the boundary contract with it; the cause was not the rule
+  but a flat face the fill made across three collinear rim points, which
+  moved a coast point 240 m -- flat faces are now dropped after the fill,
+  and Odaiba is accepted with it (every earlier recipe rebuilds
+  byte-identically). Quarter-octave bands were tried and moved the Kimitsu
   transition coast by 211 m. A recipe can also avoid it by making the region
   cover the channel mouths, so the element there is fine enough.
 - OSM `man_made` lines (breakwaters mapped only as lines) are not used.
