@@ -1728,10 +1728,15 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
         a1 = angle_at(new, pfix[u], pfix[w], poly)
         if a1 is None or (a1 < min_angle_deg and (a0 is None or a1 < a0 - 1e-6)):
             return False
+        # ...and every ring keeps its role: a tip stepped back over a small
+        # lake turned its water into an island (review, round 10)
+        p_try = pfix.copy()
+        p_try[v] = new
+        if not _ring_is_polygon(p_try, egfix, v, _rim_depths(pfix, egfix)):
+            return False
         retreated.append({"at": [round(float(c), 1) for c in pfix[v]],
                           "by_m": round(h - dist, 1), "gap_was_m": round(dist, 2)})
-        pfix = pfix.copy()
-        pfix[v] = new
+        pfix = p_try
         return True
 
     # ------------------------------------------------------------------ slits

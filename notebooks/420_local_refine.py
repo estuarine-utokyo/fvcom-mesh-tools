@@ -36,8 +36,10 @@ from fvcom_mesh_tools.bathy_patch import (  # noqa: E402
 )
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14, write_fort14
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case
-from fvcom_mesh_tools.patch import (
-    _subdivide,  # noqa: E402
+from fvcom_mesh_tools.patch import (  # noqa: E402
+    _rim_depths,
+    _ring_is_polygon,
+    _subdivide,
     ambient_size_field,
     base_size_field,
     blunt_acute_corners,
@@ -911,6 +913,7 @@ if HIRES is not None and _land_filtered and _walls_src:
                 bend = np.degrees(np.arccos(np.clip(
                     u1 @ u2 / (np.linalg.norm(u1) * np.linalg.norm(u2) + 1e-12), -1, 1)))
                 if bend < 15.0:
+                    _pin_follows([rim_xy[v]], foot[k])
                     rim_xy[v] = foot[k]
                     _moved.append(v)
             return _blunt(v, h_here)
@@ -940,11 +943,24 @@ if HIRES is not None and _land_filtered and _walls_src:
             if not short:
                 break
             n = short[0]
-            rim_xy[r] = 0.5 * (rim_xy[r] + rim_xy[n])
-            rim_eg = np.where(rim_eg == n, r, rim_eg)
-            rim_eg = rim_eg[rim_eg[:, 0] != rim_eg[:, 1]]
+            mid = 0.5 * (rim_xy[r] + rim_xy[n])
+            xy_try = rim_xy.copy()
+            xy_try[r] = mid
+            eg_try = np.where(rim_eg == n, r, rim_eg)
+            eg_try = eg_try[eg_try[:, 0] != eg_try[:, 1]]
+            # a fold that leaves no polygon, or changes which ring is land,
+            # is not made: a triangle folded to nothing (review, round 10)
+            if not _ring_is_polygon(xy_try, eg_try, r, _rim_depths(rim_xy, rim_eg)):
+                break
+            _pin_follows([rim_xy[r], rim_xy[n]], mid)
+            rim_xy, rim_eg = xy_try, eg_try
             _folded.append((n, r))
         return r
+
+    def _pin_follows(old_xy, new_xy):
+        """A pinned rim point that moves or folds keeps its pin (round 10)."""
+        if any((round(float(q[0]), 6), round(float(q[1]), 6)) in PINNED_XY for q in old_xy):
+            PINNED_XY.add((round(float(new_xy[0]), 6), round(float(new_xy[1]), 6)))
 
     def _protected():
         """Vertices two pieces share -- the junctions node_walls made."""
@@ -1671,8 +1687,9 @@ def attempt(seed):
         # triangle, or a wall rooted twice on the coast around a pocket --
         # leaves a piece the open boundary cannot reach.  The first harbour
         # with walls had two, one of them two elements of 3.1 and 4.8 deg.
-        # Every wall PIECE (connected run of wall edges) touching such a
-        # piece is withdrawn and the split redone; the count is reported.
+        # The SHORTEST wall edge touching such a piece is withdrawn and the
+        # split redone, one edge at a time until the open boundary reaches
+        # everything (walls_cut_off); the count is reported.
         _obc0 = set(np.concatenate([np.asarray(s) for s in base.open_boundaries]).tolist())
         _obc_new = {int(node_map[n]) for n in _obc0 if node_map[n] >= 0}
         _pre = (nodes, elements)

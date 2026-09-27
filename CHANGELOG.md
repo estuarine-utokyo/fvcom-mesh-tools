@@ -8,6 +8,14 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 10 (2026-09-28)
+
+- A tip stepped back, and a short coastline edge folded into a wall root,
+  must leave every rim ring a polygon with its land/water role unchanged
+  (a lake became land; a triangle folded to nothing).
+- A pinned rim point that folds into a wall root or moves along the coast
+  keeps its pin.
+
 ### Fixed -- review of the coastline rules, round 9 (2026-09-28)
 
 - The points the first corner blunting makes or moves are held in place in
