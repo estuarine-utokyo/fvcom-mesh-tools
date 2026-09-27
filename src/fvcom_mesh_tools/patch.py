@@ -1396,7 +1396,7 @@ def _ring_at_size(ring: np.ndarray, size, *, fine_h=None) -> np.ndarray:
 
 
 def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
-               min_edge_factor=0.5, gap_factor=0.5, min_angle_deg=60.0,
+               min_edge_factor=0.5, gap_factor=1.0, min_angle_deg=60.0,
                operations=("short_edges", "slits", "angles"), rounds=2,
                focus=None, focus_factor=1.5):
     """Check the finished rim against the local size and repair what fails.
@@ -1416,7 +1416,9 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
         blunting stopped at 0.9 of a quay edge and left 3.0 m beside its
         cap among 30 m elements; 13.1 and 19.5 deg.)
     ``slits``  a point closer than ``gap_factor`` of an element to a rim
-        edge it is not next to, across water, is a throat: the throat is
+        edge it is not next to, across water, is a throat (one element by
+        default: a slot a blunting cap leaves 14-33 m wide among 30 m
+        elements was missed at half an element, Yokohama): the throat is
         cut, and the dead end beyond it becomes land if no disc of one
         element fits in it and nothing on its outline is frozen or a wall
         root.  No angle rule sees this -- the pier corner at a 3.3 m slit

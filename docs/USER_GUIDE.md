@@ -255,7 +255,7 @@ to two rounds (`patch.rim_repair`):
    ends of a short cap between two corners merge into its midpoint, when
    that crosses nothing, moves little and sharpens no water angle below
    60 deg;
-2. a point closer than half an element to a coast it is not next to is a
+2. a point closer than one element to a coast it is not next to is a
    throat: the dead end beyond it becomes land if no element fits in it,
    and otherwise (a pier tip nearly touching the quay across) the tip steps
    back until the gap is one element;
@@ -525,7 +525,7 @@ package and have unit tests.
   (`recipes/refine/tokyo_odaiba_hires.yaml`, with the Daiba islands) and
   Funabashi port (`recipes/refine/funabashi_port_hires.yaml`,
   `continuous_width` and `wall_pockets`) and Yokohama inner harbour (`recipes/refine/yokohama_port_hires.yaml`,
-  rim repair and four opt-in rules, a 2.3 km circle). Odaiba
+  `wall_pockets` and `keep_base_land`, a 2.3 km circle). Odaiba
   needed two coastline rules Kimitsu had not shown -- a new place will find
   new cases (§12).
 - A structure hugging the coast within 0.4 element, thinner than half an

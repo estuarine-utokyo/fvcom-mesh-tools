@@ -19,6 +19,10 @@ will only ship with a major bump (Semantic Versioning).
   `continuous_width: false` restores the earlier filter.
 - Flat faces the fill leaves across collinear rim points are dropped; one
   of them had moved an Odaiba coast point 240 m.
+- Rim repair's slit test finds throats under one element (was half): a
+  14-33 m slot a blunting cap left at Yokohama among 30 m elements. All
+  other recipes rebuild byte-identically; Yokohama now names only
+  `wall_pockets` and `keep_base_land`.
 
 ### Changed -- rim repair on by default (2026-09-26)
 

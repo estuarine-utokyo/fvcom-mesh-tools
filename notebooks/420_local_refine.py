@@ -2034,7 +2034,7 @@ if ("rim_repair" in EXPERIMENTAL and best is not None and best[1] > 0
     _saved = ({k: np.array(rc[k], copy=True) for k in ("pfix", "egfix", "pfix_base")},
               WALL_SEGS.copy(), hole, PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL, boundary)
     _rrep2 = apply_rim_repair("rim repair, retry near the offenders",
-                              min_edge_factor=0.75, gap_factor=0.75,
+                              min_edge_factor=0.75, gap_factor=1.5,
                               focus=_focus, rounds=1)
     reports["rim_repair_retry"] = _rrep2
     if _rrep2["n_points_removed"] or _rrep2["n_slits_closed"]:
