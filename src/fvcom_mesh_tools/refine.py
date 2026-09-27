@@ -112,12 +112,13 @@ HIRES_BATHYMETRY = ("tokyo_bay", "base")
 
 HIRES_SCOPE = ("hole", "core")
 HIRES_BLEND = ("ramp", "none")
-# Coastline rules a recipe may switch on by name.  They fixed the Funabashi
-# transition and broke Kimitsu, Futtsu and Odaiba when applied to every
-# recipe (2026-09-25), so they are opt-in until the band-seam artefact they
-# work around is fixed at its source (docs/USER_GUIDE.md, known limits).
-HIRES_EXPERIMENTAL = ("water_wedges", "wall_pockets", "short_chords", "rim_repair",
-                      "seam_water", "keep_base_land", "continuous_width")
+# Coastline rules a recipe may switch on by name (docs/USER_GUIDE.md).
+# rim_repair and continuous_width are on by default and listed so that an
+# override (LR_EXPERIMENTAL) can name them.  water_wedges, short_chords and
+# seam_water worked round the band seams until continuous_width fixed them
+# at the source; no recipe used them and they were removed on 2026-09-27
+# (commit 4a8c503 has them).
+HIRES_EXPERIMENTAL = ("wall_pockets", "keep_base_land", "rim_repair", "continuous_width")
 
 GRAVITY_M_S2 = 9.81
 

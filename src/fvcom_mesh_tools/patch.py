@@ -664,26 +664,8 @@ def _unusable_replacement(new: np.ndarray, xy: np.ndarray, idx,
     return None
 
 
-def _water_wedges(land, r: float, mitre_closed=None) -> list:
-    """The acute water wedges a closing at radius ``r`` fills.
-
-    The pieces a round closing adds beyond a mitre closing, of ``0.6 r2`` or
-    more: a corner of about 60 deg or sharper.  The crescents a round
-    closing takes out of wider corners (0.21 r2 at 90 deg) are left alone.
-    """
-    import shapely
-
-    if mitre_closed is None:
-        mitre_closed = land.buffer(r, join_style="mitre").buffer(-r, join_style="mitre")
-    extra = shapely.difference(
-        land.buffer(r, join_style="round").buffer(-r, join_style="round"), mitre_closed)
-    return [g for g in getattr(extra, "geoms", [extra])
-            if g.geom_type == "Polygon" and g.area >= 0.6 * r * r]
-
-
 def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0,
-                     land_width_factor: float | None = None,
-                     close_wedges: bool = False):
+                     land_width_factor: float | None = None):
     """Remove what a mesh of size ``h0`` cannot resolve, and say what went.
 
     This is the judgement the declared grid size implies, and it has to be
@@ -735,20 +717,6 @@ def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0,
     # and a sliver that the wall extraction would read as a structure.
     opened = before.buffer(-r_land, join_style="mitre").buffer(r_land, join_style="mitre")
     closed = opened.buffer(r, join_style="mitre").buffer(-r, join_style="mitre")
-    # ...but a mitre closing rebuilds every corner it rounds, so an acute
-    # WEDGE of water survives it whole, however narrow its end: the Funabashi
-    # river mouths kept 20-30 deg wedges 60-170 m wide among 120-240 m
-    # elements, and the elements in them came out at 13.6 deg.  A round
-    # closing is the width rule itself (water no disc of radius r fits in),
-    # and it also takes a crescent out of every inner quay corner -- 0.21 r2
-    # at 90 deg.  So only its wedge fills are taken: pieces of 0.6 r2 or more
-    # -- for an ideal wedge, 63 deg or sharper; an approximate test, since a
-    # short wedge or two corners that touch change the area.  Opt-in
-    # (``close_wedges``): applied to every recipe it moved a Kimitsu quay by
-    # 37 m and made a 3.2 deg corner at Odaiba.
-    wedges = _water_wedges(opened, r, closed) if close_wedges else []
-    if wedges:
-        closed = shapely.union_all([closed, *wedges])
     out = shapely.make_valid(closed)
 
     def _rings(g):
@@ -761,7 +729,6 @@ def filter_shoreline(land, h0: float, *, elements_per_feature: float = 3.0,
         "removes_features_narrower_than_m": float(2.0 * r),
         "removes_land_narrower_than_m": float(2.0 * r_land),
         "fills_water_narrower_than_m": float(2.0 * r),
-        "n_water_wedges_closed": len(wedges),
         "area_before_m2": float(before.area),
         "area_after_m2": float(out.area),
         "area_removed_m2": float(before.area - out.area),
@@ -879,8 +846,6 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
                            land_width_factor: float | None = None,
                            land_width_max_band: int | None = None,
                            spacing: float | None = None,
-                           close_wedges: bool = False,
-                           close_seam_water: bool = False,
                            keep_land=None,
                            continuous_width: bool = False):
     """:func:`filter_shoreline` at the LOCAL element size, not one size.
@@ -925,7 +890,7 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
     zones: dict[int, list] = {}
     for geom, value in features.shapes(band, transform=transform):
         zones.setdefault(int(value), []).append(shapely.geometry.shape(geom))
-    pieces, rows, zone_list = [], [], []
+    pieces, rows = [], []
     for k in sorted(zones):
         hk = h0 * 2.0 ** k
         zone = shapely.intersection(shapely.union_all(zones[k]), footprint)
@@ -934,7 +899,7 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
         lw = land_width_factor if (land_width_max_band is None
                                    or k <= land_width_max_band) else None
         fk, rk = filter_shoreline(land, hk, elements_per_feature=elements_per_feature,
-                                  land_width_factor=lw, close_wedges=close_wedges)
+                                  land_width_factor=lw)
         if keep_land is not None and lw is None:
             # In the coarse bands land under two elements goes like water
             # does, and where both are unresolvable the order decides: at
@@ -945,36 +910,14 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
             fk = shapely.union(fk, keep_land)
         part = shapely.intersection(fk, zone)
         pieces.append(part)
-        zone_list.append((zone, hk))
         rows.append({"band": k, "h_m": hk, "zone_km2": float(zone.area / 1e6),
                      "removes_narrower_than_m": rk["removes_features_narrower_than_m"],
                      "removes_land_narrower_than_m": rk["removes_land_narrower_than_m"]})
     # land outside the sampled footprint is kept exactly as the finest band has it
     f0, _ = filter_shoreline(land, h0, elements_per_feature=elements_per_feature,
-                             land_width_factor=land_width_factor, close_wedges=close_wedges)
+                             land_width_factor=land_width_factor)
     pieces.append(shapely.difference(f0, footprint))
     joined = shapely.union_all([q for q in pieces if not q.is_empty])
-    n_seam = 0
-    if close_seam_water:
-        # Where one band closes water and the next keeps it, the join leaves
-        # a strip between the kept bank and the cut that neither band saw
-        # (Yokohama: a channel end 100-170 m wide among 235 m elements, a
-        # 50 m coast edge left in it, and 29 deg elements in every seed).
-        # The joined land is closed once more, band by band at that band's
-        # own threshold; a piece it adds is taken whole if it touches the
-        # band's zone.
-        r_of = 0.5 * float(elements_per_feature)
-        add = []
-        for zone, hk in zone_list:
-            r = r_of * hk
-            closed = joined.buffer(r, join_style="mitre").buffer(-r, join_style="mitre")
-            gained = shapely.difference(closed, joined)
-            add.extend(g for g in getattr(gained, "geoms", [gained])
-                       if g.geom_type == "Polygon" and g.area > 1.0
-                       and shapely.intersection(g, zone).area > 1.0)
-        if add:
-            n_seam = len(add)
-            joined = shapely.union_all([joined, *add])
     cw_rep = None
     if continuous_width:
         # Water judged at the local size itself, in the coarse zone only
@@ -990,10 +933,9 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
         if not cw.is_empty:
             joined = shapely.union_all([joined, cw])
     out, rep = filter_shoreline(joined, h0, elements_per_feature=elements_per_feature,
-                                land_width_factor=land_width_factor,
-                                close_wedges=close_wedges)
+                                land_width_factor=land_width_factor)
     before = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
-    rep = {**rep, "bands": rows, "n_seam_water_closed": n_seam,
+    rep = {**rep, "bands": rows,
            "continuous_width": cw_rep,
            "land_lost_m2": float(shapely.difference(before, out).area),
            "water_lost_m2": float(shapely.difference(out, before).area),
@@ -1844,7 +1786,7 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
 
 
 def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0, *,
-                        fine_h=None, protect=()):
+                        protect=()):
     """Cut off every coastline corner sharper than ``min_angle_deg`` on the water side.
 
     The water between two boundary lines that meet at under 60 degrees holds
@@ -1861,13 +1803,6 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
     point it may not remove -- a frozen one (``pfix_base >= 0``) or one with
     other than two constrained edges -- and, so that the chord stays inside
     the water, at 0.9 of a side it would otherwise run past.
-
-    Where the local element is coarser than ``fine_h``, a chord shorter than
-    0.75 of it becomes ONE point, its midpoint, if the water keeps
-    ``min_angle_deg`` there and at both neighbours: a walk that stops at a
-    corner leaves a chord shorter than the element, and at Funabashi a
-    139 m chord among 238 m elements left elements of 17.9 deg beside it.
-    It is the step rule of :func:`_corner_walk`, which the fine zone has.
 
     ``water`` is the hole the rim bounds; ``size`` maps (n, 2) points to the
     local element size.  Returns ``(pfix, egfix, pfix_base, report)``.
@@ -1938,79 +1873,6 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
             probe = pfix[v] + bis / np.linalg.norm(bis) * 0.05 * min(lp, ln)
             return ang if water.contains(shapely.Point(probe)) else 360.0 - ang
 
-        def angle_at(xy, p_xy, n_xy):
-            """The water's angle at xy between p_xy and n_xy, or None."""
-            up, un = p_xy - xy, n_xy - xy
-            lp, ln = float(np.linalg.norm(up)), float(np.linalg.norm(un))
-            if lp <= 0 or ln <= 0:
-                return None
-            ang = float(np.degrees(np.arccos(np.clip(up @ un / (lp * ln), -1, 1))))
-            bis = up / lp + un / ln
-            if np.linalg.norm(bis) < 1e-9:
-                return 180.0
-            probe = xy + bis / np.linalg.norm(bis) * 0.05 * min(lp, ln)
-            return ang if water.contains(shapely.Point(probe)) else 360.0 - ang
-
-        def collapse(v, a, b, removed):
-            """The chord between walk ends a and b as its midpoint, or None."""
-            nonlocal pfix, egfix, pfix_base
-            (a_xy, a_stop, a_at), (b_xy, b_stop, b_at) = a, b
-            m = 0.5 * (a_xy + b_xy)
-            rem, ends = set(removed), []
-            for stop, at in ((a_stop, a_at), (b_stop, b_at)):
-                if at:                      # the end IS a corner: it goes too
-                    if not free(stop):
-                        return None
-                    far = [q for q in nbrs[stop] if q not in rem]
-                    if len(far) != 1:
-                        return None
-                    rem.add(stop)
-                    ends.append(far[0])
-                else:
-                    ends.append(stop)
-            e0, e1 = ends
-            if e0 == e1 or e0 in rem or e1 in rem:
-                return None
-            # The old path e0 .. e1 through the removed points and the new one
-            # e0 - m - e1 bound what changes hands, and it must all be WATER
-            # handed to the land: a midpoint beyond a stopped corner can lie
-            # over land and would make new water (review 5 reproduced 31 m2).
-            path, prev = [e0], None
-            while path[-1] != e1 and len(path) <= len(rem) + 1:
-                nxt = [q for q in nbrs[path[-1]] if q != prev and (q in rem or q == e1)]
-                if len(nxt) != 1:
-                    return None
-                prev = path[-1]
-                path.append(nxt[0])
-            if path[-1] != e1:
-                return None
-            between = shapely.make_valid(shapely.Polygon(
-                np.vstack([pfix[path], m[None]])))
-            if shapely.difference(between, water.buffer(1e-6)).area > 1e-6:
-                return None
-            others = [shapely.LineString(pfix[[x, y]]) for x, y in egfix.tolist()
-                      if not ({x, y} & (rem | {e0, e1}))]
-            new = shapely.MultiLineString([[pfix[e0], m], [m, pfix[e1]]])
-            if others and shapely.MultiLineString(others).intersects(new):
-                return None
-            angs = [angle_at(m, pfix[e0], pfix[e1])]
-            for e, other in ((e0, e1), (e1, e0)):
-                nb = [q for q in nbrs[e] if q not in rem]
-                if len(nb) == 1:            # e keeps one old neighbour and gains m
-                    angs.append(angle_at(pfix[e], pfix[nb[0]], m))
-            if any(x is None or x < min_angle_deg for x in angs):
-                return None
-            keep_e = ~np.isin(egfix, list(rem)).any(axis=1)
-            im = len(pfix)
-            egfix = np.vstack([egfix[keep_e], [[e0, im], [im, e1]]])
-            pfix = np.vstack([pfix, m[None]])
-            pfix_base = np.concatenate([pfix_base, [-1]])
-            live = np.setdiff1d(np.arange(len(pfix)), list(rem))
-            remap = np.full(len(pfix), -1, dtype=np.int64)
-            remap[live] = np.arange(len(live))
-            pfix, pfix_base, egfix = pfix[live], pfix_base[live], remap[egfix]
-            return m, len(rem)
-
         def open_frozen(v):
             nonlocal pfix, egfix, pfix_base
             p, n = nbrs[v]
@@ -2079,10 +1941,6 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
             chord = shapely.LineString([a_xy, b_xy])
             if not water.buffer(1e-6).contains(chord):
                 continue
-            if fine_h is not None and d > fine_h and chord.length < 0.75 * d:
-                got = collapse(v, (a_xy, a_stop, a_at), (b_xy, b_stop, b_at), removed)
-                if got is not None:
-                    return ang, got[0], 0.0, got[1]
             # a chord end AT a corner is that corner, not a new point beside it
             ia = len(pfix)
             new_xy, ends = [], []

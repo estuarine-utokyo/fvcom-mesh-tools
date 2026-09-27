@@ -518,8 +518,6 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
                                               elements_per_feature=2,
                                               land_width_factor=0.5,
                                               land_width_max_band=1,
-                                              close_wedges="water_wedges" in EXPERIMENTAL,
-                                              close_seam_water="seam_water" in EXPERIMENTAL,
                                               keep_land=_keep_land,
                                               continuous_width="continuous_width" in EXPERIMENTAL)
     reports["shoreline_filter"] = _frep
@@ -704,8 +702,7 @@ if HIRES is not None:
     # owner 2026-09-24); a lone node left by one is opened by the mesh repair
     # and the QA gate says if that failed.
     _p, _e, _b, _brep = blunt_acute_corners(
-        rc["pfix"], rc["egfix"], rc["pfix_base"], hole, h_achieved,
-        fine_h=FINE_H if "short_chords" in EXPERIMENTAL else None)
+        rc["pfix"], rc["egfix"], rc["pfix_base"], hole, h_achieved)
     if HIRES["coastline"] != "resolve":
         reports["acute_corners_kept"] = {k: _brep[k] for k in
                                          ("n_corners_blunted", "angles_deg", "at")}

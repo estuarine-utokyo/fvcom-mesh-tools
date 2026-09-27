@@ -762,12 +762,14 @@ def test_hires_defaults_to_resolving_the_coastline_on_the_ladder(tmp_path):
 
 def test_hires_experimental_rules_are_opt_in_by_name(tmp_path):
     cfg = load_refine(_hires_recipe(
-        tmp_path, "hires: {experimental: [wall_pockets, water_wedges, wall_pockets]}\n"))
-    assert cfg["hires"]["experimental"] == ["wall_pockets", "water_wedges"]
+        tmp_path, "hires: {experimental: [wall_pockets, keep_base_land, wall_pockets]}\n"))
+    assert cfg["hires"]["experimental"] == ["keep_base_land", "wall_pockets"]
     with pytest.raises(ValueError, match="experimental"):
         load_refine(_hires_recipe(tmp_path, "hires: {experimental: [round_corners]}\n"))
+    with pytest.raises(ValueError, match="experimental"):       # removed 2026-09-27
+        load_refine(_hires_recipe(tmp_path, "hires: {experimental: [water_wedges]}\n"))
     with pytest.raises(ValueError, match="experimental"):
-        load_refine(_hires_recipe(tmp_path, "hires: {experimental: water_wedges}\n"))
+        load_refine(_hires_recipe(tmp_path, "hires: {experimental: wall_pockets}\n"))
 
 
 def test_hires_continuous_width_is_on_by_default_and_can_be_switched_off(tmp_path):
