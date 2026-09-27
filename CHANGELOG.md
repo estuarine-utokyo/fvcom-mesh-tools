@@ -8,6 +8,14 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 12 (2026-09-28)
+
+- An island added from the source keeps its lakes as water (only its
+  outline was added, and a lake inside it became land).
+- Rim repair tries a refused short edge again in a later pass, and
+  reports the short edges left on the rim it returns, not the refusals on
+  the way (`n_short_edges_refused` keeps those).
+
 ### Fixed -- review of the coastline rules, round 11 (2026-09-28)
 
 - One guard for every rim edit (`_rim_edit_ok`): each ring a valid polygon,

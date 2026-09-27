@@ -715,7 +715,8 @@ if HIRES is not None and _land_filtered:
         rc["pfix"], rc["egfix"], rc["pfix_base"] = _p, _e, _b
         hole = hole_polygon(rc["pfix"], rc["egfix"])
     say(f"islands: {_irep['n_islands_added']} land polygon(s) inside the hole added "
-        f"to the rim ({_irep['n_island_points']} point(s))"
+        f"to the rim, {_irep['n_lakes_added']} lake(s) in them "
+        f"({_irep['n_island_points']} point(s))"
         + (f"; {len(_irep['skipped'])} left out, e.g. {_irep['skipped'][:3]}"
            if _irep["skipped"] else ""))
     # Land left out for crossing the rim is meshed as water where it is in

@@ -1618,7 +1618,9 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
     # ------------------------------------------------------------ short edges
     def short_edges():
         nonlocal egfix
-        done_refused = {tuple(sorted(r["edge_xy"])) for r in refused}
+        # refused in THIS pass only: an edge refused before may be removable
+        # once blunting or a slit changed its neighbours (review, round 12)
+        done_refused: set = set()
         for _ in range(len(pfix)):
             nb = nbrs_of()
             L = np.linalg.norm(pfix[egfix[:, 0]] - pfix[egfix[:, 1]], axis=1)
@@ -1672,9 +1674,10 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
             if not options:
                 edge_xy = (key(pfix[a]), key(pfix[b]))
                 done_refused.add(tuple(sorted(edge_xy)))
-                refused.append({"edge_xy": edge_xy, "length_m": round(float(L[k]), 2),
-                                "h_m": round(float(h[k]), 1),
-                                "at": [round(float(v), 1) for v in mid[k]]})
+                if all(tuple(sorted(r["edge_xy"])) != tuple(sorted(edge_xy)) for r in refused):
+                    refused.append({"edge_xy": edge_xy, "length_m": round(float(L[k]), 2),
+                                    "h_m": round(float(h[k]), 1),
+                                    "at": [round(float(v), 1) for v in mid[k]]})
                 continue
             tri, x, u, w = min(options)
             removed.append({"at": [round(float(v), 1) for v in pfix[x]],
@@ -1889,11 +1892,21 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
             break
     if protect and (ident[sorted(protect)] < 0).any():
         raise RuntimeError("rim_repair removed a protected point")
+    # what is left is read off the rim returned, not the refusals on the
+    # way: a later blunting took an edge the report still named (round 12)
+    left = []
+    if len(egfix):
+        L = np.linalg.norm(pfix[egfix[:, 0]] - pfix[egfix[:, 1]], axis=1)
+        mid = 0.5 * (pfix[egfix[:, 0]] + pfix[egfix[:, 1]])
+        h = np.asarray(size(mid), dtype=float)
+        left = [{"length_m": round(float(L[k]), 2), "h_m": round(float(h[k]), 1),
+                 "at": [round(float(v), 1) for v in mid[k]]}
+                for k in np.argsort(L / h) if L[k] < min_edge_factor * h[k]
+                and in_focus(mid[k])]
     report = {"n_points_removed": len(removed), "removed": removed[:50],
               "n_tips_stepped_back": len(retreated), "stepped_back": retreated[:50],
-              "n_short_edges_left": len(refused),
-              "short_edges_left": [{k: v for k, v in r.items() if k != "edge_xy"}
-                                   for r in refused[:50]],
+              "n_short_edges_left": len(left), "short_edges_left": left[:50],
+              "n_short_edges_refused": len(refused),
               "n_slits_closed": len(slits), "slits": slits[:50],
               "slits_left": slits_left[:50],
               "n_corners_blunted": sum(r["n_corners_blunted"] for r in angles_rep),
@@ -2061,6 +2074,7 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
     import shapely
 
     rings, skipped = [], []
+    n_islands = n_lakes = 0
     edge = shapely.boundary(water)
     # every polygon, however make_valid nested it; lines are no land (round 6)
     for g in _polygons(land):
@@ -2083,12 +2097,35 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
                             "why": f"{gap:.1f} m from the rim"})
             continue
         r = _ring_at_size(ext, size, fine_h=fine_h)
-        if len(r) >= 3 and shapely.Polygon(r).is_valid:
-            rings.append(r)
-        else:
+        if not (len(r) >= 3 and shapely.Polygon(r).is_valid):
             skipped.append({"at": [round(float(c[0]), 1), round(float(c[1]), 1)],
                             "why": "no valid ring at the local size"})
-    return rings, {"n_islands_added": len(rings), "skipped": skipped,
+            continue
+        rings.append(r)
+        n_islands += 1
+        # The island's own lakes are water: its exterior alone filled a
+        # 160,000 m2 lake the filter had kept (review, round 12).  A lake the
+        # island's ring cannot carry clear of it is reported, as land.
+        shell = shapely.Polygon(r)
+        for hole_ in g.interiors:
+            lake = np.asarray(hole_.coords, dtype=float)[:-1, :2]
+            hl = float(np.min(_size_at(size, lake)))
+            lr = _ring_at_size(lake, size, fine_h=fine_h)
+            lp = shapely.Polygon(lr) if len(lr) >= 3 else shapely.Polygon()
+            gap = float(shapely.distance(shell.exterior, lp.exterior)) \
+                if not lp.is_empty else 0.0
+            if lp.is_empty or not lp.is_valid or not shell.contains(lp) \
+                    or gap < clearance_factor * hl:
+                lc = np.asarray(shapely.Polygon(lake).representative_point().coords)[0]
+                skipped.append({"at": [round(float(lc[0]), 1), round(float(lc[1]), 1)],
+                                "why": "a lake in an island, too close to its coast; "
+                                       "meshed as land",
+                                "lake_area_m2": round(float(shapely.Polygon(lake).area), 1)})
+                continue
+            rings.append(lr)
+            n_lakes += 1
+    return rings, {"n_islands_added": n_islands, "n_lakes_added": n_lakes,
+                   "skipped": skipped,
                    "n_island_points": int(sum(len(r) for r in rings))}
 
 
