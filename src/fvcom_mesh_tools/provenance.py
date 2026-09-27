@@ -107,11 +107,23 @@ def code_state(name: str, path) -> dict[str, Any]:
                            "git": git_state(p)}
     if out["git"] is None:
         root = p.parent if p.is_file() else p
-        h = hashlib.sha256()
-        for f in sorted(root.rglob("*.py")):
+        # each file is read once, and one that cannot be read makes the
+        # identity incomplete, said so, rather than a digest that looks whole
+        # (review, round 5)
+        h, failed = hashlib.sha256(), []
+        try:
+            files = sorted(root.rglob("*.py"))
+        except OSError:
+            files, failed = [], [str(root)]
+        for f in files:
+            digest = file_sha256(f)
+            if digest is None:
+                failed.append(str(f))
+                continue
             h.update(str(f.relative_to(root)).encode())
-            h.update(file_sha256(f).encode() if file_sha256(f) else b"")
-        out["source_sha256"] = h.hexdigest()
+            h.update(digest.encode())
+        out["source_sha256"] = None if failed else h.hexdigest()
+        out["source_unreadable"] = failed
     return out
 
 

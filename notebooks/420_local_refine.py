@@ -738,7 +738,8 @@ if HIRES is not None and _land_filtered:
     WET_LAND_SRC = shapely.difference(_filtered, _refused)
     _wet_land = shapely.intersection(hole, WET_LAND_SRC)
     # judged at the size where a disc would stand, not at one point's size
-    # (review, round 3); FINE_H / 2 is the smallest element anywhere
+    # (review, round 3); H_FLOOR is the smallest element anywhere, the finest
+    # target or the finest base element, whichever is smaller
     _solid = land_an_element_fits(_wet_land, h_achieved, H_FLOOR)
     reports["land_meshed_as_water_m2"] = float(_wet_land.area)
     if _solid:

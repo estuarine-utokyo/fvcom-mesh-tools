@@ -940,14 +940,22 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
     # an iterator of polygons would be spent by the first band (review, round 3)
     if not hasattr(land, "geom_type"):
         land = list(land)
+    if not (np.isfinite(h0) and h0 > 0):
+        raise ValueError("h0 must be finite and positive")
     s = float(spacing if spacing is not None else h0)
+    if not (np.isfinite(s) and s > 0):
+        raise ValueError("spacing must be finite and positive")
     x0, y0, x1, y1 = footprint.bounds
     nx, ny = int(np.ceil((x1 - x0) / s)) + 1, int(np.ceil((y1 - y0) / s)) + 1
     gx = x0 + (np.arange(nx) + 0.5) * s
     gy = y1 - (np.arange(ny) + 0.5) * s
     mx, my = np.meshgrid(gx, gy)
-    h = np.asarray(size_field(np.column_stack([mx.ravel(), my.ravel()])),
-                   dtype=float).reshape(ny, nx)
+    h = np.asarray(size_field(np.column_stack([mx.ravel(), my.ravel()])), dtype=float)
+    # checked before the h0 clip, which made a zero or negative size look
+    # like the finest band (review, round 5)
+    if h.shape not in ((nx * ny,), (nx * ny, 1)) or not np.isfinite(h).all() or (h <= 0).any():
+        raise ValueError("the size field is not finite and positive over the footprint")
+    h = h.reshape(ny, nx)
     band = np.floor(np.log2(np.maximum(h, h0) / h0)).astype(np.int32)
     transform = from_origin(x0, y1, s, s)
     zones: dict[int, list] = {}
@@ -1782,19 +1790,27 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
     return pfix, egfix, pfix_base, ident, report
 
 
-def size_lower_bound(geom, size, h_floor: float, *, slope: float = 1.0) -> float:
-    """A size no point of ``geom`` is below -- guaranteed, not sampled.
+def _covering_grid(geom, step: float):
+    """Grid points of spacing ``step`` within ``c`` of ``geom``, and ``c``.
 
-    The field is read on a grid of ``h_floor / 4`` inside ``geom`` and on its
-    vertices, and the smallest reading is lowered by ``slope`` times the
-    farthest any point can be from a grid point: a field that changes by at
-    most ``slope`` per metre cannot hide anything smaller between readings.
-    The sizing fields here change by far less (the region ramps by the
-    gradation, 0.165; the smoothed base field by about 0.2), so ``slope=1``
-    is a safe bound.  ``h_floor`` -- the smallest size the field has
-    anywhere -- is the answer when the readings allow no better (reviews,
-    rounds 2-4: every sampled check missed something between its samples).
+    Every point of ``geom`` lies within ``c = step / sqrt(2)`` of one of
+    them.  Keeping only the points INSIDE ``geom`` loses that along its
+    edges, where the nearest grid point is outside (review, round 5: a
+    100 x 1 m box kept none, and its vertices read 47 m from a 30 m spot).
     """
+    import shapely
+
+    c = step / np.sqrt(2.0)
+    x0, y0, x1, y1 = geom.bounds
+    gx, gy = np.meshgrid(np.arange(x0, x1 + step, step), np.arange(y0, y1 + step, step))
+    grid = np.column_stack([gx.ravel(), gy.ravel()])
+    shapely.prepare(geom)
+    keep = shapely.dwithin(geom, shapely.points(grid[:, 0], grid[:, 1]), c * (1 + 1e-9))
+    return grid[np.asarray(keep, dtype=bool)], c
+
+
+def _size_bounds(geom, size, h_floor: float, slope: float) -> tuple[float, float]:
+    """``(lo, hi)`` of ``size`` over ``geom``; see :func:`size_lower_bound`."""
     import shapely
 
     if not (np.isfinite(h_floor) and h_floor > 0):
@@ -1802,16 +1818,56 @@ def size_lower_bound(geom, size, h_floor: float, *, slope: float = 1.0) -> float
     if not (np.isfinite(slope) and slope >= 0):
         raise ValueError("slope must be finite and non-negative")
     step = 0.25 * h_floor
-    pts = [shapely.get_coordinates(geom)[:, :2]]
-    x0, y0, x1, y1 = geom.bounds
-    gx, gy = np.meshgrid(np.arange(x0, x1 + step, step), np.arange(y0, y1 + step, step))
-    grid = np.column_stack([gx.ravel(), gy.ravel()])
-    pts.append(grid[shapely.contains_xy(geom, grid[:, 0], grid[:, 1])])
-    pts = np.vstack([q for q in pts if len(q)])
+    own = getattr(size, "size_bounds", None)
+    if own is not None:
+        lo, hi = own(geom, step)
+        if not (np.isfinite(lo) and np.isfinite(hi) and 0 < lo <= hi):
+            raise ValueError("the size field is not finite and positive over the geometry")
+        return lo, hi
+    grid, c = _covering_grid(geom, step)
+    pts = np.vstack([q for q in (shapely.get_coordinates(geom)[:, :2], grid) if len(q)])
     h = np.asarray(size(pts), dtype=float).reshape(-1)
     if h.shape != (len(pts),) or not np.isfinite(h).all() or (h <= 0).any():
         raise ValueError("the size field is not finite and positive over the geometry")
-    return float(max(h_floor, h.min() - slope * step / np.sqrt(2.0)))
+    return float(h.min() - slope * c), float(h.max() + slope * c)
+
+
+def size_lower_bound(geom, size, h_floor: float, *, slope: float = 1.0) -> float:
+    """A size no point of ``geom`` is below -- guaranteed, not sampled.
+
+    A field that knows its own structure says so through a ``size_bounds``
+    attribute (:func:`patch_sizing` and :func:`base_size_field` do: their
+    bounds come from element vertices and candidate nearest nodes, and hold
+    without any slope premise -- the ``nearest`` extension is discontinuous,
+    review, round 5).  Any other field is read on a grid of ``h_floor / 4``
+    that COVERS ``geom`` -- every point of it within half a diagonal of a
+    reading -- and on its vertices, and the smallest reading is lowered by
+    ``slope`` times that half diagonal: a field that changes by at most
+    ``slope`` per metre cannot hide anything smaller between readings.
+    ``h_floor`` -- the smallest size the field has anywhere -- is the answer
+    when the readings allow no better (reviews, rounds 2-5).
+    """
+    return float(max(h_floor, _size_bounds(geom, size, h_floor, slope)[0]))
+
+
+def size_upper_bound(geom, size, h_floor: float, *, slope: float = 1.0) -> float:
+    """A size no point of ``geom`` is above; the mirror of
+    :func:`size_lower_bound`, for a test that must hold at the COARSEST
+    element on ``geom`` (an island at least one element in area, clear of
+    the coast by half of one) -- a lower bound passes those too easily
+    (review, round 5).
+    """
+    return float(_size_bounds(geom, size, h_floor, slope)[1])
+
+
+def _polygons(geom):
+    """Every polygon in ``geom``, however deeply collections nest them."""
+    if geom is None or geom.is_empty:
+        return
+    if geom.geom_type == "Polygon":
+        yield geom
+    for g in getattr(geom, "geoms", ()):
+        yield from _polygons(g)
 
 
 def land_an_element_fits(land, size, h_min: float, *, factor: float = 0.5,
@@ -1832,9 +1888,8 @@ def land_an_element_fits(land, size, h_min: float, *, factor: float = 0.5,
     if not (np.isfinite(factor) and factor > 0):
         raise ValueError("factor must be finite and positive")
     out = []
-    for g in getattr(land, "geoms", [land]):
-        if g.geom_type != "Polygon" or g.is_empty:
-            continue
+    # make_valid nests polygons in collections; every one is land (round 5)
+    for g in _polygons(land):
         if g.buffer(-factor * h_min).is_empty:
             continue                                   # nothing fits even at the floor
         lo = size_lower_bound(g, size, h_min, slope=slope)
@@ -2266,6 +2321,8 @@ def patch_sizing(
     mode; what varies instead is the LOCAL slope, which the caller should
     check with :func:`effective_gradation` against what C4 allows.
     """
+    import shapely
+
     base_size = base_size_field(nodes, elements, outside=outside)
     geoms = [_region_geometry(r) for r in regions]
 
@@ -2277,6 +2334,24 @@ def patch_sizing(
             out = np.minimum(out, _region_contribution(g, p, base))
         return np.minimum(out, base) / distmesh_scale
 
+    def size_bounds(geom, step):
+        # A region contributes target + (base - target) * u, u = clip(d / width)
+        # rising with the distance d from it: over ``geom`` u is at least its
+        # value at the nearest point, and the base at least its own lower
+        # bound, so where that bound is over the target the contribution is
+        # at least target + (lo - target) * u_min, and elsewhere at least the
+        # base bound itself.  Contributions only lower the base, whose upper
+        # bound is the field's.  No slope premise (review, round 5).
+        lo_b, hi = base_size.size_bounds(geom, step)
+        lo = lo_b
+        for _edge, poly, target, width, _pr in geoms:
+            d = float(shapely.distance(poly, geom))
+            u = min(d / width, 1.0) if width > 0 else float(d > 0)
+            if lo_b > target:
+                lo = min(lo, float(target) + (lo_b - float(target)) * u)
+        return lo / distmesh_scale, hi / distmesh_scale
+
+    h.size_bounds = size_bounds
     return h
 
 
@@ -2329,6 +2404,63 @@ def base_size_field(nodes, elements, *, outside: str = "max"):
         out[bad] = amb[tree.query(p[bad])[1]]
         return out
 
+    index = {}
+
+    def _index():
+        import shapely
+        from scipy.spatial import cKDTree
+
+        if not index:
+            index["tri"] = shapely.STRtree(shapely.polygons(xy[tri]))
+            e = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]), axis=1)
+            ue, cnt = np.unique(e, axis=0, return_counts=True)
+            index["rim"] = shapely.STRtree(shapely.linestrings(xy[ue[cnt == 1]]))
+            index["nodes"] = tree if tree is not None else cKDTree(xy)
+        return index
+
+    def size_bounds(geom, step):
+        """``(lo, hi)``: bounds of this field over ``geom``, proved.
+
+        Inside the mesh the field is linear on each element, so it lies
+        between the values at the vertices of the elements ``geom`` meets.
+        Outside, ``nearest`` takes one node's value and is discontinuous
+        across the nodes' Voronoi edges -- no slope bounds it (review, round
+        5) -- so every node that can be nearest to a point of ``geom`` is
+        found: each such point lies within ``c`` of a grid point ``g`` (grid
+        of ``step``, half-diagonal ``c``) that is either outside the mesh or
+        within ``c`` of its boundary, and its nearest node lies within
+        ``d(g) + 2c`` of ``g``.
+        """
+        import shapely
+
+        ix = _index()
+        vals = []
+        hit = ix["tri"].query(geom, predicate="intersects")
+        if len(hit):
+            vals.append(amb[tri[hit].ravel()])
+        g, c = _covering_grid(geom, step)
+        if len(g):
+            gp = shapely.points(g[:, 0], g[:, 1])
+            inside = np.isfinite(np.asarray(interp(g[:, 0], g[:, 1]), dtype=float))
+            near_rim = np.zeros(len(g), dtype=bool)
+            near_rim[np.unique(ix["rim"].query(gp, predicate="dwithin", distance=c)[0])] = True
+            out = ~inside | near_rim
+            if out.any():
+                if tree is None:
+                    vals.append(np.array([amb_max]))
+                else:
+                    go = g[out]
+                    d = ix["nodes"].query(go)[0]
+                    hits = ix["nodes"].query_ball_point(go, d + 2.0 * c)
+                    vals.append(amb[np.unique(np.concatenate(
+                        [np.asarray(k, dtype=np.int64) for k in hits]))])
+        v = np.concatenate(vals) if vals else np.zeros(0)
+        v = v[np.isfinite(v)]
+        if not len(v):
+            raise ValueError("the size field has no value over the geometry")
+        return float(v.min()), float(v.max())
+
+    f.size_bounds = size_bounds
     return f
 
 

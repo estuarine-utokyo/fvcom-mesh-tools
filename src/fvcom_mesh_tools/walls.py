@@ -630,7 +630,7 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_flo
     import shapely
     from shapely.ops import nearest_points, polygonize, substring
 
-    from fvcom_mesh_tools.patch import size_lower_bound
+    from fvcom_mesh_tools.patch import size_lower_bound, size_upper_bound
 
     walls = list(walls)                 # iterated more than once (review, round 3)
     lines = [shapely.LineString(np.asarray(w.coords)[:, :2]) for w in walls if w.length > 0]
@@ -690,6 +690,11 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_flo
         floor = float(size_floor) if size_floor is not None else \
             0.5 * float(np.min(np.asarray(size(np.asarray(f.exterior.coords)[:, :2]))))
         h = size_lower_bound(f, size, floor)
+        # The tests that must hold at the COARSEST element on it -- one
+        # element of area, half of one clear of the coast -- take the upper
+        # bound; the lower one passed a 9,000 m2 pocket at a 100 m size, and
+        # a 48 m gap against 50 (review, round 5).
+        h_hi = size_upper_bound(f, size, floor)
         # ...and clear of the coast by half an element.  The rim is resolved
         # from the land's own components, and a pocket that touched or
         # nearly touched the coast merged into it and left a stretch with no
@@ -697,8 +702,8 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_flo
         # ...and no smaller than one element: a 100 m2 curl at Kimitsu made
         # land became an island the mesh could only carry with slivers
         # (31 new violations, dt 2.0 -> 0.6 s).
-        if h > min_h and f.buffer(-h).is_empty and f.area >= h * h and \
-                float(shapely.distance(f, land)) >= 0.5 * h:
+        if h > min_h and f.buffer(-h).is_empty and f.area >= h_hi * h_hi and \
+                float(shapely.distance(f, land)) >= 0.5 * h_hi:
             closed.append(f)
             rep["at"].append([round(pt.x, 1), round(pt.y, 1)])
             # the pocket itself, so a caller can tell whether it stayed water

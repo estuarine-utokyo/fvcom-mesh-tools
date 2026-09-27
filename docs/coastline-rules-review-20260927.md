@@ -1057,3 +1057,354 @@ outside the contract of `size_lower_bound`, which says so.
 
 After the round-4 fixes all six hires recipes rebuild accepted and byte-identical
 to the round-3 rebuild.
+
+## Round 5
+
+### Answer (verbatim)
+
+Read-only review completed at `f07c6d9`; the working tree remains clean. No mesh generation or batch jobs ran. Production mesh QA, counts and implied time steps were **not rerun**.
+
+Verification used the requested interpreter:
+
+- Full pytest invocation with `-p no:cacheprovider` failed before collection: no writable temporary directory.
+- Focused pytest run with `--capture=sys --noconftest -p no:cacheprovider`: **43 passed**, three temporary-directory setup errors.
+- Broader selection of tests requiring no filesystem writes: **191 passed**. Matplotlib’s cache-directory writability check was mocked; no cache was written.
+- Five seed/retry and driver-land-check cases passed with filesystem writes mocked.
+- Findings below were reproduced in memory.
+
+**Previous findings**
+
+| Finding | Status | Reason |
+|---|---|---|
+| R1 #1: Repair under preserve | RESOLVED | Repair and retry require `resolve`. |
+| R1 #2: Lagoon entrance closure | RESOLVED | Connectivity protection remains; original regression passes. |
+| R1 #3: Refused pocket loses walls | RESOLVED | Restoration uses pocket geometry rather than its representative point. |
+| R1 #4: Triangle ring collapse | RESOLVED | Duplicate-edge and minimum-ring-size guards remain; regression passes. |
+| R1 #5: Retreat-only retry | RESOLVED | Array comparison detects movement; mocked search/restoration regression passes. |
+| R1 #6: Empty land becomes land | RESOLVED | Empty-land regression passes. |
+| R1 #7: Invalid continuous-width arguments | RESOLVED | Reported parameter errors and empty footprints are handled. Finding 5 concerns the separate band filter. |
+| R1 #8: Ignored seed argument | RESOLVED | Mocked regression confirms the supplied seeds are searched. |
+| R1 #9: GPL import through provenance | RESOLVED | Distribution metadata replaces library imports. |
+| R1 #10: Missing provenance inputs/settings | RESOLVED | Bathymetry, geometry datasets and effective environment settings are recorded. |
+| R1 #11: Untracked source omitted | RESOLVED | Git status includes untracked files; tracking status is recorded. |
+| R1 #12: Accepted-seed-only replay | RESOLVED | Pass-2 replay requires the recorded original seed sequence. |
+| R1 #13: Ineffective fixtures | RESOLVED | Fixtures exercise their guards; the unreachable merge operation was removed. |
+| R1 #14: Fixed 10 m documentation | RESOLVED | Guide specifies one-third of the finest target. |
+| R2 #1: Resolvable land accepted as water | PARTIAL | Validation exists, but nested polygon collections bypass it; finding 4. |
+| R2 #2: All-land raster crash | RESOLVED | Regression passes. |
+| R2 #3: Detached artificial island | RESOLVED | Detached closure pieces are rejected; regression passes. |
+| R2 #4: Fine region inside pocket erased | PARTIAL | Original fixture passes, but fine-zone exclusion still fails; finding 1. |
+| R2 #5: Obsolete sliding curves | RESOLVED | Repair-created, moved and adjacency-changed rim points are pinned. |
+| R2 #6: Geometry provenance omissions | RESOLVED | Dataset enumeration includes single-file formats and shapefile sidecars. |
+| R2 #7: Falsy experimental values | RESOLVED | Schema explicitly rejects non-list values other than `None`. |
+| R2 #8: Wrong seed-variable documentation | RESOLVED | Header documents `LR_SEEDS`. |
+| R3 #1: Variable-size land guard | PARTIAL | Original example is fixed; the new bound’s guarantee remains incomplete, findings 1–2. |
+| R3 #2: Repairs bypass land validation | RESOLVED | Final-rim validation runs with repair enabled or disabled; retry validation remains. |
+| R3 #3: Unchanged new corners unpinned | RESOLVED | Changed adjacency causes pinning; strengthened regression passes. |
+| R3 #4: Pocket sampling grid | PARTIAL | Denser sampling was replaced, but the replacement still misses a fine region; finding 1. |
+| R3 #5: Uppercase sidecars | RESOLVED | Extension matching is case-insensitive. |
+| R3 #6: Imported-package provenance | RESOLVED | Actual imported paths and non-Git source identity are recorded. Finding 6 concerns failure handling introduced by that fallback. |
+| R3 #7: Exhausted iterators | RESOLVED | Both helpers materialize inputs; regressions pass. |
+| R4 #1: Land guard misses qualifying disc | PARTIAL | Triangle regression passes, but the claimed bound is not generally guaranteed; findings 1–2. |
+| R4 #2: Incorrect size floor | RESOLVED | `H_FLOOR` includes the minimum base ambient size. |
+| R4 #3: Repair switch disables validation | RESOLVED | Both driver call-site cases pass with writes mocked. |
+| R4 #4: Fine basin behind coarse mouth erased | PARTIAL | Supplied basin regression passes; the driver does not satisfy the bound’s slope premise everywhere, finding 2. |
+| R4 #5: Pocket fine-zone exclusion | PARTIAL | A continuous field within the stated slope contract still defeats it; finding 1. |
+| R4 #6: Non-Git implementation identity | RESOLVED | Path, distribution and source hash are now retained. |
+| R4 #7: Invalid sizes/factors accepted | RESOLVED | Reported land-helper cases now raise; regressions pass. |
+| R4 #8: Tests omit their prerequisite/call site | RESOLVED | Removal is asserted and both driver branches are exercised. |
+| R4 #9: Priority documentation | RESOLVED | Guide states that priority has no effect in local refinement. |
+| Author: Zero-progress retreats | RESOLVED | Threshold regressions pass. |
+| Author: Retry without tip retreat | RESOLVED | Mocked regression confirms restoration and a search with tips kept. |
+
+**Findings**
+
+1. **Minor — The “guaranteed” size bound still misses fine regions beside polygon edges.**
+
+   Location: [patch.py:1809](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:1809), used by [walls.py:692](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/walls.py:692).
+
+   The half-diagonal covering distance applies to the complete rectangular grid. Removing every grid point outside or on the polygon destroys that guarantee. Polygon vertices do not replace the missing samples along long edges.
+
+   Reproduction:
+
+   ```python
+   wall = LineString([
+       (0, 0), (0, 250), (100, 250), (100, 150), (20, 150)
+   ])
+   c = np.array([48.75, 150.1])
+   size = lambda q: 59.9 + 0.8*np.linalg.norm(np.asarray(q)-c, axis=1)
+
+   added, _, report = close_wall_pockets(
+       [wall], box(-2000, -2000, 2000, 0), size,
+       min_h=60.000001, size_floor=30.0,
+   )
+   ```
+
+   This field has slope at most **0.8**, within the documented contract. Nevertheless:
+
+   ```text
+   reported lower bound: 61.2334453318
+   actual size at c:     59.9
+   pockets closed:       1
+   area closed:          10,000 m²
+   added.contains(c):    True
+   ```
+
+   A simpler direct counterexample is `box(0,0,100,1)`, `h_floor=20`, and `h(q)=30+||q-(50,0.5)||`: the returned bound is **76.466966**, exceeding the actual minimum **30**.
+
+   **Fix:** Use samples with a proven covering distance, including boundary cells. For a globally defined Lipschitz field, retaining the complete bounding grid is one option. Otherwise establish coverage on intersecting cells or fall back to `h_floor`.
+
+2. **Minor — The driver supplies a sizing field that violates the new bound’s slope contract.**
+
+   Locations: [420_local_refine.py:629](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:629), [patch.py:2329](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:2329).
+
+   Outside the base mesh, `"nearest"` selects a nearest **node’s** ambient value. This is discontinuous across Voronoi boundaries whenever adjacent values differ. Twenty smoothing passes do not remove those discontinuities. Thus the driver cannot generally use `slope=1` to certify absence.
+
+   Reproduction using the actual `base_size_field`, without mocking its arithmetic:
+
+   ```python
+   xy = np.array([
+       (0,0), (100,0), (100,100), (0,100),
+       (300,0), (300,100), (700,0), (700,100),
+   ], dtype=float)
+   tri = np.array([
+       (0,1,3), (1,2,3), (1,4,2),
+       (4,5,2), (4,6,5), (6,7,5),
+   ])
+   f = base_size_field(xy, tri, outside="nearest")
+   f([[49.999999, -10], [50.000001, -10]])
+   ```
+
+   Result: **192.46580798** and **194.62454752** across **0.000002 m**, an apparent slope above **1,000,000**.
+
+   A second reproduction using actual `patch_sizing` on a symmetric small grid returned a bound of **318.421719 m** where the field was **303.941149 m**. Even the complete bounding grid missed the smaller value, so fixing finding 1 alone does not fix this issue.
+
+   **Fix:** Provide a proven Lipschitz extension, or compute bounds directly from the interpolation/Voronoi regions. Use the global floor where the slope premise cannot be established.
+
+3. **Minor — The new lower bound weakens the wall-pocket minimum-area and coast-clearance guards.**
+
+   Location: [walls.py:700](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/walls.py:700).
+
+   A lower bound is conservative for proving that no disc fits. It is not conservative for proving that an island is large enough or far enough from land.
+
+   With constant `size=100`, `size_floor=30`, and `min_h=60.000001`, use:
+
+   ```python
+   wall = LineString([
+       (0,0), (0,y+100), (width,y+100), (width,y), (20,y)
+   ])
+   land = box(-2000, -2000, 2000, 0)
+   ```
+
+   Actual results:
+
+   | `width`, `y` | Accepted area | Coast clearance | Violation |
+   |---|---:|---:|---|
+   | `90`, `150` | 9,000 m² | 150 m | Below the 10,000 m² minimum |
+   | `100`, `48` | 10,000 m² | 48 m | Below the 50 m clearance |
+   | `90`, `48` | 9,000 m² | 48 m | Both |
+
+   The 9,000 m² pocket also passes `island_rings`, producing one four-point island.
+
+   **Fix:** Keep separate bounds for predicates with opposite directions. Use conservative upper estimates or direct checks for the minimum-area and clearance requirements; retain the lower bound for the fine-zone exclusion and disc-absence proof.
+
+4. **Minor — Nested polygon collections bypass the land-in-water guard entirely.**
+
+   Location: [patch.py:1835](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:1835).
+
+   The helper traverses only one level and skips a `MultiPolygon` inside a `GeometryCollection`. Such structures are ordinary outputs of `make_valid`.
+
+   Reproduction:
+
+   ```python
+   raw = Polygon([
+       (0,0), (100,0), (100,100), (0,100), (0,0),
+       (-100,0), (-100,-100), (-200,-100),
+       (-200,0), (-100,0), (0,0),
+   ])
+   land = shapely.make_valid(raw)
+   land_an_element_fits(land, lambda q: np.full(len(q), 30.0), 30.0)
+   ```
+
+   `make_valid` returns a collection containing a `MultiPolygon` and a line. The two polygons total **20,000 m²**, each easily accommodating the required 15 m disc, but the guard returns **`[]`**.
+
+   **Fix:** Recursively traverse polygonal members of collections. Ignore only non-area members, not nested polygon containers.
+
+5. **Minor — The local shoreline filter silently accepts zero and negative sizing fields.**
+
+   Location: [patch.py:951](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:951).
+
+   `np.maximum(h, h0)` converts invalid non-positive sizes into valid finest-band sizes before validation. With continuous width disabled, nothing subsequently rejects them.
+
+   Reproduction:
+
+   ```python
+   filter_shoreline_local(
+       box(0,0,100,100),
+       lambda q: np.full(len(q), -10.0),
+       30.0,
+       box(-50,-50,150,150),
+   )
+   ```
+
+   Both `-10.0` and `0.0` return a successful **10,000 m²** result. NaN and infinity instead fail later with the misleading message `h0 must be finite and positive`, although `h0=30` is valid.
+
+   **Fix:** Validate the sampled field’s shape, finiteness and positivity before assigning bands, consistently with `unresolvable_water`.
+
+6. **Minor — Non-Git source hashing mishandles unreadable or changing files.**
+
+   Location: [provenance.py:113](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/provenance.py:113).
+
+   Each readable file is hashed twice. If the first read succeeds and the second fails, `.encode()` is called on `None`. If the first read fails, the file’s contents are silently omitted while a normal-looking aggregate hash is still reported.
+
+   In-memory fault injection, with Git unavailable and one enumerated Python file:
+
+   ```text
+   file_sha256 results [valid_digest, None]
+       → AttributeError: 'NoneType' object has no attribute 'encode'
+
+   file_sha256 result None
+       → source_sha256 contains an ordinary non-null digest
+   ```
+
+   The first case aborts provenance collection; the second presents an incomplete content identity without indicating incompleteness.
+
+   **Fix:** Read each digest once. If any required source cannot be hashed, record a null/incomplete aggregate plus the failed paths, or raise a deliberate, descriptive error.
+
+7. **Nit — The driver still documents the size-floor assumption that round 4 removed.**
+
+   Location: [420_local_refine.py:741](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:741).
+
+   The comment says `FINE_H / 2 is the smallest element anywhere`. A finer base disproves that statement—the reason `H_FLOOR` was introduced. The following call correctly uses `H_FLOOR`.
+
+   **Fix:** Replace the stale explanation with the target/base minimum used by `H_FLOOR`.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 6 minor, 1 nit)
+
+
+### Prompt
+
+```markdown
+# Review request, round 5: coastline rules for local refinement (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (use `/octfs/work/G16445/v61021/miniforge3/envs/oceanmesh-bench/bin/python`;
+the tests run with `.../bin/python -m pytest -q tests/`). Do not submit
+batch jobs and do not run mesh generation (`notebooks/420_local_refine.py`
+needs the compute nodes). Answer in English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+`git diff 0c5d9b3..HEAD` (now 23 commits; 7a6cffe fixed round 1, 2d8d1d7 round 2, fd2bbe1 round 3, the last commit round 4; read `git log 0c5d9b3..HEAD` for the
+reasons). The local-refinement driver `notebooks/420_local_refine.py`
+refines a Tokyo Bay FVCOM mesh inside a region, re-cuts the coastline from
+OSM (`hires.coastline: resolve`) and must pass QA with 0 violations
+introduced. Changes in scope:
+
+- `src/fvcom_mesh_tools/patch.py`
+  - `rim_repair`: short edges (remove a free end, or merge a cap between
+    two corners to its midpoint), slits (throat under one element; close a
+    dead end no element fits in, otherwise step a pier tip back), angles
+    (`blunt_acute_corners` again with wall roots protected), `focus=` for a
+    QA-feedback retry; returns a remap for wall references.
+  - `unresolvable_water` and `filter_shoreline_local(continuous_width=)`:
+    coarse-zone water judged at the local size by a distance transform
+    (radius 0.75 h, dead ends only, straits left open).
+  - `filter_shoreline_local(keep_land=)`: in coarse bands a removed land
+    piece is kept whole if most of it is base land.
+  - `_source_substring`: the arc of a closed ring that fits the stretch.
+  - `blunt_acute_corners(protect=)`; `island_rings` reports area inside.
+  - Removal of `water_wedges`, `short_chords`, `seam_water`.
+- `src/fvcom_mesh_tools/walls.py`: `close_wall_pockets`.
+- `src/fvcom_mesh_tools/provenance.py` (new): commits, file hashes,
+  library versions recorded in `report.json`.
+- `src/fvcom_mesh_tools/refine.py`: `hires.rim_repair`,
+  `continuous_width`, `keep_base_land`, `wall_pockets` (all default true),
+  `hires.experimental` list.
+- `notebooks/420_local_refine.py`: wiring; `LR_EXPERIMENTAL` override;
+  `apply_rim_repair` / `assemble_constraints`; `seed_search` and the
+  one-shot retry near the offenders with snapshot/restore; flat-face drop
+  after the fill; wall-pocket restore when an island is refused;
+  `rejected_seed<k>.npz`; provenance.
+- `jobs/octopus/417_hires_refine.sh` (LR_EXPERIMENTAL documented).
+- Tests: `tests/test_patch.py`, `test_walls.py`, `test_refine.py`,
+  `test_provenance.py`, `test_local_refine_driver.py`,
+  `test_review_hires_fixes.py`.
+- Docs: `docs/USER_GUIDE.md` §4, §5 (reproducibility), §11; `CHANGELOG.md`;
+  `recipes/refine/*.yaml` comments.
+
+Evidence already gathered by the author (on compute nodes): all six hires
+recipes accepted with the four rules on, byte-identical rebuilds from the
+accepted seed, FVCOM smoke runs and 20-day M2 runs pass.
+
+Out of scope: the rest of the package, unless these changes touch it.
+
+## Previous rounds
+Rounds 1-3: see your round-4 status table.
+Round 4 (FAIL 0/4/4/1): all fixed in f07c6d9 (`git show f07c6d9`; triage in
+`docs/coastline-rules-review-20260927.md`).
+1. `patch.size_lower_bound` (grid readings minus slope x half-diagonal,
+   floored); `land_an_element_fits` proves absence by erosion at that bound
+   and reports any polygon it cannot clear. Assumption, now documented: the
+   sizing field changes by at most `slope=1` m per metre (the real fields:
+   about 0.2 for the smoothed base, 0.165 in the ramps).
+2. `H_FLOOR` = min(finest target, finest base ambient size).
+3. the land check runs on the final rim whatever the rules.
+4. slit closure judged on the size bound over the dead end.
+5. wall-pocket gate and disc test on the size bound.
+6. `provenance.code_state`: path, distribution version, git or source hash.
+7. NaN/inf/<=0 sizes and bad factors raise.
+8. premise asserted; the driver call site is exercised with rim repair on
+   and off.
+9. USER_GUIDE: priority has no effect in local refinement.
+All six hires recipes rebuild accepted, byte-identical to round 3.
+914 tests pass.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the whole scope above and everything it
+   touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| 1 | minor | yes: reviewer's thin-box and wall-pocket reproductions (bound 76.47 > 30; pocket closed over a 59.9 m spot) | yes | `_covering_grid`: keep every grid point within half a diagonal of the geometry, not only those inside; tests `test_lower_bound_covers_the_edges_of_a_thin_box`, `test_pocket_over_a_fine_spot_beside_its_edge_stays_water` |
+| 2 | minor | yes: reviewer's 8-node mesh, 192.47 vs 194.62 across 2e-6 m | yes | fixed differently from "make it Lipschitz": `base_size_field` and `patch_sizing` carry `size_bounds(geom, step)`, proved from element vertices (inside, the field is linear per element) and every node that can be nearest to a point of geom (outside); a region adds its target where its ramp reaches. No slope premise. `size_lower_bound` uses it when present. Tests over dense grids around the Voronoi jumps, with and without a region |
+| 3 | minor | yes: widths/y (90,150), (100,48), (90,48) all closed | yes | `size_upper_bound`; the pocket's minimum-area and coast-clearance tests use it; parametrized test plus a pocket that still closes |
+| 4 | minor | yes: make_valid collection, guard returned [] | yes | `_polygons` recurses collections; test |
+| 5 | minor | yes: -10 and 0 returned 10,000 m2; NaN gave the h0 message | yes | sampled field validated before the h0 clip; h0/spacing validated; tests for -10, 0, NaN, inf and the normal path |
+| 6 | minor | yes: code path read (double `file_sha256`, `None.encode`) | yes | each file read once; unreadable files listed in `source_unreadable` and `source_sha256` is None; rglob failure recorded; tests |
+| 7 | nit | yes: comment read | yes | comment names H_FLOOR |
+
+A first version of fix 2 lowered the bound to a region's target wherever its
+ramp reached; all six hires recipes then failed the land check on land wider
+than one target element. The bound now follows the ramp
+(`target + (lo - target) * u(d_min)`).
+
+After the round-5 fixes all six hires recipes rebuild accepted and
+byte-identical to the round-4 rebuild. 931 tests pass.

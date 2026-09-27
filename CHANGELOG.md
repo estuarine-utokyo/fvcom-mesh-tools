@@ -8,6 +8,24 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 5 (2026-09-28)
+
+- `size_lower_bound` reads a grid that covers the geometry, edges included
+  (it kept only the points inside, and a thin box read 76 m over a 30 m
+  spot). The sizing fields of `patch_sizing` and `base_size_field` carry a
+  `size_bounds` method proved from element vertices and every node that
+  can be nearest: the `nearest` extension outside the base mesh is
+  discontinuous, so no slope premise could bound it.
+- New `size_upper_bound`: a wall pocket must be one element in area and
+  half an element clear of the coast at the COARSEST size on it (a lower
+  bound had passed a 9,000 m2 pocket at a 100 m size).
+- `land_an_element_fits` finds polygons nested in collections, as
+  `make_valid` returns them.
+- `filter_shoreline_local` refuses a size field that is zero, negative or
+  not finite (the clip to `h0` had hidden it).
+- Provenance reads each source file once and, when one cannot be read,
+  records it in `source_unreadable` with `source_sha256` null.
+
 ### Fixed -- review of the coastline rules, round 1 (2026-09-27)
 
 - Rim repair is off under `hires.coastline: preserve` (it had moved a
