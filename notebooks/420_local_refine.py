@@ -318,6 +318,17 @@ reports = {"recipe": str(recipe), "base_mesh": str(cfg["base_mesh"]),
            "base_obc": str(cfg["base_obc"]) if cfg["base_obc"] else None,
            "base_rmax": base_rmax, "preflight": [],
            "land": str(LAND) if land_m is not None else None}
+def _bathy_files():
+    """The depth products the ladder reads, when it is the source."""
+    if not _LADDER:
+        return {}
+    from fvcom_mesh_tools.dem import tokyo_bay as _tb
+    root = Path(os.environ.get("DATA_DIR", ""))
+    out = {f"bathymetry_{k}": root / v[0] for k, v in _tb._PRODUCTS.items()}
+    out["bathymetry_soundings"] = root / _tb._SOUNDINGS
+    return out
+
+
 # Everything besides the seed that decides the mesh (provenance.py): the
 # code of both trees, the input files, and the libraries.
 reports["provenance"] = collect_provenance(
@@ -327,7 +338,15 @@ reports["provenance"] = collect_provenance(
            **({"base_depth": cfg["base_depth"]} if cfg["base_depth"] else {}),
            **({"base_obc": cfg["base_obc"]} if cfg["base_obc"] else {}),
            **({"land": [LAND.with_suffix(x) for x in (".shp", ".shx", ".dbf", ".prj")]}
-              if land_m is not None else {})})
+              if land_m is not None else {}),
+           # every file the depths or the regions came from (review, round 1)
+           **_bathy_files(),
+           **{f"region_{r.name}": r.source["file"] for _, r in regions_m
+              if r.source and r.source.get("file")}})
+# and every setting that changes the mesh
+reports["provenance"]["environment"] = {
+    k: v for k, v in sorted(os.environ.items())
+    if k.startswith(("LR_", "FMESH_")) or k == "DATA_DIR"}
 reports["provenance"]["seeds"] = os.environ.get("LR_SEEDS", "0,1,2,3,4")
 reports["provenance"]["max_iter"] = int(os.environ.get("LR_MAX_ITER", 100))
 reports["provenance"]["experimental"] = sorted(EXPERIMENTAL)
@@ -685,9 +704,13 @@ if HIRES is not None and _land_filtered:
             if x.get("area_inside_m2", 0.0) > (2.0 * FINE_H) ** 2]
     if _wet:
         say(f"WARNING: land crossing the rim is meshed as water here: {_wet}")
-    # a wall pocket the rim did not take is still water: give its walls back
-    _lost = [xy for xy in reports.get("walls_extracted", {}).get("pockets_closed", {})
-             .get("at", []) if hole.contains(shapely.Point(xy))]
+    # A wall pocket the rim did not take is still water: give its walls back.
+    # Judged on the pocket itself -- any of it still in the hole -- not on one
+    # point: a pocket crossing the rim was refused with 23,000 m2 inside
+    # while its representative point was outside (review, round 1).
+    _pk = reports.get("walls_extracted", {}).get("pockets_closed", {})
+    _lost = [xy for xy, w in zip(_pk.get("at", []), _pk.get("wkt", []))
+             if shapely.intersection(hole, shapely.from_wkt(w)).area > 1.0]
     if _lost:
         _walls_src = _walls_before_pockets
         reports["walls_extracted"]["pockets_closed"]["walls_restored_for"] = _lost
@@ -1191,7 +1214,7 @@ def apply_rim_repair(tag="rim repair", **kw):
             raise RuntimeError("rim_repair removed a point a wall is rooted on")
     hole = hole_polygon(rc["pfix"], rc["egfix"])
     say(f"{tag}: {rep_['n_points_removed']} point(s) removed beside edges under "
-        f"half an element, {rep_['n_edges_merged']} edge(s) merged to a point, "
+        f"half an element, "
         f"{rep_['n_slits_closed']} slit(s) closed, "
         f"{rep_['n_tips_stepped_back']} tip(s) stepped back, "
         f"{rep_['n_corners_blunted']} corner(s) blunted; "
@@ -1212,7 +1235,11 @@ def assemble_constraints():
              n_rim=len(rc["pfix"]))
 
 
-if "rim_repair" in EXPERIMENTAL:
+# Rim repair moves the coastline, so only where the recipe lets it move:
+# `preserve` promises the base coastline exactly (review, round 1).
+RIM_REPAIR = ("rim_repair" in EXPERIMENTAL and HIRES is not None
+              and HIRES["coastline"] == "resolve")
+if RIM_REPAIR:
     # The rim as the fill will get it, checked against the local size and
     # repaired (patch.rim_repair).  Frozen points and wall roots stay.
     reports["rim_repair"] = apply_rim_repair()
@@ -1957,7 +1984,7 @@ def save_report():
 def seed_search(seed_list):
     """Try each seed; the best candidate, or None."""
     best = None
-    for seed in seeds:
+    for seed in seed_list:
         say(f"--- seed {seed}")
         try:
             candidate, out = attempt(seed)
@@ -2021,29 +2048,42 @@ def seed_search(seed_list):
 
 
 best = seed_search(seeds)
-# One retry, only with rim_repair: every seed failed QA, so the rim is
+reports["search_pass"] = 1
+# One retry, only with rim repair: every seed failed QA, so the rim is
 # repaired again near where the best seed's elements failed, with looser
 # thresholds, and the seeds are tried once more (review 6: a bounded
-# QA-feedback loop, offenders first, nothing touched elsewhere).
-if ("rim_repair" in EXPERIMENTAL and best is not None and best[1] > 0
-        and not best[0]):
+# QA-feedback loop, offenders first, nothing touched elsewhere).  The retry's
+# geometry depends on the first search's best seed, so the accepted seed
+# alone does not reproduce a pass-2 mesh: LR_SEEDS as recorded does.
+if RIM_REPAIR and best is not None and best[1] > 0 and not best[0]:
     _focus = [(v["x"], v["y"]) for v in best[7] if "x" in v]
-    # everything the retry changes, to put back if it does no better
+    # everything the retry changes, put back on every path that does not
+    # take its result -- including an exception (review, round 1)
     _saved = ({k: np.array(rc[k], copy=True) for k in ("pfix", "egfix", "pfix_base")},
               WALL_SEGS.copy(), hole, PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL, boundary)
-    _rrep2 = apply_rim_repair("rim repair, retry near the offenders",
-                              min_edge_factor=0.75, gap_factor=1.5,
-                              focus=_focus, rounds=1)
-    reports["rim_repair_retry"] = _rrep2
-    if _rrep2["n_points_removed"] or _rrep2["n_slits_closed"]:
-        assemble_constraints()
-        shapely.prepare(hole)
-        boundary = shapely.boundary(hole)
-        _best2 = seed_search(seeds)
-        if _best2 is not None and (_best2[0], _best2[1]) < (best[0], best[1]):
-            best = _best2
-        else:
-            say("    the retry did not do better; the first search's best stands")
+    _taken = False
+    try:
+        _rrep2 = apply_rim_repair("rim repair, retry near the offenders",
+                                  min_edge_factor=0.75, gap_factor=1.5,
+                                  focus=_focus, rounds=1)
+        reports["rim_repair_retry"] = _rrep2
+        # changed is what the arrays say, not what the counters say: a
+        # retreat alone left the rim moved and unsearched
+        _changed = (len(rc["pfix"]) != len(_saved[0]["pfix"])
+                    or not np.array_equal(np.asarray(rc["pfix"]), _saved[0]["pfix"])
+                    or not np.array_equal(np.asarray(rc["egfix"]), _saved[0]["egfix"]))
+        if _changed:
+            assemble_constraints()
+            shapely.prepare(hole)
+            boundary = shapely.boundary(hole)
+            _best2 = seed_search(seeds)
+            if _best2 is not None and (_best2[0], _best2[1]) < (best[0], best[1]):
+                best, _taken = _best2, True
+                reports["search_pass"] = 2
+            else:
+                say("    the retry did not do better; the first search's best stands")
+    finally:
+        if not _taken:
             _rc, WALL_SEGS, hole, PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL, boundary = _saved
             rc.update(_rc)
             np.savez(OUT / "fill_constraints.npz", pfix=PFIX_ALL, egfix=EGFIX_ALL,

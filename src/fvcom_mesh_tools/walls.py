@@ -632,7 +632,7 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
 
     lines = [shapely.LineString(np.asarray(w.coords)[:, :2]) for w in walls if w.length > 0]
     empty = shapely.Polygon()
-    rep = {"n_pockets_closed": 0, "area_m2": 0.0, "at": []}
+    rep = {"n_pockets_closed": 0, "area_m2": 0.0, "at": [], "wkt": [], "n_chords": 0}
     if not lines:
         return empty, list(walls), rep
     land = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
@@ -658,6 +658,7 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
             if 0.0 < d <= gap_factor * h:
                 chords.append(shapely.LineString(
                     [p.coords[0], nearest_points(target, p)[0].coords[0]]))
+    rep["n_chords"] = len(chords)
     faces = list(polygonize(shapely.union_all([*lines, *chords, coast])))
     wall_buf = shapely.union_all(lines).buffer(0.01)
     coast_buf = coast.buffer(0.01) if not coast.is_empty else None
@@ -695,6 +696,8 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
                 float(shapely.distance(f, land)) >= 0.5 * h:
             closed.append(f)
             rep["at"].append([round(pt.x, 1), round(pt.y, 1)])
+            # the pocket itself, so a caller can tell whether it stayed water
+            rep["wkt"].append(shapely.to_wkt(f, rounding_precision=3))
     if not closed:
         return empty, list(walls), rep
     added = shapely.union_all(closed)

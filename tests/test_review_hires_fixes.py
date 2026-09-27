@@ -200,3 +200,33 @@ def test_f14_the_workflow_refuses_a_comma_before_submitting(tmp_path):
 def test_f5_every_stage_requires_the_previous_stage_s_marker(script, marker):
     text = (ROOT / "jobs/octopus" / script).read_text()
     assert marker in text and "exit 2" in text
+
+
+def test_a_refused_wall_pocket_gets_its_walls_back_even_off_its_point():
+    """review (coastline rules) round 1: judged on the pocket's point, a pocket
+    crossing the rim was refused with 23,000 m2 in the hole and its walls lost."""
+    source = (ROOT / "notebooks/420_local_refine.py").read_text()
+    tree = ast.parse(source)
+    isl = next(
+        n for n in tree.body
+        if isinstance(n, ast.If)
+        and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+                and c.func.id == "island_rings" for c in ast.walk(n)))
+    from fvcom_mesh_tools.patch import island_rings
+
+    hole = shapely.box(-100, 100, 100, 500)
+    pocket = shapely.box(0, 150, 400, 380)          # half in the hole, point outside
+    assert not hole.contains(pocket.representative_point())
+    before, after = ["all walls"], ["walls with the pocket's gone"]
+    env = {"HIRES": {"coastline": "resolve"}, "_land_filtered": True, "_filtered": pocket,
+           "FINE_H": 60.0, "hole": hole, "island_rings": island_rings,
+           "reports": {"walls_extracted": {"pockets_closed": {
+               "at": [list(pocket.representative_point().coords[0])],
+               "wkt": [pocket.wkt]}}},
+           "_walls_src": after, "_walls_before_pockets": before,
+           "h_achieved": lambda q: np.full(len(q), 200.0), "hole_polygon": hole_polygon,
+           "rc": {"pfix": np.zeros((0, 2)), "egfix": np.zeros((0, 2), dtype=np.int64),
+                  "pfix_base": np.zeros(0, dtype=np.int64), "curves": []},
+           "np": np, "shapely": shapely, "say": lambda *a: None}
+    exec(compile(ast.Module(body=[isl], type_ignores=[]), "<driver block>", "exec"), env)
+    assert env["_walls_src"] is before

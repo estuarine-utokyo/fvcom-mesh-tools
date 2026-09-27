@@ -11,7 +11,7 @@ or the OSM coastline it was cut from.  :func:`collect` records the rest.
 from __future__ import annotations
 
 import hashlib
-import importlib
+import importlib.metadata
 import platform
 import subprocess
 from pathlib import Path
@@ -39,36 +39,52 @@ def file_sha256(path) -> str | None:
 def git_state(path) -> dict[str, Any] | None:
     """The commit a source tree is at, and whether it has local changes.
 
-    ``dirty`` lists the changed tracked files: a mesh made from uncommitted
-    code cannot be remade from the commit alone, and saying so is the point.
+    ``dirty`` lists changed and untracked files: a mesh made from
+    uncommitted code cannot be remade from the commit alone, and saying so is
+    the point.  ``path_tracked`` says whether ``path`` itself is in the
+    commit (None for a directory).
     Returns None outside a git work tree or without git.
     """
     root = Path(path).resolve()
     if root.is_file():
         root = root.parent
 
-    def run(*args):
+    target = Path(path).resolve()
+
+    def run(*args, check=True):
         return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
-                              text=True, timeout=30, check=True).stdout
+                              text=True, timeout=30, check=check)
 
     try:
-        top = run("rev-parse", "--show-toplevel").strip()
-        commit = run("rev-parse", "HEAD").strip()
-        # porcelain lines are "XY path"; the leading status column may be a
-        # space, so the output is not stripped before slicing
-        changed = [ln[3:] for ln in run("status", "--porcelain", "--untracked-files=no")
-                   .splitlines() if ln.strip()]
+        top = run("rev-parse", "--show-toplevel").stdout.strip()
+        commit = run("rev-parse", "HEAD").stdout.strip()
+        # Porcelain lines are "XY path"; the leading status column may be a
+        # space, so the output is not stripped before slicing.  Untracked
+        # files count: a new, uncommitted source file is exactly what the
+        # commit alone cannot give back (review, round 1).
+        changed = [ln[3:] for ln in run("status", "--porcelain").stdout.splitlines()
+                   if ln.strip()]
+        tracked = None
+        if target.is_file():
+            tracked = run("ls-files", "--error-unmatch", str(target),
+                          check=False).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return None
-    return {"root": top, "commit": commit, "dirty": changed}
+    return {"root": top, "commit": commit, "dirty": changed, "path_tracked": tracked}
 
 
 def _version(name: str) -> str | None:
+    """The installed distribution's version, without importing it.
+
+    Importing would load ``oceanmesh``, which is GPL and may not be imported
+    from this Apache-2.0 package (CLAUDE.md; review, round 1).  For an
+    editable install the metadata is from install time; the commit in
+    ``code`` is what identifies such a tree.
+    """
     try:
-        mod = importlib.import_module(name)
-    except Exception:  # noqa: BLE001 -- an absent or broken library is recorded as None
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
         return None
-    return str(getattr(mod, "__version__", None) or "unknown")
 
 
 def collect(*, code: dict[str, Any] | None = None,

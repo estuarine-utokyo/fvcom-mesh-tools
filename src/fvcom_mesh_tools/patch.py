@@ -774,49 +774,72 @@ def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
     from scipy import ndimage
 
     s = float(spacing)
-    x0, y0, x1, y1 = footprint.bounds
+    if not (np.isfinite(s) and s > 0):
+        raise ValueError("spacing must be finite and positive")
+    if not (np.isfinite(radius_factor) and radius_factor > 0):
+        raise ValueError("radius_factor must be finite and positive")
+    if not (np.isfinite(levels_ratio) and levels_ratio > 1.0):
+        raise ValueError("levels_ratio must be finite and above 1")
+    empty = shapely.Polygon()
+    rep = {"spacing_m": s, "n_levels": 0, "lost_cells": 0, "area_m2": 0.0,
+           "n_pieces": 0, "n_straits_left_open": 0, "n_entrances_left_open": 0}
+    land_u = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
+    # no footprint, or no coast to measure from: nothing can be judged
+    if footprint is None or footprint.is_empty or land_u.is_empty:
+        return empty, rep
+
+    def sizes(x, y):
+        v = np.asarray(size_field(np.column_stack([x.ravel(), y.ravel()])),
+                       dtype=float).reshape(x.shape)
+        if not np.isfinite(v).all() or (v <= 0).any():
+            raise ValueError("the size field is not finite and positive over the footprint")
+        return v
+
+    # The raster reaches past the footprint by the largest disc, so a disc
+    # centred outside it still counts (review, round 1): the footprint is
+    # where water may be CLOSED, not where it may be measured from.
+    fx0, fy0, fx1, fy1 = footprint.bounds
+    sx, sy = np.meshgrid(np.linspace(fx0, fx1, 24), np.linspace(fy0, fy1, 24))
+    pad = radius_factor * float(sizes(sx, sy).max()) + 2.0 * s
+    x0, y0, x1, y1 = fx0 - pad, fy0 - pad, fx1 + pad, fy1 + pad
     nx, ny = int(np.ceil((x1 - x0) / s)) + 1, int(np.ceil((y1 - y0) / s)) + 1
     transform = from_origin(x0, y1, s, s)
-    land_u = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
     is_land = features.rasterize([(land_u, 1)], out_shape=(ny, nx), transform=transform,
                                  fill=0, all_touched=False, dtype="uint8").astype(bool)
+    if not is_land.any():
+        return empty, rep
     inside = features.rasterize([(footprint, 1)], out_shape=(ny, nx), transform=transform,
                                 fill=0, dtype="uint8").astype(bool)
-    water = inside & ~is_land
     gx = x0 + (np.arange(nx) + 0.5) * s
     gy = y1 - (np.arange(ny) + 0.5) * s
     mx, my = np.meshgrid(gx, gy)
-    h = np.asarray(size_field(np.column_stack([mx.ravel(), my.ravel()])),
-                   dtype=float).reshape(ny, nx)
+    h = sizes(mx, my)
     r = radius_factor * h
-    # distance from each water cell to land; outside the footprint counts as
-    # water, so the footprint edge is not a coast
-    dist = ndimage.distance_transform_edt(~is_land) * s
-    centres = water & (dist >= r)
+    sea = ~is_land                       # water anywhere on the raster
+    water = inside & sea                 # water that may be closed
+    dist = ndimage.distance_transform_edt(sea) * s
+    centres = sea & (dist >= r)
     covered = np.zeros_like(water)
-    rmin, rmax = float(np.nanmin(r[water])) if water.any() else 0.0, \
-        float(np.nanmax(r[water])) if water.any() else 0.0
+    rmin, rmax = float(r[sea].min()), float(r[sea].max())
     lo = max(rmin, s)
-    n_levels = 0
-    while lo <= rmax * levels_ratio and water.any():
+    while lo <= rmax * levels_ratio:
         hi = lo * levels_ratio
         c = centres & (r >= lo) & (r < hi)
         if c.any():
             covered |= ndimage.distance_transform_edt(~c) * s <= hi
-            n_levels += 1
+            rep["n_levels"] += 1
         lo = hi
     # centres whose radius is under one cell cover themselves
     covered |= centres & (r < max(rmin, s))
     lost = water & ~covered & (h > min_h)
-    empty = shapely.Polygon()
-    rep = {"spacing_m": s, "n_levels": n_levels, "lost_cells": int(lost.sum())}
+    rep["lost_cells"] = int(lost.sum())
     if not lost.any():
-        rep["area_m2"] = 0.0
         return empty, rep
     polys = [shapely.geometry.shape(g) for g, v in
              features.shapes(lost.astype("uint8"), mask=lost, transform=transform) if v == 1]
     g = shapely.union_all(polys)
     g = shapely.simplify(g.buffer(s, join_style="round").buffer(-s, join_style="round"), s)
+    g = shapely.intersection(g, footprint)
     min_area = np.pi * max(min_h, s) ** 2 / 4.0
     pieces = [q for q in getattr(g, "geoms", [g]) if q.geom_type == "Polygon"
               and q.area >= min_area]
@@ -826,19 +849,47 @@ def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
     # join left a stretch with no source component.
     comps = [q for q in getattr(land_u, "geoms", [land_u]) if not q.is_empty]
     tree = shapely.STRtree(comps)
-    kept, straits = [], 0
+    # ...and only water whose closing cuts nothing off: an entrance whose
+    # basin behind is wide enough for elements touches one body of land too,
+    # and closing it left the basin a lake (review, round 1)
+    sea_v = shapely.difference(shapely.box(x0, y0, x1, y1), land_u)
+    kept = []
     for q in pieces:
-        touching = [k for k in tree.query(q.buffer(2.0 * s))
-                    if shapely.intersects(comps[k], q.buffer(2.0 * s))]
-        if len(touching) <= 1:
-            kept.append(q)
-        else:
-            straits += 1
+        ring = q.buffer(2.0 * s)
+        touching = [k for k in tree.query(ring) if shapely.intersects(comps[k], ring)]
+        if len(touching) > 1:
+            rep["n_straits_left_open"] += 1
+            continue
+        # judged on the piece grown by two cells: smoothing leaves it a hair
+        # short of the banks, and the hairline of water joined the two sides
+        qd = q.buffer(2.0 * s)
+        rest = shapely.difference(shapely.intersection(sea_v, qd.buffer(4.0 * s)), qd)
+        sides = [w for w in getattr(rest, "geoms", [rest])
+                 if w.geom_type == "Polygon" and w.area > s * s]
+        if len(sides) > 1 and _splits_water(sea_v, qd, sides):
+            rep["n_entrances_left_open"] += 1
+            continue
+        kept.append(q)
     out = shapely.union_all(kept) if kept else empty
     rep["area_m2"] = float(out.area)
     rep["n_pieces"] = len(kept)
-    rep["n_straits_left_open"] = straits
     return out, rep
+
+
+def _splits_water(sea, piece, sides) -> bool:
+    """True when taking ``piece`` out of ``sea`` separates two of ``sides``."""
+    import shapely
+
+    left = shapely.difference(sea, piece)
+    parts = [w for w in getattr(left, "geoms", [left]) if w.geom_type == "Polygon"]
+    owner = set()
+    for sd in sides:
+        p = sd.representative_point()
+        for k, w in enumerate(parts):
+            if w.buffer(1e-6).contains(p):
+                owner.add(k)
+                break
+    return len(owner) > 1
 
 
 def filter_shoreline_local(land, size_field, h0: float, footprint, *,
@@ -1400,7 +1451,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
     n_in = len(pfix)
     ident = np.arange(n_in)             # current index of each input point
     protect = set(int(k) for k in protect)
-    removed, refused, slits, slits_left, merged, retreated = [], [], [], [], [], []
+    removed, refused, slits, slits_left, retreated = [], [], [], [], []
     angles_rep: list = []
 
     def key(xy):
@@ -1453,62 +1504,6 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
         probe = xy + bis / np.linalg.norm(bis) * 0.05 * min(lp, ln)
         return ang if poly.contains(shapely.Point(probe)) else 360.0 - ang
 
-    def merge_ends(a, b, nb, L, h):
-        """Both ends of a short edge between two corners become its midpoint.
-
-        Removing either end of a cap between two corners moves the coast by
-        the whole cap (Yokohama: 11.8 and 13.7 m caps among 30 m elements);
-        their midpoint moves it by half the cap at most.  Taken only when
-        both ends are free, the two new edges cross nothing, the land/water
-        change is no wider than the edge, and no water angle there -- at the
-        midpoint or at the neighbours -- is sharpened below the limit.
-        """
-        nonlocal pfix, egfix, pfix_base
-        if not (free(a, nb) and free(b, nb)):
-            return False
-        ua = [x for x in nb[a] if x != b]
-        wb = [x for x in nb[b] if x != a]
-        if len(ua) != 1 or len(wb) != 1 or ua[0] == wb[0]:
-            return False
-        u, w = ua[0], wb[0]
-        m = 0.5 * (pfix[a] + pfix[b])
-        before = shapely.Polygon([pfix[u], pfix[a], pfix[b], pfix[w]])
-        after = shapely.Polygon([pfix[u], m, pfix[w]])
-        moved = shapely.symmetric_difference(shapely.make_valid(before),
-                                             shapely.make_valid(after)).area
-        if moved > 0.5 * L * h:
-            return False
-        new = shapely.MultiLineString([[pfix[u], m], [m, pfix[w]]])
-        others = [shapely.LineString(pfix[[c, d]]) for c, d in egfix.tolist()
-                  if not ({c, d} & {a, b, u, w})]
-        if others and shapely.MultiLineString(others).intersects(new):
-            return False
-        at_a = angle_at(pfix[a], pfix[u], pfix[b], water)
-        at_b = angle_at(pfix[b], pfix[a], pfix[w], water)
-        at_m = angle_at(m, pfix[u], pfix[w], water)
-        worst_before = min(x for x in (at_a, at_b) if x is not None) \
-            if (at_a is not None or at_b is not None) else None
-        if at_m is None or (at_m < min_angle_deg and
-                            (worst_before is None or at_m < worst_before - 1e-6)):
-            return False
-        for y, old, far in ((u, a, w), (w, b, u)):
-            other = [q for q in nb.get(y, []) if q != old]
-            if len(other) != 1:
-                continue
-            ang0 = angle_at(pfix[y], pfix[other[0]], pfix[old], water)
-            ang1 = angle_at(pfix[y], pfix[other[0]], m, water)
-            if ang1 is None or (ang1 < min_angle_deg and
-                                (ang0 is None or ang1 < ang0 - 1e-6)):
-                return False
-        im = len(pfix)
-        pfix = np.vstack([pfix, m[None]])
-        pfix_base = np.concatenate([pfix_base, [-1]])
-        egfix = np.vstack([egfix[~np.isin(egfix, [a, b]).any(axis=1)], [[u, im], [im, w]]])
-        merged.append({"at": [round(float(c), 1) for c in m], "edge_m": round(L, 2),
-                       "h_m": round(h, 1), "area_m2": round(float(moved), 1)})
-        compact([a, b])
-        return True
-
     # ------------------------------------------------------------ short edges
     def short_edges():
         nonlocal egfix
@@ -1532,7 +1527,9 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                 if not free(x, nb):
                     continue
                 u, w = nb[x]
-                if u == w:
+                # u and w already joined: the ring is a triangle, and taking
+                # x would leave two points and a doubled edge (review, round 1)
+                if u == w or w in nb.get(u, []):
                     continue
                 du, dw = pfix[u] - pfix[x], pfix[w] - pfix[x]
                 tri = abs(float(du[0] * dw[1] - du[1] * dw[0])) / 2.0
@@ -1555,8 +1552,6 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                         ok = False
                 if ok:
                     options.append((tri, x, u, w))
-            if not options and merge_ends(a, b, nb, float(L[k]), float(h[k])):
-                continue
             if not options:
                 edge_xy = (key(pfix[a]), key(pfix[b]))
                 done_refused.add(tuple(sorted(edge_xy)))
@@ -1718,7 +1713,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
             np.asarray(b2)
 
     def n_done():
-        return (len(removed), len(merged), len(slits), len(retreated),
+        return (len(removed), len(slits), len(retreated),
                 sum(r["n_corners_blunted"] for r in angles_rep))
 
     for _ in range(max(1, int(rounds))):
@@ -1736,7 +1731,6 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
     if protect and (ident[sorted(protect)] < 0).any():
         raise RuntimeError("rim_repair removed a protected point")
     report = {"n_points_removed": len(removed), "removed": removed[:50],
-              "n_edges_merged": len(merged), "merged": merged[:50],
               "n_tips_stepped_back": len(retreated), "stepped_back": retreated[:50],
               "n_short_edges_left": len(refused),
               "short_edges_left": [{k: v for k, v in r.items() if k != "edge_xy"}
@@ -1948,6 +1942,18 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
             b_xy, b_stop, b_pass, b_at = walk(v, n, d)
             removed = {v, *a_pass, *b_pass}
             if a_stop in removed or b_stop in removed or a_stop == b_stop:
+                continue
+            # the ring must keep three points: blunting a small triangle
+            # took it down to two, and the next hole_polygon failed
+            # (review, round 1)
+            ring, todo = {v}, [v]
+            while todo:
+                for q in nbrs.get(todo.pop(), []):
+                    if q not in ring:
+                        ring.add(q)
+                        todo.append(q)
+            n_new = sum(1 for at_ in (a_at, b_at) if not at_)
+            if len(ring) - len(removed) + n_new < 3:
                 continue
             chord = shapely.LineString([a_xy, b_xy])
             if not water.buffer(1e-6).contains(chord):

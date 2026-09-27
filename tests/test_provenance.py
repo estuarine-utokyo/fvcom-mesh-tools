@@ -60,3 +60,23 @@ def test_collect_hashes_a_shapefile_set_together_and_records_libraries(repo, tmp
     # the set's hash changes when any member does
     parts[1].write_bytes(b"other")
     assert collect(files={"land": parts})["files"]["land"]["sha256"] != want
+
+
+def test_collect_imports_no_library(monkeypatch):
+    """review round 1: importing oceanmesh (GPL) from this package is barred."""
+    import importlib
+
+    def refuse(name, *a, **k):
+        raise AssertionError(f"imported {name}")
+
+    monkeypatch.setattr(importlib, "import_module", refuse)
+    rec = collect(libraries=("numpy", "no_such_library_xyz"))
+    assert rec["libraries"]["numpy"] and rec["libraries"]["no_such_library_xyz"] is None
+
+
+def test_git_state_counts_untracked_files_and_whether_the_path_is_tracked(repo):
+    new = repo / "driver.py"
+    new.write_text("print(1)\n")
+    st = git_state(new)
+    assert "driver.py" in st["dirty"] and st["path_tracked"] is False
+    assert git_state(repo / "code.py")["path_tracked"] is True

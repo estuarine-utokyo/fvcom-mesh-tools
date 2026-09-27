@@ -2034,15 +2034,18 @@ def test_rim_repair_keeps_protected_and_frozen_points():
 def test_rim_repair_refuses_a_removal_that_moves_the_coast():
     from fvcom_mesh_tools.patch import hole_polygon, rim_repair
 
-    # the short edge ends at a spike 40 m deep: removing its point would
-    # hand far more than the edge's own width to the water
-    pfix = np.array([[0.0, 0.0], [150.0, 0.0], [153.0, -40.0], [300.0, 0.0],
+    # a 10 m edge (under half of 30 m) into a notch 150 m long: taking
+    # either end away hands 735 m2 to the water, against the 150 m2 (half
+    # the edge times the element) a removal may move
+    pfix = np.array([[0.0, 0.0], [150.0, 0.0], [152.0, -9.8], [300.0, 0.0],
                      [300.0, 300.0], [0.0, 300.0]])
     egfix = np.array([[k, (k + 1) % 6] for k in range(6)])
+    assert np.linalg.norm(pfix[1] - pfix[2]) < 15.0          # the branch is reached
     water = hole_polygon(pfix, egfix)
     p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(6, -1), water,
                                      lambda xy: np.full(len(xy), 30.0))
     assert rep["n_points_removed"] == 0 and len(p) == 6
+    assert rep["n_short_edges_left"] == 1                    # refused, and said so
 
 
 def test_keep_land_holds_base_land_where_land_and_water_are_both_unresolvable():
@@ -2121,7 +2124,7 @@ def test_rim_repair_blunts_an_acute_corner_but_not_at_a_wall_root():
     assert rep["n_corners_blunted"] == 0 and remap[0] == 0
 
 
-def test_rim_repair_merges_a_short_cap_between_two_corners():
+def test_rim_repair_takes_a_short_cap_between_two_corners():
     from fvcom_mesh_tools.patch import hole_polygon, rim_repair
 
     # water below a coast with a 12 m cap between two 120-deg corners: taking
@@ -2132,7 +2135,7 @@ def test_rim_repair_merges_a_short_cap_between_two_corners():
     water = hole_polygon(pfix, egfix)
     p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(8, -1), water,
                                      lambda xy: np.full(len(xy), 30.0))
-    assert rep["n_edges_merged"] + rep["n_points_removed"] >= 1
+    assert rep["n_points_removed"] >= 1
     after = hole_polygon(p, e)
     assert after.is_valid
     L = np.linalg.norm(p[e[:, 0]] - p[e[:, 1]], axis=1)
@@ -2234,3 +2237,50 @@ def test_keep_land_keeps_a_removed_piece_whole_or_not_at_all():
     little = shapely.box(-75, -200, 75, 0)                    # 25 %
     out, _ = filter_shoreline_local(land, size, 30.0, box, spacing=50.0, keep_land=little)
     assert not shapely.contains(out, shapely.Point(0, -100))   # none of it
+
+
+def test_rim_repair_keeps_a_triangle_ring_whole():
+    """review round 1: a triangle came down to two points and a doubled edge."""
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    p = np.array([[0.0, 0.0], [10.0, 0.0], [5.0, 20.0]])
+    e = np.array([[0, 1], [1, 2], [2, 0]])
+    out = rim_repair(p, e, np.full(3, -1), hole_polygon(p, e),
+                     lambda xy: np.full(len(xy), 30.0))
+    assert len(out[0]) >= 3 and hole_polygon(out[0], out[1]).is_valid
+
+
+def test_unresolvable_water_needs_a_coast_and_sane_arguments():
+    from fvcom_mesh_tools.patch import unresolvable_water
+
+    box = shapely.box(0, 0, 1000, 1000)
+    const = lambda h: (lambda q: np.full(len(np.atleast_2d(q)), h))  # noqa: E731
+    lost, _ = unresolvable_water(shapely.Polygon(), const(2000.0), box, min_h=60, spacing=10)
+    assert lost.is_empty                        # no land: nothing to close towards
+    lost, _ = unresolvable_water(shapely.box(0, 0, 10, 10), const(100.0), shapely.Polygon())
+    assert lost.is_empty
+    for kw in (dict(levels_ratio=1.0), dict(spacing=0.0), dict(radius_factor=-1.0)):
+        with pytest.raises(ValueError):
+            unresolvable_water(shapely.box(0, 0, 10, 10), const(100.0), box, **kw)
+
+
+def test_continuous_width_leaves_a_lagoon_entrance_open():
+    """review round 1: the entrance to a basin with room for elements closed."""
+    from fvcom_mesh_tools.patch import filter_shoreline_local
+
+    fp = shapely.box(-2000, -2000, 2000, 2000)
+    size = lambda q: np.full(len(np.atleast_2d(q)), 225.0)  # noqa: E731
+    lagoon = shapely.difference(fp, shapely.union_all([
+        shapely.box(-2100, -1500, -400, 1500), shapely.box(400, -1500, 1500, 1500),
+        shapely.box(-500, -150, 500, 150)]))
+    out, rep = filter_shoreline_local(lagoon, size, 30.0, fp, spacing=30.0,
+                                      continuous_width=True)
+    water = shapely.difference(fp, out)
+    assert len(getattr(water, "geoms", [water])) == 1
+    assert rep["continuous_width"]["n_entrances_left_open"] == 1
+    # the same channel with no basin behind it is a dead end, and closes
+    dead = shapely.difference(fp, shapely.union_all([
+        shapely.box(-2100, -1500, -400, 1500), shapely.box(-500, -150, 800, 150)]))
+    out, rep = filter_shoreline_local(dead, size, 30.0, fp, spacing=30.0,
+                                      continuous_width=True)
+    assert shapely.contains(out, shapely.Point(600, 0))

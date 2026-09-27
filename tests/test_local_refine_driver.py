@@ -136,8 +136,8 @@ def seed_search_env(tmp_path, attempts, qa_failures, misses=None):
         # block reads its flag.  False is the default path: everything the
         # recipe did before the branch existed.
         "_LADDER": False,
-        # no opt-in rules: the QA-feedback retry belongs to rim_repair
-        "EXPERIMENTAL": set(),
+        # no rim repair: the QA-feedback retry belongs to it
+        "EXPERIMENTAL": set(), "RIM_REPAIR": False,
     }
 
 
@@ -343,3 +343,67 @@ def test_a_wall_that_closes_water_off_is_found_by_its_piece():
     one = walls_cut_off(t2, len(out), copy_of, we, obc, xy=xy)
     assert len(one) == 1 and one[0] < 8, (
         "given coordinates, only the shortest touching edge is withdrawn")
+
+
+def test_seed_search_tries_the_seeds_it_is_given():
+    """review round 1: it iterated the global list, not its argument."""
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp())
+    good = (np.array([1]), None, None, np.arange(1))
+    env = seed_search_env(tmp, attempts={**{k: good for k in range(5)}, 17: good},
+                          qa_failures={1: 0})
+    run_search(env)
+    env["_called"].clear()
+    env["seed_search"]([17])
+    assert env["_called"] == [17]
+
+
+def test_a_retry_that_moves_the_rim_and_does_no_better_is_put_back():
+    """review round 1: a retreat-only repair was neither searched nor undone."""
+    import tempfile
+
+    import shapely
+
+    tmp = Path(tempfile.mkdtemp())
+    bad = (np.array([1]), None, None, np.arange(1))
+    env = seed_search_env(tmp, attempts={k: bad for k in range(5)}, qa_failures={1: 2})
+    rc = {"pfix": np.array([[0.0, 0.0], [10.0, 0.0], [0.0, 10.0]]),
+          "egfix": np.array([[0, 1], [1, 2], [2, 0]]), "pfix_base": np.full(3, -1)}
+    calls = {"assemble": 0}
+
+    def apply_rim_repair(tag="", **kw):
+        # a tip stepped back: coordinates change, no counter says so
+        rc["pfix"] = rc["pfix"] + np.array([[0.0, 0.0], [-1.0, 0.0], [0.0, 0.0]])
+        return {"n_points_removed": 0, "n_slits_closed": 0, "n_edges_merged": 0,
+                "n_tips_stepped_back": 0}
+
+    def assemble_constraints():
+        calls["assemble"] += 1
+
+    hole = shapely.box(0, 0, 10, 10)
+    env.update(RIM_REPAIR=True, rc=rc, WALL_SEGS=np.zeros((0, 2), dtype=int), hole=hole,
+               PFIX_ALL=rc["pfix"], EGFIX_ALL=rc["egfix"], PFIX_BASE_ALL=rc["pfix_base"],
+               boundary=hole.boundary, shapely=shapely, apply_rim_repair=apply_rim_repair,
+               assemble_constraints=assemble_constraints)
+    before = rc["pfix"].copy()
+    try:
+        run_search(env)
+    except SystemExit:
+        pass                                  # every seed failed QA: fine here
+    assert calls["assemble"] == 1             # the moved rim was searched
+    assert env["_called"] == [0, 1, 2, 3, 4] * 2
+    assert np.array_equal(env["rc"]["pfix"], before)   # and put back
+    assert env["reports"]["search_pass"] == 1
+
+
+def test_rim_repair_is_off_where_the_coastline_is_preserved():
+    """review round 1: `preserve` promises the base coastline exactly."""
+    tree = ast.parse(DRIVER.read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.Assign)
+                and any(getattr(t, "id", None) == "RIM_REPAIR" for t in n.targets))
+    code = compile(ast.Module(body=[node], type_ignores=[]), "<driver>", "exec")
+    for coastline, want in (("preserve", False), ("resolve", True)):
+        env = {"EXPERIMENTAL": {"rim_repair"}, "HIRES": {"coastline": coastline}}
+        exec(code, env)
+        assert env["RIM_REPAIR"] is want

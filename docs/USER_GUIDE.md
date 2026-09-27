@@ -252,10 +252,10 @@ was made the default, and each can be switched off in a recipe
 
 | rule | what it does | since |
 |---|---|---|
-| `continuous_width` | in the coarse zone (elements over twice the target), water is judged at the local element size itself, not at the lower bound of an octave band: water narrower than 1.5 elements that ends at one body of land is closed (a strait between two bodies is left). Distance transform on a 10 m raster, smoothed; it only adds land to what the band filter keeps. The fix at the source for the band seams (§11) | 2026-09-27 |
+| `continuous_width` | in the coarse zone (elements over twice the target), water is judged at the local element size itself, not at the lower bound of an octave band: water narrower than 1.5 elements that ends at one body of land is closed (a strait between two bodies is left). Distance transform on a raster of one third of the finest target (10 m for a 30 m target), smoothed; it only adds land to what the band filter keeps. The fix at the source for the band seams (§11) | 2026-09-27 |
 | `keep_base_land` | in the coarse zone, where land and water are both too narrow for the elements, a piece of land the filter would remove stays land -- the whole piece -- if the base mesh has most of it as land; the narrow water round it is closed (owner's choice) | 2026-09-27 |
 | `wall_pockets` | water shut in by walls alone, off the coast, in the coarse zone, narrower than two elements and at least one element in area, becomes an island; its walls come back if the rim refuses the island | 2026-09-27 |
-| `rim_repair` | before the fill, the finished coastline is checked against the local size and repaired, in order, up to two rounds: (1) a point beside an edge under half an element is removed, or a short cap between two corners merges to its midpoint; (2) a point within one element of a coast it is not next to is a throat -- the dead end beyond becomes land if no element fits in it, otherwise (a pier tip nearly touching the quay across) the tip steps back to one element; (3) water corners under 60 deg are cut again. Frozen points and wall roots never move. If every seed fails, the rim is repaired once more near the best seed's offenders and the seeds are tried again | 2026-09-26 |
+| `rim_repair` | before the fill, the finished coastline is checked against the local size and repaired, in order, up to two rounds: (1) a point beside an edge under half an element is removed, if that crosses nothing, moves little and sharpens no water angle below 60 deg -- otherwise the edge is reported; (2) a point within one element of a coast it is not next to is a throat -- the dead end beyond becomes land if no element fits in it, otherwise (a pier tip nearly touching the quay across) the tip steps back to one element; (3) water corners under 60 deg are cut again. Frozen points and wall roots never move. If every seed fails, the rim is repaired once more near the best seed's offenders and the seeds are tried again | 2026-09-26 |
 
 With all four on, all seven recipes are accepted and none names a rule.
 Three more rules (`water_wedges`, `short_chords`, `seam_water`) worked round
@@ -297,15 +297,20 @@ byte-identical fort.14 files, and a run of seed 3 alone gave the same mesh as
 a search over 0-4 that chose 3. "The same inputs" means more than the seed.
 `report.json` records it all under `provenance`:
 - the commit of this repository and of the oceanmesh fork, with any
-  uncommitted files (the run also warns about them);
-- SHA-256 of the recipe, base mesh, depth and OBC files and the OSM
-  shapefile;
-- the Python and library versions, and `LR_SEEDS` / `LR_MAX_ITER`.
+  uncommitted or untracked files (the run also warns about them);
+- SHA-256 of the recipe, base mesh, depth and OBC files, the OSM
+  shapefile, the depth products the ladder read, and any region file;
+- the Python and library versions (from package metadata; nothing is
+  imported for it), the opt-in rules used, and every `LR_*` / `FMESH_*`
+  setting and `DATA_DIR`.
 
-To remake a mesh, check out both commits, use the same inputs and set
-`LR_SEEDS` to the accepted `seed`. Identical results across machines or
-library versions are not guaranteed: floating-point differences can move a
-node.
+To remake a mesh, check out both commits, use the same inputs and settings,
+and set `LR_SEEDS` to the list the report records under
+`provenance.seeds`. The accepted `seed` alone is enough only when
+`search_pass` is 1: a mesh from the retry near the offenders (`search_pass`
+2) depends on which seed failed best in the first search, so the whole list
+is needed. Identical results across machines or library versions are not
+guaranteed: floating-point differences can move a node.
 
 ---
 

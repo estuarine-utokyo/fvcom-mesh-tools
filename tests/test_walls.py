@@ -410,8 +410,12 @@ def test_close_wall_pockets_leaves_a_pocket_two_elements_can_cross():
     from fvcom_mesh_tools.walls import close_wall_pockets
 
     land = shapely.box(-2000, -2000, 2000, 0)
-    curl = shapely.LineString([(0, 0), (0, 300), (400, 300), (400, 70), (40, 70)])
+    # the end stops 20 m from its own side -- under one 30 m element, so the
+    # mouth is chorded and the pocket is found -- but 380 x 230 m has room
+    # for an element, and it stays water
+    curl = shapely.LineString([(0, 0), (0, 300), (400, 300), (400, 70), (20, 70)])
     added, kept, rep = close_wall_pockets([curl], land, _const(30.0))
+    assert rep["n_chords"] >= 1
     assert rep["n_pockets_closed"] == 0
     assert added.is_empty
     assert sum(w.length for w in kept) == pytest.approx(curl.length)
@@ -448,7 +452,10 @@ def test_close_wall_pockets_stays_out_of_the_fine_zone():
     from fvcom_mesh_tools.walls import close_wall_pockets
 
     land = shapely.box(-2000, -2000, 2000, 0)
-    curl = shapely.LineString([(0, 0), (0, 300), (400, 300), (400, 70), (40, 70)])
+    # the pocket that IS closed at h 200 (150 m off the coast) -- left alone
+    # only because the element is not coarser than min_h
+    curl = shapely.LineString([(0, 0), (0, 380), (400, 380), (400, 150), (40, 150)])
+    assert close_wall_pockets([curl], land, _const(200.0))[2]["n_pockets_closed"] == 1
     added, kept, rep = close_wall_pockets([curl], land, _const(200.0), min_h=200.0)
     assert rep["n_pockets_closed"] == 0
 

@@ -8,6 +8,25 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 1 (2026-09-27)
+
+- Rim repair is off under `hires.coastline: preserve` (it had moved a
+  preserved coast); the merge-to-midpoint operation is removed (it never
+  applied: whatever refused the removal refused the merge); a removal or a
+  blunting that would leave a ring of two points is refused.
+- `continuous_width` leaves open a narrow entrance whose basin behind has
+  room for elements, handles empty land or footprint, validates its
+  arguments, and measures discs past the footprint edge.
+- A refused wall pocket gets its walls back when any of it is still water
+  (it was judged on one point).
+- The QA-feedback retry searches any change to the rim, puts the rim back
+  on every path that does not take its result, and `search_pass` in
+  `report.json` says which search gave the mesh; `seed_search` uses its
+  argument.
+- Provenance reads library versions from metadata (it had imported
+  oceanmesh, GPL), counts untracked files, and records the depth products,
+  region files and every `LR_*` / `FMESH_*` setting.
+
 ### Changed -- every coastline rule on by default (2026-09-27)
 
 - `keep_base_land` and `wall_pockets` are on by default too, so all four
