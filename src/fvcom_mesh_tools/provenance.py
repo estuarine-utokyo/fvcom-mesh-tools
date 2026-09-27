@@ -110,12 +110,14 @@ def code_state(name: str, path) -> dict[str, Any]:
         # each file is read once, and one that cannot be read makes the
         # identity incomplete, said so, rather than a digest that looks whole
         # (review, round 5)
+        # Path.rglob swallows a directory it cannot scan, and an unreadable
+        # tree hashed as empty (review, round 6): walk with the errors kept
         h, failed = hashlib.sha256(), []
-        try:
-            files = sorted(root.rglob("*.py"))
-        except OSError:
-            files, failed = [], [str(root)]
-        for f in files:
+        files = []
+        for d, _dirs, names in root.walk(on_error=lambda e: failed.append(
+                str(e.filename) if e.filename else str(root))):
+            files.extend(d / n for n in names if n.endswith(".py"))
+        for f in sorted(files):
             digest = file_sha256(f)
             if digest is None:
                 failed.append(str(f))

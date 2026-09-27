@@ -8,6 +8,16 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 6 (2026-09-28)
+
+- `continuous_width` pads its raster by the largest disc over the PADDED
+  box, grown to a fixed point, not over the footprint (a disc centred
+  86 m out was missed and 9,234 m2 of open water closed); a pad that does
+  not settle closes nothing (`unbounded_pad`).
+- `island_rings` finds polygons nested in collections; `filter_shoreline_local`
+  refuses an empty footprint; provenance reports a source directory it
+  cannot scan (`Path.rglob` hid it).
+
 ### Fixed -- review of the coastline rules, round 5 (2026-09-28)
 
 - `size_lower_bound` reads a grid that covers the geometry, edges included

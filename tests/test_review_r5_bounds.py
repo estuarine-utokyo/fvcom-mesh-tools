@@ -35,16 +35,31 @@ def test_lower_bound_covers_the_edges_of_a_thin_box():
     assert hi >= 30.0 + np.hypot(50.0, 0.5)
 
 
-def test_pocket_over_a_fine_spot_beside_its_edge_stays_water():
+def _fine_spot_pocket():
     wall = LineString([(0, 0), (0, 250), (100, 250), (100, 150), (20, 150)])
     c = np.array([48.75, 150.1])
 
+    # capped at 90 m so that area and clearance pass, and only the fine spot
+    # can keep the pocket open (review, round 6)
     def size(q):
-        return 59.9 + 0.8 * np.linalg.norm(np.atleast_2d(q)[:, :2] - c, axis=1)
+        return np.minimum(90.0, 59.9 + 0.8 * np.linalg.norm(np.atleast_2d(q)[:, :2] - c,
+                                                            axis=1))
 
-    added, _, rep = close_wall_pockets([wall], box(-2000, -2000, 2000, 0), size,
-                                       min_h=60.000001, size_floor=30.0)
+    return close_wall_pockets([wall], box(-2000, -2000, 2000, 0), size,
+                              min_h=60.000001, size_floor=30.0)
+
+
+def test_pocket_over_a_fine_spot_beside_its_edge_stays_water():
+    added, _, rep = _fine_spot_pocket()
     assert rep["n_pockets_closed"] == 0 and added.is_empty
+
+
+def test_pocket_fine_spot_fixture_depends_on_the_lower_bound(monkeypatch):
+    import fvcom_mesh_tools.patch as patch_mod
+
+    monkeypatch.setattr(patch_mod, "size_lower_bound", lambda *a, **k: 1000.0)
+    _, _, rep = _fine_spot_pocket()
+    assert rep["n_pockets_closed"] == 1
 
 
 @pytest.mark.parametrize("width,y", [(90, 150), (100, 48), (90, 48)])

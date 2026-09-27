@@ -783,7 +783,7 @@ def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
     empty = shapely.Polygon()
     rep = {"spacing_m": s, "n_levels": 0, "lost_cells": 0, "area_m2": 0.0,
            "n_pieces": 0, "n_straits_left_open": 0, "n_entrances_left_open": 0,
-           "n_detached_left_open": 0}
+           "n_detached_left_open": 0, "unbounded_pad": False}
     land_u = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
     # no footprint, or no coast to measure from: nothing can be judged
     if footprint is None or footprint.is_empty or land_u.is_empty:
@@ -798,10 +798,47 @@ def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
 
     # The raster reaches past the footprint by the largest disc, so a disc
     # centred outside it still counts (review, round 1): the footprint is
-    # where water may be CLOSED, not where it may be measured from.
+    # where water may be CLOSED, not where it may be measured from.  The
+    # largest disc is the one over the PADDED box, not over the footprint --
+    # sizes grow outward, and a disc centred 86 m out reached water the
+    # footprint's own sizes said nothing could (review, round 6) -- so the
+    # pad grows until it holds the largest disc centred inside it (a proved
+    # upper bound, size_upper_bound).  Beyond it a disc is smaller than its
+    # distance to the footprint while radius_factor times the field's slope
+    # stays under 1 (the ramps: 0.75 x 0.165).  A pad that does not settle
+    # proves nothing, and then nothing is closed.
     fx0, fy0, fx1, fy1 = footprint.bounds
+    h_step = max(4.0 * s, float(min_h))
+    pad, last, grew = 2.0 * s, 0.0, np.inf
+    settled = False
+    for _ in range(8):
+        # a pad that grows as fast as it did the step before diverges; stop
+        # before the box (and the raster) outgrows memory
+        if (fx1 - fx0 + 2 * pad) * (fy1 - fy0 + 2 * pad) / (s * s) > 5e7:
+            break
+        box_ = shapely.box(fx0 - pad, fy0 - pad, fx1 + pad, fy1 + pad)
+        try:
+            need = radius_factor * size_upper_bound(box_, size_field, h_step) + 2.0 * s
+        except ValueError as e:
+            raise ValueError("the size field is not finite and positive over the "
+                             "footprint") from e
+        if need <= pad:
+            settled = True
+            break
+        if need - last >= grew:
+            break
+        grew, last = need - last, need
+        pad = 1.25 * need     # overshoot: a growing field never meets need exactly
+    if not settled:
+        rep["unbounded_pad"] = True
+        return empty, rep
+    # The raster stays where the footprint's own sizes put it, and a larger
+    # pad adds whole cells around it: moving the origin re-quantises the land,
+    # which moved every recipe's coast by 50-95 m for a pad that only needed
+    # to ADD disc centres.
     sx, sy = np.meshgrid(np.linspace(fx0, fx1, 24), np.linspace(fy0, fy1, 24))
-    pad = radius_factor * float(sizes(sx, sy).max()) + 2.0 * s
+    pad0 = radius_factor * float(sizes(sx, sy).max()) + 2.0 * s
+    pad = pad0 + np.ceil(max(0.0, pad - pad0) / s) * s
     x0, y0, x1, y1 = fx0 - pad, fy0 - pad, fx1 + pad, fy1 + pad
     nx, ny = int(np.ceil((x1 - x0) / s)) + 1, int(np.ceil((y1 - y0) / s)) + 1
     transform = from_origin(x0, y1, s, s)
@@ -942,6 +979,8 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
         land = list(land)
     if not (np.isfinite(h0) and h0 > 0):
         raise ValueError("h0 must be finite and positive")
+    if footprint is None or footprint.is_empty:
+        raise ValueError("the footprint is empty: there is no local size to filter at")
     s = float(spacing if spacing is not None else h0)
     if not (np.isfinite(s) and s > 0):
         raise ValueError("spacing must be finite and positive")
@@ -1919,8 +1958,9 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
 
     rings, skipped = [], []
     edge = shapely.boundary(water)
-    for g in getattr(land, "geoms", [land]):
-        if g.is_empty or not shapely.intersects(water, g):
+    # every polygon, however make_valid nested it; lines are no land (round 6)
+    for g in _polygons(land):
+        if not shapely.intersects(water, g):
             continue
         c = np.asarray(g.representative_point().coords)[0]
         if not shapely.within(g, water):

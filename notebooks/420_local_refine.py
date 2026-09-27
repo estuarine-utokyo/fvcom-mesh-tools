@@ -258,10 +258,10 @@ def base_depth_of(lon, lat):
 # ONE `if`, taken here (owner, 2026-09-23).  `hires` absent and nothing below
 # is reached; everything the recipe did before it existed, it still does.
 HIRES = cfg["hires"]
-# opt-in coastline rules (refine.HIRES_EXPERIMENTAL); none unless named.
-# LR_EXPERIMENTAL ("a:b", or "none" to clear the recipe's) overrides the
-# recipe, for trying a rule on recipes that do not name it; the report
-# records what was used.
+# The coastline rules (refine.HIRES_EXPERIMENTAL): all four on by default,
+# each switched off by `hires.<rule>: false`.  LR_EXPERIMENTAL ("a:b", or
+# "none" for no rule) replaces the whole set for a trial; the report records
+# what was used.
 EXPERIMENTAL = set(HIRES.get("experimental", [])) if HIRES is not None else set()
 # rim_repair, continuous_width, keep_base_land and wall_pockets are on
 # unless the recipe says false
@@ -534,8 +534,8 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
         _base_water = shapely.union_all(shapely.polygons(base.nodes[base.elements, :2]))
         _frozen_land = shapely.intersection(shapely.difference(_band, _base_water), _foot)
     reports["frozen_land_in_filter_km2"] = float(_frozen_land.area / 1e6)
-    # land in the source that the base mesh also has as land (opt-in, used
-    # in the coarse bands only; patch.filter_shoreline_local)
+    # land in the source that the base mesh also has as land (keep_base_land,
+    # on by default; used in the coarse bands only; patch.filter_shoreline_local)
     _keep_land = None
     if "keep_base_land" in EXPERIMENTAL:
         _bw = shapely.union_all(shapely.polygons(base.nodes[base.elements, :2]))
@@ -564,7 +564,7 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
     _wrep["straightened"] = _srep
     _walls_src = node_walls(_walls_src, snap_m=_h0)
     # water the walls shut in, too narrow to mesh, is land like any other
-    # (opt-in).  The walls are kept aside until the pocket is on the rim as
+    # (wall_pockets, on by default).  The walls are kept aside until the pocket is on the rim as
     # an island: island_rings may refuse it, and then the walls come back.
     _walls_before_pockets = list(_walls_src)
     _prep = {"n_pockets_closed": 0, "at": []}
