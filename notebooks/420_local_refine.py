@@ -49,6 +49,7 @@ from fvcom_mesh_tools.patch import (
     improve_patch,
     introduced_violations,
     island_rings,
+    land_an_element_fits,
     patch_sizing,
     refresh_depths,
     region_conflicts,
@@ -333,7 +334,10 @@ def _bathy_files():
 # Everything besides the seed that decides the mesh (provenance.py): the
 # code of both trees, the input files, and the libraries.
 reports["provenance"] = collect_provenance(
-    code={"fvcom_mesh_tools": Path(__file__).resolve(),
+    # the package as imported -- it can be another checkout than this
+    # driver's (review, round 3) -- and the driver itself
+    code={"fvcom_mesh_tools": Path(sys.modules["fvcom_mesh_tools"].__file__).resolve(),
+          "driver": Path(__file__).resolve(),
           "oceanmesh": Path(om.__file__).resolve()},
     files={"recipe": recipe, "base_mesh": cfg["base_mesh"],
            **({"base_depth": cfg["base_depth"]} if cfg["base_depth"] else {}),
@@ -724,14 +728,12 @@ if HIRES is not None and _land_filtered:
     # as islands are water on purpose and do not count.
     _refused = shapely.union_all([shapely.from_wkt(w) for xy, w in
                                   zip(_pk.get("at", []), _pk.get("wkt", [])) if xy in _lost])
-    _wet_land = shapely.difference(shapely.intersection(hole, _filtered), _refused)
-    _solid = []
-    for _g in getattr(_wet_land, "geoms", [_wet_land]):
-        if _g.geom_type != "Polygon" or _g.area <= 0:
-            continue
-        _hh = float(h_achieved(np.asarray(_g.representative_point().coords))[0])
-        if not _g.buffer(-0.5 * _hh).is_empty:
-            _solid.append([round(v, 1) for v in _g.representative_point().coords[0]])
+    # the land the rim must carry, kept for the checks after every rim change
+    WET_LAND_SRC = shapely.difference(_filtered, _refused)
+    _wet_land = shapely.intersection(hole, WET_LAND_SRC)
+    # judged at the size where a disc would stand, not at one point's size
+    # (review, round 3); FINE_H / 2 is the smallest element anywhere
+    _solid = land_an_element_fits(_wet_land, h_achieved, 0.5 * FINE_H)
     reports["land_meshed_as_water_m2"] = float(_wet_land.area)
     if _solid:
         (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
@@ -1227,6 +1229,15 @@ if HIRES is not None and _land_filtered and _walls_src:
 # repair slid a stepped-back pier tip 12 m back along it (review, round 2):
 # they are held where the repair put them.
 RIM_PINNED = np.zeros(0, dtype=np.int64)
+WET_LAND_SRC = globals().get("WET_LAND_SRC")
+
+
+def _nbr_xy(pts, edges, k):
+    """The positions of point k's neighbours on the rim, as a set."""
+    pts, edges = np.asarray(pts), np.asarray(edges)
+    nb = edges[(edges == k).any(axis=1)].ravel()
+    return frozenset((round(float(pts[j, 0]), 6), round(float(pts[j, 1]), 6))
+                     for j in nb if j != k)
 
 
 def apply_rim_repair(tag="rim repair", **kw):
@@ -1234,13 +1245,18 @@ def apply_rim_repair(tag="rim repair", **kw):
     global WALL_SEGS, hole, RIM_PINNED
     n_rim = len(rc["pfix"])
     _old = {(round(float(x), 6), round(float(y), 6)) for x, y in np.asarray(rc["pfix"])[:, :2]}
+    _old_nbr = {(round(float(x), 6), round(float(y), 6)): _nbr_xy(rc["pfix"], rc["egfix"], k)
+                for k, (x, y) in enumerate(np.asarray(rc["pfix"])[:, :2])}
     roots = set(np.unique(WALL_SEGS[WALL_SEGS < n_rim]).tolist()) if len(WALL_SEGS) else set()
     p_, e_, b_, remap_, rep_ = rim_repair(rc["pfix"], rc["egfix"], rc["pfix_base"],
                                           hole, h_achieved, protect=roots, **kw)
     rc["pfix"], rc["egfix"], rc["pfix_base"] = p_, e_, b_
     _kept = remap_[RIM_PINNED] if len(RIM_PINNED) else np.zeros(0, dtype=np.int64)
+    # made or moved -- and a point whose neighbours changed: taking one
+    # point out makes its survivor a corner without moving it (round 3)
     _made = [k for k, (x, y) in enumerate(np.asarray(p_)[:, :2])
-             if (round(float(x), 6), round(float(y), 6)) not in _old]
+             if (round(float(x), 6), round(float(y), 6)) not in _old
+             or _nbr_xy(p_, e_, k) != _old_nbr.get((round(float(x), 6), round(float(y), 6)))]
     RIM_PINNED = np.unique(np.concatenate([_kept[_kept >= 0],
                                            np.asarray(_made, dtype=np.int64)]))
     if len(WALL_SEGS):
@@ -1275,10 +1291,26 @@ def assemble_constraints():
 # `preserve` promises the base coastline exactly (review, round 1).
 RIM_REPAIR = ("rim_repair" in EXPERIMENTAL and HIRES is not None
               and HIRES["coastline"] == "resolve")
+def wet_land_after_repair():
+    """Land the rim must carry that a repaired rim leaves in the water."""
+    if WET_LAND_SRC is None:
+        return [], 0.0
+    wet = shapely.intersection(hole, WET_LAND_SRC)
+    return land_an_element_fits(wet, h_achieved, 0.5 * FINE_H), float(wet.area)
+
+
 if RIM_REPAIR:
     # The rim as the fill will get it, checked against the local size and
     # repaired (patch.rim_repair).  Frozen points and wall roots stay.
     reports["rim_repair"] = apply_rim_repair()
+    # ...and the land check again: a repair that hands land to the water
+    # (a pier tip stepped back) must not hand over land an element fits in
+    # (review, round 3)
+    _solid, reports["land_meshed_as_water_m2"] = wet_land_after_repair()
+    if _solid:
+        (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
+        raise SystemExit(f"rim repair left land wide enough for an element in the water "
+                         f"near {_solid[:5]}")
 assemble_constraints()
 
 # The slope the field actually has, measured on the hole it will be meshed
@@ -2105,12 +2137,29 @@ if RIM_REPAIR and best is not None and best[1] > 0 and not best[0]:
         _rrep2 = apply_rim_repair("rim repair, retry near the offenders",
                                   min_edge_factor=0.75, gap_factor=1.5,
                                   focus=_focus, rounds=1)
+        _wet_pts, _wet_area = wet_land_after_repair()
+        if _wet_pts:
+            # A tip stepped back over land an element fits in: the same
+            # repair without stepping tips back -- the slits and short
+            # edges it also fixes are worth having (Yokohama, round 3).
+            say(f"    the retry would leave land an element fits in the water near "
+                f"{_wet_pts[:3]}; again without stepping tips back")
+            (_rc, WALL_SEGS, hole, PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL, boundary,
+             RIM_PINNED) = _saved
+            rc.update({k: np.array(v, copy=True) for k, v in _rc.items()})
+            _rrep2 = apply_rim_repair("rim repair, retry near the offenders, tips kept",
+                                      min_edge_factor=0.75, gap_factor=1.5,
+                                      focus=_focus, rounds=1, retreat_tips=False)
+            _wet_pts, _wet_area = wet_land_after_repair()
         reports["rim_repair_retry"] = _rrep2
         # changed is what the arrays say, not what the counters say: a
         # retreat alone left the rim moved and unsearched
-        _changed = (len(rc["pfix"]) != len(_saved[0]["pfix"])
+        _changed = not _wet_pts and (len(rc["pfix"]) != len(_saved[0]["pfix"])
                     or not np.array_equal(np.asarray(rc["pfix"]), _saved[0]["pfix"])
                     or not np.array_equal(np.asarray(rc["egfix"]), _saved[0]["egfix"]))
+        if _wet_pts:
+            say(f"    the retry would still leave land an element fits in the water "
+                f"near {_wet_pts[:3]}; not taken")
         if _changed:
             assemble_constraints()
             shapely.prepare(hole)
@@ -2119,6 +2168,7 @@ if RIM_REPAIR and best is not None and best[1] > 0 and not best[0]:
             if _best2 is not None and (_best2[0], _best2[1]) < (best[0], best[1]):
                 best, _taken = _best2, True
                 reports["search_pass"] = 2
+                reports["land_meshed_as_water_m2"] = _wet_area
             else:
                 say("    the retry did not do better; the first search's best stands")
     finally:

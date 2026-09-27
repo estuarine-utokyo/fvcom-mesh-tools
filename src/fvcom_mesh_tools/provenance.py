@@ -47,8 +47,14 @@ def dataset_files(path) -> list[Path]:
     p = Path(path)
     if p.suffix.lower() != ".shp":
         return [p]
-    return [p] + [q for q in (p.with_suffix(x) for x in (".shx", ".dbf", ".prj", ".cpg"))
-                  if q.exists()]
+    # matched without case: GDAL reads LAND.SHP with LAND.PRJ (review, round 3)
+    side = {".shx", ".dbf", ".prj", ".cpg"}
+    try:
+        sibs = sorted(q for q in p.parent.iterdir()
+                      if q.stem == p.stem and q.suffix.lower() in side)
+    except OSError:
+        sibs = []
+    return [p] + sibs
 
 
 def git_state(path) -> dict[str, Any] | None:

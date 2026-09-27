@@ -2322,3 +2322,46 @@ def test_rim_repair_steps_each_tip_back_once(gap_factor):
     assert 1 <= rep["n_tips_stepped_back"] <= 3
     pier = p[(p[:, 0] > 185) & (p[:, 0] < 215) & (p[:, 1] > 1)]
     assert (300.0 - pier[:, 1]).min() >= gap_factor * 30.0
+
+
+def test_land_an_element_fits_uses_the_size_where_the_disc_stands():
+    """review round 3: one representative point's size (280 m) hid a 25 m disc
+    where the elements are 50 m."""
+    from fvcom_mesh_tools.patch import land_an_element_fits
+
+    land = shapely.intersection(shapely.box(-100, 400, 2500, 500), shapely.box(0, 0, 3000, 1000))
+
+    def size(q):
+        q = np.atleast_2d(q)
+        return np.clip(30.0 + 0.2 * q[:, 0], 30.0, 400.0)
+
+    assert land_an_element_fits(land, size, 30.0)
+    # a coastline sliver a few metres wide holds nothing
+    assert land_an_element_fits(shapely.box(0, 0, 3000, 8), size, 30.0) == []
+
+
+def test_a_pier_tip_steps_back_only_over_land_no_element_fits_in():
+    """review round 3: stepping back by 1.5 elements handed 5,000 m2 of a
+    120 m pier to the water."""
+    from fvcom_mesh_tools.patch import hole_polygon, land_an_element_fits, rim_repair
+
+    pfix = np.array([[0.0, 0.0], [190.0, 0.0], [190.0, 297.0], [310.0, 297.0],
+                     [310.0, 0.0], [600.0, 0.0], [600.0, 300.0], [0.0, 300.0]])
+    egfix = np.array([[k, (k + 1) % 8] for k in range(8)])
+    size = lambda xy: np.full(len(np.atleast_2d(xy)), 30.0)  # noqa: E731
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(8, -1), hole_polygon(pfix, egfix),
+                                     size, gap_factor=1.5)
+    wet = shapely.intersection(hole_polygon(p, e), shapely.box(190, 0, 310, 297))
+    assert land_an_element_fits(wet, size, 30.0) == []
+
+
+def test_filter_shoreline_local_takes_an_iterator_of_land():
+    """review round 3: an iterator was spent by the first band."""
+    from fvcom_mesh_tools.patch import filter_shoreline_local
+
+    land = [shapely.box(-500, -500, 1500, 500)]
+    fp = shapely.box(0, -1000, 1000, 1000)
+    size = lambda q: np.full(len(np.atleast_2d(q)), 120.0)  # noqa: E731
+    a, _ = filter_shoreline_local(land, size, 30.0, fp, keep_land=land[0])
+    b, _ = filter_shoreline_local(iter(land), size, 30.0, fp, keep_land=land[0])
+    assert a.area == pytest.approx(b.area)

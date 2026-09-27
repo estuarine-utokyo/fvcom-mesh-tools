@@ -386,6 +386,7 @@ def test_a_retry_that_moves_the_rim_and_does_no_better_is_put_back():
                PFIX_ALL=rc["pfix"], EGFIX_ALL=rc["egfix"], PFIX_BASE_ALL=rc["pfix_base"],
                boundary=hole.boundary, shapely=shapely, apply_rim_repair=apply_rim_repair,
                RIM_PINNED=np.zeros(0, dtype=int),
+               wet_land_after_repair=lambda: ([], 0.0),
                assemble_constraints=assemble_constraints)
     before = rc["pfix"].copy()
     try:
@@ -427,6 +428,7 @@ def test_rim_repair_pins_the_points_it_makes_or_moves():
            "hole_polygon": hole_polygon, "h_achieved": lambda q: np.full(len(q), 30.0),
            "say": lambda *a: None, "RIM_PINNED": np.zeros(0, dtype=np.int64),
            "shapely": shapely}
+    driver_function("_nbr_xy", env)
     apply = driver_function("apply_rim_repair", env)
     rep = apply()
     assert rep["n_tips_stepped_back"] >= 1
@@ -434,3 +436,80 @@ def test_rim_repair_pins_the_points_it_makes_or_moves():
     moved = {tuple(np.round(q, 3)) for q in env["rc"]["pfix"]
              if not any(np.allclose(q, o) for o in pfix)}
     assert moved and moved <= pinned
+
+
+def test_rim_repair_pins_a_survivor_that_becomes_a_corner():
+    """review round 3: taking (190, 297) out made (190, 277) a corner without
+    moving it, and it was left free to slide along the old pier curve."""
+    import shapely
+
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    pfix = np.array([[0.0, 0.0], [190.0, 0.0], [190.0, 277.0], [190.0, 297.0],
+                     [202.0, 297.0], [202.0, 277.0], [202.0, 0.0], [600.0, 0.0],
+                     [600.0, 500.0], [0.0, 500.0]])
+    rc = {"pfix": pfix, "egfix": np.array([[k, (k + 1) % 10] for k in range(10)]),
+          "pfix_base": np.full(10, -1)}
+    env = {"np": np, "rc": rc, "WALL_SEGS": np.zeros((0, 2), dtype=np.int64),
+           "hole": hole_polygon(pfix, rc["egfix"]), "rim_repair": rim_repair,
+           "hole_polygon": hole_polygon, "h_achieved": lambda q: np.full(len(q), 30.0),
+           "say": lambda *a: None, "RIM_PINNED": np.zeros(0, dtype=np.int64),
+           "shapely": shapely}
+    driver_function("_nbr_xy", env)
+    apply = driver_function("apply_rim_repair", env)
+    apply()
+    out = env["rc"]["pfix"]
+    if not any(np.allclose(q, [190.0, 297.0]) for q in out):      # it was taken out
+        pinned = {tuple(np.round(out[k], 3)) for k in env["RIM_PINNED"]}
+        assert (190.0, 277.0) in pinned
+
+
+def test_the_land_check_runs_again_after_a_rim_repair():
+    """review round 3: the check ran once, before the repairs that hand land
+    to the water."""
+    import shapely
+
+    from fvcom_mesh_tools.patch import land_an_element_fits
+
+    env = {"np": np, "shapely": shapely, "land_an_element_fits": land_an_element_fits,
+           "h_achieved": lambda q: np.full(len(np.atleast_2d(q)), 30.0), "FINE_H": 60.0,
+           "WET_LAND_SRC": shapely.box(100, 0, 300, 300), "hole": shapely.box(0, 0, 1000, 1000)}
+    check = driver_function("wet_land_after_repair", env)
+    pts, area = check()
+    assert pts and area == pytest.approx(200 * 300)
+    env["hole"] = shapely.difference(shapely.box(0, 0, 1000, 1000), shapely.box(100, 0, 300, 300))
+    assert check()[0] == []
+
+
+def test_a_retry_that_wets_land_is_redone_without_stepping_tips_back():
+    """review round 3: a tip stepped back over land an element fits in; the
+    retry is redone keeping the tips, not thrown away."""
+    import tempfile
+
+    import shapely
+
+    tmp = Path(tempfile.mkdtemp())
+    bad = (np.array([1]), None, None, np.arange(1))
+    env = seed_search_env(tmp, attempts={k: bad for k in range(5)}, qa_failures={1: 2})
+    rc = {"pfix": np.array([[0.0, 0.0], [10.0, 0.0], [0.0, 10.0]]),
+          "egfix": np.array([[0, 1], [1, 2], [2, 0]]), "pfix_base": np.full(3, -1)}
+    calls = []
+
+    def apply_rim_repair(tag="", **kw):
+        calls.append(kw.get("retreat_tips", True))
+        rc["pfix"] = rc["pfix"] + np.array([[0.0, 0.0], [-1.0, 0.0], [0.0, 0.0]])
+        return {}
+
+    wet = iter([([[5.0, 5.0]], 100.0), ([], 0.0)])
+    hole = shapely.box(0, 0, 10, 10)
+    env.update(RIM_REPAIR=True, rc=rc, WALL_SEGS=np.zeros((0, 2), dtype=int), hole=hole,
+               PFIX_ALL=rc["pfix"], EGFIX_ALL=rc["egfix"], PFIX_BASE_ALL=rc["pfix_base"],
+               boundary=hole.boundary, shapely=shapely, apply_rim_repair=apply_rim_repair,
+               RIM_PINNED=np.zeros(0, dtype=int), wet_land_after_repair=lambda: next(wet),
+               assemble_constraints=lambda: None)
+    try:
+        run_search(env)
+    except SystemExit:
+        pass
+    assert calls == [True, False]
+    assert env["_called"] == [0, 1, 2, 3, 4] * 2          # the kept-tips repair was searched

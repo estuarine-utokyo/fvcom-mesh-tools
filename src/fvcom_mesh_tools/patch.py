@@ -937,6 +937,9 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
     from rasterio import features
     from rasterio.transform import from_origin
 
+    # an iterator of polygons would be spent by the first band (review, round 3)
+    if not hasattr(land, "geom_type"):
+        land = list(land)
     s = float(spacing if spacing is not None else h0)
     x0, y0, x1, y1 = footprint.bounds
     nx, ny = int(np.ceil((x1 - x0) / s)) + 1, int(np.ceil((y1 - y0) / s)) + 1
@@ -1411,7 +1414,7 @@ def _ring_at_size(ring: np.ndarray, size, *, fine_h=None) -> np.ndarray:
 def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                min_edge_factor=0.5, gap_factor=1.0, min_angle_deg=60.0,
                operations=("short_edges", "slits", "angles"), rounds=2,
-               focus=None, focus_factor=1.5):
+               focus=None, focus_factor=1.5, retreat_tips=True):
     """Check the finished rim against the local size and repair what fails.
 
     Each rule upstream (the filter, the corner walk, blunting, rooting) is
@@ -1439,6 +1442,8 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
     ``angles``  :func:`blunt_acute_corners` once more on the finished rim,
         wall roots protected: rooting and the operations above can make a
         water corner under ``min_angle_deg``.
+
+    ``retreat_tips`` False leaves a tip where it is (the slit is reported).
 
     ``focus`` ((m, 2) points, e.g. the QA offenders of a failed seed)
     limits the short-edge and slit operations to within ``focus_factor``
@@ -1598,6 +1603,11 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
         # it must go INTO the land (the pier), not into the water
         if poly.contains(shapely.Point(new)):
             return False
+        # ...and hand over only land no element fits in: stepping back by
+        # 1.5 elements took 5,000 m2 off a 120 m pier (review, round 3)
+        handed = shapely.make_valid(shapely.Polygon([pfix[u], pfix[v], pfix[w], new]))
+        if not handed.buffer(-0.5 * float(np.asarray(size(pfix[v][None]))[0])).is_empty:
+            return False
         edges = shapely.MultiLineString([[pfix[u], new], [new, pfix[w]]])
         others = [shapely.LineString(pfix[[c, e2]]) for c, e2 in egfix.tolist()
                   if not ({c, e2} & {v, u, w})]
@@ -1681,7 +1691,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                 # whose tip nearly touches the quay across (Yokohama, 3.3 m).
                 # The tip steps back instead, straight away from the quay,
                 # until the gap is one element.
-                if retreat(v, q, float(h_all[v]), nb, poly):
+                if retreat_tips and retreat(v, q, float(h_all[v]), nb, poly):
                     return True
                 slits_left.append({"at": [round(float(c), 1) for c in pfix[v]],
                                    "why": "wide enough for an element, and the tip "
@@ -1758,6 +1768,42 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
               "n_corners_blunted": sum(r["n_corners_blunted"] for r in angles_rep),
               "corners": [a for r in angles_rep for a in r["at"]][:50]}
     return pfix, egfix, pfix_base, ident, report
+
+
+def land_an_element_fits(land, size, h_min: float, *, factor: float = 0.5) -> list:
+    """Points of ``land`` that hold a disc of ``factor`` local elements.
+
+    A centre ``c`` qualifies when its distance to the land's edge is at least
+    ``factor * size(c)`` -- the size where the disc would stand, not one size
+    for the whole polygon (review, round 3: a representative point at 280 m
+    hid a 25 m disc where the elements are 50 m).  Only the part of the land
+    ``factor * h_min`` inside its edge can hold any disc, and it is searched
+    on a grid of ``factor * h_min / 2``, ``h_min`` being the smallest element
+    the field has anywhere.  Returns the qualifying points (empty if none).
+    """
+    import shapely
+
+    if not (np.isfinite(h_min) and h_min > 0):
+        raise ValueError("h_min must be finite and positive")
+    out = []
+    step = 0.5 * factor * h_min
+    for g in getattr(land, "geoms", [land]):
+        if g.geom_type != "Polygon" or g.is_empty:
+            continue
+        core = g.buffer(-factor * h_min)
+        if core.is_empty:
+            continue
+        x0, y0, x1, y1 = core.bounds
+        gx, gy = np.meshgrid(np.arange(x0, x1 + step, step), np.arange(y0, y1 + step, step))
+        pts = np.column_stack([gx.ravel(), gy.ravel()])
+        pts = pts[shapely.contains_xy(core, pts[:, 0], pts[:, 1])]
+        rp = np.asarray(core.representative_point().coords)[:, :2]
+        pts = np.vstack([pts, rp]) if len(pts) else rp
+        d = shapely.distance(g.boundary, shapely.points(pts[:, 0], pts[:, 1]))
+        h = np.asarray(size(pts), dtype=float)
+        ok = d >= factor * h
+        out.extend(np.round(pts[ok][:3], 1).tolist())
+    return out
 
 
 def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):

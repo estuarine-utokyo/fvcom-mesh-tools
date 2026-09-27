@@ -24,7 +24,12 @@ from fvcom_mesh_tools.cli.refine_run import main as refine_main
 from fvcom_mesh_tools.dem import tokyo_bay as tb
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
-from fvcom_mesh_tools.patch import _corner_walk, blunt_acute_corners, hole_polygon
+from fvcom_mesh_tools.patch import (
+    _corner_walk,
+    blunt_acute_corners,
+    hole_polygon,
+    land_an_element_fits,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -178,7 +183,8 @@ def test_f11_the_land_filter_does_not_wait_for_a_base_coastline():
            "h_achieved": lambda q: np.full(len(q), 30.0), "hole_polygon": hole_polygon,
            "rc": {"pfix": np.zeros((0, 2)), "egfix": np.zeros((0, 2), dtype=np.int64),
                   "pfix_base": np.zeros(0, dtype=np.int64), "curves": []},
-           "np": np, "shapely": shapely, "say": lambda *a: None}
+           "np": np, "shapely": shapely, "say": lambda *a: None,
+           "land_an_element_fits": land_an_element_fits}
     import json
     import tempfile
 
@@ -233,7 +239,8 @@ def test_a_refused_wall_pocket_gets_its_walls_back_even_off_its_point():
            "h_achieved": lambda q: np.full(len(q), 200.0), "hole_polygon": hole_polygon,
            "rc": {"pfix": np.zeros((0, 2)), "egfix": np.zeros((0, 2), dtype=np.int64),
                   "pfix_base": np.zeros(0, dtype=np.int64), "curves": []},
-           "np": np, "shapely": shapely, "say": lambda *a: None}
+           "np": np, "shapely": shapely, "say": lambda *a: None,
+           "land_an_element_fits": land_an_element_fits}
     exec(compile(ast.Module(body=[isl], type_ignores=[]), "<driver block>", "exec"), env)
     assert env["_walls_src"] is before
 
@@ -259,7 +266,8 @@ def test_land_wide_enough_for_an_element_may_not_be_meshed_as_water(tmp_path):
            "h_achieved": lambda q: np.full(len(q), 30.0), "hole_polygon": hole_polygon,
            "rc": {"pfix": np.zeros((0, 2)), "egfix": np.zeros((0, 2), dtype=np.int64),
                   "pfix_base": np.zeros(0, dtype=np.int64), "curves": []},
-           "np": np, "shapely": shapely, "say": lambda *a: None}
+           "np": np, "shapely": shapely, "say": lambda *a: None,
+           "land_an_element_fits": land_an_element_fits}
     with pytest.raises(SystemExit, match="wide enough for an element"):
         exec(compile(ast.Module(body=[isl], type_ignores=[]), "<driver block>", "exec"), env)
     # a coastline chord's sliver, a few metres wide, is not

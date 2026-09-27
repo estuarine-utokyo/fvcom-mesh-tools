@@ -92,3 +92,13 @@ def test_dataset_files_takes_a_shapefiles_sidecars_and_a_geojson_alone(tmp_path)
     gj = tmp_path / "area.geojson"
     gj.write_text("{}")
     assert dataset_files(gj) == [gj]
+
+
+def test_dataset_files_matches_sidecars_without_case(tmp_path):
+    """review round 3: LAND.SHP's LAND.PRJ and LAND.DBF were missed."""
+    from fvcom_mesh_tools.provenance import dataset_files
+
+    for ext in (".SHP", ".SHX", ".DBF", ".PRJ", ".CPG"):
+        (tmp_path / f"LAND{ext}").write_text(ext)
+    got = {p.suffix for p in dataset_files(tmp_path / "LAND.SHP")}
+    assert got == {".SHP", ".SHX", ".DBF", ".PRJ", ".CPG"}

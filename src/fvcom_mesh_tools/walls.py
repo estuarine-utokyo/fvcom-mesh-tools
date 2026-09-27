@@ -630,6 +630,7 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
     import shapely
     from shapely.ops import nearest_points, polygonize, substring
 
+    walls = list(walls)                 # iterated more than once (review, round 3)
     lines = [shapely.LineString(np.asarray(w.coords)[:, :2]) for w in walls if w.length > 0]
     empty = shapely.Polygon()
     rep = {"n_pockets_closed": 0, "area_m2": 0.0, "at": [], "wkt": [], "n_chords": 0}
@@ -685,10 +686,11 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
         probe = np.vstack([np.asarray(pt.coords)[:, :2],
                            np.asarray(f.exterior.coords)[:, :2]])
         h = float(np.min(np.asarray(size(probe), dtype=float)))
-        # ...and inside it, on a grid of a quarter of that: a fine region
-        # between the vertices was missed (review, round 2)
+        # ...and inside it, on a grid fine enough for the smallest element
+        # the field is gated on: a quarter of the coarse size read at the
+        # vertices missed a fine region between them (reviews, rounds 2-3)
         x0, y0, x1, y1 = f.bounds
-        step = max(2.0, 0.25 * h)
+        step = max(2.0, 0.25 * (min_h if min_h > 0 else h))
         gx, gy = np.meshgrid(np.arange(x0 + 0.5 * step, x1, step),
                              np.arange(y0 + 0.5 * step, y1, step))
         grid = np.column_stack([gx.ravel(), gy.ravel()])

@@ -472,3 +472,265 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 After the round-2 fixes all six hires recipes rebuild accepted: five
 byte-identical to the round-1 rebuild, Yokohama (search_pass 2, 6 tip
 retreats) moving by up to 22 m.
+
+
+## Round 3
+
+### Answer (verbatim)
+
+Read-only review completed at `2d8d1d7`. No files changed, mesh generation performed, or batch jobs submitted.
+
+Using the requested interpreter, the standard pytest invocation failed before collection because the sandbox has no writable temporary directory. With `--capture=sys --noconftest -p no:cacheprovider`, the expanded geometry selection passed **50 tests**. Three driver regressions also passed with filesystem writes mocked. The findings below use in-memory reproductions. `git diff --check` reported Markdown hard-break whitespace in the archived review; the working tree remains clean.
+
+**Previous findings**
+
+| Finding | Status | Reason |
+|---|---|---|
+| R1 #1: Repair under preserve | RESOLVED | `RIM_REPAIR` requires `resolve`; regression passes. |
+| R1 #2: Lagoon entrance closed | RESOLVED | Original lagoon fixture remains connected; regression passes. |
+| R1 #3: Refused pocket loses walls | RESOLVED | Restoration uses polygon overlap; off-centre regression passes. |
+| R1 #4: Triangle ring collapse | RESOLVED | Undersized rings and duplicate-edge removals are refused. |
+| R1 #5: Retreat-only retry | RESOLVED | Array comparison detects changes; mocked search/restoration regression passes. |
+| R1 #6: Empty land becomes land | RESOLVED | Empty-land regression passes. |
+| R1 #7: Invalid continuous-width arguments | RESOLVED | Reported invalid arguments are rejected; empty footprints are handled. |
+| R1 #8: Ignored seed argument | RESOLVED | Mocked regression confirms the supplied seed list is used. |
+| R1 #9: GPL import through provenance | RESOLVED | Distribution metadata replaces imports; regression passes. |
+| R1 #10: Missing provenance inputs/settings | PARTIAL | Added inputs/settings are recorded, but dataset inventory still misses uppercase sidecars; finding 5. |
+| R1 #11: Untracked source omitted | RESOLVED | Untracked files and `path_tracked` are recorded. |
+| R1 #12: Accepted-seed-only replay | RESOLVED | Documentation requires the original sequence for pass 2; selected pass is recorded. |
+| R1 #13: Ineffective fixtures | RESOLVED | Revised fixtures exercise their operations/guards; unreachable merge operation was removed. |
+| R1 #14: Fixed 10 m documentation | RESOLVED | Documentation states one-third of the finest target. |
+| R2 #1: Resolved land accepted as water | PARTIAL | Constant-size regression passes, but variable sizing and subsequent repairs bypass protection; findings 1–2. |
+| R2 #2: All-land raster crashes | RESOLVED | All-land regression passes. |
+| R2 #3: Detached artificial island | RESOLVED | Detached pieces are rejected; regression passes. |
+| R2 #4: Unsampled fine region erased | PARTIAL | Original fixture passes, but the coarse sampling grid still misses smaller fine regions; finding 4. |
+| R2 #5: Obsolete sliding curves | PARTIAL | Moved/created points are pinned, but unchanged points that become corners are missed; finding 3. |
+| R2 #6: Geometry provenance omissions | PARTIAL | Lowercase sidecars and GeoJSON are handled; uppercase sidecars remain omitted; finding 5. |
+| R2 #7: Falsy experimental values | RESOLVED | Direct calls reject `False`, `0`, `""`, and `{}`; `None` becomes `[]`. |
+| R2 #8: Wrong seed-variable documentation | RESOLVED | Header documents `LR_SEEDS`. |
+| Author’s zero-progress retreat finding | RESOLVED | Both threshold regressions pass; the longer retreat exposes the separate validation gap in finding 2. |
+
+**Findings**
+
+1. **Major — The land-overlap guard misses resolvable land when size varies across a polygon.**  
+   Location: [420_local_refine.py:732](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:732).
+
+   The guard samples `h_achieved` at one representative point and uses that radius everywhere in the polygon.
+
+   **Reproduction:** Set the hole to `box(0,0,3000,1000)`, land to `box(-100,400,2500,500)`, and `h(x,y)=clip(30+0.2*x,30,400)`. The actual shoreline filter retains this land with `h0=30`, `land_width_factor=.5`, `land_width_max_band=1`, `keep_land=land`, and continuous width enabled. `island_rings` refuses it for crossing the rim.
+
+   Executing the actual driver block then permits **250,000 m²** of land inside the hole: its representative point samples `h=280`, so erosion by 140 m is empty. Yet at `(100,450)`, `h=50`, and a **25 m radius disc fits entirely inside that land**. The field’s slope is only 0.2; this does not require a discontinuity.
+
+   **Fix:** Test clearance against the size at potential disc centres throughout the overlap, using controlled/adaptive sampling or conservative bounds. A single representative-point size cannot implement the stated local-size criterion.
+
+2. **Major — Later rim repairs invalidate the land check, and the report retains the pre-repair overlap.**  
+   Locations: [420_local_refine.py:735](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:735), [420_local_refine.py:2105](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:2105).
+
+   The overlap check runs before blunting, wall rooting, initial rim repair, and the feedback retry. None of those paths repeats it. The round-2 change making retreat respect `gap_factor=1.5` can now introduce land that fails the new guard’s own criterion.
+
+   **Reproduction:** Use this cyclic, all-free water rim with constant `h=30`:
+
+   ```python
+   [(0,0), (190,0), (190,297), (310,297),
+    (310,0), (600,0), (600,300), (0,300)]
+   ```
+
+   The pier land is `box(190,0,310,297)`. Execute the actual island/check block, default `apply_rim_repair()`, then the retry with `min_edge_factor=.75`, `gap_factor=1.5`, `rounds=1`, focused at `(190,269.97)` and `(310,269.97)`.
+
+   The report still says **`land_meshed_as_water_m2=0`**, while the resulting hole overlaps **5,045.4 m²** of pier land. Eroding that overlap by `0.5*h=15` leaves **1,084.05 m²**, so it unequivocally fails the intended guard. Seed acceptance does not recheck it.
+
+   **Fix:** Recompute and gate overlap after geometry changes, including retry candidates and the delivered boundary. Reject or restore repairs that violate the land contract, and report the selected geometry’s overlap.
+
+3. **Minor — Pinning misses unchanged points that become corners when a neighbour is removed.**  
+   Location: [420_local_refine.py:1242](/octfs/work/G16445/v610con-mesh-tools/notebooks/420_local_refine.py:1242).
+
+   `RIM_PINNED` detects new coordinates, but a topology change can create a corner without moving its surviving vertex. That vertex remains eligible to slide along the obsolete source curve.
+
+   **Reproduction:** With constant `h=30`, cyclic edges and all-free points, use:
+
+   ```python
+   [(0,0), (190,0), (190,277), (190,297), (202,297),
+    (202,277), (202,0), (600,0), (600,500), (0,500)]
+   ```
+
+   Actual `apply_rim_repair()` removes `(190,297)` and returns **`RIM_PINNED=[]`**. Its surviving neighbour `(190,277)` is now a corner.
+
+   For the valid fan with nodes `[(190,277),(190,250),(202,297),(160,280)]` and faces `[[1,0,3],[0,2,3]]`, allowing only node 0 to slide along the original pier curve moves it to **`(190,273.76)`** in one improvement round. Using the repaired curve keeps it at `(190,277)`.
+
+   **Fix:** Maintain current sliding curves separately from source-reference curves, or also pin surviving vertices whose incident geometry changes. Include that state in retry restoration.
+
+4. **Minor — Pocket sampling still misses fine regions smaller than the coarse sampling grid.**  
+   Location: [walls.py:691](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/walls.py:691).
+
+   Grid spacing is chosen from the initial coarse samples. It therefore cannot establish that no finer region lies between those samples.
+
+   **Reproduction:** Use land `box(-2000,-2000,2000,0)` and wall:
+
+   ```python
+   [(0,0), (0,380), (400,380), (400,150), (40,150)]
+   ```
+
+   Set `h=30` within 20 m of `(100,250)` and `h=200` elsewhere. With `min_h=60.000001`, `close_wall_pockets` closes **92,000 m²**, including the fine region. The 50 m sampling grid misses that region completely.
+
+   **Fix:** Use declared fine-region geometry or conservative size bounds to establish the exclusion. For a sampled implementation, require a known minimum feature scale/variation bound and sample accordingly; quarter of the initially observed coarse size is insufficient.
+
+5. **Minor — Uppercase shapefile sidecars remain absent from provenance.**  
+   Location: [provenance.py:50](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/provenance.py:50).
+
+   Extension recognition is case-insensitive, but sidecar lookup constructs only lowercase suffixes.
+
+   **Reproduction:** For `LAND.SHP`, `LAND.SHX`, `LAND.DBF`, `LAND.PRJ`, and `LAND.CPG`, mocked filesystem inventory makes `dataset_files("…/LAND.SHP")` return **only `LAND.SHP`**. I also verified that GDAL reads an uppercase dataset through an in-memory ZIP, including its CRS and attributes. Changing the consumed uppercase `.PRJ` or `.DBF` therefore leaves the recorded dataset hash unchanged.
+
+   **Fix:** Enumerate actual sibling filenames with case-insensitive sidecar matching, preserving their actual paths, and test uppercase/mixed-case datasets.
+
+6. **Minor — Package provenance records the driver’s checkout rather than the imported package’s checkout.**  
+   Location: [420_local_refine.py:336](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:336).
+
+   The `"fvcom_mesh_tools"` entry uses the notebook’s `__file__`. Python can import the package from a different editable checkout or installed distribution; the driver neither records that origin nor checks that it matches.
+
+   **Evidence:** Executing the extracted provenance assignment with a different driver-tree path while retaining the actual imported package attributes that other tree to `"fvcom_mesh_tools"`. The imported implementation remains in this repository. Running checkout A’s notebook with an environment installed from checkout B has this same mismatch.
+
+   **Fix:** Record the driver and imported package separately, deriving the package entry from its actual module `__file__`. For an installation outside Git, record distribution identity and relevant source hashes.
+
+7. **Minor — Geometry iterators are consumed twice, silently dropping land or walls.**  
+   Locations: [patch.py:954](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:954), [walls.py:713](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/walls.py:713).
+
+   Both helpers accept iterable inputs but reuse them after consumption.
+
+   **Reproductions:**
+
+   - For land `[box(-500,-500,1500,500)]`, footprint `box(0,-1000,1000,1000)`, constant `h=120`, `h0=30`, and `keep_land` equal to that land polygon, `filter_shoreline_local` returns **2,000,000 m²** with a list but **1,000,000 m²** with `iter(list)`. The iterator case also incorrectly reports zero original land area.
+   - For a single 500 m pier `[(0,0),(0,500)]`, coastal land below `y=0`, and `h=30`, `close_wall_pockets` reports zero closures in both cases. A list preserves **500 m** of wall; an iterator returns **zero walls**.
+
+   **Fix:** Materialize iterable inputs once on entry and reuse the materialized geometry for every pass, report, and unchanged-result return.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 2 major, 5 minor, 0 nit)
+
+
+### Prompt
+
+```markdown
+# Review request, round 3: coastline rules for local refinement (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (use `/octfs/work/G16445/v61021/miniforge3/envs/oceanmesh-bench/bin/python`;
+the tests run with `.../bin/python -m pytest -q tests/`). Do not submit
+batch jobs and do not run mesh generation (`notebooks/420_local_refine.py`
+needs the compute nodes). Answer in English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+`git diff 0c5d9b3..HEAD` (now 21 commits; 7a6cffe fixed round 1, 2d8d1d7 round 2; read `git log 0c5d9b3..HEAD` for the
+reasons). The local-refinement driver `notebooks/420_local_refine.py`
+refines a Tokyo Bay FVCOM mesh inside a region, re-cuts the coastline from
+OSM (`hires.coastline: resolve`) and must pass QA with 0 violations
+introduced. Changes in scope:
+
+- `src/fvcom_mesh_tools/patch.py`
+  - `rim_repair`: short edges (remove a free end, or merge a cap between
+    two corners to its midpoint), slits (throat under one element; close a
+    dead end no element fits in, otherwise step a pier tip back), angles
+    (`blunt_acute_corners` again with wall roots protected), `focus=` for a
+    QA-feedback retry; returns a remap for wall references.
+  - `unresolvable_water` and `filter_shoreline_local(continuous_width=)`:
+    coarse-zone water judged at the local size by a distance transform
+    (radius 0.75 h, dead ends only, straits left open).
+  - `filter_shoreline_local(keep_land=)`: in coarse bands a removed land
+    piece is kept whole if most of it is base land.
+  - `_source_substring`: the arc of a closed ring that fits the stretch.
+  - `blunt_acute_corners(protect=)`; `island_rings` reports area inside.
+  - Removal of `water_wedges`, `short_chords`, `seam_water`.
+- `src/fvcom_mesh_tools/walls.py`: `close_wall_pockets`.
+- `src/fvcom_mesh_tools/provenance.py` (new): commits, file hashes,
+  library versions recorded in `report.json`.
+- `src/fvcom_mesh_tools/refine.py`: `hires.rim_repair`,
+  `continuous_width`, `keep_base_land`, `wall_pockets` (all default true),
+  `hires.experimental` list.
+- `notebooks/420_local_refine.py`: wiring; `LR_EXPERIMENTAL` override;
+  `apply_rim_repair` / `assemble_constraints`; `seed_search` and the
+  one-shot retry near the offenders with snapshot/restore; flat-face drop
+  after the fill; wall-pocket restore when an island is refused;
+  `rejected_seed<k>.npz`; provenance.
+- `jobs/octopus/417_hires_refine.sh` (LR_EXPERIMENTAL documented).
+- Tests: `tests/test_patch.py`, `test_walls.py`, `test_refine.py`,
+  `test_provenance.py`, `test_local_refine_driver.py`,
+  `test_review_hires_fixes.py`.
+- Docs: `docs/USER_GUIDE.md` §4, §5 (reproducibility), §11; `CHANGELOG.md`;
+  `recipes/refine/*.yaml` comments.
+
+Evidence already gathered by the author (on compute nodes): all six hires
+recipes accepted with the four rules on, byte-identical rebuilds from the
+accepted seed, FVCOM smoke runs and 20-day M2 runs pass.
+
+Out of scope: the rest of the package, unless these changes touch it.
+
+## Previous rounds
+Round 1 (FAIL 0/3/10/1): all fixed in 7a6cffe; your round-2 status table
+had 13 RESOLVED and #10 PARTIAL.
+Round 2 (FAIL 0/1/6/1): all fixed in 2d8d1d7 (`git show 2d8d1d7`; triage in
+`docs/coastline-rules-review-20260927.md`).
+1. crossing land only warned -> the driver fails before meshing if land
+   inside the hole holds a disc of 0.5 h (refused wall pockets excepted);
+   `land_meshed_as_water_m2` reported. (All six recipes' land in the hole
+   is chord slivers, none holds such a disc; all still accepted.)
+2. all-land raster -> empty result.
+3. detached water -> left open (`n_detached_left_open`).
+4. pocket size sampled on an interior grid of a quarter element.
+5. points rim_repair makes or moves are pinned in the seam repair
+   (`RIM_PINNED`, restored with the retry snapshot).
+6. `provenance.dataset_files` (shapefile sidecars; GeoJSON itself) for land
+   and region files -- completes round-1 #10.
+7. `hires.experimental` must be a list (None -> []).
+8. driver header documents `LR_SEEDS`.
+Also fixed (found by us while rebuilding): `rim_repair`'s tip retreat put
+the tip exactly at the throat distance, rounding left it inside, and it was
+stepped back again by 0 m -- 2,180 times at Yokohama, and never out under
+the retry's gap_factor 1.5. It now steps to 1.001 x gap_factor x h and a
+no-progress step is refused.
+All six hires recipes rebuild accepted on compute nodes. 896 tests pass.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the whole scope above and everything it
+   touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| 1 | major | yes: reviewer's sloping field; one point's h hid a 25 m disc | yes | patch.land_an_element_fits: disc centres searched inside the land (0.5 h_min in) on a grid of 0.25 h_min, each judged at its own size; test_land_an_element_fits_uses_the_size_where_the_disc_stands |
+| 2 | major | yes: retreat at gap 1.5 handed 5,045 m2 of a 120 m pier to the water, report stale | yes | retreat refuses to hand over land a half-element disc fits in; the land check runs again after rim repair (fails the run) and on the retry (retry not taken); report updated; test_a_pier_tip_steps_back_only_over_land_no_element_fits_in, test_the_land_check_runs_again_after_a_rim_repair |
+| 3 | minor | yes: survivor of a removal not pinned | yes | a point whose rim neighbours changed is pinned too; test_rim_repair_pins_a_survivor_that_becomes_a_corner |
+| 4 | minor | yes: 20 m fine region missed at 50 m grid | yes | pocket grid spacing from min_h (the gate), not from the coarse size; test_close_wall_pockets_sees_a_fine_region_smaller_than_the_coarse_grid |
+| 5 | minor | yes: uppercase sidecars | yes | case-insensitive sibling match; test_dataset_files_matches_sidecars_without_case |
+| 6 | minor | yes: driver path recorded as the package | yes | package entry from sys.modules["fvcom_mesh_tools"].__file__, driver recorded separately |
+| 7 | minor | yes: iterators spent | yes | materialised on entry; test_filter_shoreline_local_takes_an_iterator_of_land, test_close_wall_pockets_takes_an_iterator_of_walls |
+| (self) | major | found while rebuilding: with the round-3 checks Yokohama failed -- its round-2 retry had stepped pier tips back over land an element fits in (375,761 3,925,679), which the new check refused | yes | when the retry fails the land check it is redone with `retreat_tips=False` (slits and short edges kept); Yokohama accepted that way; test_a_retry_that_wets_land_is_redone_without_stepping_tips_back |
+
+After the round-3 fixes all six hires recipes rebuild accepted: five
+byte-identical to the round-2 rebuild except Funabashi (5 m) and Futtsu
+nori (22 m) from the wider pinning, Yokohama through the kept-tips retry.

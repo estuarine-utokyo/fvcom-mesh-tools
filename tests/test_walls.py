@@ -487,3 +487,31 @@ def test_close_wall_pockets_sees_a_fine_region_inside_the_pocket():
         return np.where(np.hypot(q[:, 0] - 100, q[:, 1] - 265) < 40, 30.0, 200.0)
 
     assert close_wall_pockets([curl], land, size, min_h=60.000001)[2]["n_pockets_closed"] == 0
+
+
+def test_close_wall_pockets_sees_a_fine_region_smaller_than_the_coarse_grid():
+    """review round 3: a 20 m fine region fell between samples 50 m apart."""
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    land = shapely.box(-2000, -2000, 2000, 0)
+    curl = shapely.LineString([(0, 0), (0, 380), (400, 380), (400, 150), (40, 150)])
+
+    def size(q):
+        q = np.atleast_2d(q)
+        return np.where(np.hypot(q[:, 0] - 100, q[:, 1] - 250) < 20, 30.0, 200.0)
+
+    assert close_wall_pockets([curl], land, size, min_h=60.000001)[2]["n_pockets_closed"] == 0
+
+
+def test_close_wall_pockets_takes_an_iterator_of_walls():
+    """review round 3: an iterator came back as no walls at all."""
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    pier = shapely.LineString([(0, 0), (0, 500)])
+    _, kept, _ = close_wall_pockets(iter([pier]), shapely.box(-2000, -2000, 2000, 0),
+                                    _const(30.0))
+    assert sum(w.length for w in kept) == pytest.approx(500.0)
