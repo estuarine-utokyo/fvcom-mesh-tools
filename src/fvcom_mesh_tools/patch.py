@@ -891,6 +891,8 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
     for geom, value in features.shapes(band, transform=transform):
         zones.setdefault(int(value), []).append(shapely.geometry.shape(geom))
     pieces, rows = [], []
+    land_union = shapely.union_all([land] if hasattr(land, "geom_type") else list(land)) \
+        if keep_land is not None else None
     for k in sorted(zones):
         hk = h0 * 2.0 ** k
         zone = shapely.intersection(shapely.union_all(zones[k]), footprint)
@@ -904,10 +906,19 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
             # In the coarse bands land under two elements goes like water
             # does, and where both are unresolvable the order decides: at
             # Yokohama two 150 m quay blocks the base mesh has as land went
-            # first and left 0.19 km2 of new water behind.  ``keep_land``
-            # (land in the source AND in the base) stays land there; the
-            # narrow water round it is closed by the h0 pass below.
-            fk = shapely.union(fk, keep_land)
+            # first and left 0.19 km2 of new water behind.  A piece of land
+            # the band removes stays land if most of it is ``keep_land``
+            # (land in the source AND in the base) -- the WHOLE piece: kept
+            # only where the base has it, a Funabashi peninsula was cut in
+            # two along the base's coast, and the half that went left a wall
+            # and a 27 deg pocket against the half that stayed.  The narrow
+            # water round a kept piece is closed by the h0 pass below.
+            removed = shapely.difference(land_union, fk)
+            back = [q for q in getattr(removed, "geoms", [removed])
+                    if q.geom_type == "Polygon" and q.area > 0
+                    and shapely.intersection(q, keep_land).area >= 0.5 * q.area]
+            if back:
+                fk = shapely.union_all([fk, *back])
         part = shapely.intersection(fk, zone)
         pieces.append(part)
         rows.append({"band": k, "h_m": hk, "zone_km2": float(zone.area / 1e6),

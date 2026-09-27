@@ -257,9 +257,10 @@ HIRES = cfg["hires"]
 # recipe, for trying a rule on recipes that do not name it; the report
 # records what was used.
 EXPERIMENTAL = set(HIRES.get("experimental", [])) if HIRES is not None else set()
-# rim_repair and continuous_width are on unless the recipe says false
+# rim_repair, continuous_width, keep_base_land and wall_pockets are on
+# unless the recipe says false
 if HIRES is not None:
-    for _rule in ("rim_repair", "continuous_width"):
+    for _rule in ("rim_repair", "continuous_width", "keep_base_land", "wall_pockets"):
         if HIRES.get(_rule, True):
             EXPERIMENTAL.add(_rule)
         else:

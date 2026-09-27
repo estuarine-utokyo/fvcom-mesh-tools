@@ -451,3 +451,16 @@ def test_close_wall_pockets_stays_out_of_the_fine_zone():
     curl = shapely.LineString([(0, 0), (0, 300), (400, 300), (400, 70), (40, 70)])
     added, kept, rep = close_wall_pockets([curl], land, _const(200.0), min_h=200.0)
     assert rep["n_pockets_closed"] == 0
+
+
+def test_close_wall_pockets_leaves_a_pocket_smaller_than_one_element():
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    land = shapely.box(-2000, -2000, 2000, 0)
+    # a 60 x 40 m curl 150 m off the coast among 200 m elements: 2,400 m2,
+    # less than one element
+    curl = shapely.LineString([(0, 0), (0, 190), (60, 190), (60, 150), (5, 150)])
+    added, kept, rep = close_wall_pockets([curl], land, _const(200.0))
+    assert rep["n_pockets_closed"] == 0

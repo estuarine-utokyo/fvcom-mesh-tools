@@ -2216,3 +2216,21 @@ def test_unresolvable_water_leaves_a_strait_between_two_bodies_of_land():
                                    min_h=60.0, spacing=10.0)
     assert not shapely.intersects(lost, shapely.Point(0, -75))
     assert rep["n_straits_left_open"] >= 1
+
+
+def test_keep_land_keeps_a_removed_piece_whole_or_not_at_all():
+    # Funabashi: a narrow peninsula the base has mostly as land was kept only
+    # where the base has it, cut in two along the base's coast.
+    from fvcom_mesh_tools.patch import filter_shoreline_local
+
+    box = shapely.box(-1500, -1500, 1500, 1500)
+    mainland = shapely.box(-1500, 0, 1500, 1500)
+    pen = shapely.box(-75, -800, 75, 0)                        # 150 m wide
+    land = shapely.union_all([mainland, pen])
+    size = lambda p: np.full(len(np.atleast_2d(p)), 240.0)  # noqa: E731
+    base_part = shapely.box(-75, -600, 75, 0)                 # 75 % of it
+    out, _ = filter_shoreline_local(land, size, 30.0, box, spacing=50.0, keep_land=base_part)
+    assert shapely.contains(out, shapely.Point(0, -700))       # the whole of it
+    little = shapely.box(-75, -200, 75, 0)                    # 25 %
+    out, _ = filter_shoreline_local(land, size, 30.0, box, spacing=50.0, keep_land=little)
+    assert not shapely.contains(out, shapely.Point(0, -100))   # none of it

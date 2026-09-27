@@ -113,8 +113,8 @@ HIRES_BATHYMETRY = ("tokyo_bay", "base")
 HIRES_SCOPE = ("hole", "core")
 HIRES_BLEND = ("ramp", "none")
 # Coastline rules a recipe may switch on by name (docs/USER_GUIDE.md).
-# rim_repair and continuous_width are on by default and listed so that an
-# override (LR_EXPERIMENTAL) can name them.  water_wedges, short_chords and
+# All four are on by default (hires.<rule>: false turns one off) and are
+# listed so that an override (LR_EXPERIMENTAL) can name them.  water_wedges, short_chords and
 # seam_water worked round the band seams until continuous_width fixed them
 # at the source; no recipe used them and they were removed on 2026-09-27
 # (commit 4a8c503 has them).
@@ -328,7 +328,8 @@ def _hires(spec, cfg) -> dict[str, Any] | None:
                 f"{'coastline_tolerance_m' if key.endswith('_m') else key} exists "
                 "to refuse")
     _keys(spec, [], ["coastline", "bathymetry", "scope", "blend", "experimental",
-                     "rim_repair", "continuous_width"])
+                     "rim_repair", "continuous_width", "keep_base_land",
+                     "wall_pockets"])
     out = {
         "coastline": spec.get("coastline", "resolve"),
         "bathymetry": spec.get("bathymetry", "tokyo_bay"),
@@ -342,8 +343,14 @@ def _hires(spec, cfg) -> dict[str, Any] | None:
         # on by default since 2026-09-27 (owner): coarse-zone water judged at
         # the local size, no band seams; false restores the earlier filter
         "continuous_width": spec.get("continuous_width", True),
+        # on by default since 2026-09-27 (owner's policy of 2026-09-26: where
+        # land and water are both unresolvable, the base mesh's land stays)
+        "keep_base_land": spec.get("keep_base_land", True),
+        # on by default since 2026-09-27: with a floor of one element's area
+        # it leaves every recipe but Funabashi and Yokohama unchanged
+        "wall_pockets": spec.get("wall_pockets", True),
     }
-    for key in ("rim_repair", "continuous_width"):
+    for key in ("rim_repair", "continuous_width", "keep_base_land", "wall_pockets"):
         if not isinstance(out[key], bool):
             raise ValueError(f"hires.{key} must be true or false")
     exp = out["experimental"]

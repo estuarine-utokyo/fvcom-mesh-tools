@@ -19,10 +19,9 @@
 # those resolved stretches were refused and the boundary contract broke.
 # This recipe is centred on the harbour and 2.3 km wide, which takes the
 # whole inner harbour (and the Daikoku pier, 4.5 km east, into the
-# transition). Accepted with rim_repair and continuous_width (on by
-# default) and two opt-in rules, after one retry near the offenders (seed
-# 1, 0 introduced violations, NP 15,241, dt 1.07 s); without any of them
-# the best seed had 39.
+# transition). Accepted 2026-09-27 with the four coastline rules (all on
+# by default; docs/USER_GUIDE.md): seed 0, 0 introduced violations,
+# NP 15,234, dt 1.20 s. Without any of them the best seed had 39.
 # keep_base_land (owner, 2026-09-26): where land and water are both too
 # narrow for the transition's elements, land the base mesh also has stays
 # land -- without it two 150 m quay blocks north of Minato Mirai became
@@ -41,9 +40,6 @@ hires:
   bathymetry: tokyo_bay
   scope: hole
   blend: ramp
-  # continuous_width and rim_repair (on by default) replace short_chords,
-  # seam_water and water_wedges (2026-09-27)
-  experimental: [wall_pockets, keep_base_land]
 
 refine:
   - name: yokohama_port

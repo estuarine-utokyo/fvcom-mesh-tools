@@ -688,7 +688,10 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
         # from the land's own components, and a pocket that touched or
         # nearly touched the coast merged into it and left a stretch with no
         # source component (Odaiba, 387,650 3,945,700).
-        if h > min_h and f.buffer(-h).is_empty and \
+        # ...and no smaller than one element: a 100 m2 curl at Kimitsu made
+        # land became an island the mesh could only carry with slivers
+        # (31 new violations, dt 2.0 -> 0.6 s).
+        if h > min_h and f.buffer(-h).is_empty and f.area >= h * h and \
                 float(shapely.distance(f, land)) >= 0.5 * h:
             closed.append(f)
             rep["at"].append([round(pt.x, 1), round(pt.y, 1)])

@@ -8,6 +8,18 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Changed -- every coastline rule on by default (2026-09-27)
+
+- `keep_base_land` and `wall_pockets` are on by default too, so all four
+  coastline rules are, and no recipe names one. `keep_base_land` now keeps
+  a piece of land the filter would remove whole, if the base has most of
+  it (kept only where the base had it, a Funabashi peninsula was cut in two
+  along the base's coast and left a 27 deg pocket). `wall_pockets` closes
+  no pocket smaller than one element (a 100 m2 curl at Kimitsu had made
+  31 violations). All seven recipes are accepted with the four on.
+- Removed `water_wedges`, `short_chords` and `seam_water` (unused since
+  `continuous_width` fixed the band seams; commit 4a8c503 has them).
+
 ### Changed -- continuous width on by default (2026-09-27)
 
 - `hires.continuous_width` (default `true`, owner's decision): coarse-zone

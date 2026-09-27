@@ -29,14 +29,13 @@ hires:
   bathymetry: tokyo_bay
   scope: hole
   blend: ramp
-  # Opt-in coastline rules (docs/USER_GUIDE.md). Two river mouths 1-2 km west
-  # of the circle meet the coarse transition (h 120-240 m), and the octave
-  # bands left their ends as acute wedges; continuous_width (on by default)
-  # judges that water at the local element size instead, with no band seam.
-  # A curled breakwater there shuts in a 400 x 230 m pocket, closed by
-  # wall_pockets.
-  # (Until 2026-09-27: water_wedges, wall_pockets, short_chords.)
-  experimental: [wall_pockets]
+  # The coastline rules (docs/USER_GUIDE.md, all on by default) carry this
+  # port: two river mouths 1-2 km west of the circle meet the coarse
+  # transition (h 120-240 m), where continuous_width judges the water at the
+  # local element size, and a curled breakwater shuts in a 400 x 230 m
+  # pocket that wall_pockets closes. Until 2026-09-27 the recipe named
+  # water_wedges, wall_pockets and short_chords.
+  # Accepted 2026-09-27: seed 3, 0 introduced violations, NP 6,675, dt 1.45 s.
 
 refine:
   - name: funabashi_port
