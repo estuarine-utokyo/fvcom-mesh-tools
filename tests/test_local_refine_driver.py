@@ -429,6 +429,7 @@ def test_rim_repair_pins_the_points_it_makes_or_moves():
            "say": lambda *a: None, "RIM_PINNED": np.zeros(0, dtype=np.int64),
            "shapely": shapely, "H_FLOOR": 30.0}
     driver_function("_nbr_xy", env)
+    driver_function("_rim_changed", env)
     apply = driver_function("apply_rim_repair", env)
     rep = apply()
     assert rep["n_tips_stepped_back"] >= 1
@@ -456,6 +457,7 @@ def test_rim_repair_pins_a_survivor_that_becomes_a_corner():
            "say": lambda *a: None, "RIM_PINNED": np.zeros(0, dtype=np.int64),
            "shapely": shapely, "H_FLOOR": 30.0}
     driver_function("_nbr_xy", env)
+    driver_function("_rim_changed", env)
     apply = driver_function("apply_rim_repair", env)
     apply()
     out = env["rc"]["pfix"]

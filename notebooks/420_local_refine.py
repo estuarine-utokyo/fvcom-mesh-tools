@@ -758,6 +758,35 @@ if HIRES is not None and _land_filtered:
             f"land the coastline filter kept is inside the hole and wide enough for an "
             f"element near {_solid[:5]}; the rim does not carry it (it crosses the frozen "
             "interface?) -- move or widen the region so its coast is inside the hole")
+def _nbr_xy(pts, edges, k):
+    """The positions of point k's neighbours on the rim, as a set."""
+    pts, edges = np.asarray(pts), np.asarray(edges)
+    nb = edges[(edges == k).any(axis=1)].ravel()
+    return frozenset((round(float(pts[j, 0]), 6), round(float(pts[j, 1]), 6))
+                     for j in nb if j != k)
+
+
+def _rim_changed(old_p, old_e, new_p, new_e):
+    """Points of the new rim made, moved, or with changed neighbours.
+
+    They are corners of the edited rim but may lie on a straight run of the
+    OLD source curve, and the seam repair slides a free coastline node along
+    that curve: a stepped-back pier tip went 12 m back along it (review,
+    round 2), and so did a blunting chord's end (round 9).  Taking one point
+    out makes its survivor a corner without moving it (round 3).
+    """
+    def key(x, y):
+        return (round(float(x), 6), round(float(y), 6))
+
+    old_p = np.asarray(old_p)[:, :2]
+    old = {key(x, y): _nbr_xy(old_p, old_e, k) for k, (x, y) in enumerate(old_p)}
+    return [k for k, (x, y) in enumerate(np.asarray(new_p)[:, :2])
+            if key(x, y) not in old or _nbr_xy(new_p, new_e, k) != old[key(x, y)]]
+
+
+# Rim points an edit made or moved, by position until the rim's indices
+# settle (walls are rooted into it after the blunting); RIM_PINNED below.
+PINNED_XY: set = set()
 if HIRES is not None:
     # A resolved coastline follows OSM into every corner, and a corner under
     # 60 deg holds one element: its node is then in that element alone, and
@@ -778,6 +807,8 @@ if HIRES is not None:
         _brep = {**_brep, "n_corners_blunted": 0}
     reports["acute_corners_blunted"] = _brep
     if _brep["n_corners_blunted"]:
+        PINNED_XY = {(round(float(_p[k, 0]), 6), round(float(_p[k, 1]), 6))
+                     for k in _rim_changed(rc["pfix"], rc["egfix"], _p, _e)}
         rc["pfix"], rc["egfix"], rc["pfix_base"] = _p, _e, _b
         hole = hole_polygon(rc["pfix"], rc["egfix"])
         say(f"coastline: {_brep['n_corners_blunted']} corner(s) under 60 deg cut "
@@ -1241,40 +1272,28 @@ if HIRES is not None and _land_filtered and _walls_src:
         f"{n_acute} dropped for meeting another line at under 60 deg, "
         f"{n_close_tips} for a tip within half an element of the coast, "
         f"{n_joined} tip(s) joined to a line within half an element")
-# Rim points rim_repair made or moved.  They are corners of the repaired
-# rim but may lie on a straight run of the OLD source curve, and the seam
-# repair slid a stepped-back pier tip 12 m back along it (review, round 2):
-# they are held where the repair put them.
-RIM_PINNED = np.zeros(0, dtype=np.int64)
+# Rim points an edit made or moved (_rim_changed), held where the edit put
+# them: the blunting's, found by position now that walls are rooted, and
+# every rim_repair's after it (apply_rim_repair).  Whether or not rim repair
+# runs (review, round 9).
+RIM_PINNED = np.asarray([k for k, (x, y) in enumerate(np.asarray(rc["pfix"])[:, :2])
+                         if (round(float(x), 6), round(float(y), 6)) in PINNED_XY],
+                        dtype=np.int64)
 WET_LAND_SRC = globals().get("WET_LAND_SRC")
-
-
-def _nbr_xy(pts, edges, k):
-    """The positions of point k's neighbours on the rim, as a set."""
-    pts, edges = np.asarray(pts), np.asarray(edges)
-    nb = edges[(edges == k).any(axis=1)].ravel()
-    return frozenset((round(float(pts[j, 0]), 6), round(float(pts[j, 1]), 6))
-                     for j in nb if j != k)
 
 
 def apply_rim_repair(tag="rim repair", **kw):
     """patch.rim_repair on the current rim; walls follow, the hole is redrawn."""
     global WALL_SEGS, hole, RIM_PINNED
     n_rim = len(rc["pfix"])
-    _old = {(round(float(x), 6), round(float(y), 6)) for x, y in np.asarray(rc["pfix"])[:, :2]}
-    _old_nbr = {(round(float(x), 6), round(float(y), 6)): _nbr_xy(rc["pfix"], rc["egfix"], k)
-                for k, (x, y) in enumerate(np.asarray(rc["pfix"])[:, :2])}
+    _old_p, _old_e = np.asarray(rc["pfix"]).copy(), np.asarray(rc["egfix"]).copy()
     roots = set(np.unique(WALL_SEGS[WALL_SEGS < n_rim]).tolist()) if len(WALL_SEGS) else set()
     p_, e_, b_, remap_, rep_ = rim_repair(rc["pfix"], rc["egfix"], rc["pfix_base"],
                                           hole, h_achieved, protect=roots,
                                           size_floor=H_FLOOR, **kw)
     rc["pfix"], rc["egfix"], rc["pfix_base"] = p_, e_, b_
     _kept = remap_[RIM_PINNED] if len(RIM_PINNED) else np.zeros(0, dtype=np.int64)
-    # made or moved -- and a point whose neighbours changed: taking one
-    # point out makes its survivor a corner without moving it (round 3)
-    _made = [k for k, (x, y) in enumerate(np.asarray(p_)[:, :2])
-             if (round(float(x), 6), round(float(y), 6)) not in _old
-             or _nbr_xy(p_, e_, k) != _old_nbr.get((round(float(x), 6), round(float(y), 6)))]
+    _made = _rim_changed(_old_p, _old_e, p_, e_)
     RIM_PINNED = np.unique(np.concatenate([_kept[_kept >= 0],
                                            np.asarray(_made, dtype=np.int64)]))
     if len(WALL_SEGS):
@@ -1480,10 +1499,12 @@ def achieved_per_region(mesh):
 
 
 def walls_cut_off(elements, n_nodes, copy_of, wall_edges, obc_nodes, xy=None):
-    """Indices of the wall edges whose PIECE borders water cut off from the OBC.
+    """Wall edges to withdraw because they cut water off from the OBC.
 
-    A piece is a connected run of wall edges, by original node id.  Water is
-    cut off when a component of the split mesh holds no open-boundary node.
+    Water is cut off when a component of the split mesh holds no
+    open-boundary node.  The edges that touch it (by original node id) are
+    returned -- all of them, or, given ``xy``, only the shortest, so that
+    one edge at a time is withdrawn.
     """
     tri = np.asarray(elements, dtype=np.int64)
     parent = list(range(n_nodes))
@@ -1505,19 +1526,6 @@ def walls_cut_off(elements, n_nodes, copy_of, wall_edges, obc_nodes, xy=None):
     if not stranded:
         return []
     we = np.asarray(wall_edges, dtype=np.int64)
-    wp = list(range(int(we.max()) + 1)) if len(we) else []
-
-    def wfind(k):
-        while wp[k] != k:
-            wp[k] = wp[wp[k]]
-            k = wp[k]
-        return k
-
-    for a, b in we.tolist():
-        ra, rb = wfind(a), wfind(b)
-        if ra != rb:
-            wp[ra] = rb
-    del wfind
     # The SHORTEST wall edge that touches the stranded water, one at a time.
     # Withdrawing the whole connected piece removed an entire arm of the
     # L-shaped breakwater to open a pocket its short crossing stub had made.

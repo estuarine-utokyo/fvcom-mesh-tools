@@ -631,6 +631,7 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_flo
     from shapely.ops import nearest_points, polygonize, substring
 
     from fvcom_mesh_tools.patch import (
+        _polygons,
         resolve_size_floor,
         size_lower_bound,
         size_upper_bound,
@@ -642,7 +643,10 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_flo
     rep = {"n_pockets_closed": 0, "area_m2": 0.0, "at": [], "wkt": [], "n_chords": 0}
     if not lines:
         return empty, list(walls), rep
-    land = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
+    # land is its polygons, however nested: a collection with a line in it
+    # has no boundary (review, round 9)
+    land = shapely.union_all([g for x in ([land] if hasattr(land, "geom_type") else list(land))
+                              for g in _polygons(x)])
     h_mid = np.asarray(size(np.asarray(
         [w.interpolate(0.5, normalized=True).coords[0] for w in lines])), dtype=float)
     near = shapely.union_all([w.buffer(2.0 * h) for w, h in zip(lines, h_mid)])

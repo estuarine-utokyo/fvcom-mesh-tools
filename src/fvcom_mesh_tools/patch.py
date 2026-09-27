@@ -1101,15 +1101,6 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
     return out, rep
 
 
-def _base_spacing(pts: np.ndarray) -> np.ndarray:
-    """How far apart the base polyline's own vertices are, per vertex."""
-    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
-    if not seg.size:
-        return np.zeros(len(pts))
-    return np.minimum(np.concatenate([[seg[0]], seg]),
-                      np.concatenate([seg, [seg[-1]]]))
-
-
 def _resolve_stretch(pts: np.ndarray, shoreline, size, *, fine_h=None) -> np.ndarray:
     """Follow the source, over the whole stretch.
 
@@ -1299,16 +1290,13 @@ def rim_constraints(
                         kept_because[why] = kept_because.get(why, 0) + 1
                         curves.append(np.asarray(xy[idx], dtype=float))
                     elif coastline == "resolve":
-                        # The DELIVERED polyline, not the source substring.
-                        # `resolve` is per vertex: a stretch can follow the
-                        # source where the mesh is fine and keep the base
-                        # where it is coarse, and the curve is also what the
-                        # repair may SLIDE these nodes along.  Handing it the
-                        # source would let the repair pull a kept node onto
-                        # the source -- moving the coastline exactly where
-                        # the decision was not to.  Measured on the Kimitsu
-                        # port patch, a kept sub-run sat 157 m from the
-                        # source substring.
+                        # The DELIVERED polyline, not the source substring:
+                        # `resolve` follows the source over the whole stretch
+                        # (_resolve_stretch), simplified and cut at the local
+                        # size, and the curve is what the seam repair may
+                        # SLIDE these nodes along.  Sliding along the raw
+                        # substring would pull a node off the delivered
+                        # coastline into detail the local size removed.
                         curves.append(np.asarray(new, dtype=float))
                     else:
                         curves.append(coastline_curve(xy[idx], coastline, shoreline))
@@ -1667,7 +1655,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                 # in a line passed every test above and returned a ring of
                 # zero area (review, round 7)
                 eg_try = np.vstack([egfix[~np.isin(egfix, [x]).any(axis=1)], [[u, w]]])
-                if not _ring_is_polygon(pfix, eg_try, u):
+                if not _ring_is_polygon(pfix, eg_try, u, _rim_depths(pfix, egfix)):
                     continue
                 ok = True
                 for y, far in ((u, w), (w, u)):
@@ -1836,7 +1824,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                 new_e = [[v, qi]] + ([[qi, other_end]] if qi != other_end else [])
                 eg_try = np.vstack([egfix[keep_e], np.asarray(new_e, dtype=np.int64)])
                 p_try = np.vstack([pfix, np.asarray(new_pts)]) if new_pts else pfix
-                if not _ring_is_polygon(p_try, eg_try, v):
+                if not _ring_is_polygon(p_try, eg_try, v, _rim_depths(pfix, egfix)):
                     continue
                 try:                            # nor cross another ring
                     hole_polygon(p_try, eg_try)
@@ -2099,8 +2087,28 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
                    "n_island_points": int(sum(len(r) for r in rings))}
 
 
-def _ring_is_polygon(pfix, egfix, k) -> bool:
-    """Whether the ring through point ``k`` is a simple polygon of some area.
+def _rim_depths(pfix, egfix) -> tuple:
+    """How deep each rim ring is nested in the others, sorted.
+
+    Even is a shell of water, odd an island.  An edit that changes these
+    turned land into water: a blunting chord left an enclosed island outside
+    its shell, and the valid result meshed its 4 m2 as water (review,
+    round 9).
+    """
+    import shapely
+
+    rings, _ = boundary_rings(pfix, egfix)
+    xy = np.asarray(pfix, dtype=float)[:, :2]
+    polys = [shapely.Polygon(xy[r]) for r in rings]
+    return tuple(sorted(
+        sum(1 for j, q in enumerate(polys) if j != i and q.contains(shapely.Point(xy[r[0]])))
+        for i, r in enumerate(rings)))
+
+
+def _ring_is_polygon(pfix, egfix, k, depths=None) -> bool:
+    """Whether the ring through point ``k`` is a simple polygon of some area,
+    and, given the rim's ``depths`` before the edit, every ring keeps its
+    role (:func:`_rim_depths`).
 
     A change that keeps three points can still leave them in a line: a
     zero-area ring that every edge test passes and hole_polygon cannot use
@@ -2124,7 +2132,9 @@ def _ring_is_polygon(pfix, egfix, k) -> bool:
     if len(seq) < 3:
         return False
     ring = shapely.Polygon(np.asarray(pfix, dtype=float)[seq, :2])
-    return bool(ring.is_valid and ring.area > 0)
+    if not (ring.is_valid and ring.area > 0):
+        return False
+    return depths is None or _rim_depths(pfix, egfix) == depths
 
 
 def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0, *,
@@ -2240,7 +2250,7 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
                     continue            # a point on a straight run opens nothing
                 keep_e = ~np.isin(egfix, [drop]).any(axis=1)
                 eg_try = np.vstack([egfix[keep_e], [[v, nxt]]])
-                if not _ring_is_polygon(pfix, eg_try, v):
+                if not _ring_is_polygon(pfix, eg_try, v, _rim_depths(pfix, egfix)):
                     continue            # three points in a line (review, round 7)
                 egfix = eg_try
                 live = np.setdiff1d(np.arange(len(pfix)), [drop])
@@ -2320,7 +2330,7 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
             keep_e = ~np.isin(egfix, list(removed)).any(axis=1)
             eg_try = np.vstack([egfix[keep_e], np.asarray(new_e, dtype=np.int64)])
             p_try = np.vstack([pfix, np.asarray(new_xy)]) if new_xy else pfix
-            if not _ring_is_polygon(p_try, eg_try, int(path[0])):
+            if not _ring_is_polygon(p_try, eg_try, int(path[0]), _rim_depths(pfix, egfix)):
                 continue
             egfix = eg_try
             if new_xy:

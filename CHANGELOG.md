@@ -8,6 +8,15 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 9 (2026-09-28)
+
+- The points the first corner blunting makes or moves are held in place in
+  the seam repair, as rim repair's are (they slid back along the old
+  curve), with or without rim repair.
+- A blunting, slit or short-edge edit that changes how the rim's rings
+  nest (an island left outside its shell, meshed as water) is refused.
+- `close_wall_pockets` takes the polygons of a mixed land collection.
+
 ### Fixed -- review of the coastline rules, round 8 (2026-09-28)
 
 - A slit is closed only by a chord that leaves the rim a valid polygon;
