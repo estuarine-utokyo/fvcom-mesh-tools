@@ -156,7 +156,7 @@ def with_patch_violations(env: dict) -> dict:
 def run_search(env):
     with_patch_violations(env)
     return driver_block("# --------------------------------------------------------- the seed",
-                        'say(f"accepted seed', env)
+                        'say(f"selected seed', env)
 
 
 def test_a_seed_that_cannot_be_built_does_not_end_the_search():

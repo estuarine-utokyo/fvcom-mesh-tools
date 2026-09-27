@@ -8,6 +8,17 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 8 (2026-09-28)
+
+- A slit is closed only by a chord that leaves the rim a valid polygon;
+  `hole_polygon` refuses an invalid one. Equal source arcs are chosen by
+  fit, not by where the ring starts.
+- A rim of islands only may have no source shoreline (the filter removed
+  them): they become water instead of stopping the run.
+- `close_wall_pockets` works with no land; a shapefile whose sidecars
+  cannot be listed gets a null digest; rejected meshes are named by search
+  pass (`rejected_pass<P>_seed<k>.npz`).
+
 ### Fixed -- review of the coastline rules, round 7 (2026-09-28)
 
 - Under `coastline: resolve` an island wholly inside the hole is no longer

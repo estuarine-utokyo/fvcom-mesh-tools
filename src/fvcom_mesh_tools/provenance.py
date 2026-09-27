@@ -23,9 +23,14 @@ __all__ = ["code_state", "collect", "dataset_files", "file_sha256", "git_state"]
 LIBRARIES = ("numpy", "scipy", "shapely", "geopandas", "pyproj", "rasterio",
              "matplotlib", "netCDF4", "oceanmesh", "fvcom-mesh-tools")
 
+# the suffix of the marker dataset_files adds when sidecars cannot be listed
+UNLISTED = ".<sidecars-unlisted>"
+
 
 def file_sha256(path) -> str | None:
     """SHA-256 of a file, or None when it cannot be read."""
+    if str(path).endswith(UNLISTED):
+        return None                     # a dataset whose sidecars are unknown
     try:
         h = hashlib.sha256()
         with open(path, "rb") as f:
@@ -43,6 +48,12 @@ def dataset_files(path) -> list[Path]:
     a ``where:`` selects on) in ``.dbf``, its CRS in ``.prj`` and its text
     encoding in ``.cpg``; any single-file format (GeoJSON, GeoPackage) is
     itself (review, round 2).
+
+    When the directory cannot be listed, which sidecars exist is unknown --
+    not the same as "none" -- and the list ends with a marker path,
+    ``<stem>.<sidecars-unlisted>``, that names this and hashes to None, so
+    the dataset's digest in :func:`collect` is null rather than a digest of
+    the ``.shp`` alone (review, round 8).
     """
     p = Path(path)
     if p.suffix.lower() != ".shp":
@@ -53,8 +64,9 @@ def dataset_files(path) -> list[Path]:
         sibs = sorted(q for q in p.parent.iterdir()
                       if q.stem == p.stem and q.suffix.lower() in side)
     except OSError:
-        sibs = []
+        return [p, p.with_name(p.stem + UNLISTED)]
     return [p] + sibs
+
 
 
 def git_state(path) -> dict[str, Any] | None:

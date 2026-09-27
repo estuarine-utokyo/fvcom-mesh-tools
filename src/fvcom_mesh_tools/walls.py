@@ -646,7 +646,10 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_flo
     h_mid = np.asarray(size(np.asarray(
         [w.interpolate(0.5, normalized=True).coords[0] for w in lines])), dtype=float)
     near = shapely.union_all([w.buffer(2.0 * h) for w, h in zip(lines, h_mid)])
-    coast = shapely.intersection(land.boundary, near)
+    # no land at all (every structure became a wall): no coast, and nothing
+    # to keep clear of -- an empty collection has no boundary (review, round 8)
+    coast = shapely.LineString() if land.is_empty else \
+        shapely.intersection(land.boundary, near)
     chords = []
     for k, w in enumerate(lines):
         for end in (0, 1):
@@ -673,7 +676,7 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_flo
     for f in faces:
         if f.area < 1.0:
             continue  # two lines that touch along a stretch, not a pocket
-        if shapely.intersection(f, land).area > 0.5 * f.area:
+        if not land.is_empty and shapely.intersection(f, land).area > 0.5 * f.area:
             continue  # a face of land, not a pocket
         # Only a pocket the walls shut in THEMSELVES: none of its outline on
         # the coast, and at least half of it wall (the rest is chords).  A
@@ -706,8 +709,9 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_flo
         # ...and no smaller than one element: a 100 m2 curl at Kimitsu made
         # land became an island the mesh could only carry with slivers
         # (31 new violations, dt 2.0 -> 0.6 s).
+        clear = np.inf if land.is_empty else float(shapely.distance(f, land))
         if h > min_h and f.buffer(-h).is_empty and f.area >= h_hi * h_hi and \
-                float(shapely.distance(f, land)) >= 0.5 * h_hi:
+                clear >= 0.5 * h_hi:
             closed.append(f)
             rep["at"].append([round(pt.x, 1), round(pt.y, 1)])
             # the pocket itself, so a caller can tell whether it stayed water

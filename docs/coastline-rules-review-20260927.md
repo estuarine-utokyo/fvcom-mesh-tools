@@ -2025,3 +2025,325 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | 6 | nit | yes: comment read | yes | comment describes filter -> rim -> hole; Shoreline for the log only |
 
 All six hires recipes rebuild accepted and byte-identical to round 6. 948 tests pass.
+
+## Round 8
+
+### Answer (verbatim)
+
+Reviewed `e88208f` read-only. No files changed, batch jobs submitted, or mesh generation run.
+
+The full pytest command failed before collection because no temporary directory was writable. An adjusted run initially produced **204 passed, 37 failed, 15 errors** in filesystem/cache-dependent paths. With Matplotlib setup mocked in memory and temporary-file-dependent tests skipped, the scoped suite produced **231 passed, 34 skipped**, including all nine round-7 regressions. Another **26 in-memory hires-schema checks passed**. The author’s full-suite and compute-node results were not independently reproduced.
+
+**Previous findings**
+
+“RESOLVED” below refers to the reported defect; related new cases are identified separately.
+
+| Finding | Status | Reason |
+|---|---|---|
+| R1 #1 — Preserve mode | RESOLVED | Rim repair requires `resolve`. |
+| R1 #2 — Lagoon entrance | RESOLVED | Connectivity guard preserves the reproduced entrance. |
+| R1 #3 — Refused pocket walls | RESOLVED | Restoration tests pocket geometry against remaining water. |
+| R1 #4 — Ring collapse | RESOLVED | Original triangle and degenerate-ring cases are guarded. See finding 1 for a different operation. |
+| R1 #5 — Retreat-only retry | RESOLVED | Array comparison detects changes; restoration uses `finally`. |
+| R1 #6 — Artificial land/padding | RESOLVED | Empty-land handling and certified exterior bounds address the reported cases. |
+| R1 #7 — Invalid continuous-width parameters | RESOLVED | Reported parameters and empty footprints are handled. |
+| R1 #8 — Ignored seed argument | RESOLVED | Search iterates `seed_list`. |
+| R1 #9 — GPL provenance import | RESOLVED | Versions use distribution metadata. |
+| R1 #10 — Missing provenance inputs/settings | PARTIAL | Inputs/settings are recorded, but enumeration errors can omit sidecars—finding 5. |
+| R1 #11 — Untracked source | RESOLVED | Untracked files and entry-point tracking status are recorded. |
+| R1 #12 — Retry reproducibility | RESOLVED | Documentation requires the original seed sequence for pass 2. |
+| R1 #13 — Ineffective fixtures | RESOLVED | Fixtures assert the relevant operations; unreachable merge code was removed. |
+| R1 #14 — Raster documentation | RESOLVED | Resolution is documented relative to the finest target. |
+| R2 #1 — Resolvable land accepted as water | RESOLVED | Recursive land validation checks qualifying land inside the hole. |
+| R2 #2 — All-land raster | RESOLVED | Empty-water early return works. |
+| R2 #3 — Detached artificial island | RESOLVED | Closure requires adjacent land. |
+| R2 #4 — Fine region inside pocket | RESOLVED | Estimated floors no longer override conservative bounds. |
+| R2 #5 — Obsolete sliding curves | RESOLVED | Repair-created and moved points are pinned. |
+| R2 #6 — Geometry provenance | PARTIAL | Normal enumeration works; failed enumeration is silently incomplete—finding 5. |
+| R2 #7 — Falsy experimental values | RESOLVED | Explicit list validation rejects them. |
+| R2 #8 — Seed-variable documentation | RESOLVED | Header names `LR_SEEDS`. |
+| R3 #1 — Variable-size land guard | RESOLVED | Decisions use conservative bounds. |
+| R3 #2 — Repairs bypass validation | RESOLVED | Final-rim and retry land checks remain wired. |
+| R3 #3 — Unchanged new corners | RESOLVED | Changed adjacency also causes pinning. |
+| R3 #4 — Pocket sampling grid | RESOLVED | Covering samples and uncertified-floor handling address both gaps. |
+| R3 #5 — Uppercase sidecars | RESOLVED | Extension matching is case-insensitive. |
+| R3 #6 — Imported-package identity | RESOLVED | Actual imported paths are recorded. |
+| R3 #7 — Exhausted iterators | RESOLVED | Both helpers materialize their inputs. |
+| R4 #1 — Missed qualifying disc | RESOLVED | Conservative erosion replaces sampled absence decisions. |
+| R4 #2 — Incorrect driver size floor | RESOLVED | `H_FLOOR` includes the base ambient minimum. |
+| R4 #3 — Validation disabled with repair | RESOLVED | Final land validation is outside the repair switch. |
+| R4 #4 — Fine basin behind coarse mouth | RESOLVED | Default estimated floors no longer erase the reproduced basin. |
+| R4 #5 — Pocket fine-zone exclusion | RESOLVED | Default estimated floors no longer override the fine-zone bound. |
+| R4 #6 — Non-Git identity | RESOLVED | Path, distribution and source digest are retained. |
+| R4 #7 — Invalid sizes/factors | RESOLVED | Reported invalid cases are rejected. |
+| R4 #8 — Missing test prerequisites | RESOLVED | Tests assert prerequisites and exercise driver guards. |
+| R4 #9 — Priority documentation | RESOLVED | Guide states that local refinement ignores priority. |
+| R5 #1 — Grid coverage | RESOLVED | Boundary-adjacent samples provide coverage. |
+| R5 #2 — Invalid slope premise | RESOLVED | Base and patch fields supply structural bounds. |
+| R5 #3 — Pocket area/clearance | RESOLVED | Both predicates use upper bounds. |
+| R5 #4 — Nested land collections | RESOLVED | Land validation recursively traverses polygons. |
+| R5 #5 — Invalid sampled sizes | RESOLVED | Validation precedes clipping. |
+| R5 #6 — Unreadable source hashing | RESOLVED | Failed source reads/scans invalidate the digest. |
+| R5 #7 — Stale floor comment | RESOLVED | Comment names `H_FLOOR`. |
+| R6 #1 — Hidden source-enumeration failures | RESOLVED | `Path.walk(on_error=...)` records failures. |
+| R6 #2 — Exterior disc centres | RESOLVED | Certified global maxima bound the annulus search; unsupported bounded fields refuse closure. |
+| R6 #3 — Nested island collections | RESOLVED | `island_rings` recursively visits polygons. |
+| R6 #4 — Empty filter footprint | RESOLVED | Explicit descriptive rejection. |
+| R6 #5 — Ineffective fine-spot test | RESOLVED | Revised fixture and negative control exercise the bound. |
+| R6 #6 — Opt-in comments | RESOLVED | Comments describe the defaults correctly. |
+| R7 #1 — Fully free islands | PARTIAL | Replacement works when source shoreline remains; filtered-away islands still abort upstream—finding 3. |
+| R7 #2 — Discontinuous exterior sizes | RESOLVED | Both new padding regressions pass. |
+| R7 #3 — Estimated default floors | RESOLVED | Pocket and slit reproductions now preserve fine water. |
+| R7 #4 — Degenerate ring | RESOLVED | Original reproduction stays valid; ordinary removal still works. |
+| R7 #5 — Closed-ring arc selection | PARTIAL | Uneven-density case is fixed; equal-length arcs remain start-dependent—finding 2. |
+| R7 #6 — Obsolete driver comment | RESOLVED | Comment describes the implemented filter → rim → hole path. |
+
+**Findings**
+
+1. **Minor — Slit endpoint snapping can return a self-intersecting rim.**
+
+   Location: [patch.py:1819](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:1819).
+
+   The slit path checks the original throat, then may replace it with a different chord by snapping to `other_end`. It commits that chord without the polygon-validity guard added to the other operations.
+
+   Reproduced in memory with:
+
+   ```python
+   p = np.array([
+       (0,0), (0,5), (20,5), (20,2), (10,2),
+       (10,-2), (8,-1), (8,-20), (-100,-20), (-100,0)
+   ], float)
+   e = np.column_stack([np.arange(10), np.roll(np.arange(10), -1)])
+   result = rim_repair(
+       p, e, np.full(10, -1), Polygon(p),
+       lambda q: np.full(len(q), 30.),
+       protect=(5, 6), operations=("slits",), rounds=1,
+       retreat_tips=False, focus=[[0, 0]], focus_factor=.001,
+   )
+   ```
+
+   The input is valid, with area **2,243 m²**. Repair reports one closed slit, but `hole_polygon(result[0], result[1])` returns `is_valid=False`, with **`Self-intersection[8 -1.6]`**. The snapped chord crosses the retained edge beside the protected corner.
+
+   **Fix:** Validate the proposed slit ring after endpoint snapping and before committing it. Try the unsnapped throat or refuse the operation when invalid. Also make `hole_polygon` explicitly reject invalid output. This is an existing slit-path gap left uncovered by round 7.
+
+2. **Minor — Equal-length source arcs still depend on the ring’s starting vertex.**
+
+   Location: [patch.py:612](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:612).
+
+   When both arcs have equal length, `<=` designates the direct arc as “short.” The subsequent factor-of-two rule preserves that arbitrary choice unless the other arc fits dramatically better.
+
+   Reproduction:
+
+   ```python
+   pts = np.array([(0,0), (60,40), (100,100)], float)
+   a = LineString([(0,0), (100,0), (100,100), (0,100), (0,0)])
+   b = LineString([(100,0), (100,100), (0,100), (0,0), (100,0)])
+   ```
+
+   `_source_substring(pts, a)` returns the **bottom/right** arc; the same call with `b` returns the **left/top** arc. Both are 200 m long; only the source ring’s starting coordinate changed.
+
+   **Fix:** Handle equal or numerically indistinguishable lengths explicitly: choose by fit, then use a canonical geometric tie-break if necessary. Add rotated-start and reversed-orientation regressions. Round-7 finding 5 remains partial.
+
+3. **Minor — The driver rejects a wholly free island that the filter correctly removes.**
+
+   Location: [420_local_refine.py:616](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:616).
+
+   The new island behavior permits an empty source to replace a free base island with water, but the driver exits before reaching it whenever filtering removes the last nearby shoreline.
+
+   Using the round-7 island mesh, source land `box(695,695,705,705)`, constant `h=30`, and the driver’s fine-band land-width settings, the filter removes the **100 m²** source island. Executing the actual shoreline-update block then raises:
+
+   > the h0 = 30 m filter left no shoreline near the free rim
+
+   Calling the fixed `rim_constraints(..., coastline="resolve", shoreline=[])` directly succeeds: it reports one island left to the source and constructs the **640,000 m²** water hole.
+
+   **Fix:** Permit empty source shoreline when the affected physical rings are wholly free interior islands. Pass an empty shoreline collection through to island replacement; retain appropriate refusal for anchored coastline stretches. Cover the earlier “no raw shoreline nearby” branch too.
+
+4. **Minor — Empty land crashes `close_wall_pockets`.**
+
+   Location: [walls.py:649](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/walls.py:649), [walls.py:661](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/walls.py:661).
+
+   Reproduction:
+
+   ```python
+   wall = LineString([(0,0), (0,400), (110,400), (110,290), (20,290)])
+   close_wall_pockets(
+       [wall], Polygon(), lambda q: np.full(len(q), 100.),
+       min_h=60.000001, size_floor=30.,
+   )
+   ```
+
+   This raises **`AttributeError: 'NoneType' object has no attribute 'is_empty'`**. Unioning empty land yields an empty geometry collection whose boundary is `None`. With mainland `box(-2000,-2000,2000,0)`, the identical wall successfully closes **12,100 m²**.
+
+   Empty filtered land is possible when all source structures become walls.
+
+   **Fix:** Represent absent coastline with an empty line geometry and treat clearance from absent land as infinite. Merely filtering out `None` still leaves the later empty-land distance comparison returning NaN.
+
+5. **Minor — Failed shapefile enumeration silently produces an incomplete provenance hash.**
+
+   Location: [provenance.py:55](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/provenance.py:55).
+
+   Injecting `PermissionError` into `Path.iterdir()` makes `dataset_files("/readable/land.shp")` return only the `.shp` path. `collect()` then produces a non-null aggregate hash, with no indication that `.dbf`, `.prj`, `.shx` or `.cpg` enumeration failed.
+
+   Directory listing can fail while known files remain readable. Consequently, consumed attributes or CRS can change without changing the recorded fingerprint. This gap is in the sidecar-enumeration fix; the source-tree walker now handles the analogous failure correctly.
+
+   **Fix:** Propagate enumeration failure or record an explicit incomplete-dataset status and null digest. Distinguish “sidecar absent” from “could not determine which sidecars exist.”
+
+6. **Minor — Feedback retries overwrite first-pass rejected-mesh diagnostics.**
+
+   Location: [420_local_refine.py:1984](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:1984).
+
+   Both searches reuse the same seeds and write `rejected_seed<seed>.npz`. Executing the actual rejection block twice with seed 3 and an in-memory save replacement produced:
+
+   ```text
+   /virtual/output/rejected_seed3.npz
+   /virtual/output/rejected_seed3.npz
+   ```
+
+   Only the second attempt’s arrays remained. The attempts report can therefore retain two failures while the first failure’s diagnostic mesh has been lost.
+
+   **Fix:** Include search pass and attempt identity in diagnostic filenames, and record the filename/pass alongside each attempt.
+
+7. **Nit — The fill log prints stale constraint counts.**
+
+   Location: [420_local_refine.py:1385](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:1385).
+
+   `rc["n_pfix"]` and `rc["n_egfix"]` describe the original `rim_constraints` result. Island insertion, wall construction and rim repair subsequently change the arrays without updating those counters.
+
+   In the round-7 island fixture, the logged fixed-point count remains **32** after island insertion increases the rim to **44** points.
+
+   **Fix:** Print `len(PFIX_ALL)` and `len(EGFIX_ALL)` for the constraints actually passed to the filler.
+
+8. **Nit — A failed candidate is logged as “accepted” before the acceptance gate.**
+
+   Location: [420_local_refine.py:2219](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:2219).
+
+   When every seed introduces violations, the best failing candidate still reaches the unconditional `say(f"accepted seed {seed}")`. The driver later rejects it at line 2309. The `ACCEPTED` marker remains correctly gated, but the log gives a contradictory acceptance statement.
+
+   **Fix:** Say “selected seed” at this point, or move “accepted seed” after all gates and successful marker creation.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 6 minor, 2 nit)
+
+
+### Prompt
+
+```markdown
+# Review request, round 8: coastline rules for local refinement (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (use `/octfs/work/G16445/v61021/miniforge3/envs/oceanmesh-bench/bin/python`;
+the tests run with `.../bin/python -m pytest -q tests/`). Do not submit
+batch jobs and do not run mesh generation (`notebooks/420_local_refine.py`
+needs the compute nodes). Answer in English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+`git diff 0c5d9b3..HEAD` (now 27 commits; 7a6cffe fixed round 1, 2d8d1d7 round 2, fd2bbe1 round 3, f07c6d9 round 4, c88739e round 5, 806d011 round 6, the last commit round 7; read `git log 0c5d9b3..HEAD` for the
+reasons). The local-refinement driver `notebooks/420_local_refine.py`
+refines a Tokyo Bay FVCOM mesh inside a region, re-cuts the coastline from
+OSM (`hires.coastline: resolve`) and must pass QA with 0 violations
+introduced. Changes in scope:
+
+- `src/fvcom_mesh_tools/patch.py`
+  - `rim_repair`: short edges (remove a free end, or merge a cap between
+    two corners to its midpoint), slits (throat under one element; close a
+    dead end no element fits in, otherwise step a pier tip back), angles
+    (`blunt_acute_corners` again with wall roots protected), `focus=` for a
+    QA-feedback retry; returns a remap for wall references.
+  - `unresolvable_water` and `filter_shoreline_local(continuous_width=)`:
+    coarse-zone water judged at the local size by a distance transform
+    (radius 0.75 h, dead ends only, straits left open).
+  - `filter_shoreline_local(keep_land=)`: in coarse bands a removed land
+    piece is kept whole if most of it is base land.
+  - `_source_substring`: the arc of a closed ring that fits the stretch.
+  - `blunt_acute_corners(protect=)`; `island_rings` reports area inside.
+  - Removal of `water_wedges`, `short_chords`, `seam_water`.
+- `src/fvcom_mesh_tools/walls.py`: `close_wall_pockets`.
+- `src/fvcom_mesh_tools/provenance.py` (new): commits, file hashes,
+  library versions recorded in `report.json`.
+- `src/fvcom_mesh_tools/refine.py`: `hires.rim_repair`,
+  `continuous_width`, `keep_base_land`, `wall_pockets` (all default true),
+  `hires.experimental` list.
+- `notebooks/420_local_refine.py`: wiring; `LR_EXPERIMENTAL` override;
+  `apply_rim_repair` / `assemble_constraints`; `seed_search` and the
+  one-shot retry near the offenders with snapshot/restore; flat-face drop
+  after the fill; wall-pocket restore when an island is refused;
+  `rejected_seed<k>.npz`; provenance.
+- `jobs/octopus/417_hires_refine.sh` (LR_EXPERIMENTAL documented).
+- Tests: `tests/test_patch.py`, `test_walls.py`, `test_refine.py`,
+  `test_provenance.py`, `test_local_refine_driver.py`,
+  `test_review_hires_fixes.py`.
+- Docs: `docs/USER_GUIDE.md` §4, §5 (reproducibility), §11; `CHANGELOG.md`;
+  `recipes/refine/*.yaml` comments.
+
+Evidence already gathered by the author (on compute nodes): all six hires
+recipes accepted with the four rules on, byte-identical rebuilds from the
+accepted seed, FVCOM smoke runs and 20-day M2 runs pass.
+
+Out of scope: the rest of the package, unless these changes touch it.
+
+## Previous rounds
+Rounds 1-6: see your round-7 status table.
+Round 7 (FAIL 0/1/4/1): all fixed in the last commit (`git show HEAD`;
+triage in `docs/coastline-rules-review-20260927.md`).
+1. `rim_constraints`: under `resolve` with a shoreline a wholly free island
+   is left out (`n_islands_left_to_source`); the driver's `island_rings`
+   adds the source's land inside the hole and the land check covers it.
+   `preserve` / `resample` still copy it.
+2. certified `size_min` / `size_max` on `patch_sizing` and
+   `base_size_field`; `unresolvable_water` checks annuli doubling out to
+   `radius_factor * size_max`; a field with `size_bounds` and no
+   `size_max` closes nothing. A plain callable keeps the documented slope
+   premise (radius_factor x slope < 1).
+3. `resolve_size_floor`; `certified=False` bounds are never raised to an
+   estimated floor.
+4. `_ring_is_polygon` guards short-edge removal and both blunting paths
+   (your reproduction's degenerate ring came from opening a frozen corner
+   in `blunt_acute_corners`, run by the `angles` operation).
+5. `_source_substring`: vertex + arc-length probes; shorter vs longer arc.
+6. driver comment.
+Tests: `tests/test_review_r7.py`. All six hires recipes rebuild accepted,
+byte-identical to round 6. 948 tests pass.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the whole scope above and everything it
+   touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| 1 | minor | yes: reviewer's rim; hole self-intersects at (8, -1.6) | yes | the slit tries the snapped chord, then the unsnapped throat, and takes the first that leaves its ring a simple polygon and the whole rim a valid hole; else it is reported ("closing it would not leave a simple ring"). `hole_polygon` raises on an invalid result. Tests: reproduction, a bow tie |
+| 2 | minor | yes: 200 m arcs, answer changed with the ring start | yes | equal-length arcs (within 1e-9 of the ring) are chosen by fit, then by the midpoint's coordinates; test with two starts and the reversed orientation |
+| 3 | minor | yes: code path read (both SystemExit branches refuse an empty `shore`) | yes | the driver refuses an empty source only when some ring is ANCHORED (has frozen and free nodes); a rim of islands only passes an empty list, and `rim_constraints` leaves the islands to the source. Test on the round-7 island mesh |
+| 4 | minor | yes: `AttributeError` on `Polygon()` | yes | empty land: no coast, no land faces, clearance infinite; test closes the pocket |
+| 5 | minor | yes: `Path.iterdir` raising gave the .shp alone | yes | `dataset_files` ends the list with a `<stem>.<sidecars-unlisted>` marker that hashes to None, so the dataset digest is null and the record says why; tests for both paths |
+| 6 | minor | yes: code read; both passes wrote `rejected_seed<k>.npz` | yes | `rejected_pass<P>_seed<k>.npz`, named in the attempt's `rejected_file`; `seed_search(..., search_pass=)` sets it. Test through the extracted `seed_search` |
+| 7 | nit | yes | yes | the fill log prints `len(PFIX_ALL)`, `len(EGFIX_ALL)` |
+| 8 | nit | yes | yes | "selected seed N (search pass P); the gates follow" |
+
+The driver-test harness delimits the seed-search block by the log line, so it follows the new wording. All six hires recipes rebuild accepted and byte-identical to round 7. 956 tests pass.

@@ -443,6 +443,14 @@ if HIRES is not None:
 # ring the stretch already lies on.  Picking it inside the resampler by
 # nearest distance would let a stretch jump to the opposite bank at a strait.
 free = np.setdiff1d(np.unique(sel.rim_edges), sel.frozen_nodes)
+# A stretch is anchored when its ring also has a frozen node; only anchored
+# stretches are re-cut from `shore`.  A ring with no frozen node is an island
+# the source replaces whole (patch.rim_constraints), and a source that has
+# none there -- the filter removed it -- is a legitimate answer, not a
+# missing input (review, round 8).
+_frozen_set = set(sel.frozen_nodes.tolist())
+ANCHORED = any(any(int(v) in _frozen_set for v in r) and
+               any(int(v) not in _frozen_set for v in r) for r in sel.rings)
 shore = None
 if cfg["coastline"] in ("resample", "resolve") and free.size:
     # Every land ring within reach is offered, and rim_constraints picks the
@@ -456,11 +464,12 @@ if cfg["coastline"] in ("resample", "resolve") and free.size:
         for r in [g.exterior, *g.interiors]:
             if shapely.intersects(reach, r):
                 shore.append(shapely.LineString(np.asarray(r.coords)))
-    if not shore:
+    if not shore and ANCHORED:
         raise SystemExit(f"coastline: {cfg['coastline']} found no source "
                          "shoreline within 3 km of the free rim")
-    say(f"source shoreline: {len(shore)} ring(s) within 3 km, nearest "
-        f"{min(shapely.distance(pts, ln) for ln in shore):.1f} m from the free rim")
+    say(f"source shoreline: {len(shore)} ring(s) within 3 km"
+        + (f", nearest {min(shapely.distance(pts, ln) for ln in shore):.1f} m "
+           "from the free rim" if shore else "; the free rim is islands only"))
 
 _shl = None
 _land_filtered = False
@@ -613,7 +622,7 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
             for r in [g.exterior, *g.interiors]:
                 if shapely.intersects(reach, r):
                     shore.append(shapely.LineString(np.asarray(r.coords)))
-        if not shore:
+        if not shore and ANCHORED:
             raise SystemExit(f"the h0 = {_h0:g} m filter left no shoreline near "
                              "the free rim; the declared size cannot carry this "
                              "coastline at all")
@@ -1382,7 +1391,7 @@ bbox = (float(xmin), float(xmax), float(ymin), float(ymax))
 # and a seeding lattice anchored at a too-large hmin under-seeds the core.
 hmin = target / DISTMESH_SCALE
 say(f"fill: bbox {bbox[1] - bbox[0]:.0f} x {bbox[3] - bbox[2]:.0f} m, "
-    f"hmin {hmin:.1f} m, pfix {rc['n_pfix']}, egfix {rc['n_egfix']}")
+    f"hmin {hmin:.1f} m, pfix {len(PFIX_ALL)}, egfix {len(EGFIX_ALL)}")
 
 from oceanmesh.mesh_improve import (  # noqa: E402
     collapse_thin_triangles,
@@ -1981,7 +1990,10 @@ def attempt(seed):
     if not ver["ok"]:
         # kept for inspection only: it broke the contract, so it is never
         # the result (and no marker is written for it)
-        np.savez_compressed(OUT / f"rejected_seed{seed}.npz", nodes=nodes,
+        # named by search pass too: the retry tries the same seeds, and one
+        # name for both lost the first pass's mesh (review, round 8)
+        out["rejected_file"] = f"rejected_pass{SEARCH_PASS}_seed{seed}.npz"
+        np.savez_compressed(OUT / out["rejected_file"], nodes=nodes,
                             elements=elements, want_boundary=np.asarray(
                                 sorted(tuple(sorted(e)) for e in want_boundary)))
         return None, out
@@ -2063,8 +2075,13 @@ def save_report():
     (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
 
 
-def seed_search(seed_list):
+SEARCH_PASS = 1
+
+
+def seed_search(seed_list, search_pass=1):
     """Try each seed; the best candidate, or None."""
+    global SEARCH_PASS
+    SEARCH_PASS = search_pass
     best = None
     for seed in seed_list:
         say(f"--- seed {seed}")
@@ -2176,7 +2193,7 @@ if RIM_REPAIR and best is not None and best[1] > 0 and not best[0]:
             assemble_constraints()
             shapely.prepare(hole)
             boundary = shapely.boundary(hole)
-            _best2 = seed_search(seeds)
+            _best2 = seed_search(seeds, search_pass=2)
             if _best2 is not None and (_best2[0], _best2[1]) < (best[0], best[1]):
                 best, _taken = _best2, True
                 reports["search_pass"] = 2
@@ -2216,7 +2233,7 @@ reports["mesh"] = str(out14)
 written, mesh = serialise(candidate, out, out14)
 qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000,
             allowed_duplicate_pairs=wall_pairs(out))
-say(f"accepted seed {seed}")
+say(f"selected seed {seed} (search pass {reports['search_pass']}); the gates follow")
 # The wall pairs travel with the mesh, bound to it by hash, so the delivered
 # file can be checked again by `fmesh-mesh-qa` and get the same verdict.
 if wall_pairs(out):

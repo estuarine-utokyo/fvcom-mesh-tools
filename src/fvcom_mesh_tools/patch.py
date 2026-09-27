@@ -609,10 +609,17 @@ def _source_substring(pts: np.ndarray, shoreline):
         oc = [np.asarray(g.coords, dtype=float)[:, :2] for g in other if g.length > 0]
         if oc:
             wrap = shapely.LineString(np.vstack([oc[0], *[c[1:] for c in oc[1:]]]))
-            short, long_ = (piece, wrap) if piece.length <= wrap.length else (wrap, piece)
-            fit_short = float(shapely.distance(probe, short).max())
-            fit_long = float(shapely.distance(probe, long_).max())
-            piece = long_ if fit_long < 0.5 * fit_short else short
+            fit = {id(g): float(shapely.distance(probe, g).max()) for g in (piece, wrap)}
+            if abs(piece.length - wrap.length) <= 1e-9 * L:
+                # equal arcs: the one that fits, and on a tie the one whose
+                # midpoint comes first -- never "whichever did not cross the
+                # ring's start" (review, round 8)
+                def mid(g):
+                    return tuple(np.round(g.interpolate(0.5, normalized=True).coords[0], 6))
+                piece = min((piece, wrap), key=lambda g: (round(fit[id(g)], 9), mid(g)))
+            else:
+                short, long_ = (piece, wrap) if piece.length < wrap.length else (wrap, piece)
+                piece = long_ if fit[id(long_)] < 0.5 * fit[id(short)] else short
     coords = np.asarray(piece.coords, dtype=float)[:, :2]
     if len(coords) < 2:
         return None
@@ -1815,17 +1822,35 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                                    "why": "frozen or wall root inside"})
                 continue
             other_end = b if end == a else a
-            # q snaps to the far end when it is that close already
-            if float(np.linalg.norm(q - pfix[other_end])) <= 0.25 * h:
-                qi, new_pts = other_end, []
-            else:
-                qi, new_pts = len(pfix), [q]
             drop = set(inner) | {end}
             keep_e = ~np.isin(egfix, list(drop)).any(axis=1)
-            new_e = [[v, qi]] + ([[qi, other_end]] if qi != other_end else [])
-            egfix = np.vstack([egfix[keep_e], np.asarray(new_e, dtype=np.int64)])
-            if new_pts:
-                pfix = np.vstack([pfix, np.asarray(new_pts)])
+            # q snaps to the far end when it is that close already -- but the
+            # snapped chord is not the throat that was checked, and one
+            # crossed the edge beside a protected corner (review, round 8):
+            # each candidate must leave the ring a simple polygon
+            cands = [(len(pfix), [q])]
+            if float(np.linalg.norm(q - pfix[other_end])) <= 0.25 * h:
+                cands.insert(0, (other_end, []))
+            chosen = None
+            for qi, new_pts in cands:
+                new_e = [[v, qi]] + ([[qi, other_end]] if qi != other_end else [])
+                eg_try = np.vstack([egfix[keep_e], np.asarray(new_e, dtype=np.int64)])
+                p_try = np.vstack([pfix, np.asarray(new_pts)]) if new_pts else pfix
+                if not _ring_is_polygon(p_try, eg_try, v):
+                    continue
+                try:                            # nor cross another ring
+                    hole_polygon(p_try, eg_try)
+                except ValueError:
+                    continue
+                chosen = (eg_try, p_try, bool(new_pts))
+                break
+            if chosen is None:
+                slits_left.append({"at": [round(float(c), 1) for c in pfix[v]],
+                                   "why": "closing it would not leave a simple ring"})
+                continue
+            egfix, p_try, added = chosen
+            if added:
+                pfix = p_try
                 pfix_base = np.concatenate([pfix_base, [-1]])
             slits.append({"at": [round(float(c), 1) for c in pfix[v]],
                           "throat_m": round(float(throat.length), 2),
@@ -2382,6 +2407,11 @@ def hole_polygon(pfix: np.ndarray, egfix: np.ndarray):
             "water polygon") from exc
     if out.is_empty:
         raise ValueError("the rim segments do not close a polygon")
+    if not out.is_valid:
+        # union_all can hand back an invalid polygon rather than raise, and
+        # a repair that made one was accepted (review, round 8)
+        raise ValueError("the rim does not bound a valid polygon ("
+                         f"{shapely.is_valid_reason(out)})")
     # A valid Polygon is not evidence that it is the domain the rim asked
     # for.  Two rings touching along an edge with distinct node ids union
     # into a rectangle and two units of constraint simply vanish from its
