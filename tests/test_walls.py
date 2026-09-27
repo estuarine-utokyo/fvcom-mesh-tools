@@ -515,3 +515,21 @@ def test_close_wall_pockets_takes_an_iterator_of_walls():
     _, kept, _ = close_wall_pockets(iter([pier]), shapely.box(-2000, -2000, 2000, 0),
                                     _const(30.0))
     assert sum(w.length for w in kept) == pytest.approx(500.0)
+
+
+def test_close_wall_pockets_refuses_near_the_fine_zone_threshold():
+    """review round 4: a smooth field (slope 0.1) at 59.9 m inside a pocket
+    gated at 60 m was read above the gate and the pocket closed."""
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    land = shapely.box(-2000, -2000, 2000, 0)
+    wall = shapely.LineString([(0, 0), (0, 250), (100, 250), (100, 150), (20, 150)])
+
+    def size(q):
+        q = np.atleast_2d(q)
+        return 59.9 + 0.1 * np.linalg.norm(q - np.array([30.0, 180.0]), axis=1)
+
+    rep = close_wall_pockets([wall], land, size, min_h=60.000001, size_floor=30.0)[2]
+    assert rep["n_pockets_closed"] == 0

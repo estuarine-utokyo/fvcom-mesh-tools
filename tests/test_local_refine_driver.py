@@ -427,7 +427,7 @@ def test_rim_repair_pins_the_points_it_makes_or_moves():
            "hole": hole_polygon(pfix, rc["egfix"]), "rim_repair": rim_repair,
            "hole_polygon": hole_polygon, "h_achieved": lambda q: np.full(len(q), 30.0),
            "say": lambda *a: None, "RIM_PINNED": np.zeros(0, dtype=np.int64),
-           "shapely": shapely}
+           "shapely": shapely, "H_FLOOR": 30.0}
     driver_function("_nbr_xy", env)
     apply = driver_function("apply_rim_repair", env)
     rep = apply()
@@ -454,14 +454,16 @@ def test_rim_repair_pins_a_survivor_that_becomes_a_corner():
            "hole": hole_polygon(pfix, rc["egfix"]), "rim_repair": rim_repair,
            "hole_polygon": hole_polygon, "h_achieved": lambda q: np.full(len(q), 30.0),
            "say": lambda *a: None, "RIM_PINNED": np.zeros(0, dtype=np.int64),
-           "shapely": shapely}
+           "shapely": shapely, "H_FLOOR": 30.0}
     driver_function("_nbr_xy", env)
     apply = driver_function("apply_rim_repair", env)
     apply()
     out = env["rc"]["pfix"]
-    if not any(np.allclose(q, [190.0, 297.0]) for q in out):      # it was taken out
-        pinned = {tuple(np.round(out[k], 3)) for k in env["RIM_PINNED"]}
-        assert (190.0, 277.0) in pinned
+    # the premise: the repair took (190, 297) out (review, round 4: the test
+    # passed with an identity repair because this was only an `if`)
+    assert not any(np.allclose(q, [190.0, 297.0]) for q in out)
+    pinned = {tuple(np.round(out[k], 3)) for k in env["RIM_PINNED"]}
+    assert (190.0, 277.0) in pinned
 
 
 def test_the_land_check_runs_again_after_a_rim_repair():
@@ -472,7 +474,7 @@ def test_the_land_check_runs_again_after_a_rim_repair():
     from fvcom_mesh_tools.patch import land_an_element_fits
 
     env = {"np": np, "shapely": shapely, "land_an_element_fits": land_an_element_fits,
-           "h_achieved": lambda q: np.full(len(np.atleast_2d(q)), 30.0), "FINE_H": 60.0,
+           "h_achieved": lambda q: np.full(len(np.atleast_2d(q)), 30.0), "H_FLOOR": 30.0,
            "WET_LAND_SRC": shapely.box(100, 0, 300, 300), "hole": shapely.box(0, 0, 1000, 1000)}
     check = driver_function("wet_land_after_repair", env)
     pts, area = check()
@@ -513,3 +515,26 @@ def test_a_retry_that_wets_land_is_redone_without_stepping_tips_back():
         pass
     assert calls == [True, False]
     assert env["_called"] == [0, 1, 2, 3, 4] * 2          # the kept-tips repair was searched
+
+
+@pytest.mark.parametrize("rim_repair_on", [True, False])
+def test_the_driver_stops_when_the_final_rim_leaves_land_in_the_water(rim_repair_on):
+    """review round 4: the check sat inside `if RIM_REPAIR`, so switching rim
+    repair off switched it off, and blunting changes the rim too."""
+    import json
+    import tempfile
+
+    src = DRIVER.read_text().split("\n")
+    i = next(k for k, ln in enumerate(src) if ln.startswith("if RIM_REPAIR:"))
+    stop = '    raise SystemExit(f"the coastline'
+    j = next(k for k, ln in enumerate(src) if ln.startswith(stop))
+    block = "\n".join(src[i:j + 2])
+    calls = []
+    env = {"RIM_REPAIR": rim_repair_on, "apply_rim_repair": lambda: calls.append(1) or {},
+           "wet_land_after_repair": lambda: ([[5.0, 5.0]], 100.0),
+           "WET_LAND_SRC": object(), "reports": {}, "OUT": Path(tempfile.mkdtemp()),
+           "json": json}
+    with pytest.raises(SystemExit, match="wide enough for an element"):
+        exec(compile(block, "<driver>", "exec"), env)
+    assert calls == ([1] if rim_repair_on else [])
+    assert env["reports"]["land_meshed_as_water_m2"] == 100.0

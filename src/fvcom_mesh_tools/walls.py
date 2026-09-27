@@ -602,7 +602,7 @@ def straighten_walls(walls, size, *, trim_factor=0.5, tol_factor=0.1):
     return out, {"n_straightened": len(turned), "end_to_end_turn_deg": turned}
 
 
-def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
+def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_floor=None):
     """Water that walls shut in, narrower than two local elements, is land.
 
     The shoreline filter closes water narrower than two elements, but it
@@ -629,6 +629,8 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
     """
     import shapely
     from shapely.ops import nearest_points, polygonize, substring
+
+    from fvcom_mesh_tools.patch import size_lower_bound
 
     walls = list(walls)                 # iterated more than once (review, round 3)
     lines = [shapely.LineString(np.asarray(w.coords)[:, :2]) for w in walls if w.length > 0]
@@ -681,23 +683,13 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
         if shapely.intersection(f.boundary, wall_buf).length < 0.5 * f.length:
             continue
         pt = f.representative_point()
-        # the finest element anywhere on it decides: a pocket reaching into
-        # finer elements may be resolvable there
-        probe = np.vstack([np.asarray(pt.coords)[:, :2],
-                           np.asarray(f.exterior.coords)[:, :2]])
-        h = float(np.min(np.asarray(size(probe), dtype=float)))
-        # ...and inside it, on a grid fine enough for the smallest element
-        # the field is gated on: a quarter of the coarse size read at the
-        # vertices missed a fine region between them (reviews, rounds 2-3)
-        x0, y0, x1, y1 = f.bounds
-        step = max(2.0, 0.25 * (min_h if min_h > 0 else h))
-        gx, gy = np.meshgrid(np.arange(x0 + 0.5 * step, x1, step),
-                             np.arange(y0 + 0.5 * step, y1, step))
-        grid = np.column_stack([gx.ravel(), gy.ravel()])
-        if len(grid):
-            grid = grid[shapely.contains_xy(f, grid[:, 0], grid[:, 1])]
-            if len(grid):
-                h = min(h, float(np.min(np.asarray(size(grid), dtype=float))))
+        # The finest element anywhere on it decides: a guaranteed lower bound
+        # of the size over the pocket (patch.size_lower_bound), not readings
+        # at its vertices or on a grid -- each of those missed a fine region
+        # between its samples (reviews, rounds 2-4).
+        floor = float(size_floor) if size_floor is not None else \
+            0.5 * float(np.min(np.asarray(size(np.asarray(f.exterior.coords)[:, :2]))))
+        h = size_lower_bound(f, size, floor)
         # ...and clear of the coast by half an element.  The rim is resolved
         # from the land's own components, and a pocket that touched or
         # nearly touched the coast merged into it and left a stretch with no

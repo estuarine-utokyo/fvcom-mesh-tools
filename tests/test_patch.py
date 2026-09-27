@@ -2365,3 +2365,51 @@ def test_filter_shoreline_local_takes_an_iterator_of_land():
     a, _ = filter_shoreline_local(land, size, 30.0, fp, keep_land=land[0])
     b, _ = filter_shoreline_local(iter(land), size, 30.0, fp, keep_land=land[0])
     assert a.area == pytest.approx(b.area)
+
+
+def test_land_an_element_fits_proves_absence_and_does_not_sample_it():
+    """review round 4: a grid search missed an in-centre with 31 m of
+    clearance against 30 m; absence is now proved by erosion at a lower
+    bound of the size."""
+    from fvcom_mesh_tools.patch import land_an_element_fits
+
+    r = 31.0
+    tri = shapely.Polygon([(0, 0), (2 * np.sqrt(3) * r, 0), (np.sqrt(3) * r, 3 * r)])
+    assert land_an_element_fits(tri, lambda q: np.full(len(np.atleast_2d(q)), 60.0), 30.0)
+    # a finer base than the target: the floor is the base's 20 m, and a 10 m
+    # disc fits in 25 m of land
+    strip = shapely.box(0, 0, 25, 1000)
+    assert land_an_element_fits(strip, lambda q: np.full(len(np.atleast_2d(q)), 20.0), 20.0)
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -1.0])
+def test_land_an_element_fits_refuses_a_bad_size_or_factor(bad):
+    from fvcom_mesh_tools.patch import land_an_element_fits
+
+    box = shapely.box(0, 0, 100, 100)
+    with pytest.raises(ValueError):
+        land_an_element_fits(box, lambda q: np.full(len(np.atleast_2d(q)), bad), 30.0)
+    for factor in (0.0, -1.0, np.nan):
+        with pytest.raises(ValueError):
+            land_an_element_fits(box, lambda q: np.full(len(np.atleast_2d(q)), 30.0), 30.0,
+                                 factor=factor)
+
+
+def test_rim_repair_keeps_a_fine_basin_behind_a_coarse_mouth():
+    """review round 4: the basin was judged on sizes at its vertices, and a
+    finer interior with room for a 30 m disc was closed."""
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    pfix = np.array([(0, 0), (500, 0), (500, 500), (260, 500), (260, 540), (290, 540),
+                     (290, 620), (210, 620), (210, 540), (240, 540), (240, 500), (0, 500)],
+                    dtype=float)
+    egfix = np.array([[k, (k + 1) % 12] for k in range(12)])
+    c = np.array([250.0, 580.0])
+
+    def size(q):
+        q = np.atleast_2d(q)
+        return np.minimum(100.0, 30.0 + 0.4 * np.maximum(np.linalg.norm(q - c, axis=1) - 5, 0))
+
+    water = hole_polygon(pfix, egfix)
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(12, -1), water, size, size_floor=30.0)
+    assert hole_polygon(p, e).contains(shapely.Point(c))

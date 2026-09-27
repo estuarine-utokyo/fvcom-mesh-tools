@@ -56,7 +56,8 @@ def test_collect_hashes_a_shapefile_set_together_and_records_libraries(repo, tmp
     assert rec["files"]["land"]["sha256"] == want
     assert rec["files"]["gone"]["sha256"] is None
     assert rec["libraries"]["numpy"] and rec["libraries"]["no_such_library_xyz"] is None
-    assert rec["code"]["tool"]["commit"]
+    assert rec["code"]["tool"]["git"]["commit"]
+    assert rec["code"]["tool"]["path"] == str(repo.resolve())
     # the set's hash changes when any member does
     parts[1].write_bytes(b"other")
     assert collect(files={"land": parts})["files"]["land"]["sha256"] != want
@@ -102,3 +103,16 @@ def test_dataset_files_matches_sidecars_without_case(tmp_path):
         (tmp_path / f"LAND{ext}").write_text(ext)
     got = {p.suffix for p in dataset_files(tmp_path / "LAND.SHP")}
     assert got == {".SHP", ".SHX", ".DBF", ".PRJ", ".CPG"}
+
+
+def test_code_outside_git_is_identified_by_its_sources(tmp_path):
+    """review round 4: a package installed outside git had no identity."""
+    from fvcom_mesh_tools.provenance import code_state
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("x = 1\n")
+    one = code_state("no_such_dist", pkg / "a.py")
+    assert one["git"] is None and one["path"] == str((pkg / "a.py").resolve())
+    (pkg / "a.py").write_text("x = 2\n")
+    assert code_state("no_such_dist", pkg / "a.py")["source_sha256"] != one["source_sha256"]

@@ -184,7 +184,7 @@ def test_f11_the_land_filter_does_not_wait_for_a_base_coastline():
            "rc": {"pfix": np.zeros((0, 2)), "egfix": np.zeros((0, 2), dtype=np.int64),
                   "pfix_base": np.zeros(0, dtype=np.int64), "curves": []},
            "np": np, "shapely": shapely, "say": lambda *a: None,
-           "land_an_element_fits": land_an_element_fits}
+           "land_an_element_fits": land_an_element_fits, "H_FLOOR": 30.0}
     import json
     import tempfile
 
@@ -240,7 +240,7 @@ def test_a_refused_wall_pocket_gets_its_walls_back_even_off_its_point():
            "rc": {"pfix": np.zeros((0, 2)), "egfix": np.zeros((0, 2), dtype=np.int64),
                   "pfix_base": np.zeros(0, dtype=np.int64), "curves": []},
            "np": np, "shapely": shapely, "say": lambda *a: None,
-           "land_an_element_fits": land_an_element_fits}
+           "land_an_element_fits": land_an_element_fits, "H_FLOOR": 30.0}
     exec(compile(ast.Module(body=[isl], type_ignores=[]), "<driver block>", "exec"), env)
     assert env["_walls_src"] is before
 
@@ -267,7 +267,7 @@ def test_land_wide_enough_for_an_element_may_not_be_meshed_as_water(tmp_path):
            "rc": {"pfix": np.zeros((0, 2)), "egfix": np.zeros((0, 2), dtype=np.int64),
                   "pfix_base": np.zeros(0, dtype=np.int64), "curves": []},
            "np": np, "shapely": shapely, "say": lambda *a: None,
-           "land_an_element_fits": land_an_element_fits}
+           "land_an_element_fits": land_an_element_fits, "H_FLOOR": 30.0}
     with pytest.raises(SystemExit, match="wide enough for an element"):
         exec(compile(ast.Module(body=[isl], type_ignores=[]), "<driver block>", "exec"), env)
     # a coastline chord's sliver, a few metres wide, is not

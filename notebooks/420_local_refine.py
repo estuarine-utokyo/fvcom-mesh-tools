@@ -225,6 +225,10 @@ for _g, _r in regions_m:
 # from the sizing recipe: what the transition has to reach is the mesh that
 # is actually there.  Near Futtsu that is 420 m, not the 350 m nominal.
 amb_node = ambient_size_field(base.nodes, base.elements)
+# The smallest size the field has anywhere: the finest target, or the base
+# mesh where it is finer still -- patch_sizing keeps that (review, round 4:
+# half the finest target was assumed, and a 20 m base hid a 10 m disc).
+H_FLOOR = float(min(min(r.target_h_m for _, r in regions_m), np.nanmin(amb_node)))
 ambient = {}
 for geom, region in regions_m:
     d = shapely.distance(shapely.points(base.nodes[:, 0], base.nodes[:, 1]), geom)
@@ -354,7 +358,8 @@ reports["provenance"]["environment"] = {
 reports["provenance"]["seeds"] = os.environ.get("LR_SEEDS", "0,1,2,3,4")
 reports["provenance"]["max_iter"] = int(os.environ.get("LR_MAX_ITER", 100))
 reports["provenance"]["experimental"] = sorted(EXPERIMENTAL)
-_dirty = {k: v["dirty"] for k, v in reports["provenance"]["code"].items() if v and v["dirty"]}
+_dirty = {k: v["git"]["dirty"] for k, v in reports["provenance"]["code"].items()
+          if v.get("git") and v["git"]["dirty"]}
 if _dirty:
     say(f"provenance: uncommitted changes in {_dirty}; this mesh cannot be remade "
         "from the commits alone")
@@ -565,7 +570,8 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
     _prep = {"n_pockets_closed": 0, "at": []}
     if "wall_pockets" in EXPERIMENTAL:
         _pockets, _walls_src, _prep = close_wall_pockets(_walls_src, _filtered, _h_local,
-                                                         min_h=2.0 * _h0 + 1e-6)
+                                                         min_h=2.0 * _h0 + 1e-6,
+                                                         size_floor=H_FLOOR)
     _wrep["pockets_closed"] = _prep
     if _prep["n_pockets_closed"]:
         _filtered = shapely.make_valid(shapely.union_all([_filtered, _pockets]))
@@ -733,7 +739,7 @@ if HIRES is not None and _land_filtered:
     _wet_land = shapely.intersection(hole, WET_LAND_SRC)
     # judged at the size where a disc would stand, not at one point's size
     # (review, round 3); FINE_H / 2 is the smallest element anywhere
-    _solid = land_an_element_fits(_wet_land, h_achieved, 0.5 * FINE_H)
+    _solid = land_an_element_fits(_wet_land, h_achieved, H_FLOOR)
     reports["land_meshed_as_water_m2"] = float(_wet_land.area)
     if _solid:
         (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
@@ -1249,7 +1255,8 @@ def apply_rim_repair(tag="rim repair", **kw):
                 for k, (x, y) in enumerate(np.asarray(rc["pfix"])[:, :2])}
     roots = set(np.unique(WALL_SEGS[WALL_SEGS < n_rim]).tolist()) if len(WALL_SEGS) else set()
     p_, e_, b_, remap_, rep_ = rim_repair(rc["pfix"], rc["egfix"], rc["pfix_base"],
-                                          hole, h_achieved, protect=roots, **kw)
+                                          hole, h_achieved, protect=roots,
+                                          size_floor=H_FLOOR, **kw)
     rc["pfix"], rc["egfix"], rc["pfix_base"] = p_, e_, b_
     _kept = remap_[RIM_PINNED] if len(RIM_PINNED) else np.zeros(0, dtype=np.int64)
     # made or moved -- and a point whose neighbours changed: taking one
@@ -1296,21 +1303,24 @@ def wet_land_after_repair():
     if WET_LAND_SRC is None:
         return [], 0.0
     wet = shapely.intersection(hole, WET_LAND_SRC)
-    return land_an_element_fits(wet, h_achieved, 0.5 * FINE_H), float(wet.area)
+    return land_an_element_fits(wet, h_achieved, H_FLOOR), float(wet.area)
 
 
 if RIM_REPAIR:
     # The rim as the fill will get it, checked against the local size and
     # repaired (patch.rim_repair).  Frozen points and wall roots stay.
     reports["rim_repair"] = apply_rim_repair()
-    # ...and the land check again: a repair that hands land to the water
-    # (a pier tip stepped back) must not hand over land an element fits in
-    # (review, round 3)
-    _solid, reports["land_meshed_as_water_m2"] = wet_land_after_repair()
-    if _solid:
-        (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
-        raise SystemExit(f"rim repair left land wide enough for an element in the water "
-                         f"near {_solid[:5]}")
+# The land check once more, on the rim the fill gets, whatever the rules:
+# blunting and wall rooting change it too, and switching rim repair off
+# must not switch the check off (review, round 4).  A repair that hands
+# land to the water must not hand over land an element fits in (round 3).
+_solid, _wet_area = wet_land_after_repair()
+if WET_LAND_SRC is not None:
+    reports["land_meshed_as_water_m2"] = _wet_area
+if _solid:
+    (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
+    raise SystemExit(f"the coastline leaves land wide enough for an element in the water "
+                     f"near {_solid[:5]}")
 assemble_constraints()
 
 # The slope the field actually has, measured on the hole it will be meshed

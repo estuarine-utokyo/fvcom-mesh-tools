@@ -1414,7 +1414,7 @@ def _ring_at_size(ring: np.ndarray, size, *, fine_h=None) -> np.ndarray:
 def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                min_edge_factor=0.5, gap_factor=1.0, min_angle_deg=60.0,
                operations=("short_edges", "slits", "angles"), rounds=2,
-               focus=None, focus_factor=1.5, retreat_tips=True):
+               focus=None, focus_factor=1.5, retreat_tips=True, size_floor=None):
     """Check the finished rim against the local size and repair what fails.
 
     Each rule upstream (the filter, the corner walk, blunting, rooting) is
@@ -1445,6 +1445,12 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
 
     ``retreat_tips`` False leaves a tip where it is (the slit is reported).
 
+    ``size_floor`` is the smallest size the field has anywhere; the slit and
+    retreat decisions use a guaranteed lower bound of the size over the
+    water or land they change hands (:func:`size_lower_bound`), not the size
+    at a few vertices (review, round 4).  Default: half the smallest size at
+    the rim points.
+
     ``focus`` ((m, 2) points, e.g. the QA offenders of a failed seed)
     limits the short-edge and slit operations to within ``focus_factor``
     local elements of one of them, so a retry with looser thresholds touches
@@ -1463,6 +1469,8 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
     egfix = np.asarray(egfix, dtype=np.int64).copy()
     pfix_base = np.asarray(pfix_base, dtype=np.int64).copy()
     n_in = len(pfix)
+    floor = float(size_floor) if size_floor is not None else \
+        0.5 * float(np.min(np.asarray(size(pfix), dtype=float))) if len(pfix) else 1.0
     ident = np.arange(n_in)             # current index of each input point
     protect = set(int(k) for k in protect)
     removed, refused, slits, slits_left, retreated = [], [], [], [], []
@@ -1606,7 +1614,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
         # ...and hand over only land no element fits in: stepping back by
         # 1.5 elements took 5,000 m2 off a 120 m pier (review, round 3)
         handed = shapely.make_valid(shapely.Polygon([pfix[u], pfix[v], pfix[w], new]))
-        if not handed.buffer(-0.5 * float(np.asarray(size(pfix[v][None]))[0])).is_empty:
+        if land_an_element_fits(handed, size, floor):
             return False
         edges = shapely.MultiLineString([[pfix[u], new], [new, pfix[w]]])
         others = [shapely.LineString(pfix[[c, e2]]) for c, e2 in egfix.tolist()
@@ -1685,7 +1693,11 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
             end = path[-1]                  # the edge end on the dead-end side
             if not inner or shapely.difference(g, poly.buffer(1e-6)).area > 1e-6 * max(area, 1.0):
                 continue                    # the side is not water in the hole
-            h = float(np.min(h_all[path]))
+            # no element may fit ANYWHERE in the dead end, judged on a
+            # guaranteed lower bound of the size over it, not at its
+            # vertices: a finer basin behind a coarse mouth was closed
+            # (review, round 4)
+            h = size_lower_bound(g, size, floor) if not g.is_empty else float(np.min(h_all[path]))
             if not g.buffer(-h).is_empty:
                 # Closing would cut off water an element fits in -- a pier
                 # whose tip nearly touches the quay across (Yokohama, 3.3 m).
@@ -1770,39 +1782,66 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
     return pfix, egfix, pfix_base, ident, report
 
 
-def land_an_element_fits(land, size, h_min: float, *, factor: float = 0.5) -> list:
-    """Points of ``land`` that hold a disc of ``factor`` local elements.
+def size_lower_bound(geom, size, h_floor: float, *, slope: float = 1.0) -> float:
+    """A size no point of ``geom`` is below -- guaranteed, not sampled.
 
-    A centre ``c`` qualifies when its distance to the land's edge is at least
-    ``factor * size(c)`` -- the size where the disc would stand, not one size
-    for the whole polygon (review, round 3: a representative point at 280 m
-    hid a 25 m disc where the elements are 50 m).  Only the part of the land
-    ``factor * h_min`` inside its edge can hold any disc, and it is searched
-    on a grid of ``factor * h_min / 2``, ``h_min`` being the smallest element
-    the field has anywhere.  Returns the qualifying points (empty if none).
+    The field is read on a grid of ``h_floor / 4`` inside ``geom`` and on its
+    vertices, and the smallest reading is lowered by ``slope`` times the
+    farthest any point can be from a grid point: a field that changes by at
+    most ``slope`` per metre cannot hide anything smaller between readings.
+    The sizing fields here change by far less (the region ramps by the
+    gradation, 0.165; the smoothed base field by about 0.2), so ``slope=1``
+    is a safe bound.  ``h_floor`` -- the smallest size the field has
+    anywhere -- is the answer when the readings allow no better (reviews,
+    rounds 2-4: every sampled check missed something between its samples).
     """
     import shapely
 
-    if not (np.isfinite(h_min) and h_min > 0):
-        raise ValueError("h_min must be finite and positive")
+    if not (np.isfinite(h_floor) and h_floor > 0):
+        raise ValueError("h_floor must be finite and positive")
+    if not (np.isfinite(slope) and slope >= 0):
+        raise ValueError("slope must be finite and non-negative")
+    step = 0.25 * h_floor
+    pts = [shapely.get_coordinates(geom)[:, :2]]
+    x0, y0, x1, y1 = geom.bounds
+    gx, gy = np.meshgrid(np.arange(x0, x1 + step, step), np.arange(y0, y1 + step, step))
+    grid = np.column_stack([gx.ravel(), gy.ravel()])
+    pts.append(grid[shapely.contains_xy(geom, grid[:, 0], grid[:, 1])])
+    pts = np.vstack([q for q in pts if len(q)])
+    h = np.asarray(size(pts), dtype=float).reshape(-1)
+    if h.shape != (len(pts),) or not np.isfinite(h).all() or (h <= 0).any():
+        raise ValueError("the size field is not finite and positive over the geometry")
+    return float(max(h_floor, h.min() - slope * step / np.sqrt(2.0)))
+
+
+def land_an_element_fits(land, size, h_min: float, *, factor: float = 0.5,
+                         slope: float = 1.0) -> list:
+    """Where ``land`` may hold a disc of ``factor`` local elements -- empty
+    only when it certainly holds none.
+
+    Absence is proved, not sampled: for each polygon a guaranteed lower bound
+    of the size over it (:func:`size_lower_bound`) is found, and if eroding
+    the polygon by ``factor`` times that bound leaves nothing, no disc of
+    ``factor * size(c)`` fits anywhere.  Otherwise the polygon is reported --
+    it may hold one, and an unresolved case must not pass (review, round 4:
+    a sampled search missed an in-centre with 31 m of clearance against
+    30 m, and one point's size missed a 25 m disc in round 3).  ``h_min`` is
+    the smallest size the field has anywhere.  Returns one point per
+    reported polygon.
+    """
+    if not (np.isfinite(factor) and factor > 0):
+        raise ValueError("factor must be finite and positive")
     out = []
-    step = 0.5 * factor * h_min
     for g in getattr(land, "geoms", [land]):
         if g.geom_type != "Polygon" or g.is_empty:
             continue
-        core = g.buffer(-factor * h_min)
+        if g.buffer(-factor * h_min).is_empty:
+            continue                                   # nothing fits even at the floor
+        lo = size_lower_bound(g, size, h_min, slope=slope)
+        core = g.buffer(-factor * lo)
         if core.is_empty:
             continue
-        x0, y0, x1, y1 = core.bounds
-        gx, gy = np.meshgrid(np.arange(x0, x1 + step, step), np.arange(y0, y1 + step, step))
-        pts = np.column_stack([gx.ravel(), gy.ravel()])
-        pts = pts[shapely.contains_xy(core, pts[:, 0], pts[:, 1])]
-        rp = np.asarray(core.representative_point().coords)[:, :2]
-        pts = np.vstack([pts, rp]) if len(pts) else rp
-        d = shapely.distance(g.boundary, shapely.points(pts[:, 0], pts[:, 1]))
-        h = np.asarray(size(pts), dtype=float)
-        ok = d >= factor * h
-        out.extend(np.round(pts[ok][:3], 1).tolist())
+        out.append(np.round(np.asarray(core.representative_point().coords)[0], 1).tolist())
     return out
 
 

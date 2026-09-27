@@ -238,7 +238,7 @@ refine:
 | `refine` | yes | one or more regions |
 | `refine[].geometry` | yes | `circle: {center: [lon, lat], radius_m}`, a `bbox`, a GeoJSON `Polygon`, or `{file: area.geojson, where: {...}, buffer_m: 25}` |
 | `refine[].target_h_m` | yes | the target element size, m |
-| `refine[].priority` | no | which region wins where two overlap |
+| `refine[].priority` | no | no effect in local refinement: where regions overlap the finest size wins (`patch_sizing`); kept for sizing recipes |
 
 Unknown keys are errors, and relative paths resolve against the recipe's own
 directory. Before meshing, the run checks each region (depth, dryness, time

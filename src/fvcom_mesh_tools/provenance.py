@@ -17,11 +17,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-__all__ = ["collect", "dataset_files", "file_sha256", "git_state"]
+__all__ = ["code_state", "collect", "dataset_files", "file_sha256", "git_state"]
 
 # the libraries whose arithmetic or geometry decides the mesh
 LIBRARIES = ("numpy", "scipy", "shapely", "geopandas", "pyproj", "rasterio",
-             "matplotlib", "netCDF4", "oceanmesh")
+             "matplotlib", "netCDF4", "oceanmesh", "fvcom-mesh-tools")
 
 
 def file_sha256(path) -> str | None:
@@ -94,6 +94,27 @@ def git_state(path) -> dict[str, Any] | None:
     return {"root": top, "commit": commit, "dirty": changed, "path_tracked": tracked}
 
 
+def code_state(name: str, path) -> dict[str, Any]:
+    """What identifies the code at ``path``, in or out of git.
+
+    Always the resolved path and the installed distribution's version (if
+    ``name`` is one); the git state when the path is in a work tree, and
+    otherwise a SHA-256 over the Python sources beside it, sorted by name --
+    a package installed outside git had no identity at all (review, round 4).
+    """
+    p = Path(path).resolve()
+    out: dict[str, Any] = {"path": str(p), "distribution": _version(name),
+                           "git": git_state(p)}
+    if out["git"] is None:
+        root = p.parent if p.is_file() else p
+        h = hashlib.sha256()
+        for f in sorted(root.rglob("*.py")):
+            h.update(str(f.relative_to(root)).encode())
+            h.update(file_sha256(f).encode() if file_sha256(f) else b"")
+        out["source_sha256"] = h.hexdigest()
+    return out
+
+
 def _version(name: str) -> str | None:
     """The installed distribution's version, without importing it.
 
@@ -122,7 +143,7 @@ def collect(*, code: dict[str, Any] | None = None,
         "python": platform.python_version(),
         "platform": platform.platform(),
         "libraries": {name: _version(name) for name in libraries},
-        "code": {name: git_state(p) for name, p in (code or {}).items()},
+        "code": {name: code_state(name, p) for name, p in (code or {}).items()},
         "files": {},
     }
     for name, p in (files or {}).items():
