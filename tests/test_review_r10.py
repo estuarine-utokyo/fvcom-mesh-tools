@@ -5,7 +5,7 @@ import ast
 import numpy as np
 from shapely.geometry import Point
 
-from fvcom_mesh_tools.patch import _rim_depths, _ring_is_polygon, hole_polygon, rim_repair
+from fvcom_mesh_tools.patch import _rim_edit_ok, hole_polygon, rim_repair
 from tests.test_local_refine_driver import DRIVER
 
 
@@ -30,7 +30,7 @@ def test_a_tip_does_not_step_back_over_a_lake():
     out, eg, _b, _m, rep = rim_repair(p, e, b, water, _const(30.0), operations=("slits",),
                                       rounds=1, focus=[[190, 297]], focus_factor=0.001)
     assert hole_polygon(out, eg).contains(Point(192, 281))
-    assert _rim_depths(out, eg) == _rim_depths(p, e)
+    assert _rim_edit_ok(p, e, out, eg)
 
 
 def _nested(name):
@@ -43,8 +43,8 @@ def _blunt_env(xy, eg, base, pinned=()):
     env = {"np": np, "rim_xy": np.asarray(xy, dtype=float),
            "rim_eg": np.asarray(eg, dtype=np.int64), "rim_base": np.asarray(base),
            "_segs": [], "_folded": [], "PINNED_XY": set(pinned),
-           "_ring_is_polygon": _ring_is_polygon, "_rim_depths": _rim_depths}
-    for name in ("_blunt", "_pin_follows"):
+           "_rim_edit_ok": _rim_edit_ok}
+    for name in ("_blunt", "_pin"):
         exec(compile(_nested(name), "<driver>", "exec"), env)
     return env
 

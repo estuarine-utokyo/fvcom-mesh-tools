@@ -2915,3 +2915,294 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | 4 | nit | yes | yes | call-site comment: the shortest touching edge, one at a time |
 
 All six hires recipes rebuild accepted and byte-identical to round 9. 963 tests pass.
+
+## Round 11
+
+### Answer (verbatim)
+
+Four minor defects remain. No regression unique to the last commit was substantiated; these are incomplete geometry and pinning safeguards.
+
+1. **Minor — Wall-root movement still bypasses polygon and nesting validation.**
+
+   **Location:** [420_local_refine.py:915](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:915)
+
+   `_root` moves a vertex whenever its bend is below 15°. That permits a non-collinear move which changes the coastline. Unlike retreat and folding, this assignment has no candidate-ring guard.
+
+   **Reproduction:** Execute the AST-extracted `_root` with cyclic rings:
+   ```python
+   outer = [(100,-5), (300,0), (300,300), (-100,300), (-100,0)]
+   island = [(99,-4.95), (101,-4.95), (101,-4.9), (99,-4.9)]
+   ```
+   Set only outer vertex 0 free, use constant `h=30`, and call `_root([110,-4.75])`.
+
+   Observed:
+   - Vertex 0 moves to `(110,-4.75)`.
+   - Nesting changes from `(0,1)` to `(0,0)`.
+   - `hole_polygon` succeeds, but `(100,-4.925)` changes from land to water.
+
+   **Fix:** Build the proposed coordinates first. Validate the edited polygon, inter-ring separation and each ring’s nesting before moving the vertex or transferring its pin.
+
+2. **Minor — The new fold guard permits crossings between different rings.**
+
+   **Locations:** [420_local_refine.py:953](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:953), [patch.py:2139](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:2139)
+
+   `_ring_is_polygon` checks the edited ring’s validity and the nesting-depth summary. It does not check whether that ring crosses another ring. Testing one vertex for containment can leave the summary unchanged despite a crossing.
+
+   **Reproduction:** With all vertices free, execute extracted `_blunt(0,30)` on:
+   ```python
+   outer = [(0,0), (10,0), (300,0), (300,300), (0,300)]
+   island = [(6,10), (6,20), (1,20), (1,10)]
+   ```
+   The fold `(1,0)` is committed, moving the root to `(5,0)`. Depths remain `(0,1)`, but the new coast crosses the island. Subsequent `hole_polygon` raises:
+   ```text
+   the assembled hole boundary is 1202.54 m against 1225.04 m
+   of rim constraints; the rings touch or overlap
+   ```
+
+   **Fix:** Reject candidates whose ring boundaries intersect other rings. Validate the complete candidate rim before committing the fold, retaining the original geometry on refusal.
+
+3. **Minor — Sorted nesting depths allow individual rings to exchange land/water roles.**
+
+   **Location:** [patch.py:2108](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:2108)
+
+   Comparing sorted depths preserves only their counts. It does not establish the documented invariant that *every ring keeps its role*.
+
+   **Reproduction:** With all vertices free, execute extracted `_blunt(0,30)` on:
+   ```python
+   outer = [(0,0), (10,10), (300,0), (300,300), (0,300)]
+   island = [(1,20), (2,20), (2,21), (1,21)]
+   lake = [(8,6), (9,6), (9,7), (8,7)]
+   ```
+   The fold is accepted. Before and after, `_rim_depths` returns `(0,0,1)`, and `hole_polygon` remains valid. Nevertheless:
+   - `(1.5,20.5)` changes from land to water.
+   - `(8.5,6.5)` changes from water to land.
+
+   **Fix:** Match rings across an edit using surviving vertex identities and preserve their individual containment relationships. An unordered depth histogram is insufficient.
+
+4. **Minor — Newly folded wall-root corners remain unpinned when neither predecessor was pinned.**
+
+   **Location:** [420_local_refine.py:960](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/420_local_refine.py:960)
+
+   `_pin_follows` successfully transfers existing pins, but creates none for previously unpinned geometry changed by wall construction. Subsequent `apply_rim_repair` compares against the already-folded rim, so an unchanged repair pass also creates no pin.
+
+   **Reproduction:** Start with:
+   ```python
+   points = [(0,0), (10,0), (300,0), (300,300), (0,100)]
+   base_ids = [-1, -1, 2, 3, 4]
+   ```
+   Use cyclic edges and constant `h=30`.
+
+   Initial `blunt_acute_corners` reports zero edits. Extracted `_blunt(0,30)` folds `(1,0)` into `(5,0)`, leaving `PINNED_XY` empty. After compaction, ordinary `rim_repair` reports zero operations and `_rim_changed` returns no pins.
+
+   On the compacted four-node mesh with faces `[[0,1,2],[0,2,3]]`, one `improve_patch` round allowing only that root to slide moves it from **`(5,0)` to `(10,0)`**. This uses the original coast curve and a clipped wall curve `[(5,13),(5,60)]`. Explicitly pinning the root produces zero moves.
+
+   **Fix:** Record all surviving geometry and adjacency changes during wall construction, using `_rim_changed` around that stage, and include them in `RIM_PINNED`. Keep these pins when walls are subsequently withdrawn.
+
+**Status of every previous finding**
+
+“RESOLVED” refers to the original defect and reproduction. Broader remaining gaps are identified explicitly.
+
+| Finding | Status | Reason |
+|---|---|---|
+| R1 #1 — Preserve mode | RESOLVED | Rim repair requires `resolve`. |
+| R1 #2 — Lagoon entrance | RESOLVED | Connectivity guard protects the reported entrance. |
+| R1 #3 — Refused-pocket walls | RESOLVED | Restoration checks pocket geometry against remaining water. |
+| R1 #4 — Three-node collapse | RESOLVED | Reported removal and folding cases retain a polygon. |
+| R1 #5 — Retreat-only retry | RESOLVED | Array comparison detects changes; unselected state is restored. |
+| R1 #6 — Empty land/padding | RESOLVED | Empty-land handling and exterior padding cover reported cases. |
+| R1 #7 — Invalid continuous-width parameters | RESOLVED | Reported invalid parameters and empty footprints are handled. |
+| R1 #8 — Ignored seed argument | RESOLVED | Search iterates `seed_list`. |
+| R1 #9 — GPL provenance import | RESOLVED | Versions come from distribution metadata. |
+| R1 #10 — Missing provenance inputs/settings | RESOLVED | Bathymetry, region files and relevant settings are recorded. |
+| R1 #11 — Untracked source | RESOLVED | Git status includes untracked files; entry-point tracking is recorded. |
+| R1 #12 — Retry reproducibility | RESOLVED | Documentation requires the original seed sequence for pass 2. |
+| R1 #13 — Ineffective fixtures | RESOLVED | Revised fixtures exercise prerequisites; unreachable merge code was removed. |
+| R1 #14 — Raster documentation | RESOLVED | Resolution is expressed relative to the finest target. |
+| R2 #1 — Resolvable land accepted as water | RESOLVED | Land validation rejects qualifying land inside the hole. |
+| R2 #2 — All-land raster | RESOLVED | Empty-water early return handles it. |
+| R2 #3 — Detached artificial island | RESOLVED | Closure requires adjacent land. |
+| R2 #4 — Fine region inside pocket | RESOLVED | Conservative bounds protect the reported fine region. |
+| R2 #5 — Obsolete sliding curves | PARTIAL | Existing pins survive, but newly folded roots can remain unpinned: finding 4. |
+| R2 #6 — Geometry provenance | RESOLVED | Sidecars are enumerated; enumeration failure invalidates the digest. |
+| R2 #7 — Falsy experimental values | RESOLVED | Explicit list validation rejects them. |
+| R2 #8 — Seed-variable documentation | RESOLVED | Header names `LR_SEEDS`. |
+| R3 #1 — Variable-size land guard | RESOLVED | Decisions use conservative bounds. |
+| R3 #2 — Repairs bypass validation | RESOLVED | Final-rim and retry land checks remain wired. |
+| R3 #3 — Unchanged new corners | RESOLVED | Changed adjacency during rim repair causes pinning. |
+| R3 #4 — Pocket sampling grid | RESOLVED | Covering samples and uncertified-floor handling address reported gaps. |
+| R3 #5 — Uppercase sidecars | RESOLVED | Extension matching is case-insensitive. |
+| R3 #6 — Imported-package identity | RESOLVED | Actual imported paths are recorded. |
+| R3 #7 — Exhausted iterators | RESOLVED | Both helpers materialize their inputs. |
+| R4 #1 — Missed qualifying disc | RESOLVED | Conservative erosion replaces sampled absence decisions. |
+| R4 #2 — Incorrect driver size floor | RESOLVED | `H_FLOOR` includes the base ambient minimum. |
+| R4 #3 — Validation disabled with repair | RESOLVED | Final land validation is outside the repair switch. |
+| R4 #4 — Fine basin behind coarse mouth | RESOLVED | Conservative bounds protect the reproduced basin. |
+| R4 #5 — Pocket fine-zone exclusion | RESOLVED | Conservative bounds protect the fine zone. |
+| R4 #6 — Non-Git identity | RESOLVED | Path, distribution and source digest are recorded. |
+| R4 #7 — Invalid sizes/factors | RESOLVED | Reported invalid inputs are rejected. |
+| R4 #8 — Missing test prerequisites | RESOLVED | Revised fixtures exercise the intended guards. |
+| R4 #9 — Priority documentation | RESOLVED | Guide states that local refinement ignores priority. |
+| R5 #1 — Grid coverage | RESOLVED | Boundary-adjacent samples provide coverage. |
+| R5 #2 — Invalid slope premise | RESOLVED | Base and patch fields supply structural bounds. |
+| R5 #3 — Pocket area/clearance | RESOLVED | Both predicates use upper bounds. |
+| R5 #4 — Nested land collections | RESOLVED | Land validation recursively visits polygons. |
+| R5 #5 — Invalid sampled sizes | RESOLVED | Validation precedes clipping. |
+| R5 #6 — Unreadable source hashing | RESOLVED | Read and scan failures invalidate the digest. |
+| R5 #7 — Stale floor comment | RESOLVED | Comment names `H_FLOOR`. |
+| R6 #1 — Hidden enumeration failures | RESOLVED | `Path.walk(on_error=...)` records failures. |
+| R6 #2 — Exterior disc centres | RESOLVED | Padding accounts for exterior centres; unsupported bounds refuse closure. |
+| R6 #3 — Nested island collections | RESOLVED | `island_rings` recursively visits polygons. |
+| R6 #4 — Empty filter footprint | RESOLVED | Explicit descriptive rejection. |
+| R6 #5 — Ineffective fine-spot test | RESOLVED | Revised fixture and negative control exercise the bound. |
+| R6 #6 — Opt-in comments | RESOLVED | Reported comments describe defaults correctly. |
+| R7 #1 — Fully free islands | RESOLVED | Source replacement permits filtered-away islands. |
+| R7 #2 — Discontinuous exterior sizes | RESOLVED | Exterior-padding regressions pass. |
+| R7 #3 — Estimated default floors | RESOLVED | Estimated floors no longer override conservative lower bounds. |
+| R7 #4 — Degenerate ring | RESOLVED | Reported removal/blunting paths retain valid polygons. |
+| R7 #5 — Closed-ring arc selection | RESOLVED | Uneven-density and ring-start regressions pass. |
+| R7 #6 — Obsolete driver comment | RESOLVED | Comment describes filter → rim → hole. |
+| R8 #1 — Snapped slit self-intersection | RESOLVED | Candidate validation rejects the reported crossing. |
+| R8 #2 — Equal-length arcs | RESOLVED | Fit and geometric tie-breaking remove reported start dependence. |
+| R8 #3 — Filtered-away island | RESOLVED | Empty shoreline is permitted for islands-only rims. |
+| R8 #4 — Empty pocket land | RESOLVED | Empty land and mixed collections are handled. |
+| R8 #5 — Failed sidecar enumeration | RESOLVED | Failure marker forces a null digest. |
+| R8 #6 — Overwritten rejection diagnostics | RESOLVED | Rejection filenames include search pass. |
+| R8 #7 — Stale fill counts | RESOLVED | Log counts assembled constraints. |
+| R8 #8 — Premature “accepted” log | RESOLVED | Log says “selected seed”; acceptance remains gated. |
+| R9 #1 — Initial blunting pins | RESOLVED | Initial pins are created and now survive root movement/folding. |
+| R9 #2 — Changed nesting | PARTIAL | Reported cases are guarded, but root movement and depth-histogram comparison leave findings 1 and 3. |
+| R9 #3 — Mixed pocket land | RESOLVED | Recursive polygon extraction handles the collection. |
+| R9 #4 — Dead wall-component code/docstring | RESOLVED | Dead code removed; helper and call-site descriptions agree. |
+| R9 #5 — Obsolete resolution helper/comment | RESOLVED | Helper removed and comment corrected. |
+| R10 #1 — Retreat changes nesting | RESOLVED | The reported retreat is refused; its regression passes. |
+| R10 #2 — Existing pins lost during rooting | RESOLVED | `_pin_follows` transfers existing pins; finding 4 concerns previously unpinned points. |
+| R10 #3 — Fold collapses triangle | RESOLVED | Triangle-collapse regression passes; inter-ring validation remains incomplete as reported above. |
+| R10 #4 — Withdrawal comment | RESOLVED | Comment describes withdrawing one shortest edge at a time. |
+
+**Verification**
+
+Used `/octfs/work/G16445/v61021/miniforge3/envs/oceanmesh-bench/bin/python`.
+
+- Ordinary `-m pytest -q tests/ -p no:cacheprovider` failed before collection because no writable temporary directory exists.
+- A second full-suite attempt using system capture was interrupted without a test result.
+- `tests/test_review_r10.py --capture=sys --noconftest -p no:cacheprovider`: **3 passed**.
+- An in-memory pytest harness reading the existing Matplotlib cache ran the scoped package, driver and review tests: **290 passed, 75 skipped**. Filesystem-dependent tests were skipped.
+- All four findings were reproduced in memory using package functions and AST-extracted driver functions.
+- Final `git status --porcelain` was empty. No files changed, batch jobs submitted or mesh generation run. Production QA, node/element counts and implied time steps were not rerun.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 4 minor, 0 nit)
+
+
+### Prompt
+
+```markdown
+# Review request, round 11: coastline rules for local refinement (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (use `/octfs/work/G16445/v61021/miniforge3/envs/oceanmesh-bench/bin/python`;
+the tests run with `.../bin/python -m pytest -q tests/`). Do not submit
+batch jobs and do not run mesh generation (`notebooks/420_local_refine.py`
+needs the compute nodes). Answer in English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+`git diff 0c5d9b3..HEAD` (now 30 commits; 7a6cffe fixed round 1, 2d8d1d7 round 2, fd2bbe1 round 3, f07c6d9 round 4, c88739e round 5, 806d011 round 6, e88208f round 7, 6fbe8e8 round 8, 3903361 round 9, the last commit round 10; read `git log 0c5d9b3..HEAD` for the
+reasons). The local-refinement driver `notebooks/420_local_refine.py`
+refines a Tokyo Bay FVCOM mesh inside a region, re-cuts the coastline from
+OSM (`hires.coastline: resolve`) and must pass QA with 0 violations
+introduced. Changes in scope:
+
+- `src/fvcom_mesh_tools/patch.py`
+  - `rim_repair`: short edges (remove a free end, or merge a cap between
+    two corners to its midpoint), slits (throat under one element; close a
+    dead end no element fits in, otherwise step a pier tip back), angles
+    (`blunt_acute_corners` again with wall roots protected), `focus=` for a
+    QA-feedback retry; returns a remap for wall references.
+  - `unresolvable_water` and `filter_shoreline_local(continuous_width=)`:
+    coarse-zone water judged at the local size by a distance transform
+    (radius 0.75 h, dead ends only, straits left open).
+  - `filter_shoreline_local(keep_land=)`: in coarse bands a removed land
+    piece is kept whole if most of it is base land.
+  - `_source_substring`: the arc of a closed ring that fits the stretch.
+  - `blunt_acute_corners(protect=)`; `island_rings` reports area inside.
+  - Removal of `water_wedges`, `short_chords`, `seam_water`.
+- `src/fvcom_mesh_tools/walls.py`: `close_wall_pockets`.
+- `src/fvcom_mesh_tools/provenance.py` (new): commits, file hashes,
+  library versions recorded in `report.json`.
+- `src/fvcom_mesh_tools/refine.py`: `hires.rim_repair`,
+  `continuous_width`, `keep_base_land`, `wall_pockets` (all default true),
+  `hires.experimental` list.
+- `notebooks/420_local_refine.py`: wiring; `LR_EXPERIMENTAL` override;
+  `apply_rim_repair` / `assemble_constraints`; `seed_search` and the
+  one-shot retry near the offenders with snapshot/restore; flat-face drop
+  after the fill; wall-pocket restore when an island is refused;
+  `rejected_seed<k>.npz`; provenance.
+- `jobs/octopus/417_hires_refine.sh` (LR_EXPERIMENTAL documented).
+- Tests: `tests/test_patch.py`, `test_walls.py`, `test_refine.py`,
+  `test_provenance.py`, `test_local_refine_driver.py`,
+  `test_review_hires_fixes.py`.
+- Docs: `docs/USER_GUIDE.md` §4, §5 (reproducibility), §11; `CHANGELOG.md`;
+  `recipes/refine/*.yaml` comments.
+
+Evidence already gathered by the author (on compute nodes): all six hires
+recipes accepted with the four rules on, byte-identical rebuilds from the
+accepted seed, FVCOM smoke runs and 20-day M2 runs pass.
+
+Out of scope: the rest of the package, unless these changes touch it.
+
+## Previous rounds
+Rounds 1-9: see your round-10 status table.
+Round 10 (FAIL 0/0/3/1): all fixed in the last commit (`git show HEAD`;
+triage in `docs/coastline-rules-review-20260927.md`).
+1. `retreat` refuses a move whose ring is not a simple polygon or that
+   changes `_rim_depths`.
+2. driver `_pin_follows`: a pinned point that folds into a root or moves
+   along the coast passes its pin to where it lands.
+3. driver `_blunt` builds each fold first and makes it only if
+   `_ring_is_polygon(..., _rim_depths(...))` holds.
+4. withdrawal comment.
+Every rim edit path is now: short-edge removal, slit closure, retreat,
+both blunting paths, and the driver's root fold/move -- please check that
+none is left without the ring/nesting guard.
+Tests: `tests/test_review_r10.py`. All six hires recipes rebuild
+accepted, byte-identical to round 9. 963 tests pass.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the whole scope above and everything it
+   touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| 1 | minor | yes: code read -- `_root` moved a vertex with no guard | yes | the move is built first and made only if `_rim_edit_ok`; test on the extracted `_root` |
+| 2 | minor | yes: code read -- the guard checked one ring and a depth summary, not crossings | yes | `_rim_edit_ok(old, new)` replaces `_ring_is_polygon` / `_rim_depths` on every edit path (short edges, slits, retreat, both blunting paths, driver fold and root move): every ring a valid polygon of some area, no two rings intersecting |
+| 3 | minor | yes: sorted depths are a histogram, and two rings can trade | yes | rings are matched to their old selves by shared vertices and each must sit inside the same (matched) rings as before. Tests: the island/lake swap, and a unit test of the guard |
+| 4 | minor | yes: code read -- `_pin_follows` only moved existing pins | yes | `_pin`: a fold or a root move pins the point it makes and the rim points that now neighbour it (the corners wall construction made, as `_rim_changed` does for rim repair). Test on the extracted `_blunt` |
+
+All six hires recipes rebuild accepted with 0 introduced violations; five byte-identical to round 10. Kimitsu: same boundary (Hausdorff 0.00), but with the wall-root corners pinned (#4) seed 0 introduced 3 violations (c1 at element 6353, two c4) and seed 1 is accepted, dt 1.84 s against 2.02 s. 968 tests pass.

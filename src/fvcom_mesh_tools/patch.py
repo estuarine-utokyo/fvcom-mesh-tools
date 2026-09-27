@@ -1655,7 +1655,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                 # in a line passed every test above and returned a ring of
                 # zero area (review, round 7)
                 eg_try = np.vstack([egfix[~np.isin(egfix, [x]).any(axis=1)], [[u, w]]])
-                if not _ring_is_polygon(pfix, eg_try, u, _rim_depths(pfix, egfix)):
+                if not _rim_edit_ok(pfix, egfix, pfix, eg_try):
                     continue
                 ok = True
                 for y, far in ((u, w), (w, u)):
@@ -1732,7 +1732,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
         # lake turned its water into an island (review, round 10)
         p_try = pfix.copy()
         p_try[v] = new
-        if not _ring_is_polygon(p_try, egfix, v, _rim_depths(pfix, egfix)):
+        if not _rim_edit_ok(pfix, egfix, p_try, egfix):
             return False
         retreated.append({"at": [round(float(c), 1) for c in pfix[v]],
                           "by_m": round(h - dist, 1), "gap_was_m": round(dist, 2)})
@@ -1829,7 +1829,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                 new_e = [[v, qi]] + ([[qi, other_end]] if qi != other_end else [])
                 eg_try = np.vstack([egfix[keep_e], np.asarray(new_e, dtype=np.int64)])
                 p_try = np.vstack([pfix, np.asarray(new_pts)]) if new_pts else pfix
-                if not _ring_is_polygon(p_try, eg_try, v, _rim_depths(pfix, egfix)):
+                if not _rim_edit_ok(pfix, egfix, p_try, eg_try):
                     continue
                 try:                            # nor cross another ring
                     hole_polygon(p_try, eg_try)
@@ -2092,54 +2092,66 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
                    "n_island_points": int(sum(len(r) for r in rings))}
 
 
-def _rim_depths(pfix, egfix) -> tuple:
-    """How deep each rim ring is nested in the others, sorted.
-
-    Even is a shell of water, odd an island.  An edit that changes these
-    turned land into water: a blunting chord left an enclosed island outside
-    its shell, and the valid result meshed its 4 m2 as water (review,
-    round 9).
-    """
+def _rim_layout(pfix, egfix):
+    """``[(vertex keys, polygon, first vertex)]`` per rim ring, or None when
+    the edges do not form closed rings of three points or more."""
     import shapely
 
-    rings, _ = boundary_rings(pfix, egfix)
+    try:
+        rings, _ = boundary_rings(pfix, egfix)
+    except ValueError:
+        return None
     xy = np.asarray(pfix, dtype=float)[:, :2]
-    polys = [shapely.Polygon(xy[r]) for r in rings]
-    return tuple(sorted(
-        sum(1 for j, q in enumerate(polys) if j != i and q.contains(shapely.Point(xy[r[0]])))
-        for i, r in enumerate(rings)))
+    out = []
+    for r in rings:
+        if len(r) < 3:
+            return None
+        keys = {(round(float(x), 6), round(float(y), 6)) for x, y in xy[r]}
+        out.append((keys, shapely.Polygon(xy[r]), xy[r[0]]))
+    return out
 
 
-def _ring_is_polygon(pfix, egfix, k, depths=None) -> bool:
-    """Whether the ring through point ``k`` is a simple polygon of some area,
-    and, given the rim's ``depths`` before the edit, every ring keeps its
-    role (:func:`_rim_depths`).
+def _rim_edit_ok(p_old, e_old, p_new, e_new) -> bool:
+    """Whether an edit of the rim leaves it a rim with the same meaning.
 
-    A change that keeps three points can still leave them in a line: a
-    zero-area ring that every edge test passes and hole_polygon cannot use
-    (review, round 7).
+    Every ring a simple polygon of some area (three points in a line passed
+    every edge test once, review round 7); no two rings touching or crossing
+    (a fold ran the coast through an island, round 11); and every ring --
+    matched to its old self by the vertices they share -- inside exactly the
+    same rings as before, so no land becomes water or water land (an island
+    left outside its shell, round 9; a lake and an island that swapped roles
+    under an unchanged depth count, round 11).
     """
     import shapely
 
-    nb: dict = {}
-    for a, b in np.asarray(egfix, dtype=np.int64).tolist():
-        nb.setdefault(a, []).append(b)
-        nb.setdefault(b, []).append(a)
-    if len(nb.get(k, [])) != 2:
+    old, new = _rim_layout(p_old, e_old), _rim_layout(p_new, e_new)
+    if old is None or new is None or len(old) != len(new):
         return False
-    seq, prev, cur = [k], k, nb[k][0]
-    while cur != k:
-        nxt = [q for q in nb.get(cur, []) if q != prev]
-        if len(nb.get(cur, [])) != 2 or len(nxt) != 1 or len(seq) > len(pfix):
+    for _k, poly, _v in new:
+        if not (poly.is_valid and poly.area > 0):
             return False
-        seq.append(cur)
-        prev, cur = cur, nxt[0]
-    if len(seq) < 3:
+    lines = [poly.exterior for _k, poly, _v in new]
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            if lines[i].intersects(lines[j]):
+                return False
+    match = []
+    for keys, _p, _v in new:
+        shared = [len(keys & k0) for k0, _p0, _v0 in old]
+        j = int(np.argmax(shared))
+        if shared[j] == 0:
+            return False
+        match.append(j)
+    if len(set(match)) != len(match):
         return False
-    ring = shapely.Polygon(np.asarray(pfix, dtype=float)[seq, :2])
-    if not (ring.is_valid and ring.area > 0):
-        return False
-    return depths is None or _rim_depths(pfix, egfix) == depths
+
+    def containers(layout):
+        return [{j for j, (_k, q, _v) in enumerate(layout)
+                 if j != i and q.contains(shapely.Point(v))}
+                for i, (_k, _p, v) in enumerate(layout)]
+
+    c_old, c_new = containers(old), containers(new)
+    return all({match[j] for j in c_new[i]} == c_old[match[i]] for i in range(len(new)))
 
 
 def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0, *,
@@ -2255,7 +2267,7 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
                     continue            # a point on a straight run opens nothing
                 keep_e = ~np.isin(egfix, [drop]).any(axis=1)
                 eg_try = np.vstack([egfix[keep_e], [[v, nxt]]])
-                if not _ring_is_polygon(pfix, eg_try, v, _rim_depths(pfix, egfix)):
+                if not _rim_edit_ok(pfix, egfix, pfix, eg_try):
                     continue            # three points in a line (review, round 7)
                 egfix = eg_try
                 live = np.setdiff1d(np.arange(len(pfix)), [drop])
@@ -2335,7 +2347,7 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
             keep_e = ~np.isin(egfix, list(removed)).any(axis=1)
             eg_try = np.vstack([egfix[keep_e], np.asarray(new_e, dtype=np.int64)])
             p_try = np.vstack([pfix, np.asarray(new_xy)]) if new_xy else pfix
-            if not _ring_is_polygon(p_try, eg_try, int(path[0]), _rim_depths(pfix, egfix)):
+            if not _rim_edit_ok(pfix, egfix, p_try, eg_try):
                 continue
             egfix = eg_try
             if new_xy:

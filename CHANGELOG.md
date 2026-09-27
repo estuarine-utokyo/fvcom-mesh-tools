@@ -8,6 +8,15 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 11 (2026-09-28)
+
+- One guard for every rim edit (`_rim_edit_ok`): each ring a valid polygon,
+  no two rings touching, and every ring inside the same rings as before,
+  matched ring by ring. It covers short-edge removal, slits, tip retreat,
+  corner blunting and the driver's wall-root folds and moves.
+- Wall-root folds and moves pin the point they make and its new
+  neighbours for the seam repair.
+
 ### Fixed -- review of the coastline rules, round 10 (2026-09-28)
 
 - A tip stepped back, and a short coastline edge folded into a wall root,
