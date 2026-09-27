@@ -385,6 +385,7 @@ def test_a_retry_that_moves_the_rim_and_does_no_better_is_put_back():
     env.update(RIM_REPAIR=True, rc=rc, WALL_SEGS=np.zeros((0, 2), dtype=int), hole=hole,
                PFIX_ALL=rc["pfix"], EGFIX_ALL=rc["egfix"], PFIX_BASE_ALL=rc["pfix_base"],
                boundary=hole.boundary, shapely=shapely, apply_rim_repair=apply_rim_repair,
+               RIM_PINNED=np.zeros(0, dtype=int),
                assemble_constraints=assemble_constraints)
     before = rc["pfix"].copy()
     try:
@@ -407,3 +408,29 @@ def test_rim_repair_is_off_where_the_coastline_is_preserved():
         env = {"EXPERIMENTAL": {"rim_repair"}, "HIRES": {"coastline": coastline}}
         exec(code, env)
         assert env["RIM_REPAIR"] is want
+
+
+def test_rim_repair_pins_the_points_it_makes_or_moves():
+    """review round 2: a stepped-back pier tip lay on the OLD source curve and
+    the seam repair slid it 12 m back along it."""
+    import shapely
+
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    pfix = np.array([[0.0, 0.0], [190.0, 0.0], [190.0, 297.0], [200.0, 297.0],
+                     [210.0, 297.0], [210.0, 0.0], [600.0, 0.0], [600.0, 300.0],
+                     [0.0, 300.0]])
+    rc = {"pfix": pfix, "egfix": np.array([[k, (k + 1) % 9] for k in range(9)]),
+          "pfix_base": np.full(9, -1)}
+    env = {"np": np, "rc": rc, "WALL_SEGS": np.zeros((0, 2), dtype=np.int64),
+           "hole": hole_polygon(pfix, rc["egfix"]), "rim_repair": rim_repair,
+           "hole_polygon": hole_polygon, "h_achieved": lambda q: np.full(len(q), 30.0),
+           "say": lambda *a: None, "RIM_PINNED": np.zeros(0, dtype=np.int64),
+           "shapely": shapely}
+    apply = driver_function("apply_rim_repair", env)
+    rep = apply()
+    assert rep["n_tips_stepped_back"] >= 1
+    pinned = {tuple(np.round(env["rc"]["pfix"][k], 3)) for k in env["RIM_PINNED"]}
+    moved = {tuple(np.round(q, 3)) for q in env["rc"]["pfix"]
+             if not any(np.allclose(q, o) for o in pfix)}
+    assert moved and moved <= pinned

@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-__all__ = ["collect", "file_sha256", "git_state"]
+__all__ = ["collect", "dataset_files", "file_sha256", "git_state"]
 
 # the libraries whose arithmetic or geometry decides the mesh
 LIBRARIES = ("numpy", "scipy", "shapely", "geopandas", "pyproj", "rasterio",
@@ -34,6 +34,21 @@ def file_sha256(path) -> str | None:
         return h.hexdigest()
     except OSError:
         return None
+
+
+def dataset_files(path) -> list[Path]:
+    """The files a dataset is read from: a shapefile's sidecars too.
+
+    A shapefile's geometry is in ``.shp`` and ``.shx``, its attributes (which
+    a ``where:`` selects on) in ``.dbf``, its CRS in ``.prj`` and its text
+    encoding in ``.cpg``; any single-file format (GeoJSON, GeoPackage) is
+    itself (review, round 2).
+    """
+    p = Path(path)
+    if p.suffix.lower() != ".shp":
+        return [p]
+    return [p] + [q for q in (p.with_suffix(x) for x in (".shx", ".dbf", ".prj", ".cpg"))
+                  if q.exists()]
 
 
 def git_state(path) -> dict[str, Any] | None:

@@ -14,7 +14,7 @@
 #   FMESH_LAND   land polygons the base mesh was fitted to (any CRS)
 #   LR_OUT       output directory
 #   LR_MAX_ITER  DistMesh iterations (default 100)
-#   LR_SEED      DistMesh seed (default 0)
+#   LR_SEEDS     DistMesh seeds to try, comma-separated (default 0,1,2,3,4)
 import json
 import os
 import sys
@@ -59,6 +59,7 @@ from fvcom_mesh_tools.patch import (
     verify_patch,
 )
 from fvcom_mesh_tools.provenance import collect as collect_provenance  # noqa: E402
+from fvcom_mesh_tools.provenance import dataset_files  # noqa: E402
 from fvcom_mesh_tools.qa import run_qa
 from fvcom_mesh_tools.refine import (
     limit_rfactor,
@@ -337,11 +338,10 @@ reports["provenance"] = collect_provenance(
     files={"recipe": recipe, "base_mesh": cfg["base_mesh"],
            **({"base_depth": cfg["base_depth"]} if cfg["base_depth"] else {}),
            **({"base_obc": cfg["base_obc"]} if cfg["base_obc"] else {}),
-           **({"land": [LAND.with_suffix(x) for x in (".shp", ".shx", ".dbf", ".prj")]}
-              if land_m is not None else {}),
+           **({"land": dataset_files(LAND)} if land_m is not None else {}),
            # every file the depths or the regions came from (review, round 1)
            **_bathy_files(),
-           **{f"region_{r.name}": r.source["file"] for _, r in regions_m
+           **{f"region_{r.name}": dataset_files(r.source["file"]) for _, r in regions_m
               if r.source and r.source.get("file")}})
 # and every setting that changes the mesh
 reports["provenance"]["environment"] = {
@@ -716,6 +716,29 @@ if HIRES is not None and _land_filtered:
         reports["walls_extracted"]["pockets_closed"]["walls_restored_for"] = _lost
         say(f"walls: {len(_lost)} pocket(s) not taken as islands ({_lost}); "
             "their walls are kept")
+    # Land the filter kept but the rim does not carry is meshed as water.
+    # Coastline chords leave slivers of it, a few metres wide, and those are
+    # the price of a coast at the element size; land an element could stand
+    # on is not, and a run may not pass with it (review, round 2: a 300 x
+    # 600 m block crossing the rim was only warned about).  Pockets refused
+    # as islands are water on purpose and do not count.
+    _refused = shapely.union_all([shapely.from_wkt(w) for xy, w in
+                                  zip(_pk.get("at", []), _pk.get("wkt", [])) if xy in _lost])
+    _wet_land = shapely.difference(shapely.intersection(hole, _filtered), _refused)
+    _solid = []
+    for _g in getattr(_wet_land, "geoms", [_wet_land]):
+        if _g.geom_type != "Polygon" or _g.area <= 0:
+            continue
+        _hh = float(h_achieved(np.asarray(_g.representative_point().coords))[0])
+        if not _g.buffer(-0.5 * _hh).is_empty:
+            _solid.append([round(v, 1) for v in _g.representative_point().coords[0]])
+    reports["land_meshed_as_water_m2"] = float(_wet_land.area)
+    if _solid:
+        (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
+        raise SystemExit(
+            f"land the coastline filter kept is inside the hole and wide enough for an "
+            f"element near {_solid[:5]}; the rim does not carry it (it crosses the frozen "
+            "interface?) -- move or widen the region so its coast is inside the hole")
 if HIRES is not None:
     # A resolved coastline follows OSM into every corner, and a corner under
     # 60 deg holds one element: its node is then in that element alone, and
@@ -1199,14 +1222,27 @@ if HIRES is not None and _land_filtered and _walls_src:
         f"{n_acute} dropped for meeting another line at under 60 deg, "
         f"{n_close_tips} for a tip within half an element of the coast, "
         f"{n_joined} tip(s) joined to a line within half an element")
+# Rim points rim_repair made or moved.  They are corners of the repaired
+# rim but may lie on a straight run of the OLD source curve, and the seam
+# repair slid a stepped-back pier tip 12 m back along it (review, round 2):
+# they are held where the repair put them.
+RIM_PINNED = np.zeros(0, dtype=np.int64)
+
+
 def apply_rim_repair(tag="rim repair", **kw):
     """patch.rim_repair on the current rim; walls follow, the hole is redrawn."""
-    global WALL_SEGS, hole
+    global WALL_SEGS, hole, RIM_PINNED
     n_rim = len(rc["pfix"])
+    _old = {(round(float(x), 6), round(float(y), 6)) for x, y in np.asarray(rc["pfix"])[:, :2]}
     roots = set(np.unique(WALL_SEGS[WALL_SEGS < n_rim]).tolist()) if len(WALL_SEGS) else set()
     p_, e_, b_, remap_, rep_ = rim_repair(rc["pfix"], rc["egfix"], rc["pfix_base"],
                                           hole, h_achieved, protect=roots, **kw)
     rc["pfix"], rc["egfix"], rc["pfix_base"] = p_, e_, b_
+    _kept = remap_[RIM_PINNED] if len(RIM_PINNED) else np.zeros(0, dtype=np.int64)
+    _made = [k for k, (x, y) in enumerate(np.asarray(p_)[:, :2])
+             if (round(float(x), 6), round(float(y), 6)) not in _old]
+    RIM_PINNED = np.unique(np.concatenate([_kept[_kept >= 0],
+                                           np.asarray(_made, dtype=np.int64)]))
     if len(WALL_SEGS):
         WALL_SEGS = np.where(WALL_SEGS < n_rim, remap_[np.minimum(WALL_SEGS, n_rim - 1)],
                              WALL_SEGS - n_rim + len(p_))
@@ -1673,6 +1709,8 @@ def attempt(seed):
     # A tip, which has no copy, still slides.
     _grp = np.bincount(copy_of, minlength=len(nodes))
     slidable = is_new & on_boundary & ~(_grp[copy_of] > 1)
+    if len(RIM_PINNED):
+        slidable[np.asarray(st["pfix_new"], dtype=np.int64)[RIM_PINNED]] = False
     mutable_faces = np.arange(len(elements)) >= len(sel.retained)
     _before_repair = nodes.copy()
     # The curves new boundary nodes may slide along are the ones rim_constraints
@@ -2060,7 +2098,8 @@ if RIM_REPAIR and best is not None and best[1] > 0 and not best[0]:
     # everything the retry changes, put back on every path that does not
     # take its result -- including an exception (review, round 1)
     _saved = ({k: np.array(rc[k], copy=True) for k in ("pfix", "egfix", "pfix_base")},
-              WALL_SEGS.copy(), hole, PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL, boundary)
+              WALL_SEGS.copy(), hole, PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL, boundary,
+              RIM_PINNED.copy())
     _taken = False
     try:
         _rrep2 = apply_rim_repair("rim repair, retry near the offenders",
@@ -2084,7 +2123,8 @@ if RIM_REPAIR and best is not None and best[1] > 0 and not best[0]:
                 say("    the retry did not do better; the first search's best stands")
     finally:
         if not _taken:
-            _rc, WALL_SEGS, hole, PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL, boundary = _saved
+            (_rc, WALL_SEGS, hole, PFIX_ALL, EGFIX_ALL, PFIX_BASE_ALL, boundary,
+             RIM_PINNED) = _saved
             rc.update(_rc)
             np.savez(OUT / "fill_constraints.npz", pfix=PFIX_ALL, egfix=EGFIX_ALL,
                      n_rim=len(rc["pfix"]))

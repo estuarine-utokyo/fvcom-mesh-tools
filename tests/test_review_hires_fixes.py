@@ -178,11 +178,17 @@ def test_f11_the_land_filter_does_not_wait_for_a_base_coastline():
            "h_achieved": lambda q: np.full(len(q), 30.0), "hole_polygon": hole_polygon,
            "rc": {"pfix": np.zeros((0, 2)), "egfix": np.zeros((0, 2), dtype=np.int64),
                   "pfix_base": np.zeros(0, dtype=np.int64), "curves": []},
-           "np": np, "say": lambda *a: None}
+           "np": np, "shapely": shapely, "say": lambda *a: None}
+    import json
+    import tempfile
+
+    env.update(OUT=Path(tempfile.mkdtemp()), json=json)
     try:
         exec(compile(ast.Module(body=[isl], type_ignores=[]), "<driver block>", "exec"), env)
-    except ValueError:
-        pass            # hole_polygon of a lone island ring; the count is what matters
+    except (ValueError, SystemExit):
+        # hole_polygon of a lone island ring makes the island the hole, which
+        # the land-meshed-as-water gate then refuses; the count is what matters
+        pass
     assert env["reports"]["islands_added"]["n_islands_added"] == 1
 
 
@@ -230,3 +236,33 @@ def test_a_refused_wall_pocket_gets_its_walls_back_even_off_its_point():
            "np": np, "shapely": shapely, "say": lambda *a: None}
     exec(compile(ast.Module(body=[isl], type_ignores=[]), "<driver block>", "exec"), env)
     assert env["_walls_src"] is before
+
+
+def test_land_wide_enough_for_an_element_may_not_be_meshed_as_water(tmp_path):
+    """review (coastline rules) round 2: a 300 x 600 m block crossing the rim
+    was left out of the rim and only warned about."""
+    import json
+
+    source = (ROOT / "notebooks/420_local_refine.py").read_text()
+    isl = next(
+        n for n in ast.parse(source).body
+        if isinstance(n, ast.If)
+        and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+                and c.func.id == "island_rings" for c in ast.walk(n)))
+    from fvcom_mesh_tools.patch import island_rings
+
+    hole = shapely.box(0, 0, 1000, 1000)
+    block = shapely.box(700, 200, 1200, 800)                 # crosses the rim
+    env = {"HIRES": {"coastline": "resolve"}, "_land_filtered": True, "_filtered": block,
+           "FINE_H": 60.0, "hole": hole, "island_rings": island_rings, "reports": {},
+           "_walls_src": [], "_walls_before_pockets": [], "OUT": tmp_path, "json": json,
+           "h_achieved": lambda q: np.full(len(q), 30.0), "hole_polygon": hole_polygon,
+           "rc": {"pfix": np.zeros((0, 2)), "egfix": np.zeros((0, 2), dtype=np.int64),
+                  "pfix_base": np.zeros(0, dtype=np.int64), "curves": []},
+           "np": np, "shapely": shapely, "say": lambda *a: None}
+    with pytest.raises(SystemExit, match="wide enough for an element"):
+        exec(compile(ast.Module(body=[isl], type_ignores=[]), "<driver block>", "exec"), env)
+    # a coastline chord's sliver, a few metres wide, is not
+    env.update(_filtered=shapely.box(995, 200, 1200, 800), reports={})
+    exec(compile(ast.Module(body=[isl], type_ignores=[]), "<driver block>", "exec"), env)
+    assert env["reports"]["land_meshed_as_water_m2"] == pytest.approx(5 * 600)

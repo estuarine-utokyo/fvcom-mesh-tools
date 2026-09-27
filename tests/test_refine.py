@@ -829,3 +829,10 @@ def test_hires_beside_the_other_branchs_keys_is_refused(tmp_path, key):
 def test_hires_refusals(tmp_path, body, msg):
     with pytest.raises(ValueError, match=msg):
         load_refine(_hires_recipe(tmp_path, body))
+
+
+@pytest.mark.parametrize("value", ["false", "0", "''", "{}"])
+def test_hires_experimental_must_be_a_list(tmp_path, value):
+    """review round 2: `or []` turned False, 0, '' and {} into an empty list."""
+    with pytest.raises(ValueError, match="experimental"):
+        load_refine(_hires_recipe(tmp_path, f"hires: {{experimental: {value}}}\n"))

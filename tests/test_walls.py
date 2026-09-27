@@ -471,3 +471,19 @@ def test_close_wall_pockets_leaves_a_pocket_smaller_than_one_element():
     curl = shapely.LineString([(0, 0), (0, 190), (60, 190), (60, 150), (5, 150)])
     added, kept, rep = close_wall_pockets([curl], land, _const(200.0))
     assert rep["n_pockets_closed"] == 0
+
+
+def test_close_wall_pockets_sees_a_fine_region_inside_the_pocket():
+    """review round 2: the size was read only on the vertices and one point."""
+    import shapely
+
+    from fvcom_mesh_tools.walls import close_wall_pockets
+
+    land = shapely.box(-2000, -2000, 2000, 0)
+    curl = shapely.LineString([(0, 0), (0, 380), (400, 380), (400, 150), (40, 150)])
+
+    def size(q):
+        q = np.atleast_2d(q)
+        return np.where(np.hypot(q[:, 0] - 100, q[:, 1] - 265) < 40, 30.0, 200.0)
+
+    assert close_wall_pockets([curl], land, size, min_h=60.000001)[2]["n_pockets_closed"] == 0

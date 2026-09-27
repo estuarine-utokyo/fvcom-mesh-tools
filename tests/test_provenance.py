@@ -80,3 +80,15 @@ def test_git_state_counts_untracked_files_and_whether_the_path_is_tracked(repo):
     st = git_state(new)
     assert "driver.py" in st["dirty"] and st["path_tracked"] is False
     assert git_state(repo / "code.py")["path_tracked"] is True
+
+
+def test_dataset_files_takes_a_shapefiles_sidecars_and_a_geojson_alone(tmp_path):
+    from fvcom_mesh_tools.provenance import dataset_files
+
+    for ext in (".shp", ".shx", ".dbf", ".prj"):
+        (tmp_path / f"land{ext}").write_text(ext)
+    got = {p.suffix for p in dataset_files(tmp_path / "land.shp")}
+    assert got == {".shp", ".shx", ".dbf", ".prj"}
+    gj = tmp_path / "area.geojson"
+    gj.write_text("{}")
+    assert dataset_files(gj) == [gj]

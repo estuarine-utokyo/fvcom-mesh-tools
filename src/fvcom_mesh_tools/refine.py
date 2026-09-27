@@ -335,7 +335,9 @@ def _hires(spec, cfg) -> dict[str, Any] | None:
         "bathymetry": spec.get("bathymetry", "tokyo_bay"),
         "scope": spec.get("scope", "hole"),
         "blend": spec.get("blend", "ramp"),
-        "experimental": spec.get("experimental", []) or [],
+        # None (a bare key) is an empty list; anything else must BE a list --
+        # `or []` turned False, 0 and "" into one (review, round 2)
+        "experimental": [] if spec.get("experimental") is None else spec["experimental"],
         # on by default since 2026-09-26: accepted on every recipe, and 39 ->
         # 5 introduced violations at Yokohama on its own; false restores the
         # behaviour before it exactly

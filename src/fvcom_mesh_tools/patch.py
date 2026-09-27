@@ -782,7 +782,8 @@ def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
         raise ValueError("levels_ratio must be finite and above 1")
     empty = shapely.Polygon()
     rep = {"spacing_m": s, "n_levels": 0, "lost_cells": 0, "area_m2": 0.0,
-           "n_pieces": 0, "n_straits_left_open": 0, "n_entrances_left_open": 0}
+           "n_pieces": 0, "n_straits_left_open": 0, "n_entrances_left_open": 0,
+           "n_detached_left_open": 0}
     land_u = shapely.union_all([land] if hasattr(land, "geom_type") else list(land))
     # no footprint, or no coast to measure from: nothing can be judged
     if footprint is None or footprint.is_empty or land_u.is_empty:
@@ -817,6 +818,8 @@ def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
     r = radius_factor * h
     sea = ~is_land                       # water anywhere on the raster
     water = inside & sea                 # water that may be closed
+    if not water.any():                  # all land: nothing to close
+        return empty, rep
     dist = ndimage.distance_transform_edt(sea) * s
     centres = sea & (dist >= r)
     covered = np.zeros_like(water)
@@ -859,6 +862,12 @@ def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
         touching = [k for k in tree.query(ring) if shapely.intersects(comps[k], ring)]
         if len(touching) > 1:
             rep["n_straits_left_open"] += 1
+            continue
+        if not touching:
+            # water no land is next to is not a dead end or a strip -- only a
+            # size field that jumps can leave it, and closing it would make
+            # an island out of open water (review, round 2)
+            rep["n_detached_left_open"] += 1
             continue
         # judged on the piece grown by two cells: smoothing leaves it a hair
         # short of the banks, and the hairline of water joined the two sides
@@ -1567,15 +1576,24 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
             compact([x])
 
     def retreat(v, q, h, nb, poly):
-        """Move point v straight away from q until it is ``h`` from it."""
+        """Move point v straight away from q until the gap is no throat.
+
+        To just past the throat test (``gap_factor`` elements): placed at one
+        element with the test at one, rounding left it a hair inside and the
+        same tip was stepped back 2,180 times by nothing; with the retry's
+        looser test it could never get out (Yokohama, after review round 2).
+        A step that gets nowhere is refused.
+        """
         nonlocal pfix
         if not free(v, nb):
             return False
         d = pfix[v] - q
         dist = float(np.linalg.norm(d))
-        if dist <= 0:
+        target = 1.001 * max(gap_factor, 1.0) * h
+        if dist <= 0 or target - dist < 1e-3:
             return False
-        new = q + d / dist * h
+        new = q + d / dist * target
+        h = target
         u, w = nb[v]
         # it must go INTO the land (the pier), not into the water
         if poly.contains(shapely.Point(new)):

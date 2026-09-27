@@ -685,6 +685,17 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0):
         probe = np.vstack([np.asarray(pt.coords)[:, :2],
                            np.asarray(f.exterior.coords)[:, :2]])
         h = float(np.min(np.asarray(size(probe), dtype=float)))
+        # ...and inside it, on a grid of a quarter of that: a fine region
+        # between the vertices was missed (review, round 2)
+        x0, y0, x1, y1 = f.bounds
+        step = max(2.0, 0.25 * h)
+        gx, gy = np.meshgrid(np.arange(x0 + 0.5 * step, x1, step),
+                             np.arange(y0 + 0.5 * step, y1, step))
+        grid = np.column_stack([gx.ravel(), gy.ravel()])
+        if len(grid):
+            grid = grid[shapely.contains_xy(f, grid[:, 0], grid[:, 1])]
+            if len(grid):
+                h = min(h, float(np.min(np.asarray(size(grid), dtype=float))))
         # ...and clear of the coast by half an element.  The rim is resolved
         # from the land's own components, and a pocket that touched or
         # nearly touched the coast merged into it and left a stretch with no

@@ -2284,3 +2284,41 @@ def test_continuous_width_leaves_a_lagoon_entrance_open():
     out, rep = filter_shoreline_local(dead, size, 30.0, fp, spacing=30.0,
                                       continuous_width=True)
     assert shapely.contains(out, shapely.Point(600, 0))
+
+
+def test_unresolvable_water_on_all_land_and_on_detached_water():
+    """review round 2: all land crashed; water next to no land became an island."""
+    from fvcom_mesh_tools.patch import unresolvable_water
+
+    lost, _ = unresolvable_water(shapely.box(-1000, -1000, 1000, 1000),
+                                 lambda q: np.full(len(np.atleast_2d(q)), 30.0),
+                                 shapely.box(0, 0, 100, 100))
+    assert lost.is_empty
+
+    def jump(q):
+        q = np.atleast_2d(q)
+        inside = (np.abs(q[:, 0]) < 200) & (q[:, 1] > 300) & (q[:, 1] < 700)
+        return np.where(inside, 1000.0, 30.0)
+
+    lost, rep = unresolvable_water(shapely.box(-2000, -2000, 2000, 0), jump,
+                                   shapely.box(-1000, -1000, 1000, 1000),
+                                   radius_factor=0.75, min_h=60.0, spacing=10.0)
+    assert lost.is_empty and rep["n_detached_left_open"] >= 1
+
+
+@pytest.mark.parametrize("gap_factor", [1.0, 1.5])
+def test_rim_repair_steps_each_tip_back_once(gap_factor):
+    """A tip set exactly at the throat distance was stepped back again and
+    again by nothing (2,180 times at Yokohama); the retry's looser test could
+    never be met at all."""
+    from fvcom_mesh_tools.patch import hole_polygon, rim_repair
+
+    pfix = np.array([[0.0, 0.0], [190.0, 0.0], [190.0, 297.0], [200.0, 297.0],
+                     [210.0, 297.0], [210.0, 0.0], [600.0, 0.0], [600.0, 300.0],
+                     [0.0, 300.0]])
+    egfix = np.array([[k, (k + 1) % 9] for k in range(9)])
+    p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(9, -1), hole_polygon(pfix, egfix),
+                                     lambda xy: np.full(len(xy), 30.0), gap_factor=gap_factor)
+    assert 1 <= rep["n_tips_stepped_back"] <= 3
+    pier = p[(p[:, 0] > 185) & (p[:, 0] < 215) & (p[:, 1] > 1)]
+    assert (300.0 - pier[:, 1]).min() >= gap_factor * 30.0
