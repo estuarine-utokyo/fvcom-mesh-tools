@@ -21,7 +21,8 @@
 # whole inner harbour (and the Daikoku pier, 4.5 km east, into the
 # transition). Accepted with rim_repair and continuous_width (on by
 # default) and two opt-in rules, after one retry near the offenders (seed
-# 1, 0 introduced violations); without any of them the best seed had 39.
+# 1, 0 introduced violations, NP 15,241, dt 1.07 s); without any of them
+# the best seed had 39.
 # keep_base_land (owner, 2026-09-26): where land and water are both too
 # narrow for the transition's elements, land the base mesh also has stays
 # land -- without it two 150 m quay blocks north of Minato Mirai became
