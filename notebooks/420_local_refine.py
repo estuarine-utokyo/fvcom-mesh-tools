@@ -472,9 +472,10 @@ if HIRES is not None and cfg["coastline"] == "resolve":
     # THE JUDGEMENT the declared grid size implies, made once and applied to
     # the whole hole -- the transition is treated like the region (owner,
     # 2026-09-23).  Everything narrower than the target goes, because a mesh
-    # of that size cannot carry it; what survives is handed to oceanmesh,
-    # which resamples, culls by area and smooths it, and whose signed
-    # distance function is then part of the domain the fill sees.
+    # of that size cannot carry it.  What survives is the source the rim is
+    # re-cut from (`shore` below) and the land the checks hold the rim to;
+    # the fill sees the hole the rim bounds.  oceanmesh's Shoreline is built
+    # from it for the log only.
     _h0 = min(r.target_h_m for _, r in regions_m)
     # Only the land the PATCH touches.  The first version filtered every
     # polygon within 3 km of the free rim, which fragmented industrial coast

@@ -8,6 +8,20 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 7 (2026-09-28)
+
+- Under `coastline: resolve` an island wholly inside the hole is no longer
+  copied from the base: the source's land there is added by `island_rings`
+  (a 200 m base square stayed where the source had a 100 m island).
+- Sizing fields state a certified `size_min` / `size_max`. The
+  `continuous_width` pad is checked out to the largest disc the field can
+  have; a floor that is only estimated no longer raises a size bound
+  (`resolve_size_floor`).
+- Rim repair and corner blunting refuse a change that leaves a ring of
+  three points in a line.
+- The source arc for a stretch on a closed ring is judged along its whole
+  length and does not depend on where the ring starts.
+
 ### Fixed -- review of the coastline rules, round 6 (2026-09-28)
 
 - `continuous_width` pads its raster by the largest disc over the PADDED

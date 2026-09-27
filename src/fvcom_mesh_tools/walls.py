@@ -630,7 +630,11 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_flo
     import shapely
     from shapely.ops import nearest_points, polygonize, substring
 
-    from fvcom_mesh_tools.patch import size_lower_bound, size_upper_bound
+    from fvcom_mesh_tools.patch import (
+        resolve_size_floor,
+        size_lower_bound,
+        size_upper_bound,
+    )
 
     walls = list(walls)                 # iterated more than once (review, round 3)
     lines = [shapely.LineString(np.asarray(w.coords)[:, :2]) for w in walls if w.length > 0]
@@ -687,9 +691,9 @@ def close_wall_pockets(walls, land, size, *, gap_factor=1.0, min_h=0.0, size_flo
         # of the size over the pocket (patch.size_lower_bound), not readings
         # at its vertices or on a grid -- each of those missed a fine region
         # between its samples (reviews, rounds 2-4).
-        floor = float(size_floor) if size_floor is not None else \
-            0.5 * float(np.min(np.asarray(size(np.asarray(f.exterior.coords)[:, :2]))))
-        h = size_lower_bound(f, size, floor)
+        floor, floor_ok = resolve_size_floor(size, size_floor,
+                                             np.asarray(f.exterior.coords)[:, :2])
+        h = size_lower_bound(f, size, floor, certified=floor_ok)
         # The tests that must hold at the COARSEST element on it -- one
         # element of area, half of one clear of the coast -- take the upper
         # bound; the lower one passed a 9,000 m2 pocket at a 100 m size, and

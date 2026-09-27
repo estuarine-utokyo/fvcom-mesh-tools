@@ -576,9 +576,13 @@ def _source_substring(pts: np.ndarray, shoreline):
     # min-distance contest: a line running diagonally away from (0,0) beat
     # one that stays 0.1 from the entire base stretch (second review,
     # finding 3).
-    probe = shapely.points(np.column_stack([
-        np.interp(np.linspace(0, 1, 32), np.linspace(0, 1, len(pts)), pts[:, 0]),
-        np.interp(np.linspace(0, 1, 32), np.linspace(0, 1, len(pts)), pts[:, 1])]))
+    # Every vertex, and points evenly spaced by ARC LENGTH: spaced by vertex
+    # index, 32 probes all fell in a dense 1 m cluster of a 3.9 km stretch
+    # and the fit never saw the rest of it (review, round 7).
+    probe = shapely.points(np.vstack([
+        pts[:, :2],
+        shapely.get_coordinates(shapely.line_interpolate_point(
+            here, np.linspace(0.0, here.length, 65)))]))
     line = min(lines, key=lambda ln: float(shapely.distance(probe, ln).max()))
     del here
     s0 = line.project(shapely.Point(pts[0]))
@@ -592,8 +596,10 @@ def _source_substring(pts: np.ndarray, shoreline):
     # stretch from one end of that edge round to the other, and the direct
     # arc between them was that edge itself -- so the island vanished from
     # the rim and was meshed as water.  The arc that FITS the stretch is the
-    # one it replaces; the other one is taken only when it fits clearly
-    # better, so a stretch that the direct arc follows is unchanged.
+    # one it replaces; the longer one is taken only when it fits clearly
+    # better, so a stretch that the shorter arc follows is unchanged.  Which
+    # arc is "direct" depends on where the ring happens to start; shorter and
+    # longer do not (review, round 7).
     if line.is_closed and line.length > 0:
         L = line.length
         if s0 < s1:
@@ -603,10 +609,10 @@ def _source_substring(pts: np.ndarray, shoreline):
         oc = [np.asarray(g.coords, dtype=float)[:, :2] for g in other if g.length > 0]
         if oc:
             wrap = shapely.LineString(np.vstack([oc[0], *[c[1:] for c in oc[1:]]]))
-            fit_direct = float(shapely.distance(probe, piece).max())
-            fit_wrap = float(shapely.distance(probe, wrap).max())
-            if fit_wrap < 0.5 * fit_direct:
-                piece = wrap
+            short, long_ = (piece, wrap) if piece.length <= wrap.length else (wrap, piece)
+            fit_short = float(shapely.distance(probe, short).max())
+            fit_long = float(shapely.distance(probe, long_).max())
+            piece = long_ if fit_long < 0.5 * fit_short else short
     coords = np.asarray(piece.coords, dtype=float)[:, :2]
     if len(coords) < 2:
         return None
@@ -809,25 +815,49 @@ def unresolvable_water(land, size_field, footprint, *, radius_factor=1.0,
     # proves nothing, and then nothing is closed.
     fx0, fy0, fx1, fy1 = footprint.bounds
     h_step = max(4.0 * s, float(min_h))
+
+    def disc_over(p_):
+        box_ = shapely.box(fx0 - p_, fy0 - p_, fx1 + p_, fy1 + p_)
+        try:
+            return radius_factor * size_upper_bound(box_, size_field, h_step) + 2.0 * s
+        except ValueError as e:
+            raise ValueError("the size field is not finite and positive over the "
+                             "footprint") from e
+
+    # A field that states its global maximum (size_max: patch_sizing,
+    # base_size_field) is checked outward in annuli doubling to that
+    # maximum's disc: a centre beyond the pad P is P from the footprint, so
+    # the discs up to 2P must be under P, and so on.  A settled pad alone
+    # proved nothing for a field that steps up outside it (review, round 7:
+    # 100 -> 40 -> 200 m).  A field that brings its own bounds (size_bounds)
+    # makes no slope promise, so without size_max nothing is closed; a plain
+    # callable has the slope premise (radius_factor x slope < 1).
+    r_max = getattr(size_field, "size_max", None)
+    r_max = None if r_max is None else radius_factor * float(r_max)
+    if r_max is None and hasattr(size_field, "size_bounds"):
+        rep["unbounded_pad"] = True
+        return empty, rep
     pad, last, grew = 2.0 * s, 0.0, np.inf
     settled = False
-    for _ in range(8):
+    for _ in range(16):
         # a pad that grows as fast as it did the step before diverges; stop
         # before the box (and the raster) outgrows memory
         if (fx1 - fx0 + 2 * pad) * (fy1 - fy0 + 2 * pad) / (s * s) > 5e7:
             break
-        box_ = shapely.box(fx0 - pad, fy0 - pad, fx1 + pad, fy1 + pad)
-        try:
-            need = radius_factor * size_upper_bound(box_, size_field, h_step) + 2.0 * s
-        except ValueError as e:
-            raise ValueError("the size field is not finite and positive over the "
-                             "footprint") from e
+        need = disc_over(pad)
         if need <= pad:
-            settled = True
+            ring = pad
+            while r_max is not None and ring < r_max and disc_over(2.0 * ring) <= ring:
+                ring *= 2.0
+            if r_max is None or ring >= r_max:
+                settled = True
+                break
+            need = disc_over(2.0 * ring)        # an annulus out there reaches in
+            grew, last = np.inf, 0.0
+        elif need - last >= grew:
             break
-        if need - last >= grew:
-            break
-        grew, last = need - last, need
+        else:
+            grew, last = need - last, need
         pad = 1.25 * need     # overshoot: a growing field never meets need exactly
     if not settled:
         rep["unbounded_pad"] = True
@@ -1176,6 +1206,12 @@ def rim_constraints(
     the segments an unconstrained Delaunay can bridge a concave rim, and the
     819 m interface edges measured on the Futtsu rim are exactly the kind of
     chord it bridges.
+
+    A ring with no frozen node -- an island inside the hole -- has nothing to
+    anchor a stretch.  It is copied as it stands, except under ``resolve``
+    with a ``shoreline``: then it is left out (``n_islands_left_to_source``)
+    and the caller adds the source's land inside the hole with
+    :func:`island_rings`.
     """
     xy = np.asarray(nodes, dtype=float)[:, :2]
     frozen = set(selection.frozen_nodes.tolist())
@@ -1190,6 +1226,7 @@ def rim_constraints(
     placed: list = []
     kept_because: dict[str, int] = {}
     n_new = 0
+    n_islands_left = 0
 
     # A free rim node's two rim edges are both on the physical boundary, and
     # this is structural rather than lucky: an interface edge is shared with a
@@ -1203,6 +1240,15 @@ def rim_constraints(
         is_free = np.array([int(v) not in frozen for v in ring], dtype=bool)
         ring_rows: list[int] = []
 
+        if is_free.all() and coastline == "resolve" and shoreline is not None:
+            # Under `resolve` the source decides, and a copied base island
+            # kept a 200 m square where the source had a 100 m one (review,
+            # round 7).  Left out here: the caller adds the source's own land
+            # inside the hole as islands at the local size (island_rings,
+            # which the driver runs next), and the land check covers what it
+            # refuses.  A base island the source does not have is water.
+            n_islands_left += 1
+            continue
         if is_free.all():
             # An island taken whole: no frozen node anchors it, so there is no
             # stretch to anchor a resample between, and its shape is kept as
@@ -1288,6 +1334,7 @@ def rim_constraints(
         "kept_because": kept_because,
         "n_coastline_nodes_replaced": n_resampled,
         "n_coastline_nodes_new": n_new,
+        "n_islands_left_to_source": n_islands_left,
         "coastline_mode": coastline,
     }
 
@@ -1495,8 +1542,9 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
     ``size_floor`` is the smallest size the field has anywhere; the slit and
     retreat decisions use a guaranteed lower bound of the size over the
     water or land they change hands (:func:`size_lower_bound`), not the size
-    at a few vertices (review, round 4).  Default: half the smallest size at
-    the rim points.
+    at a few vertices (review, round 4).  Default: the field's own
+    ``size_min``; for a field without one, half the smallest size at the rim
+    points sets the grid step only (:func:`resolve_size_floor`).
 
     ``focus`` ((m, 2) points, e.g. the QA offenders of a failed seed)
     limits the short-edge and slit operations to within ``focus_factor``
@@ -1516,8 +1564,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
     egfix = np.asarray(egfix, dtype=np.int64).copy()
     pfix_base = np.asarray(pfix_base, dtype=np.int64).copy()
     n_in = len(pfix)
-    floor = float(size_floor) if size_floor is not None else \
-        0.5 * float(np.min(np.asarray(size(pfix), dtype=float))) if len(pfix) else 1.0
+    floor, floor_ok = resolve_size_floor(size, size_floor, pfix) if len(pfix) else (1.0, False)
     ident = np.arange(n_in)             # current index of each input point
     protect = set(int(k) for k in protect)
     removed, refused, slits, slits_left, retreated = [], [], [], [], []
@@ -1609,6 +1656,12 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
                           if not ({c, d} & {x, u, w})]
                 if others and shapely.MultiLineString(others).intersects(new):
                     continue
+                # the ring it leaves must still be a polygon: three points
+                # in a line passed every test above and returned a ring of
+                # zero area (review, round 7)
+                eg_try = np.vstack([egfix[~np.isin(egfix, [x]).any(axis=1)], [[u, w]]])
+                if not _ring_is_polygon(pfix, eg_try, u):
+                    continue
                 ok = True
                 for y, far in ((u, w), (w, u)):
                     other = [q for q in nb.get(y, []) if q != x]
@@ -1661,7 +1714,7 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
         # ...and hand over only land no element fits in: stepping back by
         # 1.5 elements took 5,000 m2 off a 120 m pier (review, round 3)
         handed = shapely.make_valid(shapely.Polygon([pfix[u], pfix[v], pfix[w], new]))
-        if land_an_element_fits(handed, size, floor):
+        if land_an_element_fits(handed, size, floor, certified=floor_ok):
             return False
         edges = shapely.MultiLineString([[pfix[u], new], [new, pfix[w]]])
         others = [shapely.LineString(pfix[[c, e2]]) for c, e2 in egfix.tolist()
@@ -1744,7 +1797,8 @@ def rim_repair(pfix, egfix, pfix_base, water, size, *, protect=(),
             # guaranteed lower bound of the size over it, not at its
             # vertices: a finer basin behind a coarse mouth was closed
             # (review, round 4)
-            h = size_lower_bound(g, size, floor) if not g.is_empty else float(np.min(h_all[path]))
+            h = size_lower_bound(g, size, floor, certified=floor_ok) if not g.is_empty \
+                else float(np.min(h_all[path]))
             if not g.buffer(-h).is_empty:
                 # Closing would cut off water an element fits in -- a pier
                 # whose tip nearly touches the quay across (Yokohama, 3.3 m).
@@ -1871,7 +1925,8 @@ def _size_bounds(geom, size, h_floor: float, slope: float) -> tuple[float, float
     return float(h.min() - slope * c), float(h.max() + slope * c)
 
 
-def size_lower_bound(geom, size, h_floor: float, *, slope: float = 1.0) -> float:
+def size_lower_bound(geom, size, h_floor: float, *, slope: float = 1.0,
+                     certified: bool = True) -> float:
     """A size no point of ``geom`` is below -- guaranteed, not sampled.
 
     A field that knows its own structure says so through a ``size_bounds``
@@ -1885,8 +1940,39 @@ def size_lower_bound(geom, size, h_floor: float, *, slope: float = 1.0) -> float
     ``slope`` per metre cannot hide anything smaller between readings.
     ``h_floor`` -- the smallest size the field has anywhere -- is the answer
     when the readings allow no better (reviews, rounds 2-5).
+
+    ``certified=False`` says ``h_floor`` is only an estimate (it then sets
+    the grid step and nothing else): the bound is not raised to it, and may
+    come out at or below zero, which every caller reads as "cannot prove
+    absence" (review, round 7: half the smallest size at a pocket's vertices
+    raised a bound over a 30 m spot to 95 m).
     """
-    return float(max(h_floor, _size_bounds(geom, size, h_floor, slope)[0]))
+    lo = _size_bounds(geom, size, h_floor, slope)[0]
+    return float(max(h_floor, lo) if certified else lo)
+
+
+def resolve_size_floor(size, size_floor=None, points=None) -> tuple[float, bool]:
+    """``(floor, certified)``: the smallest size ``size`` has anywhere.
+
+    ``size_floor`` when the caller knows it; else the field's own
+    ``size_min`` (:func:`patch_sizing`, :func:`base_size_field`); else only
+    an estimate, half the smallest size at ``points``, which the bounds use
+    for their grid step and never as a floor (review, round 7).
+    """
+    if size_floor is not None:
+        f = float(size_floor)
+        if not (np.isfinite(f) and f > 0):
+            raise ValueError("size_floor must be finite and positive")
+        return f, True
+    m = getattr(size, "size_min", None)
+    if m is not None:
+        return float(m), True
+    if points is not None and len(points):
+        v = np.asarray(size(np.atleast_2d(np.asarray(points, dtype=float))[:, :2]),
+                       dtype=float)
+        if len(v) and np.isfinite(v).all() and (v > 0).all():
+            return 0.5 * float(v.min()), False
+    raise ValueError("no size floor: pass size_floor, or a field with size_min")
 
 
 def size_upper_bound(geom, size, h_floor: float, *, slope: float = 1.0) -> float:
@@ -1910,7 +1996,7 @@ def _polygons(geom):
 
 
 def land_an_element_fits(land, size, h_min: float, *, factor: float = 0.5,
-                         slope: float = 1.0) -> list:
+                         slope: float = 1.0, certified: bool = True) -> list:
     """Where ``land`` may hold a disc of ``factor`` local elements -- empty
     only when it certainly holds none.
 
@@ -1929,9 +2015,9 @@ def land_an_element_fits(land, size, h_min: float, *, factor: float = 0.5,
     out = []
     # make_valid nests polygons in collections; every one is land (round 5)
     for g in _polygons(land):
-        if g.buffer(-factor * h_min).is_empty:
+        if certified and g.buffer(-factor * h_min).is_empty:
             continue                                   # nothing fits even at the floor
-        lo = size_lower_bound(g, size, h_min, slope=slope)
+        lo = size_lower_bound(g, size, h_min, slope=slope, certified=certified)
         core = g.buffer(-factor * lo)
         if core.is_empty:
             continue
@@ -1986,6 +2072,34 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
                             "why": "no valid ring at the local size"})
     return rings, {"n_islands_added": len(rings), "skipped": skipped,
                    "n_island_points": int(sum(len(r) for r in rings))}
+
+
+def _ring_is_polygon(pfix, egfix, k) -> bool:
+    """Whether the ring through point ``k`` is a simple polygon of some area.
+
+    A change that keeps three points can still leave them in a line: a
+    zero-area ring that every edge test passes and hole_polygon cannot use
+    (review, round 7).
+    """
+    import shapely
+
+    nb: dict = {}
+    for a, b in np.asarray(egfix, dtype=np.int64).tolist():
+        nb.setdefault(a, []).append(b)
+        nb.setdefault(b, []).append(a)
+    if len(nb.get(k, [])) != 2:
+        return False
+    seq, prev, cur = [k], k, nb[k][0]
+    while cur != k:
+        nxt = [q for q in nb.get(cur, []) if q != prev]
+        if len(nb.get(cur, [])) != 2 or len(nxt) != 1 or len(seq) > len(pfix):
+            return False
+        seq.append(cur)
+        prev, cur = cur, nxt[0]
+    if len(seq) < 3:
+        return False
+    ring = shapely.Polygon(np.asarray(pfix, dtype=float)[seq, :2])
+    return bool(ring.is_valid and ring.area > 0)
 
 
 def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0, *,
@@ -2100,7 +2214,10 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
                 if opened is None or opened < min_angle_deg:
                     continue            # a point on a straight run opens nothing
                 keep_e = ~np.isin(egfix, [drop]).any(axis=1)
-                egfix = np.vstack([egfix[keep_e], [[v, nxt]]])
+                eg_try = np.vstack([egfix[keep_e], [[v, nxt]]])
+                if not _ring_is_polygon(pfix, eg_try, v):
+                    continue            # three points in a line (review, round 7)
+                egfix = eg_try
                 live = np.setdiff1d(np.arange(len(pfix)), [drop])
                 remap = np.full(len(pfix), -1, dtype=np.int64)
                 remap[live] = np.arange(len(live))
@@ -2176,9 +2293,13 @@ def blunt_acute_corners(pfix, egfix, pfix_base, water, size, min_angle_deg=60.0,
             if ib_ is not None:
                 new_e.append([ib_, sb])
             keep_e = ~np.isin(egfix, list(removed)).any(axis=1)
-            egfix = np.vstack([egfix[keep_e], np.asarray(new_e, dtype=np.int64)])
+            eg_try = np.vstack([egfix[keep_e], np.asarray(new_e, dtype=np.int64)])
+            p_try = np.vstack([pfix, np.asarray(new_xy)]) if new_xy else pfix
+            if not _ring_is_polygon(p_try, eg_try, int(path[0])):
+                continue
+            egfix = eg_try
             if new_xy:
-                pfix = np.vstack([pfix, np.asarray(new_xy)])
+                pfix = p_try
                 pfix_base = np.concatenate([pfix_base, np.full(len(new_xy), -1)])
             live = np.setdiff1d(np.arange(len(pfix)), list(removed))
             remap = np.full(len(pfix), -1, dtype=np.int64)
@@ -2392,6 +2513,9 @@ def patch_sizing(
         return lo / distmesh_scale, hi / distmesh_scale
 
     h.size_bounds = size_bounds
+    # a contribution lies between its target and the base size
+    h.size_min = min([base_size.size_min] + [float(g[2]) for g in geoms]) / distmesh_scale
+    h.size_max = base_size.size_max / distmesh_scale
     return h
 
 
@@ -2501,6 +2625,9 @@ def base_size_field(nodes, elements, *, outside: str = "max"):
         return float(v.min()), float(v.max())
 
     f.size_bounds = size_bounds
+    # certified global bounds: every value is a node's (inside, a convex
+    # combination of three; outside, one node's, or the maximum)
+    f.size_min, f.size_max = float(np.nanmin(amb)), amb_max
     return f
 
 
