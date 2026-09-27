@@ -754,7 +754,7 @@ def test_hires_defaults_to_resolving_the_coastline_on_the_ladder(tmp_path):
     cfg = load_refine(_hires_recipe(tmp_path, "hires: {}\n"))
     assert cfg["hires"] == {"coastline": "resolve", "bathymetry": "tokyo_bay",
                             "scope": "hole", "blend": "ramp", "experimental": [],
-                            "rim_repair": True}
+                            "rim_repair": True, "continuous_width": True}
     # the branch drives the coastline, and `resolve` has no departure veto
     assert cfg["coastline"] == "resolve"
     assert cfg["coastline_tolerance_m"] == float("inf")
@@ -768,6 +768,15 @@ def test_hires_experimental_rules_are_opt_in_by_name(tmp_path):
         load_refine(_hires_recipe(tmp_path, "hires: {experimental: [round_corners]}\n"))
     with pytest.raises(ValueError, match="experimental"):
         load_refine(_hires_recipe(tmp_path, "hires: {experimental: water_wedges}\n"))
+
+
+def test_hires_continuous_width_is_on_by_default_and_can_be_switched_off(tmp_path):
+    on = load_refine(_hires_recipe(tmp_path, "hires: {}\n"))
+    assert on["hires"]["continuous_width"] is True
+    off = load_refine(_hires_recipe(tmp_path, "hires: {continuous_width: false}\n"))
+    assert off["hires"]["continuous_width"] is False
+    with pytest.raises(ValueError, match="continuous_width"):
+        load_refine(_hires_recipe(tmp_path, "hires: {continuous_width: 1}\n"))
 
 
 def test_hires_rim_repair_is_on_by_default_and_can_be_switched_off(tmp_path):

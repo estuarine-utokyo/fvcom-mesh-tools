@@ -257,12 +257,13 @@ HIRES = cfg["hires"]
 # recipe, for trying a rule on recipes that do not name it; the report
 # records what was used.
 EXPERIMENTAL = set(HIRES.get("experimental", [])) if HIRES is not None else set()
-# rim_repair is on unless the recipe says hires.rim_repair: false
+# rim_repair and continuous_width are on unless the recipe says false
 if HIRES is not None:
-    if HIRES.get("rim_repair", True):
-        EXPERIMENTAL.add("rim_repair")
-    else:
-        EXPERIMENTAL.discard("rim_repair")
+    for _rule in ("rim_repair", "continuous_width"):
+        if HIRES.get(_rule, True):
+            EXPERIMENTAL.add(_rule)
+        else:
+            EXPERIMENTAL.discard(_rule)
 if HIRES is not None and os.environ.get("LR_EXPERIMENTAL"):
     from fvcom_mesh_tools.refine import HIRES_EXPERIMENTAL as _HX
     _ov = os.environ["LR_EXPERIMENTAL"].replace(",", ":")

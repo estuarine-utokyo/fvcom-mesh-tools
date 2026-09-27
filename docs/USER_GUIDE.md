@@ -215,6 +215,7 @@ hires:
   scope: hole           # hole (region + transition) | core
   blend: ramp           # ramp | none -- how new depths meet the frozen ones
   # rim_repair: true      # default; false restores the pre-2026-09-26 behaviour
+  # continuous_width: true  # default; false restores the pre-2026-09-27 filter
   # experimental: [water_wedges, wall_pockets, short_chords]   # opt-in, see below
 
 refine:
@@ -233,6 +234,7 @@ refine:
 | `dt_expected_s` | yes | the model's external step; a region too fine for it raises an **alert**, not an error |
 | `gradation` | yes | the size growth rate outside the region; it sets the transition width |
 | `hires` | no | present = the coastline/bathymetry branch above; absent = the default branch, which keeps the base coastline and depths (`coastline: preserve/resample/spline`, `rfactor_limit`, `coastline_tolerance_m` apply there). `hires.coastline: resolve` follows OSM (sharp corners cut, islands and walls added); `preserve` keeps the base coastline exactly |
+| `hires.continuous_width` | no | judge coarse-zone water at the local element size (below); `true` by default |
 | `hires.rim_repair` | no | check and repair the finished coastline against the element size (below); `true` by default |
 | `hires.experimental` | no | opt-in coastline rules, by name (below); none by default |
 | `refine` | yes | one or more regions |
@@ -265,6 +267,17 @@ thresholds and the seeds are tried again. Accepted on all seven recipes;
 at Yokohama it takes the best seed from 39 violations to 5 on its own.
 `rim_repair: false` restores the behaviour before 2026-09-26 exactly.
 
+**Continuous width (`hires.continuous_width`, on by default).** In the
+coarse zone (elements over twice the target), water is judged at the local
+element size itself rather than at the lower bound of an octave band:
+water narrower than 1.5 local elements that ends at one body of land is
+closed; a strait between two bodies is left. It is computed by a distance
+transform on a 10 m raster and smoothed, and it only adds land to what the
+band filter keeps. This is the fix at the source for the band seams (§11).
+On since 2026-09-27 (owner): the transition coast of Kimitsu, Futtsu (x2)
+and Odaiba moved by 139-285 m, 0.04-0.44 km2 of dead-end water closed,
+all accepted. `continuous_width: false` restores the earlier filter.
+
 **Opt-in coastline rules (`hires.experimental`).** These were written for
 the Funabashi port (`recipes/refine/funabashi_port_hires.yaml`), where river
 mouths and a curled breakwater 1-2 km from the region meet transition
@@ -277,7 +290,6 @@ Odaiba, so a recipe names the ones it needs:
 | `wall_pockets` | water shut in by walls alone, narrower than two elements, off the coast and in the coarse zone (h > 2x target), becomes an island; its walls come back if the rim refuses the island |
 | `short_chords` | in the coarse zone, a corner-cutting chord shorter than 0.75 of an element becomes one point, if that only gives water to land and keeps 60 deg |
 | `keep_base_land` | in the coarse bands, where land and water are both narrower than two elements, land that the source and the base mesh both have stays land (otherwise it is removed first and becomes water); the narrow water round it is closed. Owner's choice, 2026-09-26 |
-| `continuous_width` | in the coarse zone (h > 2x target), water is judged at the local element size itself rather than at the lower bound of an octave band: water narrower than 1.5 local elements (the bands' average) that ends at one body of land is closed -- a strait between two bodies is left. Distance transform on a 10 m raster, smoothed. The fix at the source for the band seams (§11); replaces `short_chords` and `seam_water` at Funabashi and Yokohama |
 | `seam_water` | after the octave bands are joined, each band closes the joined land once more at its own threshold, so a strip left between one band's cut and another band's kept bank is closed |
 
 Try them when a run fails in the transition at a river mouth or a curled
@@ -547,9 +559,8 @@ package and have unit tests.
   Funabashi and Yokohama, with slightly MORE water than those rules kept.
   Odaiba broke the boundary contract with it; the cause was not the rule
   but a flat face the fill made across three collinear rim points, which
-  moved a coast point 240 m -- flat faces are now dropped after the fill,
-  and Odaiba is accepted with it (every earlier recipe rebuilds
-  byte-identically). Quarter-octave bands were tried and moved the Kimitsu
+  moved a coast point 240 m -- flat faces are now dropped after the fill.
+  It has been on by default since 2026-09-27 (§4). Quarter-octave bands were tried and moved the Kimitsu
   transition coast by 211 m. A recipe can also avoid it by making the region
   cover the channel mouths, so the element there is fine enough.
 - OSM `man_made` lines (breakwaters mapped only as lines) are not used.

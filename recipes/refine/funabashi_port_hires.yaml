@@ -31,11 +31,12 @@ hires:
   blend: ramp
   # Opt-in coastline rules (docs/USER_GUIDE.md). Two river mouths 1-2 km west
   # of the circle meet the coarse transition (h 120-240 m), and the octave
-  # bands left their ends as acute wedges; continuous_width judges that water
-  # at the local element size instead, with no band seam. A curled
-  # breakwater there shuts in a 400 x 230 m pocket, closed by wall_pockets.
+  # bands left their ends as acute wedges; continuous_width (on by default)
+  # judges that water at the local element size instead, with no band seam.
+  # A curled breakwater there shuts in a 400 x 230 m pocket, closed by
+  # wall_pockets.
   # (Until 2026-09-27: water_wedges, wall_pockets, short_chords.)
-  experimental: [continuous_width, wall_pockets]
+  experimental: [wall_pockets]
 
 refine:
   - name: funabashi_port

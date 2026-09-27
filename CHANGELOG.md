@@ -8,6 +8,18 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Changed -- continuous width on by default (2026-09-27)
+
+- `hires.continuous_width` (default `true`, owner's decision): coarse-zone
+  water judged at the local element size (1.5 elements, dead ends only),
+  the fix at the source for band seams. Kimitsu, Futtsu coast, Futtsu nori
+  and Odaiba are rebuilt and accepted, their transition coast moved by
+  139-285 m (0.04-0.44 km2 of dead-end water closed; Kimitsu's dt 1.87 ->
+  1.58 s); Funabashi and Yokohama, which already used it, are unchanged.
+  `continuous_width: false` restores the earlier filter.
+- Flat faces the fill leaves across collinear rim points are dropped; one
+  of them had moved an Odaiba coast point 240 m.
+
 ### Changed -- rim repair on by default (2026-09-26)
 
 - `hires.rim_repair` (default `true`): the finished coastline is checked

@@ -327,7 +327,7 @@ def _hires(spec, cfg) -> dict[str, Any] | None:
                 f"{'coastline_tolerance_m' if key.endswith('_m') else key} exists "
                 "to refuse")
     _keys(spec, [], ["coastline", "bathymetry", "scope", "blend", "experimental",
-                     "rim_repair"])
+                     "rim_repair", "continuous_width"])
     out = {
         "coastline": spec.get("coastline", "resolve"),
         "bathymetry": spec.get("bathymetry", "tokyo_bay"),
@@ -338,9 +338,13 @@ def _hires(spec, cfg) -> dict[str, Any] | None:
         # 5 introduced violations at Yokohama on its own; false restores the
         # behaviour before it exactly
         "rim_repair": spec.get("rim_repair", True),
+        # on by default since 2026-09-27 (owner): coarse-zone water judged at
+        # the local size, no band seams; false restores the earlier filter
+        "continuous_width": spec.get("continuous_width", True),
     }
-    if not isinstance(out["rim_repair"], bool):
-        raise ValueError("hires.rim_repair must be true or false")
+    for key in ("rim_repair", "continuous_width"):
+        if not isinstance(out[key], bool):
+            raise ValueError(f"hires.{key} must be true or false")
     exp = out["experimental"]
     if not isinstance(exp, list) or any(x not in HIRES_EXPERIMENTAL for x in exp):
         raise ValueError(f"hires.experimental must be a list drawn from "

@@ -40,8 +40,8 @@ hires:
   bathymetry: tokyo_bay
   scope: hole
   blend: ramp
-  # continuous_width replaces short_chords and seam_water (2026-09-27)
-  experimental: [continuous_width, wall_pockets, keep_base_land, water_wedges]
+  # continuous_width (on by default) replaces short_chords and seam_water
+  experimental: [wall_pockets, keep_base_land, water_wedges]
 
 refine:
   - name: yokohama_port
