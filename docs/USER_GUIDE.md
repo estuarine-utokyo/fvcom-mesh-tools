@@ -336,11 +336,14 @@ The run log ends with lines like these:
 
 ```
 [lr]     seed 0: QA 20/22, 0 introduced by the patch
-[lr] accepted seed 0
+[lr] selected seed 0 (search pass 1); the gates follow
 [lr] achieved in my_port: median cell 28.5 m against a 30 m target, 100.0 % of the water within 1.25x
 ```
 
 - **`0 introduced`** is the goal.
+- **`selected seed`** is the best candidate, not yet the result: the gates
+  after it (resolution, depths, the written file's QA) decide, and only a
+  run that passes them all writes `ACCEPTED`.
 - **The two failed checks.** On the Tokyo Bay base they are the base's own
   element 2101 and `min_depth_clip`. On the hires branch the depths are the
   source's until they are finished, so `min_depth_clip` is reported and not

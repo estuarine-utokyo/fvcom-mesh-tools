@@ -8,6 +8,13 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 19 (2026-09-28)
+
+- An island is added only if, with the lakes it keeps, it covers no
+  water outside its land (a filled lake had turned a rim island into
+  water); its lakes are tried resampled-first and source-first together.
+- USER_GUIDE: the log sample shows "selected seed".
+
 ### Fixed -- review of the coastline rules, round 18 (2026-09-28)
 
 - An island's outline and its lakes are chosen together, so a lake the
