@@ -1,0 +1,45 @@
+{
+  "comment": "The meshing domain (EPSG:4326) is closure_before + the open boundary + closure_after. The SW crossing follows the open boundary, extended into Miura land at its NW end; the southern closure runs east at lat 34.973 to the Boso coast, an artificial land line as in goto2023. closure_size_probe: where the coast size at the end of the southern closure is read, for the open-boundary corridor.",
+  "bbox": [
+    139.6,
+    140.12,
+    34.96,
+    35.75
+  ],
+  "closure_before": [
+    [
+      139.83,
+      34.973
+    ],
+    [
+      140.12,
+      34.973
+    ],
+    [
+      140.12,
+      35.75
+    ],
+    [
+      139.6,
+      35.75
+    ],
+    [
+      139.6,
+      35.2
+    ],
+    [
+      139.6642,
+      35.1546
+    ]
+  ],
+  "closure_after": [
+    [
+      139.83,
+      34.973
+    ]
+  ],
+  "closure_size_probe": [
+    139.82,
+    34.974
+  ]
+}

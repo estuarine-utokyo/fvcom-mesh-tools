@@ -15,13 +15,21 @@ import numpy as np
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                     format="%(levelname)s %(name)s: %(message)s")
-sys.path.insert(0, os.path.expanduser("~/Github/oceanmesh"))
+# oceanmesh is the installed package (the laboratory's fork, installed
+# editable); the run's provenance records which one (notebook 440).
 from pathlib import Path
 
 import oceanmesh as om
 from oceanmesh import DEM, Region, Shoreline
 
-OUT = Path("outputs/sample_repro")
+# Paths are settings so that a base-mesh run (notebook 440) can keep its
+# own copy; the defaults are the historical ones.
+OUT = Path(os.environ.get("SR_OUT", "outputs/sample_repro"))
+LAND_SHP = os.environ.get("SR_LAND", "outputs/tb_varres_3r/land_osm_wide.shp")
+EDITS_DIR = Path(os.environ.get("SR_EDITS_DIR", "recipes/edits/sample_repro"))
+OBC_FILE = Path(os.environ.get("SR_OBC_FILE", "recipes/base/tokyo_bay_obc.csv"))
+DOMAIN_FILE = Path(os.environ.get("SR_DOMAIN_FILE", "recipes/base/tokyo_bay_domain.json"))
+GEN_SEED = int(os.environ.get("SR_GEN_SEED", 0))
 OUT.mkdir(parents=True, exist_ok=True)
 DEG = 1.0 / 111e3
 t0 = time.time()
@@ -71,28 +79,25 @@ GRADEF = GRADE / DM_SCALE    # growth rate, sizing-field space
 print(f"[sr] size targets: {H_TARGET} (DistMesh scale {DM_SCALE}); "
       f"coastal base {H0:.0f} m mesh = {H0F:.0f} m field", flush=True)
 
-# The OBC is an INPUT: the goto2023 sample's 13-node smooth arc
-# (TokyoBay_obc.dat + TokyoBay_grd.dat, EPSG:32654 -> 4326),
-# NW (Miura/Otsu coast) -> SE (mid-channel corner). Mesh nodes are
-# CONSTRAINED onto this line via pfix+egfix.
-OBC_ARC = np.array([
-    [139.6713, 35.1396], [139.6737, 35.1288], [139.6772, 35.1168],
-    [139.6816, 35.1031], [139.6871, 35.0877], [139.6946, 35.0705],
-    [139.7000, 35.0576], [139.7069, 35.0445], [139.7134, 35.0327],
-    [139.7216, 35.0184], [139.7289, 35.0047], [139.7373, 34.9916],
-    [139.7497, 34.9750]])
-OBC_SEG = np.column_stack([np.arange(12), np.arange(1, 13)])
+# The OBC is an INPUT (owner 2026-09-28): lon,lat of its nodes in order,
+# NW (Miura/Otsu coast) -> SE (mid-channel corner), from a file. Mesh nodes
+# are CONSTRAINED onto this line via pfix+egfix.
+OBC_ARC = np.array([[float(v) for v in ln.split(",")[:2]]
+                    for ln in OBC_FILE.read_text().splitlines()
+                    if ln.strip() and not ln.lstrip().startswith("#")
+                    and not ln.lstrip().lower().startswith("lon")])
+if OBC_ARC.ndim != 2 or len(OBC_ARC) < 2:
+    raise SystemExit(f"{OBC_FILE}: an open boundary needs two points or more")
+OBC_SEG = np.column_stack([np.arange(len(OBC_ARC) - 1), np.arange(1, len(OBC_ARC))])
 
-# bay-only domain POLYGON matching the goto2023 sample geometry:
-# the SW crossing follows the OBC arc, extended into Miura land at
-# the NW end; the southern closure runs east at lat~34.973 to the
-# Boso coast (the sample carries this as an artificial land line).
-poly = np.array(
-    [[139.83, 34.973], [140.12, 34.973], [140.12, 35.75],
-     [139.60, 35.75], [139.60, 35.20], [139.6642, 35.1546]]
-    + OBC_ARC.tolist()
-    + [[139.83, 34.973]])
-bbox = (139.60, 140.12, 34.96, 35.75)
+# The domain POLYGON is an input too: closure points before and after the
+# open boundary (for goto2023's geometry: the SW crossing follows the OBC
+# arc, extended into Miura land at the NW end; the southern closure runs
+# east at lat 34.973 to the Boso coast, an artificial land line).
+_domain_spec = json.loads(DOMAIN_FILE.read_text())
+poly = np.array(_domain_spec["closure_before"] + OBC_ARC.tolist()
+                + _domain_spec["closure_after"])
+bbox = tuple(_domain_spec["bbox"])
 reg = Region(bbox, 4326)
 
 # geometry-stage narrow-channel policy (owner 2026-07-12): decide
@@ -114,7 +119,7 @@ from fvcom_mesh_tools.prep.channel_policy_geom import (
 # cells it was meant to fix. Re-enable only per-site with the
 # comparator as gate (SR_CH_POLICY=on).
 CH_SHP = OUT / "land_channel_adj.shp"
-_land_g = gpd.read_file("outputs/tb_varres_3r/land_osm_wide.shp")
+_land_g = gpd.read_file(LAND_SHP)
 _dom = _Poly(poly)
 _cosw = float(np.cos(np.deg2rad(35.35)))
 if os.environ.get("SR_CH_POLICY", "off") != "on":
@@ -155,7 +160,7 @@ CH_PF, CH_EG = [], []      # bank pfix/egfix accumulated per edit
 # manual edit before retiring it. Never silent: every skip prints.
 _SR_EXCL = {s.strip() for s in os.environ.get(
     "SR_EDITS_EXCLUDE", "").split(",") if s.strip()}
-for _ef in sorted(Path("recipes/edits/sample_repro").glob("*.json")):
+for _ef in sorted(EDITS_DIR.glob("*.json")):
     if _ef.stem in _SR_EXCL:
         print(f"[sr] channel edit {_ef.stem}: EXCLUDED "
               f"(SR_EDITS_EXCLUDE)", flush=True)
@@ -232,7 +237,7 @@ if os.environ.get("SR_WATERWAYS", "on") == "on":
     _wl = gpd.read_file(
         f"{_dd}/geodata/OSM/geofabrik_kanto/"
         "gis_osm_waterways_free_1.shp",
-        bbox=(139.60, 34.96, 140.12, 35.75))
+        bbox=(bbox[0], bbox[2], bbox[1], bbox[3]))
     _wl = _wl[_wl["fclass"].isin(["river", "canal", "stream"])]
     print(f"[sr] OSM waterway centrelines: {len(_wl)} "
           f"(river/canal/stream)", flush=True)
@@ -692,9 +697,11 @@ if os.environ.get("SR_OBC_LADDER", "on") == "on":
           f"{band['offsets_m'].min():.0f}-"
           f"{band['offsets_m'].max():.0f} m (K=1.25 x local size)",
           flush=True)
-    closure = np.array([[139.7497, 34.9750], [139.83, 34.973]])
+    # from the open boundary's SE end along the closure to the coast, and
+    # the coast size read at the probe point near its end (domain file)
+    closure = np.array([OBC_ARC[-1], _domain_spec["closure_after"][0]])
     h_coast_m = float(np.asarray(
-        g.eval(np.array([[139.82, 34.974]]))).ravel()[0]) / DEG * 1.2
+        g.eval(np.array([_domain_spec["closure_size_probe"]]))).ravel()[0]) / DEG * 1.2
     # corridor target = the BAND size (K x local), not the ambient
     # local size -- the boundary band must stay one class coarser
     pts_m, tgt_m = corridor_targets(
@@ -778,7 +785,7 @@ def _loop_area(pts, lp):
 
 def build_mesh(g):
     """One full generate->clean->bc pass on the current sizing."""
-    p, t = om.generate_mesh(sdf, g, max_iter=60, seed=0,
+    p, t = om.generate_mesh(sdf, g, max_iter=60, seed=GEN_SEED,
                             pfix=PFIX, egfix=SEGS)
     ne0 = len(t)
     p, t = prune_one_wide_protected(p, t, PFIX)

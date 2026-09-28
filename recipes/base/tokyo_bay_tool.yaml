@@ -1,0 +1,67 @@
+# The Tokyo Bay base mesh built by this project ("TokyoBayTool").
+#
+# Build it on OCTOPUS, from the repository root:
+#   qsub -v FMESH_RECIPE=recipes/base/tokyo_bay_tool.yaml jobs/octopus/440_base_mesh.sh
+#
+# Everything the mesh depends on is named here or in the files it names; the
+# run records the commit, the input hashes and the effective settings in
+# outputs/base_<name>/report.json (USER_GUIDE section 12).
+name: tokyo_bay_tool
+case: TokyoBayTool
+
+# The open boundary is an INPUT (owner, 2026-09-28): lon,lat of the nodes
+# the mesh is constrained onto, in order.
+open_boundary: tokyo_bay_obc.csv
+# The domain polygon: closure points around the open boundary, and the bbox.
+domain: tokyo_bay_domain.json
+
+# Land: OSM land polygons minus sea-connected inland water, for this window
+# (lon_min, lat_min, lon_max, lat_max). Read from $DATA_DIR only; a missing
+# source stops the run.
+land:
+  bbox: [138.19, 33.52, 141.30, 35.94]
+  min_water_area_deg2: 5.0e-5
+
+# Hand-drawn geometry corrections, applied in file-name order.
+edits: ../edits/sample_repro
+
+# Generation (notebooks/325_sample_repro.py) and finishing
+# (notebooks/331_finish2.py). Every knob is written out: a default changed in
+# the code must not change this mesh silently.
+settings:
+  SR_H0: 290.0
+  SR_MAXEL: 1400.0
+  SR_GRADE: 0.165
+  SR_DT: 15.0
+  SR_CRMIN: 0.45
+  SR_H_TARGET: achieved
+  SR_DM_SCALE: 1.2
+  SR_MODE: courant
+  SR_ZBASE: 630.0
+  SR_ZW_LAT: 35.215
+  SR_ZE_LAT: 35.17
+  SR_DMAX: 1030.0
+  SR_CFL_DT: "18"
+  SR_CFL_CRMAX: "0.9"
+  SR_CH_POLICY: "off"
+  SR_CH_REFINE: "off"
+  SR_WATERWAYS: "on"
+  SR_NORMALIZE: "on"
+  SR_OBC_LADDER: "on"
+  SR_OBC_H1: 1680
+  SR_OBC_HSCALE: 1.0
+  SR_OBC_K: 1.25
+  SR_OBC_SKIP: 2
+  SR_ONE_WIDE: forbid
+  SR_COAST_FIT: "on"
+  SR_FIN_SEED: 42
+  SR_GEN_SEED: 0
+
+# Depths (notebooks/422_tool_base.py): M7001 on T.P., 3 m floor, r-factor
+# 0.2, 300 m cap -- the production recipe of the hydro baseline. M7001 is
+# licensed data (USER_GUIDE section 2.3).
+depths: m7001_production
+
+# The mesh of 2026-09-22 (outputs/base_tool/TokyoBayTool.14). The run says
+# whether it reproduced it byte for byte.
+reference_fort14_sha256: db4d461a7c8f4e27e8146be98ea7b0b0cfc424a64d56fd581e341d154698b56c

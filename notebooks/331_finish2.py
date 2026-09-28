@@ -3,19 +3,22 @@
 # (perp-local -> phase_h frozen -> compact -> perp/R4 flips ->
 # phase_h -> compact -> C4 flips, OBC-line displacement verified).
 import os
+from pathlib import Path
 
 from fvcom_mesh_tools.one_wide import finishing_one_wide
 from fvcom_mesh_tools.sizing import load_sizing
 
 _recipe = load_sizing(os.environ["SR_SIZING"]) if os.environ.get("SR_SIZING") else None
-ONE_WIDE = finishing_one_wide("outputs/sample_repro/channel_policy.json", _recipe)
+# the generation run's directory (notebook 325's SR_OUT)
+OUT = Path(os.environ.get("SR_OUT", "outputs/sample_repro"))
+ONE_WIDE = finishing_one_wide(str(OUT / "channel_policy.json"), _recipe)
 print(f"[fin] one_wide={ONE_WIDE}", flush=True)
 from fvcom_mesh_tools.algorithms.obc_finish import finish_obc_mesh
 from fvcom_mesh_tools.channel_policy import resolve_narrow_channels
 from fvcom_mesh_tools.io import read_fort14, write_fort14
 
-SRC = "outputs/sample_repro/sample_repro_utm.14"
-DST = "outputs/sample_repro/sample_repro_final.14"
+SRC = str(OUT / "sample_repro_utm.14")
+DST = str(OUT / "sample_repro_final.14")
 
 mesh = read_fort14(SRC)
 # The selected policy controls ACTION; strict detection still reports in both modes.
@@ -49,7 +52,7 @@ import geopandas as _gpd
 from shapely.ops import unary_union as _uu
 
 _land_utm = _uu(list(_gpd.read_file(
-    "outputs/sample_repro/land_channel_adj.shp")
+    str(OUT / "land_channel_adj.shp"))
     .to_crs(32654).geometry))
 # The stochastic local repair takes a seed; a handful of stubborn
 # elements can depend on it, so it is selectable for sweeps.
@@ -58,35 +61,7 @@ mesh, info = finish_obc_mesh(
     land_union=_land_utm, one_wide=ONE_WIDE)
 _wops = (info.get("choke_widen") or {}).get("ops", [])
 _wops += (info.get("choke_widen_2") or {}).get("ops", [])
-# HUMAN-JUDGMENT mesh edits (owner 2026-07-15): coordinate-
-# addressed, gated, loud-fail ledger applied after the automatic
-# chain -- see algorithms/mesh_edits.py
-from pathlib import Path as _P
-
-from pyproj import Transformer as _Tr
-
-from fvcom_mesh_tools.algorithms.mesh_edits import apply_mesh_edits
-
-_tr43 = _Tr.from_crs(4326, 32654, always_xy=True)
-_eds = []
-for _mf in sorted(_P("recipes/mesh_edits/sample_repro").glob("*.json")):
-    _md = _json.loads(_mf.read_text())
-    for _o in _md.get("ops", []):
-        _o.setdefault("id", _md.get("id", _mf.stem))
-        _eds.append(_o)
-if _eds:
-    mesh, _minfo = apply_mesh_edits(
-        mesh, _eds, _land_utm,
-        lambda lo, la: _tr43.transform(lo, la))
-    _wops += _minfo.get("widen_ops", [])
-    print(f"[fin] mesh_edits: applied {_minfo['applied']}, "
-          f"FAILED {_minfo['failed']}", flush=True)
-    for _r in _minfo["results"]:
-        print(f"[fin]   {_r.get('id')}: {_r.get('op')} "
-              f"nodes {_r.get('nodes_f14')} -> "
-              f"{'OK ' + str({k: v for k, v in _r.items() if k in ('new_edge', 'min_angle', 'split_frac', 'local_worst_deg')}) if _r.get('ok') else 'FAILED: ' + str(_r.get('reason'))}",
-              flush=True)
-with open("outputs/sample_repro/widen_ops.json", "w") as _f:
+with open(OUT / "widen_ops.json", "w") as _f:
     _json.dump(_wops, _f)
 # COASTLINE FIT (owner 2026-09-21: "the mesh shoreline is visibly off the OSM
 # coastline where a human could place it by eye").  DistMesh only projects a
@@ -114,7 +89,7 @@ if os.environ.get("SR_COAST_FIT", "on") != "off":
                                 fixed=_obc, depths=mesh.depths)
     mesh.nodes[:, :2] = _cf.nodes[:, :2]
     print(f"[fin] {_cf.summary()}", flush=True)
-    with open("outputs/sample_repro/coast_fit.json", "w") as _f:
+    with open(OUT / "coast_fit.json", "w") as _f:
         _json.dump(_cf.to_dict(), _f, indent=1)
 else:
     print("[fin] coast fit: OFF", flush=True)
