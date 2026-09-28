@@ -6776,3 +6776,26 @@ spin-up converged, no fatal line in any FVCOM log.
 The differences are refined minus base at the tide gauges, which lie
 outside the refined regions: the patches leave the bay-scale M2 tide as it
 was, within 1 mm and 0.04 deg.
+
+### The samples on this project's own base mesh (2026-09-29)
+
+The six hires recipes now refine `outputs/base_tokyo_bay_tool` (built by
+`notebooks/440_base_mesh.py`, byte-identical to the reference), not the
+goto2023 mesh.  Refining that base needed four tool changes (`44f4fb7`,
+`7eba352`, `dec1383`, `5424bac`); all six were rebuilt from `5424bac` with
+ten seeds and run through the whole workflow (`FMESH_M2=1`).
+
+| recipe | seed | introduced | NP | dt (s) | max \|dA\| (mm) | max \|dphase\| (deg) |
+|---|---|---|---|---|---|---|
+| funabashi_port_hires | 1 | 0 | 8197 | 1.47 | 0.36 | 0.016 |
+| tokyo_odaiba_hires | 0 | 0 | 7782 | 1.58 | 0.55 | 0.025 |
+| yokohama_port_hires | 1 | 0 | 16785 | 0.99 | 0.41 | 0.010 |
+| kimitsu_port_hires | 9 | 0 | 7435 | 2.12 | 0.14 | 0.001 |
+| futtsu_coast_hires | 1 | 0 | 7477 | 2.17 | 0.61 | 0.004 |
+| futtsu_nori_hires | 3 | 0 | 5877 | 2.82 | 0.46 | 0.009 |
+
+Every run is finite and spun up (smoke, base and refined runs all
+`RUN_OK`); the differences are refined minus base at the five gauges the
+comparison samples.  Yokohama failed C1 at every seed before `5424bac`: an
+86 deg coastline corner split into three 28.6 deg elements, which
+`improve_patch` now thins.
