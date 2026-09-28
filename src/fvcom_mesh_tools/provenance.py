@@ -94,8 +94,11 @@ def git_state(path) -> dict[str, Any] | None:
         # Porcelain lines are "XY path"; the leading status column may be a
         # space, so the output is not stripped before slicing.  Untracked
         # files count: a new, uncommitted source file is exactly what the
-        # commit alone cannot give back (review, round 1).
-        changed = [ln[3:] for ln in run("status", "--porcelain").stdout.splitlines()
+        # commit alone cannot give back (review, round 1).  Untracked files
+        # are asked for explicitly: status.showUntrackedFiles=no hid them
+        # (review, round 16).
+        changed = [ln[3:] for ln in run("status", "--porcelain",
+                                        "--untracked-files=all").stdout.splitlines()
                    if ln.strip()]
         tracked = None
         if target.is_file():

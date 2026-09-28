@@ -2180,30 +2180,36 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
                                 "area_inside_m2": round(inside, 1)})
             continue
         ext = np.asarray(g.exterior.coords, dtype=float)[:-1, :2]
-        ok, gap, h_gap, possible = _clear_of(ext, edge, size, clearance_factor)
-        if not ok:
-            # Too close for the local element -- but leaving out land an
-            # element fits on meshes it as water, which the driver refuses
-            # outright (a Funabashi island 159 m from the rim where the
-            # element is 367 m; it meshes cleanly).  Such an island is kept
-            # and named; the QA gate judges the gap.  One nothing fits on is
-            # left out, as before.
-            why = f"{gap:.1f} m from the rim where the element is {h_gap:.0f} m"
-            if not possible or not land_an_element_fits(g, size, floor, certified=floor_ok):
-                skipped.append({"at": at(g), "why": why})
-                continue
-        # the RESAMPLED ring must still lie in the water, clear of the rim:
-        # a coarse walk cut a corner across the rim (review, round 15); the
-        # source outline, which passed those tests, is the fallback
-        r = None
+        # Judged on the ring DELIVERED, against the rim and every ring placed
+        # so far: the source outline's 50 m gap came back 8 m after
+        # resampling, and two islands 1 m apart were never compared (review,
+        # round 16).  The resampled ring first, the source outline next.
+        # Too close for the local element but an element fits on it and the
+        # gap could carry one: kept and named in `tight` -- leaving out land
+        # an element fits on meshes it as water, which the driver refuses (a
+        # Funabashi island 159 m from the rim where the element is 367 m
+        # meshes cleanly); the QA gate judges the gap.
+        others = shapely.union_all([edge, *[q.exterior for q, _src in placed]])
+        fits = None
+        r, ok, why = None, False, "no valid ring at the local size"
         for cand in (_ring_at_size(ext, size, fine_h=fine_h), ext):
-            if len(cand) >= 3 and shapely.Polygon(cand).is_valid \
-                    and shapely.Polygon(cand).within(water) \
-                    and not shapely.LinearRing(cand).intersects(edge):
-                r = cand
-                break
-        if r is None or not apart(shapely.Polygon(r), shapely.Polygon(g.exterior)):
-            skipped.append({"at": at(g), "why": "no valid ring at the local size"})
+            if not (len(cand) >= 3 and shapely.Polygon(cand).is_valid
+                    and shapely.Polygon(cand).within(water)
+                    and not shapely.LinearRing(cand).intersects(others)
+                    and apart(shapely.Polygon(cand), shapely.Polygon(g.exterior))):
+                continue
+            c_ok, gap, h_gap, possible = _clear_of(cand, others, size, clearance_factor)
+            if not c_ok:
+                why = f"{gap:.1f} m from the rim or another island where the element " \
+                      f"is {h_gap:.0f} m"
+                if fits is None:
+                    fits = bool(land_an_element_fits(g, size, floor, certified=floor_ok))
+                if not possible or not fits:
+                    continue
+            r, ok = cand, c_ok
+            break
+        if r is None:
+            skipped.append({"at": at(g), "why": why})
             continue
         if not ok:
             tight.append({"at": at(g), "why": why})
@@ -2219,7 +2225,8 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
             lr = _ring_at_size(lake, size, fine_h=fine_h)
             lp = shapely.Polygon(lr) if len(lr) >= 3 else shapely.Polygon()
             lake_p = shapely.Polygon(lake)
-            ok, gap, h_gap, possible = _clear_of(lr, shell.exterior, size, clearance_factor) \
+            near = shapely.union_all([shell.exterior, *[q.exterior for q, _src in placed]])
+            ok, gap, h_gap, possible = _clear_of(lr, near, size, clearance_factor) \
                 if not lp.is_empty else (False, 0.0, 0.0, False)
             is_tight = not ok and possible and not lp.is_empty and lp.is_valid \
                 and bool(land_an_element_fits(lake_p, size, floor, certified=floor_ok))

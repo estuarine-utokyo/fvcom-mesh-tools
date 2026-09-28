@@ -8,6 +8,12 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 16 (2026-09-28)
+
+- Island clearance is judged on the ring delivered, against the rim and
+  every island or lake ring already placed.
+- Provenance lists untracked files whatever `status.showUntrackedFiles` says.
+
 ### Fixed -- review of the coastline rules, round 15 (2026-09-28)
 
 - A resampled island ring must still lie in the water, clear of the rim
