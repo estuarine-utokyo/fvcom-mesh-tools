@@ -793,6 +793,56 @@ def test_a_slide_cannot_cut_a_corner():
     assert curve.hausdorff_distance(after) < 1e-9
 
 
+def _split_corner():
+    """An 86 deg water corner at the origin, cut into three 28.7 deg slivers.
+
+    The shape is the Yokohama failure of 2026-09-28: no node move can lift a
+    three-way split of 86 deg above 28.7 deg, and dropping one spoke without
+    moving anything leaves 57 + 29.
+    """
+    from scipy.spatial import Delaunay
+
+    a0, a1 = np.radians(47.1), np.radians(132.9)
+    pts = [(0.0, 0.0)]
+    for r, n in ((30, 4), (60, 4), (90, 5)):
+        for t in np.linspace(a0, a1, n):
+            pts.append((r * np.cos(t), r * np.sin(t)))
+    pts = np.array(pts)
+    tri = Delaunay(pts).simplices
+    c = pts[tri].mean(axis=1)
+    th = np.arctan2(c[:, 1], c[:, 0])
+    tri = tri[(th > a0) & (th < a1)]
+    e = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]), axis=1)
+    u, cnt = np.unique(e, axis=0, return_counts=True)
+    on_boundary = np.zeros(len(pts), dtype=bool)
+    on_boundary[u[cnt == 1].ravel()] = True
+    assert (tri == 0).any(axis=1).sum() == 3
+    return pts, tri, on_boundary
+
+
+def test_improve_thins_an_over_split_corner():
+    """A corner split one way too many loses a spoke, and the gate is met."""
+    from fvcom_mesh_tools.patch import _angles_deg
+
+    pts, tri, on_boundary = _split_corner()
+    assert _angles_deg(pts, tri).min() < 30.0
+    out, out_t, info = improve_patch(pts, tri, ~on_boundary,
+                                     np.ones(len(tri), dtype=bool))
+    assert info["n_corner_fans_thinned"] == 1
+    assert (out_t == 0).any(axis=1).sum() == 2
+    assert info["min_angle_deg"] >= 30.0
+    assert np.array_equal(out[on_boundary], pts[on_boundary])
+
+
+def test_improve_leaves_a_frozen_corner_fan_alone():
+    """The corner's elements are retained: no spoke is flipped away."""
+    pts, tri, on_boundary = _split_corner()
+    mutable = ~(tri == 0).any(axis=1)
+    _, out_t, info = improve_patch(pts, tri, ~on_boundary, mutable)
+    assert info["n_corner_fans_thinned"] == 0
+    assert np.array_equal(out_t[~mutable], tri[~mutable])
+
+
 # ------------------------------------- what the SECOND adversarial review found
 #
 # gpt-6-astra reviewed commit 8caca27 (docs/local_refine_implementation_review_2.md)

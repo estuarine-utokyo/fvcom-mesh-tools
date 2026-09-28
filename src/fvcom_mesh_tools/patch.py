@@ -4240,7 +4240,110 @@ def improve_patch(
     allowed[list(slide)] = True
     movable = np.flatnonzero((np.asarray(movable, dtype=bool) & ~can_slide)
                              | allowed)
-    n_flip = n_move = 0
+    n_flip = n_move = n_fan = 0
+    is_movable = np.zeros(len(xy), dtype=bool)
+    is_movable[movable] = True
+
+    def _sweep(nodes_, only=only_below):
+        """One pass of node moves over ``nodes_``; returns how many moved."""
+        # Connectivity is unchanged by a move, so one incidence table serves
+        # the whole sweep.
+        inc, lo, hi = _incidence(tri, len(xy))
+        adj = _face_adjacency(tri)
+        n = 0
+        for v in nodes_:
+            faces = inc[lo[v]:hi[v]]
+            if not len(faces):
+                continue
+            before = _scores(xy, tri, faces, adj, min_angle_deg, max_angle_deg,
+                             max_area_change)
+            if before[0] >= only:
+                continue
+            keep = xy[v].copy()
+            scale = float(np.linalg.norm(
+                xy[tri[faces]].reshape(-1, 2) - keep, axis=1).mean())
+            best, best_p = before, None
+            for q in _candidates(xy, tri, faces, v, keep, scale,
+                                 slide.get(int(v)), curve_of.get(int(v))):
+                xy[v] = q
+                sc = _scores(xy, tri, faces, adj, min_angle_deg, max_angle_deg,
+                             max_area_change)
+                if _better(sc, best, soft):
+                    best, best_p = sc, q
+            xy[v] = keep if best_p is None else best_p
+            if best_p is not None:
+                n += 1
+        return n
+
+    def _thin_corner_fans():
+        """Take one spoke out of each over-split boundary corner, then re-move.
+
+        A boundary node whose fan has its smallest angle below the gate, but
+        whose corner angle would clear the gate with one element fewer, has
+        each interior spoke flipped in turn; the movable nodes around the flip
+        are then swept a few times, and the whole trial is kept only when the
+        worst margin over the neighbourhood improves strictly.  Anything else
+        is put back exactly, so the pass stays monotone like the rest.
+        """
+        flips = moves = 0
+        ea_, eb_ = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]],
+                                      tri[:, [2, 0]]]), axis=1).T
+        key = ea_ * len(xy) + eb_
+        u, cnt = np.unique(key, return_counts=True)
+        bnd = np.zeros(len(xy), dtype=bool)
+        bnd[u[cnt == 1] // len(xy)] = True
+        bnd[u[cnt == 1] % len(xy)] = True
+        ang = _angles_deg(xy, tri)
+        inc, lo, hi = _incidence(tri, len(xy))
+        for v in np.flatnonzero(bnd):
+            fan = inc[lo[v]:hi[v]]
+            if len(fan) < 3 or not mutable[fan].all():
+                continue
+            at_v = np.array([ang[f][list(tri[f]).index(v)] for f in fan])
+            if at_v.min() >= min_angle_deg \
+                    or at_v.sum() / (len(fan) - 1) < min_angle_deg:
+                continue
+            spokes = {int(w) for f in fan for w in tri[f] if w != v}
+            ring = set(spokes)
+            for w in spokes:
+                ring |= {int(x) for f in inc[lo[w]:hi[w]] for x in tri[f]}
+            region = np.unique(np.concatenate(
+                [inc[lo[x]:hi[x]] for x in ring]))
+            before = _scores(xy, tri, region, _face_adjacency(tri),
+                             min_angle_deg, max_angle_deg, max_area_change)
+            val = np.bincount(tri.ravel(), minlength=len(xy))
+            for w in sorted(spokes):
+                if bnd[w]:
+                    continue
+                f0, f1 = [int(f) for f in fan if w in tri[f]]
+                c = int(np.setdiff1d(tri[f0], [v, w])[0])
+                d = int(np.setdiff1d(tri[f1], [v, w])[0])
+                if not _convex_quad(xy, v, w, c, d) or val[w] <= 3 \
+                        or val[c] + 1 > max_valence or val[d] + 1 > max_valence:
+                    continue
+                keep_xy, keep_tri = xy.copy(), tri.copy()
+                tri[f0] = _ccw(xy, np.array([c, d, w]))
+                tri[f1] = _ccw(xy, np.array([d, c, v]))
+                near = [x for x in sorted(ring) if is_movable[x]]
+                m = 0
+                for _ in range(5):
+                    k = _sweep(near, only=np.inf)
+                    m += k
+                    if not k:
+                        break
+                after = _scores(xy, tri, region, _face_adjacency(tri),
+                                min_angle_deg, max_angle_deg, max_area_change)
+                if after[0] > before[0] + 1e-9:
+                    flips += 1
+                    moves += m
+                    break
+                xy[:], tri[:] = keep_xy, keep_tri
+            else:
+                continue
+            # the tables are stale after an accepted trial
+            ang = _angles_deg(xy, tri)
+            inc, lo, hi = _incidence(tri, len(xy))
+        return flips, moves
 
     for _ in range(rounds):
         changed = False
@@ -4311,36 +4414,23 @@ def improve_patch(
                 tri[f0], tri[f1] = keep0, keep1
 
         # --- moves -------------------------------------------------------
-        # Connectivity is unchanged by a move, so one incidence table serves
-        # the whole sweep.
-        inc, lo, hi = _incidence(tri, len(xy))
-        adj = _face_adjacency(tri)
-        for v in movable:
-            faces = inc[lo[v]:hi[v]]
-            if not len(faces):
-                continue
-            before = _scores(xy, tri, faces, adj, min_angle_deg, max_angle_deg,
-                             max_area_change)
-            if before[0] >= only_below:
-                continue
-            keep = xy[v].copy()
-            scale = float(np.linalg.norm(
-                xy[tri[faces]].reshape(-1, 2) - keep, axis=1).mean())
-            best, best_p = before, None
-            for q in _candidates(xy, tri, faces, v, keep, scale,
-                                 slide.get(int(v)), curve_of.get(int(v))):
-                xy[v] = q
-                sc = _scores(xy, tri, faces, adj, min_angle_deg, max_angle_deg,
-                             max_area_change)
-                if _better(sc, best, soft):
-                    best, best_p = sc, q
-            xy[v] = keep if best_p is None else best_p
-            if best_p is not None:
-                n_move += 1
-                changed = True
+        moved = _sweep(movable)
+        n_move += moved
+        changed = changed or moved > 0
 
         if not changed:
-            break
+            # Flips and moves have each stalled on their own.  One stall they
+            # cannot leave is a coastline corner cut into too many elements:
+            # at Yokohama an 85.8 deg corner was split three ways, every
+            # element at 28.6 deg, and removing one spoke leaves 57 + 29 --
+            # no better until the node across is moved to share the corner
+            # evenly, which a flip alone never sees.
+            fan_flips, fan_moves = _thin_corner_fans()
+            n_flip += fan_flips
+            n_move += fan_moves
+            n_fan += fan_flips
+            if not fan_flips:
+                break
 
     # Valence cleanup.  Intermediate excess is allowed above because
     # forbidding it blocks the sequences that end below the limit -- but
@@ -4411,6 +4501,7 @@ def improve_patch(
         "n_moves": n_move,
         "n_slidable_used": len(slide),
         "n_valence_flips": n_valence_fixed,
+        "n_corner_fans_thinned": n_fan,
         "max_valence": int(np.bincount(tri.ravel(), minlength=len(xy)).max()),
         "min_angle_deg": float(ang.min()),
         "max_angle_deg": float(ang.max()),

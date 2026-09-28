@@ -8,6 +8,21 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Changed -- the hires samples start from this project's base mesh (2026-09-28)
+
+- The six `recipes/refine/*_hires.yaml` samples refine
+  `outputs/base_tokyo_bay_tool` (built by `notebooks/440_base_mesh.py`
+  from `recipes/base/tokyo_bay_tool.yaml`) instead of goto2023.
+- `select_patch` keeps retained pieces the cut parts off when each still
+  borders the hole; `verify_patch` requires one connected mesh.
+- The coarse transition bands keep water the base mesh holds; the rim is
+  checked against interface edges and the footprint grows once where it
+  meets the frozen mesh.
+- `improve_patch` thins a boundary corner split into one element too many
+  (flip a spoke, re-move the nodes around it, keep it only when the worst
+  margin improves): an 86 deg corner in three 28.6 deg elements failed
+  C1 at every Yokohama seed.
+
 ### Fixed -- review of the coastline rules, round 22 (2026-09-28)
 
 - `island_rings` repeats its pass preferring the source outline next to
