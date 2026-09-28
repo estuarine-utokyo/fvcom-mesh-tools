@@ -43,6 +43,7 @@ from fvcom_mesh_tools.patch import (  # noqa: E402
     base_size_field,
     blunt_acute_corners,
     boundary_after_patch,
+    boundary_rings,
     effective_gradation,
     field_gradation,
     filter_shoreline_local,
@@ -394,6 +395,13 @@ widths = {region.name: (region.transition_m if region.transition_m is not None
           for _, region in regions_m}
 footprint = unary_union([geom.buffer(widths[region.name])
                          for geom, region in regions_m])
+# The ground a first attempt had to take in as well (see GROWN below).
+if os.environ.get("LR_GROW_WKT"):
+    _grow = shapely.from_wkt(Path(os.environ["LR_GROW_WKT"]).read_text())
+    footprint = unary_union([footprint, _grow])
+    reports["footprint_grown_m2"] = float(_grow.area)
+    say(f"footprint grown by {_grow.area / 1e6:.4f} km2 where the first attempt's "
+        "coastline met the frozen mesh")
 sized = [(g, r.target_h_m, widths[r.name], r.priority) for g, r in regions_m]
 grad = effective_gradation(base.nodes, base.elements, sized)
 # Overlapping fisheries are an ordinary input; what is not ordinary is a
@@ -673,6 +681,41 @@ if rc.get("n_stretches_kept_to_avoid_a_crossing"):
         "KEPT on the base polyline: "
         + "; ".join(f"{n} because {_why.get(k, k)}"
                     for k, n in rc.get("kept_because", {}).items()))
+# GROWN: a stretch kept on the base because its source coastline would
+# cross the frozen mesh leaves the source's land along it as water -- at
+# Kimitsu on this project's base a pier ran into a small base island just
+# outside the circle and its whole harbour stayed on the base line.  The
+# ground there is taken into the hole and the run starts again, once: the
+# elements within two local elements of each crossing, and any base island
+# ring that close, whole.
+if (HIRES is not None and cfg["coastline"] == "resolve" and rc.get("kept_at")
+        and not os.environ.get("LR_GROW_WKT")):
+    from scipy.spatial import cKDTree as _KD
+
+    _pts = np.asarray(rc["kept_at"], dtype=float)
+    _cen = base.nodes[base.elements, :2].mean(axis=1)
+    _r = 2.0 * amb_node[_KD(base.nodes[:, :2]).query(_pts)[1]]
+    _take = np.zeros(len(base.elements), dtype=bool)
+    for _q, _rq in zip(_pts, _r):
+        _take |= np.linalg.norm(_cen - _q, axis=1) <= _rq
+    _brings, _bhole = boundary_rings(base.nodes[:, :2], _ub[_cb == 1])
+    for _ring, _is_isl in zip(_brings, _bhole):
+        if _is_isl and shapely.distance(shapely.LinearRing(base.nodes[_ring, :2]),
+                                        shapely.MultiPoint(_pts)) <= float(_r.max()):
+            _take |= np.isin(base.elements, _ring).any(axis=1)
+    _grow = unary_union(shapely.polygons(base.nodes[base.elements[_take], :2]).tolist())
+    _gw = OUT / "footprint_grow.wkt"
+    _gw.write_text(shapely.to_wkt(_grow, rounding_precision=3))
+    say(f"GROWN: the coastline met the frozen mesh at {rc['kept_at'][:5]}; taking "
+        f"{int(_take.sum())} element(s) ({_grow.area / 1e6:.4f} km2) into the hole "
+        "and starting again")
+    for _f in OUT.iterdir():
+        if _f.name not in (".reserved", _gw.name) and _f.is_file():
+            _f.unlink()
+    os.environ["LR_GROW_WKT"] = str(_gw)
+    os.environ["LR_RESERVATION"] = _res.read_text().strip()
+    sys.stdout.flush()
+    os.execv(sys.executable, [sys.executable, *sys.argv])
 if rc.get("n_coastline_nodes_new", 0) < rc.get("n_coastline_nodes_replaced", 0):
     # The coastline is cut at the LOCAL size, and out at the edge of a
     # transition that is the AMBIENT size.  Measured on the first hires run:

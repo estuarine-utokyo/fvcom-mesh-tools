@@ -136,7 +136,6 @@ def select_patch(
     open_boundary_nodes=(),
     obc_guard_m: float = 0.0,
     max_repair_rounds: int = 50,
-    max_stranded_fraction: float = 0.05,
 ) -> PatchSelection:
     """Choose the faces to remove, and make the resulting hole meshable.
 
@@ -155,13 +154,15 @@ def select_patch(
     the growth is reported rather than hidden -- it can push the cut towards
     the open boundary, which is checked afterwards, not before.
 
-    A cut can also strand retained pieces: a circle across the canals of a
-    base that draws them (Odaiba on this project's own base) left the water
-    beyond it joined to nothing.  A stranded piece -- every retained piece
-    but the one holding the open boundary (the largest, without one) -- is
-    taken into the hole, and reported, when the stranded pieces together are
-    at most ``max_stranded_fraction`` of the mesh; more than that is a domain
-    the recipe splits, and is refused.
+    A cut can also leave the retained mesh in pieces: a circle across the
+    canals of a base that draws them (Odaiba on this project's own base)
+    parts the water beyond it from the rest.  Every piece borders the hole,
+    so the fill joins them again, and they are kept as they are -- the
+    transition serves efficiency, not detail (owner, 2026-09-28).  Taking
+    them into the hole instead re-cut a canal 2.7 km from the region at the
+    transition's size, closed it, and left a land spit the mesh could not
+    carry.  ``n_retained_pieces`` reports them; the refined mesh is checked
+    to be one piece after stitching.
 
     Raises ``ValueError`` when the cut reaches the open boundary (with its
     guard band), empties the mesh, or disconnects the retained mesh.
@@ -179,19 +180,9 @@ def select_patch(
     if not removed.any():
         raise ValueError("the footprint selects no elements; nothing to refine")
 
-    obc_nodes = np.asarray(list(open_boundary_nodes), dtype=np.int64)
-    grown = stranded_taken = 0
+    grown = 0
     resolved = False
     for _ in range(max_repair_rounds):
-        stranded = _stranded_faces(tri, removed, obc_nodes)
-        if stranded.any():
-            if int(stranded.sum()) > max_stranded_fraction * len(tri):
-                raise ValueError(
-                    f"the cut strands {int(stranded.sum())} elements, more than "
-                    f"{max_stranded_fraction:.0%} of the mesh; the footprint splits "
-                    "the domain")
-            removed |= stranded
-            stranded_taken += int(stranded.sum())
         sel = tri[removed]
         u, c = _edge_table(sel)
         rim = u[c == 1]
@@ -203,13 +194,10 @@ def select_patch(
         # too.  A cut at (400, 200) on the 9x9 test grid leaves exactly one
         # (review finding 7, 2026-09-22).
         spike = _isolated_faces(tri, removed)
-        if not bad.size and not spike.any() \
-                and not _stranded_faces(tri, removed, obc_nodes).any():
+        if not bad.size and not spike.any():
             resolved = True
             break
         add = (np.isin(tri, bad).any(axis=1) & ~removed) | spike
-        if not add.any() and _stranded_faces(tri, removed, obc_nodes).any():
-            continue                    # the next round takes the stranded piece
         if not add.any():
             raise ValueError(
                 f"the cut pinches at {bad.size} vertices and taking their faces "
@@ -258,7 +246,7 @@ def select_patch(
                     "incident to an OBC node can change its orthogonality even "
                     "though no OBC coordinate moves")
 
-    _require_connected(retained, frozen)
+    n_pieces = _retained_pieces(retained, rim)
 
     rings, is_hole = boundary_rings(xy, rim)
     taken_nodes = np.unique(sel)
@@ -270,7 +258,7 @@ def select_patch(
         "n_elements_removed": int(removed.sum()),
         "n_elements_retained": int(len(retained)),
         "n_grown_by_repair": grown,
-        "n_stranded_taken": stranded_taken,
+        "n_retained_pieces": n_pieces,
         "n_rim_edges": int(len(rim)),
         "n_physical_rim_edges": int(is_physical.sum()),
         "n_interface_rim_edges": int((~is_physical).sum()),
@@ -303,59 +291,30 @@ def _face_components(faces: np.ndarray) -> np.ndarray:
     return connected_components(g, directed=False)[1]
 
 
-def _stranded_faces(tri: np.ndarray, removed: np.ndarray, obc_nodes) -> np.ndarray:
-    """Retained faces cut off from the main retained piece, as a face mask.
+def _retained_pieces(retained: np.ndarray, rim: np.ndarray) -> int:
+    """How many edge-connected pieces the retained mesh is in; each must
+    border the hole, which the fill then joins them through.
 
-    The main piece holds the open boundary, or is the largest when none is
-    given (or none survives).
+    A piece touching the hole only at a vertex is a pinch, which the repair
+    has already resolved; a piece with no rim edge at all would stay apart.
     """
-    keep = np.flatnonzero(~removed)
-    out = np.zeros(len(tri), dtype=bool)
-    if not len(keep):
-        return out
-    lab = _face_components(tri[keep])
-    if lab.max() == 0:
-        return out
-    main = None
-    if len(obc_nodes):
-        on = np.isin(tri[keep], obc_nodes).any(axis=1)
-        if on.any():
-            main = np.bincount(lab[on]).argmax()
-    if main is None:
-        main = np.bincount(lab).argmax()
-    out[keep[lab != main]] = True
-    return out
-
-
-def _require_connected(retained: np.ndarray, frozen: np.ndarray) -> None:
-    """Refuse a cut that severs a piece of the mesh from the rest.
-
-    The graph is over FACES joined by shared EDGES, not over nodes joined by
-    edges.  A node graph calls two triangles that meet at a single point
-    connected, and they are not: that is a non-manifold pinch, FVCOM will not
-    run on it, and the promise made to the caller is edge connectivity.  A
-    four-triangle fan with its two middle faces removed is the smallest case
-    that a node graph waves through (review finding 7, 2026-09-22).
-    """
-    from scipy.sparse import coo_matrix
-    from scipy.sparse.csgraph import connected_components
-
     if not len(retained):
         raise ValueError("the cut leaves no elements")
+    lab = _face_components(retained)
+    n = int(lab.max()) + 1
+    if n == 1:
+        return 1
+    rim_set = {tuple(x) for x in np.sort(np.asarray(rim), axis=1).tolist()}
     e = np.sort(np.vstack([retained[:, [0, 1]], retained[:, [1, 2]],
                            retained[:, [2, 0]]]), axis=1)
-    owner = np.tile(np.arange(len(retained)), 3)
-    order = np.lexsort((e[:, 1], e[:, 0]))
-    e, owner = e[order], owner[order]
-    k = np.flatnonzero(np.all(e[:-1] == e[1:], axis=1))
-    n = len(retained)
-    g = coo_matrix((np.ones(len(k)), (owner[k], owner[k + 1])), shape=(n, n))
-    ncomp, _ = connected_components(g, directed=False)
-    if ncomp != 1:
+    on_rim = np.array([tuple(x) in rim_set for x in e.tolist()]).reshape(3, -1).any(axis=0)
+    touching = set(lab[on_rim].tolist())
+    if len(touching) != n:
         raise ValueError(
-            f"the cut splits the retained mesh into {ncomp} pieces; "
-            "a refinement may not disconnect the domain")
-    del frozen
+            f"the cut splits the retained mesh into {n} pieces, "
+            f"{n - len(touching)} of them not on the hole; a refinement may not "
+            "disconnect the domain")
+    return n
 
 
 def boundary_rings(xy, rim_edges) -> tuple[list[np.ndarray], list[bool]]:
@@ -693,7 +652,7 @@ def _source_substring(pts: np.ndarray, shoreline):
 
 
 def _unusable_replacement(new: np.ndarray, xy: np.ndarray, idx,
-                          boundary_edges, placed) -> str | None:
+                          boundary_edges, placed, where: list | None = None) -> str | None:
     """Why this replacement cannot be used, or ``None`` when it can.
 
     Three ways a moved boundary breaks the mesh, and all three were met on
@@ -734,7 +693,13 @@ def _unusable_replacement(new: np.ndarray, xy: np.ndarray, idx,
         return None
     segs = [shapely.LineString(xy[[i, j], :2]) for i, j in others.tolist()]
     tree = shapely.STRtree(segs)
-    if any(shapely.crosses(line, segs[q]) for q in tree.query(line)):
+    hit = [q for q in tree.query(line) if shapely.crosses(line, segs[q])]
+    if hit:
+        if where is not None:
+            # where, so a caller can take the ground there into the hole
+            where.extend(np.asarray(shapely.intersection(line, segs[q])
+                                    .representative_point().coords)[0].tolist()
+                         for q in hit)
         return "frozen"
     return None
 
@@ -1285,8 +1250,17 @@ def rim_constraints(
     n_uncrossed = 0
     placed: list = []
     kept_because: dict[str, int] = {}
+    kept_at: list = []
     n_new = 0
     n_islands_left = 0
+    # A replaced stretch may cross neither the base's own boundary nor the
+    # interface between the hole and the retained mesh: at Funabashi on this
+    # project's base a resolved stretch cut across an interface edge, and the
+    # rim came out crossing itself (the boundary check never saw it).
+    iface = np.asarray(selection.rim_edges, dtype=np.int64).reshape(-1, 2)[
+        ~np.asarray(selection.physical_rim, dtype=bool)]
+    check_edges = iface if boundary_edges is None else np.vstack(
+        [np.asarray(boundary_edges, dtype=np.int64).reshape(-1, 2), iface])
 
     # A free rim node's two rim edges are both on the physical boundary, and
     # this is structural rather than lucky: an interface edge is shared with a
@@ -1344,8 +1318,8 @@ def rim_constraints(
                     new = coastline_points(xy[idx], size, mode=coastline, fine_h=fine_h,
                                            shoreline=shoreline,
                                            tolerance_m=tolerance_m)
-                    why = _unusable_replacement(new, xy, idx, boundary_edges,
-                                                placed)
+                    why = _unusable_replacement(new, xy, idx, check_edges,
+                                                placed, where=kept_at)
                     if why is not None:
                         new = _subdivide(xy[idx], size)
                         n_uncrossed += 1
@@ -1389,6 +1363,7 @@ def rim_constraints(
         "n_egfix": int(len(egfix)),
         "n_stretches_kept_to_avoid_a_crossing": n_uncrossed,
         "kept_because": kept_because,
+        "kept_at": [[round(float(x), 1), round(float(y), 1)] for x, y in kept_at],
         "n_coastline_nodes_replaced": n_resampled,
         "n_coastline_nodes_new": n_new,
         "n_islands_left_to_source": n_islands_left,
@@ -3975,6 +3950,9 @@ def verify_patch(
 
     base_area = _area(xy, np.asarray(base_elements, dtype=np.int64))
     new_area = _area(new_xy, tri)
+    # One piece: a cut may leave the retained mesh in pieces the fill joins
+    # (select_patch), and this is where "joins" is checked.
+    n_components = int(_face_components(tri).max()) + 1 if len(tri) else 0
 
     return {
         "n_frozen_nodes": int(len(keep)),
@@ -3997,6 +3975,7 @@ def verify_patch(
             new_xy[list(e)].mean(axis=0).round(1).tolist() for e in sorted(absent)[:10]],
         "n_extra_faces": int(extra),
         "n_nonmanifold_edges": nonmanifold,
+        "n_components": n_components,
         "frozen_exact": frozen_exact,
         "open_boundary_unchanged": bool(obc_ok),
         "area_change_fraction": float((new_area - base_area) / base_area)
@@ -4009,7 +3988,8 @@ def verify_patch(
                    and frozen_exact and not missing and (area2 > 0).all()
                    and extra == 0 and nonmanifold == 0 and not unexpected
                    and not absent
-                   and dup == 0 and orphan == 0 and obc_ok and not split),
+                   and dup == 0 and orphan == 0 and obc_ok and not split
+                   and n_components == 1),
     }
 
 

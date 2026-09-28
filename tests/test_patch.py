@@ -126,11 +126,12 @@ def test_open_boundary_guard_band_refuses_a_near_miss():
                      obc_guard_m=1000.0)
 
 
-def test_cut_that_severs_the_mesh_is_refused():
+def test_a_cut_across_the_mesh_keeps_both_sides_the_fill_joins():
+    """Both halves border the hole, so the fill joins them: kept, reported."""
     nodes, elements = grid_mesh()
     band = shapely.box(-10.0, 320.0, 1e4, 400.0)   # all of element row 3
-    with pytest.raises(ValueError, match="strands|splits the retained mesh"):
-        select_patch(nodes, elements, band)
+    sel = select_patch(nodes, elements, band)
+    assert sel.report["n_retained_pieces"] == 2
 
 
 def test_pinch_is_repaired_by_growing_the_cut():
@@ -667,7 +668,7 @@ def test_a_vertex_pinch_in_the_retained_mesh_is_not_accepted():
     """Four faces round one vertex, middle two cut: the rest meet at a point."""
     xy = np.array([[0, 0], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]], float)
     tri = np.array([[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 5]])
-    with pytest.raises(ValueError, match="strands|splits the retained mesh|entire mesh"):
+    with pytest.raises(ValueError, match="splits the retained mesh|entire mesh"):
         select_patch(xy, tri, shapely.Point(0, 2 / 3).buffer(0.4))
 
 
@@ -687,8 +688,7 @@ def test_an_isolated_retained_face_is_absorbed_into_the_cut():
     has[owner[k]] = True
     has[owner[k + 1]] = True
     assert has.all()
-    # taken as a stranded piece (it shares no edge) or by the pinch repair
-    assert sel.report["n_grown_by_repair"] + sel.report["n_stranded_taken"] > 0
+    assert sel.report["n_grown_by_repair"] > 0
 
 
 def test_a_declared_bbox_stays_a_bbox():
@@ -2426,21 +2426,28 @@ def _arm_mesh():
     return nodes, elements[keep]
 
 
-def test_a_small_stranded_piece_is_taken_into_the_hole():
-    """A cut across the arm strands its tip: the tip joins the hole."""
+def test_a_piece_the_cut_parts_from_the_rest_is_kept_as_it_is():
+    """A cut across the arm parts its tip; the tip borders the hole, so it is
+    kept -- not re-meshed -- and the fill joins it (owner, 2026-09-28)."""
     nodes, elements = _arm_mesh()
     obc = np.flatnonzero(nodes[:, 1] == 0.0)
     cut = shapely.box(2400.0, 790.0, 2600.0, 1200.0)
     sel = select_patch(nodes, elements, cut, open_boundary_nodes=obc)
     cen = nodes[elements].mean(axis=1)
     tip = (cen[:, 0] > 2600) & (cen[:, 1] > 800)
-    assert sel.report["n_stranded_taken"] == int(tip.sum()) > 0
-    assert sel.removed[tip].all()
+    assert sel.report["n_retained_pieces"] == 2
+    assert not sel.removed[tip].any()
 
 
-def test_the_piece_holding_the_open_boundary_is_the_one_kept():
-    nodes, elements = _arm_mesh()
-    obc = np.flatnonzero((nodes[:, 1] == 1100.0) & (nodes[:, 0] > 2700))   # on the tip
-    cut = shapely.box(2400.0, 790.0, 2600.0, 1200.0)
-    with pytest.raises(ValueError, match="strands"):
-        select_patch(nodes, elements, cut, open_boundary_nodes=obc)
+def test_a_frozen_crossing_says_where():
+    """The driver takes the ground at a crossing into the hole, so it needs
+    the point, not only the reason."""
+    from fvcom_mesh_tools.patch import _unusable_replacement
+
+    xy = np.array([[0.0, 0.0], [100.0, 0.0], [50.0, -50.0], [50.0, 50.0]])
+    idx = np.array([0, 1])
+    straight = np.array([[0.0, 0.0], [100.0, 0.0]])
+    where: list = []
+    assert _unusable_replacement(straight, xy, idx, np.array([[2, 3]]), [],
+                                 where=where) == "frozen"
+    assert np.allclose(where, [[50.0, 0.0]])
