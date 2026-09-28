@@ -8,6 +8,12 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 17 (2026-09-28)
+
+- Island and lake rings are chosen the same way (resampled outline, then
+  the source's), and each new ring is judged from both sides of every gap
+  to a ring already placed.
+
 ### Fixed -- review of the coastline rules, round 16 (2026-09-28)
 
 - Island clearance is judged on the ring delivered, against the rim and

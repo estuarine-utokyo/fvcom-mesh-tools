@@ -2137,9 +2137,9 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
     rings, skipped = [], []
     n_islands = n_lakes = 0
     edge = shapely.boundary(water)
-    placed: list = []                   # (resampled polygon, source polygon)
+    placed: list = []                   # (resampled polygon, source polygon, report point)
     filled: list = []                   # source lakes refused, meshed as land
-    tight: list = []                    # kept although closer than the rule
+    tight: dict = {}                    # placed index -> why it is kept although close
     floor, floor_ok = resolve_size_floor(
         size, None, shapely.get_coordinates(land)[:, :2]) if not land.is_empty else (1.0, False)
 
@@ -2152,12 +2152,63 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
         apart came out overlapping, review round 13), and it must sit inside
         exactly the placed rings its source sits inside -- and they in it:
         two sibling lakes came out one inside the other (round 14)."""
-        for q, q_src in placed:
+        for q, q_src, _at in placed:
             if poly.exterior.intersects(q.exterior):
                 return False
             if poly.within(q) != src.within(q_src) or q.within(poly) != q_src.within(src):
                 return False
         return True
+
+    def choose(cands, src, inside, fits, what):
+        """The first candidate ring that may be delivered, as
+        ``(ring, why_tight_or_None)``, or ``(None, why)``.
+
+        Each candidate -- the resampled ring, then the source outline -- is
+        judged as delivered (the source's 50 m gap came back 8 m after
+        resampling, review round 16): a valid polygon ``inside`` its
+        container, apart from every placed ring, and clear of the rim and of
+        every placed ring by ``_clear_of`` -- and every placed ring clear of
+        IT, since sizes differ on the two sides of a gap (round 17).  Too
+        close for the local element but an element fits on it and the gap
+        could carry one: kept, and named -- leaving out land an element fits
+        on meshes it as water, which the driver refuses (a Funabashi island
+        159 m from the rim where the element is 367 m meshes cleanly), and
+        filling a lake an element fits in makes water land; the QA gate
+        judges the gap.  A placed ring the new one makes tight is named too.
+        """
+        why = "no valid ring at the local size"
+        others = shapely.union_all([edge, *[q.exterior for q, _s, _a in placed]])
+        for cand in cands:
+            if len(cand) < 3:
+                continue
+            poly = shapely.Polygon(cand)
+            if not (poly.is_valid and inside(poly)
+                    and not poly.exterior.intersects(others) and apart(poly, src)):
+                continue
+            ok, gap, h_gap, possible = _clear_of(cand, others, size, clearance_factor)
+            if not ok:
+                why = f"{what} {gap:.1f} m from the rim or another ring where the " \
+                      f"element is {h_gap:.0f} m"
+                if not possible or not fits():
+                    continue
+            back, fine = {}, True
+            for i, (q, _s, _a) in enumerate(placed):
+                q_ok, q_gap, q_h, q_possible = _clear_of(
+                    np.asarray(q.exterior.coords)[:-1], poly.exterior, size, clearance_factor)
+                if not q_possible:
+                    fine = False
+                    break
+                if not q_ok:
+                    back[i] = (q_gap, q_h)
+            if not fine:
+                why = f"{what}: a ring already placed would be too close to it"
+                continue
+            for i, (q_gap, q_h) in back.items():
+                tight.setdefault(i, {"at": placed[i][2], "why": (
+                    f"{q_gap:.1f} m from a ring added later where the element is "
+                    f"{q_h:.0f} m")})
+            return cand, (None if ok else why)
+        return None, why
 
     # every polygon, however make_valid nested it; lines are no land (round
     # 6).  Outside in, so an island is met after the lake it stands in.
@@ -2180,73 +2231,43 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
                                 "area_inside_m2": round(inside, 1)})
             continue
         ext = np.asarray(g.exterior.coords, dtype=float)[:-1, :2]
-        # Judged on the ring DELIVERED, against the rim and every ring placed
-        # so far: the source outline's 50 m gap came back 8 m after
-        # resampling, and two islands 1 m apart were never compared (review,
-        # round 16).  The resampled ring first, the source outline next.
-        # Too close for the local element but an element fits on it and the
-        # gap could carry one: kept and named in `tight` -- leaving out land
-        # an element fits on meshes it as water, which the driver refuses (a
-        # Funabashi island 159 m from the rim where the element is 367 m
-        # meshes cleanly); the QA gate judges the gap.
-        others = shapely.union_all([edge, *[q.exterior for q, _src in placed]])
-        fits = None
-        r, ok, why = None, False, "no valid ring at the local size"
-        for cand in (_ring_at_size(ext, size, fine_h=fine_h), ext):
-            if not (len(cand) >= 3 and shapely.Polygon(cand).is_valid
-                    and shapely.Polygon(cand).within(water)
-                    and not shapely.LinearRing(cand).intersects(others)
-                    and apart(shapely.Polygon(cand), shapely.Polygon(g.exterior))):
-                continue
-            c_ok, gap, h_gap, possible = _clear_of(cand, others, size, clearance_factor)
-            if not c_ok:
-                why = f"{gap:.1f} m from the rim or another island where the element " \
-                      f"is {h_gap:.0f} m"
-                if fits is None:
-                    fits = bool(land_an_element_fits(g, size, floor, certified=floor_ok))
-                if not possible or not fits:
-                    continue
-            r, ok = cand, c_ok
-            break
+        src = shapely.Polygon(g.exterior)
+        r, why = choose((_ring_at_size(ext, size, fine_h=fine_h), ext), src,
+                        lambda poly: poly.within(water),
+                        lambda: bool(land_an_element_fits(g, size, floor, certified=floor_ok)),
+                        "island")
         if r is None:
             skipped.append({"at": at(g), "why": why})
             continue
-        if not ok:
-            tight.append({"at": at(g), "why": why})
+        if why:
+            tight[len(placed)] = {"at": at(g), "why": why}
         rings.append(r)
-        placed.append((shapely.Polygon(r), shapely.Polygon(g.exterior)))
+        placed.append((shapely.Polygon(r), src, at(g)))
         n_islands += 1
         # The island's own lakes are water: its exterior alone filled a
-        # 160,000 m2 lake the filter had kept (review, round 12).  A lake the
-        # island's ring cannot carry clear of it is reported, as land.
+        # 160,000 m2 lake the filter had kept (review, round 12); a lake is
+        # chosen as an island is, the source outline too (round 17), and one
+        # neither outline can carry is filled and reported.
         shell = shapely.Polygon(r)
         for hole_ in g.interiors:
             lake = np.asarray(hole_.coords, dtype=float)[:-1, :2]
-            lr = _ring_at_size(lake, size, fine_h=fine_h)
-            lp = shapely.Polygon(lr) if len(lr) >= 3 else shapely.Polygon()
             lake_p = shapely.Polygon(lake)
-            near = shapely.union_all([shell.exterior, *[q.exterior for q, _src in placed]])
-            ok, gap, h_gap, possible = _clear_of(lr, near, size, clearance_factor) \
-                if not lp.is_empty else (False, 0.0, 0.0, False)
-            is_tight = not ok and possible and not lp.is_empty and lp.is_valid \
-                and bool(land_an_element_fits(lake_p, size, floor, certified=floor_ok))
-            # the same for a lake: filling water an element fits in is not
-            # the answer to a tight coast (review, round 13)
-            if lp.is_empty or not lp.is_valid or not shell.contains(lp) \
-                    or not apart(lp, lake_p) or not (ok or is_tight):
-                filled.append(shapely.Polygon(lake))
-                skipped.append({"at": at(shapely.Polygon(lake)),
-                                "why": "a lake in an island, too close to its coast "
-                                       "or another lake; meshed as land",
-                                "lake_area_m2": round(float(shapely.Polygon(lake).area), 1)})
+            lr, why = choose(
+                (_ring_at_size(lake, size, fine_h=fine_h), lake), lake_p,
+                lambda poly: shell.contains(poly),
+                lambda: bool(land_an_element_fits(lake_p, size, floor, certified=floor_ok)),
+                "lake")
+            if lr is None:
+                filled.append(lake_p)
+                skipped.append({"at": at(lake_p), "why": f"{why}; meshed as land",
+                                "lake_area_m2": round(float(lake_p.area), 1)})
                 continue
-            if is_tight:
-                tight.append({"at": at(lake_p), "why": (
-                    f"lake {gap:.1f} m from its island's coast where the element is "
-                    f"{h_gap:.0f} m")})
+            if why:
+                tight[len(placed)] = {"at": at(lake_p), "why": why}
             rings.append(lr)
-            placed.append((lp, lake_p))
+            placed.append((shapely.Polygon(lr), lake_p, at(lake_p)))
             n_lakes += 1
+    tight = [tight[i] for i in sorted(tight)]
     return rings, {"n_islands_added": n_islands, "n_lakes_added": n_lakes,
                    "skipped": skipped, "tight": tight,
                    "n_island_points": int(sum(len(r) for r in rings))}

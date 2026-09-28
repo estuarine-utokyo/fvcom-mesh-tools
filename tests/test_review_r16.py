@@ -33,7 +33,7 @@ def test_islands_are_judged_against_each_other():
     two = MultiPolygon([box(100, 100, 300, 300), box(100, 301, 300, 500)])
     rings, rep = island_rings(two, box(0, 0, 1000, 1000), _const(30.0))
     assert rep["n_islands_added"] == 1
-    assert any("another island" in s["why"] for s in rep["skipped"])
+    assert any("another ring" in s["why"] for s in rep["skipped"])
 
 
 def test_pockets_a_metre_apart_do_not_both_become_islands():
