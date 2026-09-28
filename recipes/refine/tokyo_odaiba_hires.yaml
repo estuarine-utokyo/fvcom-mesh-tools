@@ -15,9 +15,9 @@
 #     the rest; the nearest real sounding is 31 m away on the median.
 #
 # The outline is a DEMONSTRATION circle over the port, not a port limit.
-base_mesh: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
-base_depth: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
-base_obc: ~/Github/TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
+base_mesh: ../../outputs/base_tokyo_bay_tool/TokyoBayTool_grd.dat
+base_depth: ../../outputs/base_tokyo_bay_tool/TokyoBayTool_dep.dat
+base_obc: ../../outputs/base_tokyo_bay_tool/TokyoBayTool_obc.dat
 
 dt_expected_s: 4.5
 gradation: 0.165
