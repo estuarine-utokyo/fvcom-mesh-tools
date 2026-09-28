@@ -2074,6 +2074,12 @@ def _clear_of(ring, other, size, factor):
     import shapely
 
     ring = np.asarray(ring, dtype=float)[:, :2]
+    # Pieces of a quarter of the finest size on the ring: one foot per long
+    # edge lands anywhere along a parallel gap, and one fell at a 30 m end
+    # of a gap that needs 200 m elements in its middle (review, round 14).
+    step = 0.25 * float(np.min(np.asarray(size(ring), dtype=float)))
+    dense = shapely.get_coordinates(shapely.segmentize(shapely.LinearRing(ring), step))[:-1]
+    ring = dense if len(dense) >= 3 else ring
     segs = shapely.linestrings(np.stack([ring, np.roll(ring, -1, axis=0)], axis=1))
     gaps = shapely.shortest_line(segs, other)
     d = np.asarray(shapely.length(gaps), dtype=float)
@@ -2105,10 +2111,23 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
     """
     import shapely
 
+    # a constant, or a field of any output shape, as before (review, round
+    # 14); the bounds a field states travel with it
+    field_ = size
+
+    def size(q):
+        return _size_at(field_, q)
+
+    for attr in ("size_min", "size_max", "size_bounds"):
+        if hasattr(field_, attr):
+            setattr(size, attr, getattr(field_, attr))
+    if not callable(field_):
+        size.size_min = size.size_max = float(field_)
+
     rings, skipped = [], []
     n_islands = n_lakes = 0
     edge = shapely.boundary(water)
-    placed: list = []                   # the rings accepted so far
+    placed: list = []                   # (resampled polygon, source polygon)
     filled: list = []                   # source lakes refused, meshed as land
     tight: list = []                    # kept although closer than the rule
     floor, floor_ok = resolve_size_floor(
@@ -2118,14 +2137,23 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
         c = np.asarray(geom.representative_point().coords)[0]
         return [round(float(c[0]), 1), round(float(c[1]), 1)]
 
-    def apart(ring):
-        # a ring may not touch one already placed: two lakes resampled
-        # separately came out overlapping (review, round 13)
-        return not any(ring.intersects(q) for q in placed)
+    def apart(poly, src):
+        """A ring may not touch one already placed (two lakes resampled
+        apart came out overlapping, review round 13), and it must sit inside
+        exactly the placed rings its source sits inside -- and they in it:
+        two sibling lakes came out one inside the other (round 14)."""
+        for q, q_src in placed:
+            if poly.exterior.intersects(q.exterior):
+                return False
+            if poly.within(q) != src.within(q_src) or q.within(poly) != q_src.within(src):
+                return False
+        return True
 
     # every polygon, however make_valid nested it; lines are no land (round
     # 6).  Outside in, so an island is met after the lake it stands in.
-    for g in sorted(_polygons(land), key=lambda q: -q.area):
+    # By the SHELL's area: net area leaves out the lakes, and an island in a
+    # large lake came before the island around it (review, round 14).
+    for g in sorted(_polygons(land), key=lambda q: -shapely.Polygon(q.exterior).area):
         if not shapely.intersects(water, g):
             continue
         if any(f.contains(g) for f in filled):
@@ -2154,14 +2182,15 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
             if not possible or not land_an_element_fits(g, size, floor, certified=floor_ok):
                 skipped.append({"at": at(g), "why": why})
                 continue
-            tight.append({"at": at(g), "why": why})
         r = _ring_at_size(ext, size, fine_h=fine_h)
         if not (len(r) >= 3 and shapely.Polygon(r).is_valid
-                and apart(shapely.LinearRing(r))):
+                and apart(shapely.Polygon(r), shapely.Polygon(g.exterior))):
             skipped.append({"at": at(g), "why": "no valid ring at the local size"})
             continue
+        if not ok:
+            tight.append({"at": at(g), "why": why})
         rings.append(r)
-        placed.append(shapely.LinearRing(r))
+        placed.append((shapely.Polygon(r), shapely.Polygon(g.exterior)))
         n_islands += 1
         # The island's own lakes are water: its exterior alone filled a
         # 160,000 m2 lake the filter had kept (review, round 12).  A lake the
@@ -2174,24 +2203,24 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
             lake_p = shapely.Polygon(lake)
             ok, gap, h_gap, possible = _clear_of(lr, shell.exterior, size, clearance_factor) \
                 if not lp.is_empty else (False, 0.0, 0.0, False)
-            if not ok and possible and not lp.is_empty and lp.is_valid \
-                    and land_an_element_fits(lake_p, size, floor, certified=floor_ok):
-                # the same for a lake: filling water an element fits in is
-                # not the answer to a tight coast (review, round 13)
-                tight.append({"at": at(lake_p), "why": (
-                    f"lake {gap:.1f} m from its island's coast where the element is "
-                    f"{h_gap:.0f} m")})
-                ok = True
+            is_tight = not ok and possible and not lp.is_empty and lp.is_valid \
+                and bool(land_an_element_fits(lake_p, size, floor, certified=floor_ok))
+            # the same for a lake: filling water an element fits in is not
+            # the answer to a tight coast (review, round 13)
             if lp.is_empty or not lp.is_valid or not shell.contains(lp) \
-                    or not apart(lp.exterior) or not ok:
+                    or not apart(lp, lake_p) or not (ok or is_tight):
                 filled.append(shapely.Polygon(lake))
                 skipped.append({"at": at(shapely.Polygon(lake)),
                                 "why": "a lake in an island, too close to its coast "
                                        "or another lake; meshed as land",
                                 "lake_area_m2": round(float(shapely.Polygon(lake).area), 1)})
                 continue
+            if is_tight:
+                tight.append({"at": at(lake_p), "why": (
+                    f"lake {gap:.1f} m from its island's coast where the element is "
+                    f"{h_gap:.0f} m")})
             rings.append(lr)
-            placed.append(lp.exterior)
+            placed.append((lp, lake_p))
             n_lakes += 1
     return rings, {"n_islands_added": n_islands, "n_lakes_added": n_lakes,
                    "skipped": skipped, "tight": tight,

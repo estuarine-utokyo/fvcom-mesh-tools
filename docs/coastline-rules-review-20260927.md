@@ -3809,3 +3809,376 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | 4 | minor | yes: `Path.walk` does not descend into directory symlinks | yes | `code_state` walks with `follow_symlinks=True`, each real directory once. Test: a symlinked subpackage's change changes the digest; a cycle terminates |
 
 All six hires recipes rebuild accepted and byte-identical to round 12; Funabashi's island is named in `tight`. 978 tests pass.
+
+## Round 14
+
+### Answer (verbatim)
+
+1. **Minor — Sorting by net land area does not process enclosing islands first.**
+
+   **Location:** [patch.py:2128](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:2128)
+
+   A polygon’s area excludes its lakes. An island inside a large lake can therefore sort before the island enclosing that lake. If the lake is subsequently filled, the already-added inner island becomes water through nesting parity.
+
+   **Reproduction:**
+   ```python
+   import numpy as np
+   from shapely.geometry import MultiPolygon, Polygon, box
+   from fvcom_mesh_tools.patch import island_rings
+   from tests.test_review_r12 import _with_rings
+
+   h = lambda q: np.full(len(q), 30.)
+   water = box(0, 0, 1000, 1000)
+   outer = Polygon(
+       box(100, 100, 900, 900).exterior.coords,
+       [box(105, 105, 895, 895).exterior.coords],
+   )
+   inner = box(200, 200, 800, 800)
+   rings, report = island_rings(MultiPolygon([outer, inner]), water, h)
+   after = _with_rings(water, rings)
+   ```
+
+   The valid source has outer land area **15,900 m²** and inner island area **360,000 m²**. The report says two islands added and the lake filled, but `after.intersection(inner).area == 360000`: the entire inner island becomes water. The driver’s land guard detects this and rejects the run.
+
+   **Fix:** Establish containment order using source exterior shells or an explicit containment hierarchy. Process ancestors before descendants and suppress descendants of filled lakes.
+
+   This is an incomplete round-13 fix.
+
+2. **Minor — Resampled sibling lakes can become nested without touching, reversing their roles.**
+
+   **Location:** [patch.py:2121](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:2121), used at line 2186.
+
+   `apart()` checks boundary intersections only. It permits one resampled lake to contain another, although both source lakes were siblings. The inner “lake” then becomes land.
+
+   **Reproduction:** Using the imports, `h`, and `water` above:
+   ```python
+   lake1 = Polygon([
+       (200,200), (700,200), (700,440), (400,440),
+       (400,450), (700,450), (700,700), (200,700),
+   ])
+   lake2 = box(420, 447, 425, 449)
+   land = Polygon(
+       box(100,100,900,900).exterior.coords,
+       [lake1.exterior.coords, lake2.exterior.coords],
+   )
+   rings, report = island_rings(land, water, h)
+   after = _with_rings(water, rings)
+   ```
+
+   Observed:
+
+   - Source and assembled geometries are valid.
+   - The report claims **two lakes added**, with no skipped or tight entries.
+   - `Polygon(rings[1]).contains(Polygon(rings[2]))` is true.
+   - The second returned lake ring encloses **5 m²**, all classified as land.
+   - `land_an_element_fits(after.intersection(land), h, 30.)` returns `[]`; that guard does not detect the reversal.
+
+   **Fix:** Validate containment relationships as well as intersections against the source ring hierarchy. Sibling lakes must remain siblings; incompatible resampling must be adjusted or explicitly refused.
+
+   Round 13 fixes crossing lake boundaries but leaves this round-12 nesting defect.
+
+3. **Minor — One shortest-line foot per edge can miss locally insufficient clearance.**
+
+   **Location:** [patch.py:2078](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:2078)
+
+   For parallel boundaries, many points attain the shortest distance. GEOS supplies one foot, which can lie at a fine-size endpoint while the middle of the same gap requires much larger elements. The island check uses the original, unsubdivided exterior.
+
+   **Reproduction:**
+   ```python
+   def h(q):
+       q = np.atleast_2d(q)
+       return 30. + 170. * np.maximum(
+           0., 1. - np.abs(q[:, 1] - 500.) / 400.
+       )
+
+   rings, report = island_rings(
+       box(50,100,950,900), box(0,0,1000,1000), h
+   )
+   ```
+
+   `_clear_of` returns **`(True, 50.0, 30.0, True)`**, and `report["tight"]` is empty. At `(50,500)`, however, the gap remains **50 m** and the local size is **200 m**, requiring **100 m** under the clearance rule.
+
+   **Fix:** Evaluate clearance and size together along relevant boundary portions, with conservative bounds between evaluations. An uncertain or locally tight gap should enter the disclosed `tight` path rather than silently pass. Reserve outright omission/filling for the separately established impossibility condition.
+
+   Keeping a tight feature and letting mesh QA judge it is a defensible policy; this finding concerns failure to identify and disclose that case. It does not require rejecting the demonstrated Funabashi mesh.
+
+4. **Minor — Round 13 breaks previously supported constant and column-shaped size inputs.**
+
+   **Location:** [patch.py:2081](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:2081), and the new floor initialization at line 2114.
+
+   Earlier `island_rings` used `_size_at`, which supports numeric constants and flattens callable results. The new code calls `size` directly and leaves its result’s shape unchanged.
+
+   **Reproduction:** For land `box(100,100,900,900)` and water `box(0,0,1000,1000)`:
+
+   | Size argument | `HEAD^` | `HEAD` |
+   |---|---|---|
+   | `30.` | One island returned | `TypeError: 'float' object is not callable` |
+   | `lambda q: np.full((len(q), 1), 30.)` | One island returned | `TypeError: only 0-dimensional arrays can be converted to Python scalars` |
+
+   I executed the parent’s actual `island_rings` function extracted from Git for this comparison. Column-shaped values also cause unintended matrix broadcasting in `d - factor * h`.
+
+   **Fix:** Preserve the existing size-input contract throughout the new path: normalize evaluations through `_size_at`, validate result length, and support constant sizes when resolving bounds/floors.
+
+   This regression is introduced by the latest commit.
+
+5. **Minor — Following each real directory once makes source hashes order-dependent and omits alias layout.**
+
+   **Location:** [provenance.py:132](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/provenance.py:132)
+
+   The first logical path reaching a real directory wins. Directory traversal is unsorted, while the final hash includes logical filenames. Sorting the collected files afterward cannot repair that earlier choice. Subsequent aliases contribute nothing, although their presence affects Python imports.
+
+   **Reproduction/evidence:** An in-memory `Path.walk`/`Path.resolve` mock represented:
+   ```text
+   pkg/
+     __init__.py
+     a -> shared/
+     b -> shared/
+   shared/
+     mod.py
+   ```
+
+   With identical file digests:
+
+   - Traversal order `a,b` produced a hash beginning `b65540c1`.
+   - Traversal order `b,a` produced a hash beginning `7da79c45`.
+   - Removing alias `a` from the second case produced the **same hash**, with `source_unreadable == []`.
+
+   Thus an unchanged tree can acquire a different identity, while removal of an importable package path can leave its identity unchanged.
+
+   **Fix:** Make traversal deterministic and include every logical alias in the identity. Cache content hashes by real directory if desired, but record alias mappings; use ancestry-based cycle detection or explicit cycle records.
+
+   This is introduced by round 13’s global real-directory deduplication.
+
+**Status of every previous finding**
+
+Statuses reflect code inspection, runnable regressions, and the reproductions above. Related unresolved cases are identified explicitly.
+
+| Finding | Status | Reason |
+|---|---|---|
+| R1 #1 — Preserve mode | RESOLVED | Repair and retry require `resolve`. |
+| R1 #2 — Lagoon entrance | RESOLVED | Connectivity guard protects the reported entrance. |
+| R1 #3 — Refused-pocket walls | RESOLVED | Restoration checks pocket geometry rather than its representative point. |
+| R1 #4 — Three-node collapse | RESOLVED | Candidate guards reject degenerate rings. |
+| R1 #5 — Retreat-only retry | RESOLVED | Array comparison detects movement; `finally` restores unselected state. |
+| R1 #6 — Empty land/padding | RESOLVED | Empty-land handling and exterior padding cover the reported cases. |
+| R1 #7 — Invalid continuous-width parameters | RESOLVED | Reported invalid arguments and empty footprints are handled. |
+| R1 #8 — Ignored seed argument | RESOLVED | Search iterates `seed_list`. |
+| R1 #9 — GPL provenance import | RESOLVED | Versions come from distribution metadata. |
+| R1 #10 — Missing provenance inputs/settings | RESOLVED | Bathymetry, region datasets and relevant settings are recorded. |
+| R1 #11 — Untracked source | RESOLVED | Untracked files and entry-point tracking are recorded. |
+| R1 #12 — Retry reproducibility | RESOLVED | Documentation requires the original seed sequence for pass 2. |
+| R1 #13 — Ineffective fixtures | RESOLVED | Fixtures exercise their prerequisites; unreachable merge code was removed. |
+| R1 #14 — Raster documentation | RESOLVED | Resolution is stated relative to the finest target. |
+| R2 #1 — Resolvable land accepted as water | RESOLVED | Land validation rejects qualifying land inside the hole, including finding 1’s reproduction. |
+| R2 #2 — All-land raster | RESOLVED | Empty-water early return handles it. |
+| R2 #3 — Detached artificial island | RESOLVED | Closure requires neighboring land. |
+| R2 #4 — Fine region inside pocket | RESOLVED | Conservative bounds protect the reported fine region. |
+| R2 #5 — Obsolete sliding curves | RESOLVED | Edited corners and moved/folded roots are pinned. |
+| R2 #6 — Geometry provenance | RESOLVED | Sidecars are enumerated; enumeration failure invalidates the digest. |
+| R2 #7 — Falsy experimental values | RESOLVED | Explicit list validation rejects them. |
+| R2 #8 — Seed-variable documentation | RESOLVED | Header names `LR_SEEDS`. |
+| R3 #1 — Variable-size land guard | RESOLVED | Decisions use conservative size bounds. |
+| R3 #2 — Repairs bypass validation | RESOLVED | Final-rim and retry land checks remain wired. |
+| R3 #3 — Unchanged new corners | RESOLVED | Changed adjacency causes pinning. |
+| R3 #4 — Pocket sampling grid | RESOLVED | Covering samples and conservative bounds address the reported gaps. |
+| R3 #5 — Uppercase sidecars | RESOLVED | Extension matching is case-insensitive. |
+| R3 #6 — Imported-package identity | RESOLVED | Actual imported package paths are recorded. |
+| R3 #7 — Exhausted iterators | RESOLVED | Both helpers materialize their inputs. |
+| R4 #1 — Missed qualifying disc | RESOLVED | Conservative erosion replaces sampled absence decisions. |
+| R4 #2 — Incorrect driver size floor | RESOLVED | `H_FLOOR` includes the base ambient minimum. |
+| R4 #3 — Validation disabled with repair | RESOLVED | Final land validation is outside the repair switch. |
+| R4 #4 — Fine basin behind coarse mouth | RESOLVED | Conservative bounds protect the reported basin. |
+| R4 #5 — Pocket fine-zone exclusion | RESOLVED | Conservative bounds protect the fine zone. |
+| R4 #6 — Non-Git identity | PARTIAL | Source hashing exists, but alias layouts remain incompletely identified; finding 5. |
+| R4 #7 — Invalid sizes/factors | RESOLVED | Reported invalid inputs are rejected. |
+| R4 #8 — Missing test prerequisites | RESOLVED | Revised fixtures exercise the intended guards. |
+| R4 #9 — Priority documentation | RESOLVED | Guide states that local refinement ignores priority. |
+| R5 #1 — Grid coverage | RESOLVED | Boundary-adjacent samples provide coverage. |
+| R5 #2 — Invalid slope premise | RESOLVED | Base and patch fields supply structural bounds. |
+| R5 #3 — Pocket area/clearance | RESOLVED | Wall-pocket predicates use upper bounds. |
+| R5 #4 — Nested land collections | RESOLVED | Land validation recursively visits polygons. |
+| R5 #5 — Invalid sampled sizes | RESOLVED | Validation precedes clipping. |
+| R5 #6 — Unreadable source hashing | RESOLVED | File-read failures invalidate the digest. |
+| R5 #7 — Stale floor comment | RESOLVED | Comment names `H_FLOOR`. |
+| R6 #1 — Hidden enumeration failures | RESOLVED | `Path.walk(on_error=...)` records scan failures. |
+| R6 #2 — Exterior disc centres | RESOLVED | Padding accounts for exterior centres; unsupported bounds refuse closure. |
+| R6 #3 — Nested island collections | RESOLVED | Polygon traversal is recursive; containment-order defects are separate. |
+| R6 #4 — Empty filter footprint | RESOLVED | Explicit descriptive rejection. |
+| R6 #5 — Ineffective fine-spot test | RESOLVED | Revised fixture and negative control exercise the bound. |
+| R6 #6 — Opt-in comments | RESOLVED | Reported comments describe defaults correctly. |
+| R7 #1 — Fully free islands | RESOLVED | Source replacement handles the original smaller/absent-island cases. |
+| R7 #2 — Discontinuous exterior sizes | RESOLVED | Exterior-padding regressions pass. |
+| R7 #3 — Estimated default floors | RESOLVED | Estimated floors no longer override conservative lower bounds. |
+| R7 #4 — Degenerate ring | RESOLVED | Reported removal and blunting paths retain valid polygons. |
+| R7 #5 — Closed-ring arc selection | RESOLVED | Uneven-density and ring-start regressions pass. |
+| R7 #6 — Obsolete driver comment | RESOLVED | Comment describes filter → rim → hole. |
+| R8 #1 — Snapped slit self-intersection | RESOLVED | Candidate validation rejects the reported crossing. |
+| R8 #2 — Equal-length arcs | RESOLVED | Fit and geometric tie-breaking remove reported start dependence. |
+| R8 #3 — Filtered-away island | RESOLVED | Empty shoreline is permitted for islands-only free rims. |
+| R8 #4 — Empty pocket land | RESOLVED | Empty land and mixed collections are handled. |
+| R8 #5 — Failed sidecar enumeration | RESOLVED | Failure marker forces a null digest. |
+| R8 #6 — Overwritten rejection diagnostics | RESOLVED | Rejection filenames include search pass. |
+| R8 #7 — Stale fill counts | RESOLVED | Log counts assembled constraints. |
+| R8 #8 — Premature “accepted” log | RESOLVED | Log says “selected seed”; acceptance remains gated. |
+| R9 #1 — Initial blunting pins | RESOLVED | Initial pins survive subsequent root movement and folding. |
+| R9 #2 — Changed nesting | RESOLVED | Rim-edit paths check matched containment relationships. |
+| R9 #3 — Mixed pocket land | RESOLVED | Recursive polygon extraction handles the collection. |
+| R9 #4 — Dead wall-component code/docstring | RESOLVED | Dead code removed; descriptions agree. |
+| R9 #5 — Obsolete resolution helper/comment | RESOLVED | Helper removed and comment corrected. |
+| R10 #1 — Retreat changes nesting | RESOLVED | Retreat uses `_rim_edit_ok`; regression passes. |
+| R10 #2 — Existing pins lost during rooting | RESOLVED | `_pin` pins the destination after movement or folding. |
+| R10 #3 — Fold collapses triangle | RESOLVED | Candidate validation rejects collapse; regression passes. |
+| R10 #4 — Withdrawal comment | RESOLVED | Comment describes withdrawing one shortest edge at a time. |
+| R11 #1 — Unguarded root movement | RESOLVED | Movement requires `_rim_edit_ok`; regression passes. |
+| R11 #2 — Fold crosses another ring | RESOLVED | Guard checks candidate ring boundaries against one another. |
+| R11 #3 — Rings exchange roles | RESOLVED | Injective matching preserves individual containment relationships in rim edits. |
+| R11 #4 — Newly folded roots unpinned | RESOLVED | New root and surviving neighbors are pinned; regression passes. |
+| R12 #1 — Source islands lose lakes | PARTIAL | Ordinary lakes survive; findings 1–2 expose remaining hierarchy errors. |
+| R12 #2 — Refused edges never reconsidered | RESOLVED | Refusal eligibility resets each pass; regression passes. |
+| R12 #3 — Stale remaining-edge diagnostics | RESOLVED | Diagnostics use returned edges within the requested focus. |
+| R13 #1 — Resampled lakes overlap | PARTIAL | Crossing reproduction passes; unexpected containment remains unchecked, finding 2. |
+| R13 #2 — Islands inside filled lakes | PARTIAL | Existing regression passes; net-area ordering fails for a larger descendant, finding 1. |
+| R13 #3 — Nonlocal clearance | PARTIAL | Original lake is correctly disclosed as tight; parallel-edge variation is missed, finding 3. |
+| R13 #4 — Symlinked subpackages omitted | PARTIAL | Symlink contents are followed, but duplicate aliases lose identity and determinism, finding 5. |
+
+**Verification**
+
+Used `/octfs/work/G16445/v61021/miniforge3/envs/oceanmesh-bench/bin/python` with bytecode writing disabled.
+
+- Full pytest invocation failed before collection because the sandbox has no writable temporary directory.
+- Four round-13 geometry regressions passed.
+- The scoped in-memory pytest harness used `--capture=sys --noconftest -p no:cacheprovider`, the existing Matplotlib cache, and excluded filesystem-writing and mesh-generation tests: **306 passed, 99 deselected**.
+- Earlier harness attempts encountered Matplotlib’s cache requirement and 11 tests using temporary directories directly; those were environmental failures.
+- All five findings were reproduced in memory.
+- `git diff --check` passed; final `git status --porcelain` was empty.
+
+No files changed, batch jobs were submitted, or mesh generation ran. Production QA counts, node/element counts, implied time steps, rebuilds and FVCOM runs were not independently rerun.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 5 minor, 0 nit)
+
+
+### Prompt
+
+```markdown
+# Review request, round 14: coastline rules for local refinement (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (use `/octfs/work/G16445/v61021/miniforge3/envs/oceanmesh-bench/bin/python`;
+the tests run with `.../bin/python -m pytest -q tests/`). Do not submit
+batch jobs and do not run mesh generation (`notebooks/420_local_refine.py`
+needs the compute nodes). Answer in English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+`git diff 0c5d9b3..HEAD` (now 33 commits; 7a6cffe fixed round 1, ..., 18e7071 round 11, 9b95daa round 12, the last commit round 13; read `git log 0c5d9b3..HEAD` for the
+reasons). The local-refinement driver `notebooks/420_local_refine.py`
+refines a Tokyo Bay FVCOM mesh inside a region, re-cuts the coastline from
+OSM (`hires.coastline: resolve`) and must pass QA with 0 violations
+introduced. Changes in scope:
+
+- `src/fvcom_mesh_tools/patch.py`
+  - `rim_repair`: short edges (remove a free end, or merge a cap between
+    two corners to its midpoint), slits (throat under one element; close a
+    dead end no element fits in, otherwise step a pier tip back), angles
+    (`blunt_acute_corners` again with wall roots protected), `focus=` for a
+    QA-feedback retry; returns a remap for wall references.
+  - `unresolvable_water` and `filter_shoreline_local(continuous_width=)`:
+    coarse-zone water judged at the local size by a distance transform
+    (radius 0.75 h, dead ends only, straits left open).
+  - `filter_shoreline_local(keep_land=)`: in coarse bands a removed land
+    piece is kept whole if most of it is base land.
+  - `_source_substring`: the arc of a closed ring that fits the stretch.
+  - `blunt_acute_corners(protect=)`; `island_rings` reports area inside.
+  - Removal of `water_wedges`, `short_chords`, `seam_water`.
+- `src/fvcom_mesh_tools/walls.py`: `close_wall_pockets`.
+- `src/fvcom_mesh_tools/provenance.py` (new): commits, file hashes,
+  library versions recorded in `report.json`.
+- `src/fvcom_mesh_tools/refine.py`: `hires.rim_repair`,
+  `continuous_width`, `keep_base_land`, `wall_pockets` (all default true),
+  `hires.experimental` list.
+- `notebooks/420_local_refine.py`: wiring; `LR_EXPERIMENTAL` override;
+  `apply_rim_repair` / `assemble_constraints`; `seed_search` and the
+  one-shot retry near the offenders with snapshot/restore; flat-face drop
+  after the fill; wall-pocket restore when an island is refused;
+  `rejected_seed<k>.npz`; provenance.
+- `jobs/octopus/417_hires_refine.sh` (LR_EXPERIMENTAL documented).
+- Tests: `tests/test_patch.py`, `test_walls.py`, `test_refine.py`,
+  `test_provenance.py`, `test_local_refine_driver.py`,
+  `test_review_hires_fixes.py`.
+- Docs: `docs/USER_GUIDE.md` §4, §5 (reproducibility), §11; `CHANGELOG.md`;
+  `recipes/refine/*.yaml` comments.
+
+Evidence already gathered by the author (on compute nodes): all six hires
+recipes accepted with the four rules on, byte-identical rebuilds from the
+accepted seed, FVCOM smoke runs and 20-day M2 runs pass.
+
+Out of scope: the rest of the package, unless these changes touch it.
+
+## Previous rounds
+Rounds 1-12: see your round-13 status table.
+Round 13 (FAIL 0/0/4/0): addressed in the last commit (`git show HEAD`;
+triage in `docs/coastline-rules-review-20260927.md`).
+1. `island_rings`: a ring may not touch one already placed; a lake that
+   would is filled and reported.
+2. polygons are taken outside in; one inside a lake filled as land is not
+   added ("inside a lake meshed as land").
+3. `_clear_of` judges each edge at the size where it meets the gap (the
+   foot of its shortest line to the other boundary). Three tiers, for
+   islands against the rim and lakes against their island: clear at the
+   local size -> added; gap under clearance x the finest foot size (no
+   element can fit the gap) or no element fits on the piece -> left out /
+   filled (reported); otherwise kept and named in `report["tight"]`
+   (driver WARNING) -- leaving it out meshes land an element fits on as
+   water (the driver then refuses the run) or fills water an element fits
+   in as land, and the QA gate judges the gap. Your lake reproduction is
+   therefore kept as water and named tight (50 m where the element is
+   ~170 m) rather than filled; please judge that policy. Evidence: a
+   Funabashi island 159 m from the rim where the local element is 367 m
+   has always meshed with 0 introduced QA violations; refusing it stopped
+   the run.
+4. `code_state` follows directory symlinks once per real directory.
+Tests: `tests/test_review_r13.py`, updated r12 tests. All six hires recipes
+rebuild accepted, byte-identical to round 12. 978 tests pass.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the whole scope above and everything it
+   touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| 1 | minor | yes: code read -- sorted by net area | yes | sorted by the shell's area (`Polygon(g.exterior)`); test: the inner island stays land |
+| 2 | minor | yes: code read -- `apart` checked boundaries only | yes | each placed ring keeps its source polygon; a new ring must not touch a placed one and must sit inside exactly the placed rings its source sits inside, and they in it. Test: no lake inside a sibling |
+| 3 | minor | yes: code read -- one foot per (long) edge | yes | `_clear_of` segmentizes the ring to a quarter of its finest size before taking the feet; test: the parallel gap is named tight |
+| 4 | minor | yes: `size=30.0` raises in HEAD | yes (regression of round 13) | `island_rings` evaluates through `_size_at` (constants, any output shape) and passes on the field's stated bounds; test for both inputs |
+| 5 | minor | yes: code read -- global dedupe by real directory | yes (regression of round 13) | every logical alias is walked and hashed, directories in sorted order; a directory whose real path is one of its own ancestors' ends the walk. Tests: two aliases in either order give one digest, and differ from one alias; a link to an ancestor terminates |
+
+The reviewer judged the round-13 policy (keep a tight piece an element fits on, name it, let QA judge) defensible.
+
+All six hires recipes rebuild accepted and byte-identical to round 13. 984 tests pass.

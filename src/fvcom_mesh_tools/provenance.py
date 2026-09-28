@@ -125,22 +125,26 @@ def code_state(name: str, path) -> dict[str, Any]:
         # Path.rglob swallows a directory it cannot scan, and an unreadable
         # tree hashed as empty (review, round 6): walk with the errors kept
         # Symlinked directories are followed -- Python imports through them,
-        # and a subpackage behind one went unhashed (review, round 13) -- once
-        # each, so a link back up the tree ends the walk there.
+        # and a subpackage behind one went unhashed (review, round 13) -- in
+        # sorted order and under EVERY logical path, since each alias is an
+        # importable path; a link to one of its own ancestors is a cycle and
+        # ends the walk there (review, round 14: first-alias-wins made the
+        # digest depend on traversal order and ignore a removed alias).
         h, failed = hashlib.sha256(), []
-        files, seen = [], set()
+        files = []
         for d, dirs, names in root.walk(follow_symlinks=True, on_error=lambda e: failed.append(
                 str(e.filename) if e.filename else str(root))):
             try:
                 real = d.resolve()
+                ancestors = {(root / a).resolve() for a in d.relative_to(root).parents}
             except OSError:
                 failed.append(str(d))
                 dirs[:] = []
                 continue
-            if real in seen:
+            if real in ancestors:
                 dirs[:] = []
                 continue
-            seen.add(real)
+            dirs.sort()
             files.extend(d / n for n in names if n.endswith(".py"))
         for f in sorted(files):
             digest = file_sha256(f)

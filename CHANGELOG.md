@@ -8,6 +8,14 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 14 (2026-09-28)
+
+- Island rings keep the source's nesting (islands taken by shell area;
+  sibling lakes stay siblings); clearance is judged along each edge, not
+  at one foot; constant sizes work again.
+- Provenance hashes every alias of a symlinked source directory in a
+  fixed order, and stops at a link back to an ancestor.
+
 ### Fixed -- review of the coastline rules, round 13 (2026-09-28)
 
 - Island rings: no two may touch (two lakes came out overlapping); land
