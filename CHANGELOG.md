@@ -8,6 +8,14 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 21 (2026-09-28)
+
+- Island lakes: every combination of outline preferences is searched when
+  there are few lakes (a bounded search with sideways moves when there
+  are many); an invalid combination no longer ends the search.
+- Provenance hashes imported code the enclosing repository does not track
+  (`commit_identifies_code`); the driver warns.
+
 ### Fixed -- review of the coastline rules, round 20 (2026-09-28)
 
 - Each lake of an island gets its own outline preference (a local search

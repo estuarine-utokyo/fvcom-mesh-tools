@@ -2300,32 +2300,55 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
                                       list(filled[state[2]:]), list(skipped[state[3]:]),
                                       dict(tight), len(kept)), filled_idx), None
 
+        # Every combination of lake preferences when there are few lakes
+        # (all resampled-first, then all source-first, then the rest), and a
+        # search that also takes sideways moves when there are many: a
+        # single-flip search stopped where two flips at once keep a lake,
+        # and an invalid group ended it early (review, round 21).
+        n_l = len(lakes_src)
+        if n_l <= 8:
+            import itertools
+
+            orders = [tuple([True] * n_l), tuple([False] * n_l)]
+            orders += [o for o in itertools.product((True, False), repeat=n_l)
+                       if o not in orders]
+        else:
+            orders = None
         best = None
         for shell_cand in (_ring_at_size(ext, size, fine_h=fine_h), ext):
-            prefs = [True] * len(lakes_src)          # True: resampled first
-            got, why_g = run_group(shell_cand, prefs)
-            if got is None:
-                why = why_g
-                continue
-            for _round in range(2 * len(lakes_src)):
-                if got[0] == 0:
-                    break
-                better = None
-                for i in range(len(lakes_src)):
-                    if i in got[2]:
+            if orders is not None:
+                for prefs in orders:
+                    got, why_g = run_group(shell_cand, list(prefs))
+                    if got is None:
+                        why = why_g
                         continue
-                    trial = prefs.copy()
-                    trial[i] = not trial[i]
-                    t_got, _w = run_group(shell_cand, trial)
-                    if t_got is not None and t_got[0] < got[0]:
-                        better = (trial, t_got)
+                    if best is None or got[0] < best[0]:
+                        best = (got[0], got[1])
+                    if best[0] == 0:
                         break
-                if better is None:
-                    break
-                prefs, got = better
-            if best is None or got[0] < best[0]:
-                best = (got[0], got[1])
-            if best[0] == 0:
+            else:
+                seen, frontier = set(), [tuple([True] * n_l), tuple([False] * n_l)]
+                for _step in range(4 * n_l * n_l):
+                    if not frontier:
+                        break
+                    prefs = frontier.pop(0)
+                    if prefs in seen:
+                        continue
+                    seen.add(prefs)
+                    got, why_g = run_group(shell_cand, list(prefs))
+                    if got is None:
+                        why = why_g
+                        cost = n_l + 1
+                    else:
+                        cost = got[0]
+                        if best is None or cost < best[0]:
+                            best = (cost, got[1])
+                        if cost == 0:
+                            break
+                    if best is None or cost <= best[0]:
+                        frontier += [prefs[:i] + (not prefs[i],) + prefs[i + 1:]
+                                     for i in range(n_l)]
+            if best is not None and best[0] == 0:
                 break
         del rings[state[0]:], placed[state[1]:], filled[state[2]:], skipped[state[3]:]
         tight.clear()

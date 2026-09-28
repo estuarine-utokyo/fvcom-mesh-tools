@@ -113,14 +113,18 @@ def code_state(name: str, path) -> dict[str, Any]:
     """What identifies the code at ``path``, in or out of git.
 
     Always the resolved path and the installed distribution's version (if
-    ``name`` is one); the git state when the path is in a work tree, and
-    otherwise a SHA-256 over the Python sources beside it, sorted by name --
-    a package installed outside git had no identity at all (review, round 4).
+    ``name`` is one); the git state when the path is in a work tree; and a
+    SHA-256 over the Python sources beside it, sorted by name, whenever the
+    commit does not identify them -- outside git (a package installed there
+    had no identity at all, review round 4) and for a path the enclosing
+    repository does not track, such as an ignored ``build/`` or ``.venv``
+    inside a checkout (round 21).  ``commit_identifies_code`` says which.
     """
     p = Path(path).resolve()
     out: dict[str, Any] = {"path": str(p), "distribution": _version(name),
                            "git": git_state(p)}
-    if out["git"] is None:
+    out["commit_identifies_code"] = bool(out["git"] and out["git"].get("path_tracked"))
+    if not out["commit_identifies_code"]:
         root = p.parent if p.is_file() else p
         # each file is read once, and one that cannot be read makes the
         # identity incomplete, said so, rather than a digest that looks whole

@@ -364,6 +364,11 @@ _dirty = {k: v["git"]["dirty"] for k, v in reports["provenance"]["code"].items()
 if _dirty:
     say(f"provenance: uncommitted changes in {_dirty}; this mesh cannot be remade "
         "from the commits alone")
+_untracked = [k for k, v in reports["provenance"]["code"].items()
+              if v.get("git") and not v.get("commit_identifies_code")]
+if _untracked:
+    say(f"provenance: {_untracked} imported from a path its repository does not "
+        "track; identified by source_sha256, not by the commit")
 for geom, region in regions_m:
     pf = preflight(region, gradation=cfg["gradation"],
                    dt_expected_s=cfg["dt_expected_s"],
