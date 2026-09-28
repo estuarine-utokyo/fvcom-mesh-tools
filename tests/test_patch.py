@@ -2451,3 +2451,24 @@ def test_a_frozen_crossing_says_where():
     assert _unusable_replacement(straight, xy, idx, np.array([[2, 3]]), [],
                                  where=where) == "frozen"
     assert np.allclose(where, [[50.0, 0.0]])
+
+
+def test_coarse_bands_keep_water_the_base_has():
+    """A 200 m channel in a 400 m field is filled -- unless the base has it
+    as water (keep_water), the transition following the base."""
+    from fvcom_mesh_tools.patch import filter_shoreline_local
+
+    land = shapely.box(0, 0, 4000, 4000).difference(shapely.box(1900, 0, 2100, 3000))
+    foot = shapely.box(-500, -500, 4500, 4500)
+
+    def size(q):
+        return np.full(len(np.atleast_2d(q)), 400.0)
+
+    channel = shapely.box(1900, 0, 2100, 3000)
+    out, _ = filter_shoreline_local(land, size, 30.0, foot, elements_per_feature=2,
+                                    land_width_factor=0.5, land_width_max_band=1)
+    assert out.intersection(channel).area > 0.9 * channel.area       # filled
+    out, _ = filter_shoreline_local(land, size, 30.0, foot, elements_per_feature=2,
+                                    land_width_factor=0.5, land_width_max_band=1,
+                                    keep_water=channel.buffer(1.0))
+    assert out.intersection(channel).area < 0.1 * channel.area       # kept water

@@ -560,11 +560,15 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
     reports["frozen_land_in_filter_km2"] = float(_frozen_land.area / 1e6)
     # land in the source that the base mesh also has as land (keep_base_land,
     # on by default; used in the coarse bands only; patch.filter_shoreline_local)
-    _keep_land = None
+    _keep_land = _keep_water = None
     if "keep_base_land" in EXPERIMENTAL:
         _bw = shapely.union_all(shapely.polygons(base.nodes[base.elements, :2]))
         _keep_land = shapely.difference(
             shapely.intersection(shapely.union_all(_keep), _foot), _bw)
+        # and water in the source and the base: the coarse bands keep both
+        # as the base has them (patch.filter_shoreline_local)
+        _keep_water = shapely.difference(shapely.intersection(_bw, _foot),
+                                         shapely.union_all(_keep))
     _filtered, _frep = filter_shoreline_local(_keep + ([_frozen_land] if not _frozen_land.is_empty
                                                        else []),
                                               _h_local, _h0, _foot,
@@ -572,6 +576,7 @@ if HIRES is not None and cfg["coastline"] == "resolve" and _keep:
                                               land_width_factor=0.5,
                                               land_width_max_band=1,
                                               keep_land=_keep_land,
+                                              keep_water=_keep_water,
                                               continuous_width="continuous_width" in EXPERIMENTAL)
     reports["shoreline_filter"] = _frep
     for _b in _frep["bands"]:

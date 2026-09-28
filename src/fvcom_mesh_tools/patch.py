@@ -1008,6 +1008,7 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
                            land_width_max_band: int | None = None,
                            spacing: float | None = None,
                            keep_land=None,
+                           keep_water=None,
                            continuous_width: bool = False):
     """:func:`filter_shoreline` at the LOCAL element size, not one size.
 
@@ -1066,7 +1067,11 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
         zones.setdefault(int(value), []).append(shapely.geometry.shape(geom))
     pieces, rows = [], []
     land_union = shapely.union_all([land] if hasattr(land, "geom_type") else list(land)) \
-        if keep_land is not None else None
+        if keep_land is not None or keep_water is not None else None
+
+    def mostly(q, keep):
+        return q.geom_type == "Polygon" and q.area > 0 \
+            and shapely.intersection(q, keep).area >= 0.5 * q.area
     for k in sorted(zones):
         hk = h0 * 2.0 ** k
         zone = shapely.intersection(shapely.union_all(zones[k]), footprint)
@@ -1088,11 +1093,21 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
             # and a 27 deg pocket against the half that stayed.  The narrow
             # water round a kept piece is closed by the h0 pass below.
             removed = shapely.difference(land_union, fk)
-            back = [q for q in getattr(removed, "geoms", [removed])
-                    if q.geom_type == "Polygon" and q.area > 0
-                    and shapely.intersection(q, keep_land).area >= 0.5 * q.area]
+            back = [q for q in getattr(removed, "geoms", [removed]) if mostly(q, keep_land)]
             if back:
                 fk = shapely.union_all([fk, *back])
+        if keep_water is not None and lw is None:
+            # The same for water: a piece of water the band fills stays water
+            # if most of it is ``keep_water`` (water in the base too).  The
+            # transition serves efficiency, not detail (owner, 2026-09-28):
+            # on this project's base, which draws the Odaiba channels, a
+            # 240 m band closed one inside the hole while the frozen mesh
+            # beyond kept it, and the seam got a spit the fill could not
+            # carry (8 violations).
+            filled = shapely.difference(fk, land_union)
+            back = [q for q in getattr(filled, "geoms", [filled]) if mostly(q, keep_water)]
+            if back:
+                fk = shapely.difference(fk, shapely.union_all(back))
         part = shapely.intersection(fk, zone)
         pieces.append(part)
         rows.append({"band": k, "h_m": hk, "zone_km2": float(zone.area / 1e6),
@@ -1115,6 +1130,10 @@ def filter_shoreline_local(land, size_field, h0: float, footprint, *,
         cw, cw_rep = unresolvable_water(joined, size_field, footprint,
                                         radius_factor=0.375 * float(elements_per_feature),
                                         min_h=2.0 * h0, spacing=h0 / 3.0)
+        if keep_water is not None and not cw.is_empty:
+            kept = [q for q in getattr(cw, "geoms", [cw]) if not mostly(q, keep_water)]
+            cw_rep["n_kept_as_base_water"] = len(getattr(cw, "geoms", [cw])) - len(kept)
+            cw = shapely.union_all(kept) if kept else shapely.Polygon()
         if not cw.is_empty:
             joined = shapely.union_all([joined, cw])
     out, rep = filter_shoreline(joined, h0, elements_per_feature=elements_per_feature,
@@ -1261,6 +1280,14 @@ def rim_constraints(
         ~np.asarray(selection.physical_rim, dtype=bool)]
     check_edges = iface if boundary_edges is None else np.vstack(
         [np.asarray(boundary_edges, dtype=np.int64).reshape(-1, 2), iface])
+    # ...but not the coast of a base island the source replaces: it is not
+    # on the rim at all (below), and a pier meeting it was kept on the base
+    # line with its whole harbour (Kimitsu, on this project's base)
+    if coastline == "resolve" and shoreline is not None:
+        left = {int(v) for r in selection.rings
+                if all(int(v) not in frozen for v in r) for v in r}
+        if left:
+            check_edges = check_edges[~np.isin(check_edges, list(left)).all(axis=1)]
 
     # A free rim node's two rim edges are both on the physical boundary, and
     # this is structural rather than lucky: an interface edge is shared with a
