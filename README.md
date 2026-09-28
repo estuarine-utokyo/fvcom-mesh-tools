@@ -65,10 +65,20 @@ FVCOM test as a chain of batch jobs. The steps also exist as commands:
 - how to improve the tool with an AI assistant when a new mesh shows it a
   case it cannot handle yet.
 
+## The Tokyo Bay base mesh
+
+The whole-bay base the local refinement starts from (`TokyoBayTool`) is
+built from a recipe and the raw data by one job; see USER_GUIDE §12:
+
+```bash
+qsub -v FMESH_RECIPE=recipes/base/tokyo_bay_tool.yaml jobs/octopus/440_base_mesh.sh
+```
+
 ## v5 pipeline (recipe-driven, one command)
 
-The end-to-end Tokyo Bay construction (see `docs/DESIGN_HISTORY.md`
-for the design rationale) runs from a single YAML recipe:
+An earlier, separate construction path; it does not build the base above
+(see `docs/DESIGN_HISTORY.md` for the design rationale). It runs from a
+single YAML recipe:
 
 ```bash
 fmesh-pipeline recipes/tokyo_bay_v5.yaml

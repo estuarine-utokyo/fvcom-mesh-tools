@@ -517,7 +517,7 @@ package and have unit tests.
   inner harbour (`recipes/refine/yokohama_port_hires.yaml`, a 2.3 km
   circle). Odaiba
   needed two coastline rules Kimitsu had not shown -- a new place will find
-  new cases (§12).
+  new cases (§13).
 - A structure hugging the coast within 0.4 element, thinner than half an
   element, is not represented.
 - **Band seams.** The coastline filter judges width in octave bands of the
@@ -542,7 +542,73 @@ package and have unit tests.
 
 ---
 
-## 12. Improving the tool with AI
+## 12. Building the base mesh
+
+The local refinement needs a whole-bay base. The Tokyo Bay base this project
+built -- `TokyoBayTool`, which follows the goto2023 mesh (SMS and hand work)
+closely -- is made from a recipe and the raw data alone:
+
+```bash
+# on a login node, from the repository root
+qsub -v FMESH_RECIPE=recipes/base/tokyo_bay_tool.yaml jobs/octopus/440_base_mesh.sh
+# -> outputs/base_tokyo_bay_tool/TokyoBayTool{.14,_grd,_dep,_obc,_cor}.dat
+```
+
+It takes about six minutes on 16 cores. The steps
+(`notebooks/440_base_mesh.py`):
+
+1. **Land.** OSM land polygons minus the inland water connected to the sea,
+   for the recipe's window, from `DATA_DIR` (`geodata/OSM/...`). A missing
+   source stops the run; it is never replaced by a download.
+2. **Generation.** `notebooks/325_sample_repro.py`: oceanmesh DistMesh with
+   the open boundary constrained, a two-zone Courant sizing on SRTM15, the
+   hand-drawn geometry corrections of `recipes/edits/sample_repro/`, and the
+   OSM waterways.
+3. **Finishing.** `notebooks/331_finish2.py`: narrow-channel policy,
+   open-boundary finishing, the coastline fit.
+4. **Depths and the FVCOM case.** `notebooks/422_tool_base.py`: M7001 on
+   T.P., 3 m floor, r-factor 0.2, 300 m cap -- the production recipe of the
+   hydro baseline -- then QA.
+
+**The recipe** (`recipes/base/tokyo_bay_tool.yaml`) names everything:
+
+| key | what |
+|---|---|
+| `open_boundary` | the open boundary, an input: `lon,lat` of its nodes in order (`tokyo_bay_obc.csv`, goto2023's 13 nodes). Mesh nodes are constrained onto it |
+| `domain` | the closure of the meshing domain around the open boundary, its bbox, and where the coast size at the southern closure is read (`tokyo_bay_domain.json`) |
+| `land` | the OSM window and the smallest inland water kept |
+| `edits` | the directory of hand-drawn corrections, applied in file-name order |
+| `settings` | every generation and finishing setting, written out -- a default changed in the code must not change the mesh -- including the seeds (`SR_GEN_SEED`, `SR_FIN_SEED`) |
+| `depths` | the depth product (`m7001_production`) |
+| `reference_fort14_sha256` | the mesh the recipe is meant to reproduce |
+
+**What makes it reproducible.** The seeds are fixed and the thread count is
+fixed at 16. `report.json` records:
+- the commit of this repository and of the oceanmesh fork, with any changes
+  not committed;
+- the SHA-256 of the recipe, its files and every raw input;
+- the effective settings and seeds;
+- the hashes of the products, and whether the fort.14 reproduces the
+  reference byte for byte.
+
+The build of 2026-09-28 (`aa6e1c6`) reproduced all six files of the
+2026-09-22 base.
+
+**What another user needs.**
+- The same `DATA_DIR` files. `report.json` lists their hashes, and a
+  different OSM extract gives a different coastline.
+- The oceanmesh fork, installed at the recorded commit.
+- The `oceanmesh-bench` environment.
+
+M7001 is licensed (§2.3). Without it the mesh can be rebuilt, but not its
+depths.
+
+**Another bay** needs its own recipe: an open-boundary file, a domain file,
+a land window, and edits of its own. The two-zone sizing seam in notebook
+325 (`SR_ZW_LAT`, `SR_ZE_LAT`, and the seam longitudes in the code) is Tokyo
+Bay's.
+
+## 13. Improving the tool with AI
 
 Every new mesh is a new coastline, and it will find a case the tool has not
 met: a pier at an unusual angle, a basin narrower than expected, a feature
