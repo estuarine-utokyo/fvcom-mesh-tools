@@ -8,6 +8,12 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 18 (2026-09-28)
+
+- An island's outline and its lakes are chosen together, so a lake the
+  source outline keeps is not filled; an island may hold a rim island in
+  its lake.
+
 ### Fixed -- review of the coastline rules, round 17 (2026-09-28)
 
 - Island and lake rings are chosen the same way (resampled outline, then

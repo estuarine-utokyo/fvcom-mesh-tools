@@ -2232,41 +2232,83 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
             continue
         ext = np.asarray(g.exterior.coords, dtype=float)[:-1, :2]
         src = shapely.Polygon(g.exterior)
-        r, why = choose((_ring_at_size(ext, size, fine_h=fine_h), ext), src,
-                        lambda poly: poly.within(water),
-                        lambda: bool(land_an_element_fits(g, size, floor, certified=floor_ok)),
-                        "island")
-        if r is None:
+        lakes_src = [shapely.Polygon(h_) for h_ in g.interiors]
+        lakes_u = shapely.union_all(lakes_src) if lakes_src else shapely.Polygon()
+
+        def in_water(poly):
+            # its outline in the water, and the island in the water outside
+            # its own lakes: a lake may hold a rim island (review, round 18)
+            return poly.exterior.within(water) and poly.difference(lakes_u).within(water)
+
+        # The shell and its lakes are chosen TOGETHER: a resampled shell
+        # committed first filled a lake the source shell keeps (review,
+        # round 18).  Each shell candidate is tried with its lakes, and the
+        # first that fills none -- else the one that fills fewest -- is kept.
+        state = (len(rings), len(placed), len(filled), len(skipped), dict(tight))
+        best = None
+        why = "no valid ring at the local size"
+        for shell_cand in (_ring_at_size(ext, size, fine_h=fine_h), ext):
+            del rings[state[0]:], placed[state[1]:], filled[state[2]:], skipped[state[3]:]
+            tight.clear()
+            tight.update(state[4])
+            r, why_r = choose((shell_cand,), src, in_water,
+                              lambda: bool(land_an_element_fits(g, size, floor,
+                                                                certified=floor_ok)),
+                              "island")
+            if r is None:
+                why = why_r
+                continue
+            if why_r:
+                tight[len(placed)] = {"at": at(g), "why": why_r}
+            rings.append(r)
+            placed.append((shapely.Polygon(r), src, at(g)))
+            # its lakes are water: its exterior alone filled a 160,000 m2
+            # lake the filter had kept (review, round 12); each is chosen as
+            # an island is, the source outline too (round 17), and one
+            # neither outline can carry is filled and reported
+            shell = shapely.Polygon(r)
+            n_filled = n_kept = 0
+            for lake_p in lakes_src:
+                lake = np.asarray(lake_p.exterior.coords, dtype=float)[:-1, :2]
+                lr, why_l = choose(
+                    (_ring_at_size(lake, size, fine_h=fine_h), lake), lake_p,
+                    lambda poly: shell.contains(poly),
+                    lambda: bool(land_an_element_fits(lake_p, size, floor,
+                                                      certified=floor_ok)),
+                    "lake")
+                if lr is None:
+                    filled.append(lake_p)
+                    skipped.append({"at": at(lake_p), "why": f"{why_l}; meshed as land",
+                                    "lake_area_m2": round(float(lake_p.area), 1)})
+                    n_filled += 1
+                    continue
+                if why_l:
+                    tight[len(placed)] = {"at": at(lake_p), "why": why_l}
+                rings.append(lr)
+                placed.append((shapely.Polygon(lr), lake_p, at(lake_p)))
+                n_kept += 1
+            outcome = (list(rings[state[0]:]), list(placed[state[1]:]),
+                       list(filled[state[2]:]), list(skipped[state[3]:]), dict(tight),
+                       n_kept)
+            if best is None or n_filled < best[0]:
+                best = (n_filled, outcome)
+            if n_filled == 0:
+                break
+        del rings[state[0]:], placed[state[1]:], filled[state[2]:], skipped[state[3]:]
+        tight.clear()
+        tight.update(state[4])
+        if best is None:
             skipped.append({"at": at(g), "why": why})
             continue
-        if why:
-            tight[len(placed)] = {"at": at(g), "why": why}
-        rings.append(r)
-        placed.append((shapely.Polygon(r), src, at(g)))
+        b_rings, b_placed, b_filled, b_skipped, b_tight, b_kept = best[1]
+        rings.extend(b_rings)
+        placed.extend(b_placed)
+        filled.extend(b_filled)
+        skipped.extend(b_skipped)
+        tight.clear()
+        tight.update(b_tight)
         n_islands += 1
-        # The island's own lakes are water: its exterior alone filled a
-        # 160,000 m2 lake the filter had kept (review, round 12); a lake is
-        # chosen as an island is, the source outline too (round 17), and one
-        # neither outline can carry is filled and reported.
-        shell = shapely.Polygon(r)
-        for hole_ in g.interiors:
-            lake = np.asarray(hole_.coords, dtype=float)[:-1, :2]
-            lake_p = shapely.Polygon(lake)
-            lr, why = choose(
-                (_ring_at_size(lake, size, fine_h=fine_h), lake), lake_p,
-                lambda poly: shell.contains(poly),
-                lambda: bool(land_an_element_fits(lake_p, size, floor, certified=floor_ok)),
-                "lake")
-            if lr is None:
-                filled.append(lake_p)
-                skipped.append({"at": at(lake_p), "why": f"{why}; meshed as land",
-                                "lake_area_m2": round(float(lake_p.area), 1)})
-                continue
-            if why:
-                tight[len(placed)] = {"at": at(lake_p), "why": why}
-            rings.append(lr)
-            placed.append((shapely.Polygon(lr), lake_p, at(lake_p)))
-            n_lakes += 1
+        n_lakes += b_kept
     tight = [tight[i] for i in sorted(tight)]
     return rings, {"n_islands_added": n_islands, "n_lakes_added": n_lakes,
                    "skipped": skipped, "tight": tight,
