@@ -6753,3 +6753,26 @@ hires recipes are accepted with 0 violations introduced. Since round 13
 their meshes are byte-identical from round to round, except Funabashi
 (round 9, a blunted corner held, 8.8 m) and Kimitsu (round 11, wall-root
 corners pinned: seed 1, dt 1.84 s from 2.02 s).
+
+### FVCOM check of the final meshes (2026-09-28)
+
+The meshes FVCOM had run on 2026-09-27 were all superseded by review fixes,
+so all six were rebuilt from `18e0138` (byte-identical to the round-22
+meshes) and run through the whole workflow (`refine_workflow.sh`,
+`FMESH_M2=1`): depths finished, 2-day smoke run, then a 20-day M2 run of
+the base and the refined mesh at the refined mesh's step
+(`outputs/m2_<recipe>_20260928_*`). Every run passed: finite, complete,
+spin-up converged, no fatal line in any FVCOM log.
+
+| recipe | dt (s) | max abs zeta (m) | max speed (m/s) | max amplitude diff at 5 gauges (mm) | max phase diff (deg) |
+|---|---:|---:|---:|---:|---:|
+| funabashi_port_hires | 0.9 | 0.494 | 1.15 | 0.89 | 0.04 |
+| yokohama_port_hires | 0.72 | 0.495 | 0.73 | 0.98 | 0.04 |
+| kimitsu_port_hires | 1.2 | 0.495 | 1.34 | 0.25 | 0.01 |
+| futtsu_coast_hires | 1.40625 | 0.495 | 1.47 | 0.85 | 0.00 |
+| futtsu_nori_hires | 1.5 | 0.496 | 1.52 | 0.45 | 0.02 |
+| tokyo_odaiba_hires | 0.9 | 0.496 | 1.15 | 0.93 | 0.03 |
+
+The differences are refined minus base at the tide gauges, which lie
+outside the refined regions: the patches leave the bay-scale M2 tide as it
+was, within 1 mm and 0.04 deg.
