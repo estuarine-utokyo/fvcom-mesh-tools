@@ -136,6 +136,7 @@ def select_patch(
     open_boundary_nodes=(),
     obc_guard_m: float = 0.0,
     max_repair_rounds: int = 50,
+    max_stranded_fraction: float = 0.05,
 ) -> PatchSelection:
     """Choose the faces to remove, and make the resulting hole meshable.
 
@@ -154,6 +155,14 @@ def select_patch(
     the growth is reported rather than hidden -- it can push the cut towards
     the open boundary, which is checked afterwards, not before.
 
+    A cut can also strand retained pieces: a circle across the canals of a
+    base that draws them (Odaiba on this project's own base) left the water
+    beyond it joined to nothing.  A stranded piece -- every retained piece
+    but the one holding the open boundary (the largest, without one) -- is
+    taken into the hole, and reported, when the stranded pieces together are
+    at most ``max_stranded_fraction`` of the mesh; more than that is a domain
+    the recipe splits, and is refused.
+
     Raises ``ValueError`` when the cut reaches the open boundary (with its
     guard band), empties the mesh, or disconnects the retained mesh.
     """
@@ -170,9 +179,19 @@ def select_patch(
     if not removed.any():
         raise ValueError("the footprint selects no elements; nothing to refine")
 
-    grown = 0
+    obc_nodes = np.asarray(list(open_boundary_nodes), dtype=np.int64)
+    grown = stranded_taken = 0
     resolved = False
     for _ in range(max_repair_rounds):
+        stranded = _stranded_faces(tri, removed, obc_nodes)
+        if stranded.any():
+            if int(stranded.sum()) > max_stranded_fraction * len(tri):
+                raise ValueError(
+                    f"the cut strands {int(stranded.sum())} elements, more than "
+                    f"{max_stranded_fraction:.0%} of the mesh; the footprint splits "
+                    "the domain")
+            removed |= stranded
+            stranded_taken += int(stranded.sum())
         sel = tri[removed]
         u, c = _edge_table(sel)
         rim = u[c == 1]
@@ -184,10 +203,13 @@ def select_patch(
         # too.  A cut at (400, 200) on the 9x9 test grid leaves exactly one
         # (review finding 7, 2026-09-22).
         spike = _isolated_faces(tri, removed)
-        if not bad.size and not spike.any():
+        if not bad.size and not spike.any() \
+                and not _stranded_faces(tri, removed, obc_nodes).any():
             resolved = True
             break
         add = (np.isin(tri, bad).any(axis=1) & ~removed) | spike
+        if not add.any() and _stranded_faces(tri, removed, obc_nodes).any():
+            continue                    # the next round takes the stranded piece
         if not add.any():
             raise ValueError(
                 f"the cut pinches at {bad.size} vertices and taking their faces "
@@ -248,6 +270,7 @@ def select_patch(
         "n_elements_removed": int(removed.sum()),
         "n_elements_retained": int(len(retained)),
         "n_grown_by_repair": grown,
+        "n_stranded_taken": stranded_taken,
         "n_rim_edges": int(len(rim)),
         "n_physical_rim_edges": int(is_physical.sum()),
         "n_interface_rim_edges": int((~is_physical).sum()),
@@ -263,6 +286,45 @@ def select_patch(
     return PatchSelection(removed=removed, retained=retained, frozen_nodes=frozen,
                           free_nodes=free, rim_edges=rim, physical_rim=is_physical,
                           rings=rings, ring_is_hole=is_hole, report=report)
+
+
+def _face_components(faces: np.ndarray) -> np.ndarray:
+    """Component label of each face, faces joined by shared edges."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    e = np.sort(np.vstack([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]]), axis=1)
+    owner = np.tile(np.arange(len(faces)), 3)
+    order = np.lexsort((e[:, 1], e[:, 0]))
+    e, owner = e[order], owner[order]
+    k = np.flatnonzero(np.all(e[:-1] == e[1:], axis=1))
+    n = len(faces)
+    g = coo_matrix((np.ones(len(k)), (owner[k], owner[k + 1])), shape=(n, n))
+    return connected_components(g, directed=False)[1]
+
+
+def _stranded_faces(tri: np.ndarray, removed: np.ndarray, obc_nodes) -> np.ndarray:
+    """Retained faces cut off from the main retained piece, as a face mask.
+
+    The main piece holds the open boundary, or is the largest when none is
+    given (or none survives).
+    """
+    keep = np.flatnonzero(~removed)
+    out = np.zeros(len(tri), dtype=bool)
+    if not len(keep):
+        return out
+    lab = _face_components(tri[keep])
+    if lab.max() == 0:
+        return out
+    main = None
+    if len(obc_nodes):
+        on = np.isin(tri[keep], obc_nodes).any(axis=1)
+        if on.any():
+            main = np.bincount(lab[on]).argmax()
+    if main is None:
+        main = np.bincount(lab).argmax()
+    out[keep[lab != main]] = True
+    return out
 
 
 def _require_connected(retained: np.ndarray, frozen: np.ndarray) -> None:

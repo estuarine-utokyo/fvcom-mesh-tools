@@ -34,19 +34,27 @@ python -m fvcom_mesh_tools.cli.finish_depths "$OUTDIR" \
 FIN=$(ls "$OUTDIR"/fvcom_finished/*_grd.dat)
 FIN=${FIN%_grd.dat}
 echo "finished case = $FIN"
-# The base has to carry the SAME depth product the refinement inherited.
-# goto2023's grid directory holds two: TokyoBay_dep.dat, which the grid was
-# written with (max r 0.8841 over its edges, 647 m deep), and the baseline's
-# own TokyoBay_dep_m7001tp_rfac0p2_cap300.dat (max r 0.2000, capped at 300).
-# The refinement inherited the second; staging the base with the first would
-# make the comparison a comparison of bathymetry products as well as meshes.
+# The base is the one the refinement started from, as its report names it:
+# the same grid, open boundary and depth product. goto2023 was hard-coded
+# here, and a refinement of this project's own base (TokyoBayTool) was then
+# refused for an open boundary that is not its own. The depth file is the
+# one the refinement inherited -- goto2023's grid directory holds two, and
+# staging the other would compare bathymetry products as well as meshes.
 BASEDIR=$RUN_ROOT/base_case
 mkdir -p "$BASEDIR"
-G=$HOME/Github/TB-FVCOM/input/goto2023/grid
-cp "$G/TokyoBay_grd.dat" "$BASEDIR/TokyoBayB_grd.dat"
-cp "$G/TokyoBay_obc.dat" "$BASEDIR/TokyoBayB_obc.dat"
-[ -f "$G/TokyoBay_cor.dat" ] && cp "$G/TokyoBay_cor.dat" "$BASEDIR/TokyoBayB_cor.dat"
-cp "$G/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat" "$BASEDIR/TokyoBayB_dep.dat"
+read -r B_GRD B_DEP B_OBC < <(python -c "
+import json, sys
+r = json.load(open(sys.argv[1]))
+print(r['base_mesh'], r['base_depth'], r['base_obc'])" "$OUTDIR/report.json")
+for f in "$B_GRD" "$B_DEP" "$B_OBC"; do
+    [ -f "$f" ] || { echo "the base named in the report is missing: $f"; exit 2; }
+done
+echo "base = $B_GRD"
+cp "$B_GRD" "$BASEDIR/TokyoBayB_grd.dat"
+cp "$B_OBC" "$BASEDIR/TokyoBayB_obc.dat"
+B_COR=${B_GRD%_grd.dat}_cor.dat
+[ -f "$B_COR" ] && cp "$B_COR" "$BASEDIR/TokyoBayB_cor.dat"
+cp "$B_DEP" "$BASEDIR/TokyoBayB_dep.dat"
 python notebooks/414_refine_m2_prep.py --root "$RUN_ROOT" \
     --base "$BASEDIR/TokyoBayB" --refined "$FIN"
 date -Is > "$RUN_ROOT/STAGED"

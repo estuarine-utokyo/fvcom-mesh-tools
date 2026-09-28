@@ -697,7 +697,37 @@ if rc["curves"]:
              **{f"c{k}": np.asarray(c, dtype=float)
                 for k, c in enumerate(rc["curves"]) if len(c) > 1})
 
-hole = hole_polygon(rc["pfix"], rc["egfix"])
+def rim_crossings(pfix, egfix, limit=10):
+    """Where the rim's segments cross or touch (not at a shared end)."""
+    segs = shapely.linestrings(np.stack([np.asarray(pfix)[egfix[:, 0], :2],
+                                         np.asarray(pfix)[egfix[:, 1], :2]], axis=1))
+    tree = shapely.STRtree(segs)
+    out = []
+    for i, j in zip(*tree.query(segs, predicate="intersects")):
+        if i < j and not (set(egfix[i].tolist()) & set(egfix[j].tolist())):
+            x = shapely.intersection(segs[i], segs[j]).representative_point()
+            out.append([round(x.x, 1), round(x.y, 1)])
+            if len(out) >= limit:
+                break
+    return out
+
+
+def hole_or_stop(pfix, egfix, stage):
+    """hole_polygon, or a stop that says where the rim crosses itself and
+    keeps the rim for inspection (rim_failed.npz)."""
+    try:
+        return hole_polygon(pfix, egfix)
+    except ValueError as exc:
+        np.savez(OUT / "rim_failed.npz", pfix=np.asarray(pfix), egfix=np.asarray(egfix))
+        where = rim_crossings(np.asarray(pfix), np.asarray(egfix))
+        (OUT / "report.json").write_text(json.dumps(
+            {**reports, "rim_failed": {"stage": stage, "error": str(exc),
+                                       "crossings": where}}, indent=1, default=float))
+        raise SystemExit(f"{stage}: {exc}; the rim crosses itself at {where[:5]} "
+                         f"(kept in {OUT / 'rim_failed.npz'})") from exc
+
+
+hole = hole_or_stop(rc["pfix"], rc["egfix"], "the rim from the coastline")
 if HIRES is not None and _land_filtered:
     # Land the base never had is not on the rim: the rim re-draws the BASE
     # coastline along the source, and a quay block standing in the Kimitsu
@@ -764,6 +794,10 @@ if HIRES is not None and _land_filtered:
     reports["land_meshed_as_water_m2"] = float(_wet_land.area)
     if _solid:
         (OUT / "report.json").write_text(json.dumps(reports, indent=1, default=float))
+        # the land and the rim, for a look at why the rim does not carry it
+        (OUT / "wet_land_failed.wkt").write_text(shapely.to_wkt(_wet_land, rounding_precision=2))
+        np.savez(OUT / "rim_at_wet_land.npz", pfix=np.asarray(rc["pfix"]),
+                 egfix=np.asarray(rc["egfix"]))
         raise SystemExit(
             f"land the coastline filter kept is inside the hole and wide enough for an "
             f"element near {_solid[:5]}; the rim does not carry it (it crosses the frozen "
@@ -966,8 +1000,9 @@ if HIRES is not None and _land_filtered and _walls_src:
             # (review, round 10), a fold crossed an island (round 11)
             if not _rim_edit_ok(rim_xy, rim_eg, xy_try, eg_try):
                 break
-            _pin(mid, [q for q in nb if q != n] +
-                 [int(b if a == n else a) for a, b in rim_eg.tolist() if n in (a, b) and r not in (a, b)])
+            _pin(mid, [q for q in nb if q != n]
+                 + [int(b if a == n else a) for a, b in rim_eg.tolist()
+                    if n in (a, b) and r not in (a, b)])
             rim_xy, rim_eg = xy_try, eg_try
             _folded.append((n, r))
         return r

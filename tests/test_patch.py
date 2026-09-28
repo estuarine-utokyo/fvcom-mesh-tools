@@ -129,7 +129,7 @@ def test_open_boundary_guard_band_refuses_a_near_miss():
 def test_cut_that_severs_the_mesh_is_refused():
     nodes, elements = grid_mesh()
     band = shapely.box(-10.0, 320.0, 1e4, 400.0)   # all of element row 3
-    with pytest.raises(ValueError, match="splits the retained mesh"):
+    with pytest.raises(ValueError, match="strands|splits the retained mesh"):
         select_patch(nodes, elements, band)
 
 
@@ -667,7 +667,7 @@ def test_a_vertex_pinch_in_the_retained_mesh_is_not_accepted():
     """Four faces round one vertex, middle two cut: the rest meet at a point."""
     xy = np.array([[0, 0], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]], float)
     tri = np.array([[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 5]])
-    with pytest.raises(ValueError, match="splits the retained mesh|entire mesh"):
+    with pytest.raises(ValueError, match="strands|splits the retained mesh|entire mesh"):
         select_patch(xy, tri, shapely.Point(0, 2 / 3).buffer(0.4))
 
 
@@ -687,7 +687,8 @@ def test_an_isolated_retained_face_is_absorbed_into_the_cut():
     has[owner[k]] = True
     has[owner[k + 1]] = True
     assert has.all()
-    assert sel.report["n_grown_by_repair"] > 0
+    # taken as a stranded piece (it shares no edge) or by the pinch repair
+    assert sel.report["n_grown_by_repair"] + sel.report["n_stranded_taken"] > 0
 
 
 def test_a_declared_bbox_stays_a_bbox():
@@ -2414,3 +2415,32 @@ def test_rim_repair_keeps_a_fine_basin_behind_a_coarse_mouth():
     water = hole_polygon(pfix, egfix)
     p, e, b, remap, rep = rim_repair(pfix, egfix, np.full(12, -1), water, size, size_floor=30.0)
     assert hole_polygon(p, e).contains(shapely.Point(c))
+
+
+def _arm_mesh():
+    """A 30 x 12 grid with water between y = 500 and 800 east of x = 2000:
+    an arm along the top joined to the body only at its west end."""
+    nodes, elements = grid_mesh(30, 12)
+    cen = nodes[elements].mean(axis=1)
+    keep = (cen[:, 0] < 2000) | (cen[:, 1] < 500) | (cen[:, 1] > 800)
+    return nodes, elements[keep]
+
+
+def test_a_small_stranded_piece_is_taken_into_the_hole():
+    """A cut across the arm strands its tip: the tip joins the hole."""
+    nodes, elements = _arm_mesh()
+    obc = np.flatnonzero(nodes[:, 1] == 0.0)
+    cut = shapely.box(2400.0, 790.0, 2600.0, 1200.0)
+    sel = select_patch(nodes, elements, cut, open_boundary_nodes=obc)
+    cen = nodes[elements].mean(axis=1)
+    tip = (cen[:, 0] > 2600) & (cen[:, 1] > 800)
+    assert sel.report["n_stranded_taken"] == int(tip.sum()) > 0
+    assert sel.removed[tip].all()
+
+
+def test_the_piece_holding_the_open_boundary_is_the_one_kept():
+    nodes, elements = _arm_mesh()
+    obc = np.flatnonzero((nodes[:, 1] == 1100.0) & (nodes[:, 0] > 2700))   # on the tip
+    cut = shapely.box(2400.0, 790.0, 2600.0, 1200.0)
+    with pytest.raises(ValueError, match="strands"):
+        select_patch(nodes, elements, cut, open_boundary_nodes=obc)

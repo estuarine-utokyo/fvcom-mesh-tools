@@ -18,6 +18,8 @@
 #   FMESH_VIEWS     close-ups for the figures, "name:x0:x1:y0:y1+name2:..."
 #   FMESH_M2        1 to go on to the 20-day M2 comparison (default 0)
 #   LR_SEEDS        DistMesh seeds, colon-separated (default 0:1:2:3:4)
+#   FMESH_SKIP_REFINE  1 to reuse an accepted outputs/refine_<name> and run
+#                   only the stages after it (depths, smoke, M2)
 #
 # NQSV has no afterok: a stage starts when the one before it ENDS, whatever
 # the outcome. So each stage writes a marker only when it passed, and the
@@ -30,7 +32,11 @@ RECIPE=${1:?usage: bash jobs/octopus/refine_workflow.sh RECIPE.yaml}
 [ -f "$RECIPE" ] || { echo "no such recipe: $RECIPE"; exit 2; }
 NAME=$(basename "${RECIPE%.yaml}")
 OUT=$(pwd)/outputs/refine_$NAME
-if [ -d "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then
+# FMESH_SKIP_REFINE=1 reuses an accepted refinement and runs the stages after
+# it (depths, smoke, M2); its fvcom_finished/ is rebuilt.
+if [ "${FMESH_SKIP_REFINE:-0}" = 1 ]; then
+    [ -f "$OUT/ACCEPTED" ] || { echo "FMESH_SKIP_REFINE=1 needs an accepted $OUT"; exit 2; }
+elif [ -d "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then
     echo "$OUT is not empty; move it first (mv $OUT $OUT.old)"
     exit 2
 fi
@@ -47,11 +53,16 @@ for v in "$RECIPE" "$OUT" "$RUN_ROOT" "${FMESH_VIEWS:-}"; do
 done
 id() { grep -oE '[0-9]+\.[a-z]+' | head -1; }
 
-r=$(qsub -N "fm_$NAME" -v "FMESH_RECIPE=$RECIPE,LR_SEEDS=${LR_SEEDS:-0:1:2:3:4}" \
-    jobs/octopus/417_hires_refine.sh | id)
-f=$(qsub --after "$r" -v "FMESH_SCRIPT=434_final_mesh.py,FMESH_OUT=$OUT,FMESH_VIEWS=${FMESH_VIEWS:-}" \
-    jobs/octopus/418_hires_coastline_check.sh | id)
-d=$(qsub --after "$r" -v "FMESH_OUT=$OUT,FMESH_RUN_ROOT=$RUN_ROOT,FMESH_HMIN=${FMESH_HMIN:-3},FMESH_HMAX=${FMESH_HMAX:-300},FMESH_RFACTOR=${FMESH_RFACTOR:-0.2}" \
+if [ "${FMESH_SKIP_REFINE:-0}" = 1 ]; then
+    r="(reused)"; f="(reused)"; after=()
+else
+    r=$(qsub -N "fm_$NAME" -v "FMESH_RECIPE=$RECIPE,LR_SEEDS=${LR_SEEDS:-0:1:2:3:4}" \
+        jobs/octopus/417_hires_refine.sh | id)
+    f=$(qsub --after "$r" -v "FMESH_SCRIPT=434_final_mesh.py,FMESH_OUT=$OUT,FMESH_VIEWS=${FMESH_VIEWS:-}" \
+        jobs/octopus/418_hires_coastline_check.sh | id)
+    after=(--after "$r")
+fi
+d=$(qsub "${after[@]}" -v "FMESH_OUT=$OUT,FMESH_RUN_ROOT=$RUN_ROOT,FMESH_HMIN=${FMESH_HMIN:-3},FMESH_HMAX=${FMESH_HMAX:-300},FMESH_RFACTOR=${FMESH_RFACTOR:-0.2}" \
     jobs/octopus/421_finish_and_run.sh | id)
 s=$(qsub --after "$d" -v "FMESH_RUN_ROOT=$RUN_ROOT" jobs/octopus/423_m2_smoke.sh | id)
 echo "recipe   $RECIPE"
