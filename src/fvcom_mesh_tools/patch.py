@@ -2063,7 +2063,8 @@ def _clear_of(ring, other, size, factor):
     those sizes away -- a gap under that carries no element at all.
 
     Judged edge by edge at the size where the edge meets the gap -- the
-    point of the edge nearest ``other`` -- not at the finest size anywhere
+    point of the edge nearest ``other``, bounded over the piece -- not at
+    the finest size anywhere
     on the ring: a 30 m corner let a lake stand 50 m from a coast where the
     elements are 170 m (review, round 13).  Not at the middle of the gap or
     along it: from an edge on the far side the shortest line crosses the
@@ -2084,10 +2085,19 @@ def _clear_of(ring, other, size, factor):
     gaps = shapely.shortest_line(segs, other)
     d = np.asarray(shapely.length(gaps), dtype=float)
     foot = shapely.get_coordinates(shapely.get_point(gaps, 0))
-    h = np.asarray(size(foot), dtype=float)
+    # the largest size anywhere on the piece: the most read at its foot and
+    # its ends, plus a slope of 1 m/m over its length -- samples alone left
+    # a 31 m element between two 30 m readings (review, round 15).  A field
+    # that jumps (steeper than that) is outside this bound.
+    ends = np.vstack([ring, np.roll(ring, -1, axis=0)])
+    h_ends = np.asarray(size(ends), dtype=float).reshape(2, -1)
+    length = np.asarray(shapely.length(segs), dtype=float)
+    h_foot = np.asarray(size(foot), dtype=float)
+    h = np.maximum(h_foot, h_ends.max(axis=0)) + length
     k = int(np.argmin(d - factor * h))
+    # impossible only on what was read: the finest element seen anywhere
     return (bool((d >= factor * h).all()), float(d[k]), float(h[k]),
-            bool((d >= factor * float(h.min())).all()))
+            bool((d >= factor * float(min(h_foot.min(), h_ends.min()))).all()))
 
 
 def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
@@ -2182,9 +2192,17 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
             if not possible or not land_an_element_fits(g, size, floor, certified=floor_ok):
                 skipped.append({"at": at(g), "why": why})
                 continue
-        r = _ring_at_size(ext, size, fine_h=fine_h)
-        if not (len(r) >= 3 and shapely.Polygon(r).is_valid
-                and apart(shapely.Polygon(r), shapely.Polygon(g.exterior))):
+        # the RESAMPLED ring must still lie in the water, clear of the rim:
+        # a coarse walk cut a corner across the rim (review, round 15); the
+        # source outline, which passed those tests, is the fallback
+        r = None
+        for cand in (_ring_at_size(ext, size, fine_h=fine_h), ext):
+            if len(cand) >= 3 and shapely.Polygon(cand).is_valid \
+                    and shapely.Polygon(cand).within(water) \
+                    and not shapely.LinearRing(cand).intersects(edge):
+                r = cand
+                break
+        if r is None or not apart(shapely.Polygon(r), shapely.Polygon(g.exterior)):
             skipped.append({"at": at(g), "why": "no valid ring at the local size"})
             continue
         if not ok:

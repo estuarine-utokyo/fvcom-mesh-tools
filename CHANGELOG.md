@@ -8,6 +8,12 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 15 (2026-09-28)
+
+- A resampled island ring must still lie in the water, clear of the rim
+  (else the source outline is used); clearance is bounded between samples.
+- Provenance records a source link back to an ancestor directory.
+
 ### Fixed -- review of the coastline rules, round 14 (2026-09-28)
 
 - Island rings keep the source's nesting (islands taken by shell area;

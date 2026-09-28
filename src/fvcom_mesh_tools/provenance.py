@@ -131,7 +131,7 @@ def code_state(name: str, path) -> dict[str, Any]:
         # ends the walk there (review, round 14: first-alias-wins made the
         # digest depend on traversal order and ignore a removed alias).
         h, failed = hashlib.sha256(), []
-        files = []
+        files, links = [], []
         for d, dirs, names in root.walk(follow_symlinks=True, on_error=lambda e: failed.append(
                 str(e.filename) if e.filename else str(root))):
             try:
@@ -142,6 +142,12 @@ def code_state(name: str, path) -> dict[str, Any]:
                 dirs[:] = []
                 continue
             if real in ancestors:
+                # a link back to an ancestor is an importable path too: it is
+                # recorded, as the ancestor it names inside the tree, though
+                # it is not walked again (review, round 15)
+                up = next(str(a) for a in d.relative_to(root).parents
+                          if (root / a).resolve() == real)
+                links.append(f"{d.relative_to(root)} -> {up}")
                 dirs[:] = []
                 continue
             dirs.sort()
@@ -153,6 +159,8 @@ def code_state(name: str, path) -> dict[str, Any]:
                 continue
             h.update(str(f.relative_to(root)).encode())
             h.update(digest.encode())
+        for ln in sorted(links):
+            h.update(ln.encode())
         out["source_sha256"] = None if failed else h.hexdigest()
         out["source_unreadable"] = failed
     return out

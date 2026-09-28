@@ -1334,7 +1334,7 @@ def apply_rim_repair(tag="rim repair", **kw):
             raise RuntimeError("rim_repair removed a point a wall is rooted on")
     hole = hole_polygon(rc["pfix"], rc["egfix"])
     say(f"{tag}: {rep_['n_points_removed']} point(s) removed beside edges under "
-        f"half an element, "
+        f"{kw.get('min_edge_factor', 0.5):g} of an element, "
         f"{rep_['n_slits_closed']} slit(s) closed, "
         f"{rep_['n_tips_stepped_back']} tip(s) stepped back, "
         f"{rep_['n_corners_blunted']} corner(s) blunted; "

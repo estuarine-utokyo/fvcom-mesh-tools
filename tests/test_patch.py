@@ -1777,7 +1777,7 @@ def test_island_rings_adds_land_inside_the_water_only():
     seg = np.linalg.norm(np.roll(r, -1, axis=0) - r, axis=1)
     assert seg.min() >= 15.0 and seg.max() <= 31.0
     whys = sorted(x["why"] for x in rep["skipped"])
-    assert whys == ["5.0 m from the rim where the element is 30 m", "crosses the rim"]
+    assert whys == ["5.0 m from the rim where the element is 37 m", "crosses the rim"]
 
 
 def test_ring_at_size_drops_a_short_edge_but_keeps_the_corner():
