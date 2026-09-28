@@ -2242,44 +2242,42 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
 
         # The shell and its lakes are chosen TOGETHER: a resampled shell
         # committed first filled a lake the source shell keeps (review,
-        # round 18), and a lake's resampled outline made a sibling fail that
-        # both source outlines keep (round 19).  Each shell candidate is
-        # tried with its lakes resampled-first and source-first, and the
-        # group that fills fewest lakes is kept -- the first that fills none
-        # at once.  A group whose filled lakes would put land over the water
-        # (a rim island inside a filled lake turned to water, round 19) is
-        # no group at all.
+        # round 18), and one lake's outline made a sibling fail that another
+        # choice keeps (rounds 19-20).  For each shell candidate the lakes
+        # start resampled-first; while a lake is filled, flipping another
+        # lake's preference is tried and kept when it fills fewer.  A group
+        # whose land (the shell minus the lakes it keeps) holds any of the
+        # rim -- a rim island inside a filled lake turned to water, whatever
+        # its size (rounds 19-20) -- is no group at all.
         state = (len(rings), len(placed), len(filled), len(skipped), dict(tight))
-        best = None
         why = "no valid ring at the local size"
-        tries = [(sc, mode) for sc in (_ring_at_size(ext, size, fine_h=fine_h), ext)
-                 for mode in ("resampled", "source")]
-        for shell_cand, mode in tries:
+
+        def reset():
             del rings[state[0]:], placed[state[1]:], filled[state[2]:], skipped[state[3]:]
             tight.clear()
             tight.update(state[4])
+
+        def run_group(shell_cand, prefs):
+            """The group for one shell and per-lake preferences, as
+            ``(n_filled, outcome, filled_idx)``, or ``(None, why)``."""
+            reset()
             r, why_r = choose((shell_cand,), src, in_water,
                               lambda: bool(land_an_element_fits(g, size, floor,
                                                                 certified=floor_ok)),
                               "island")
             if r is None:
-                why = why_r
-                continue
+                return None, why_r
             if why_r:
                 tight[len(placed)] = {"at": at(g), "why": why_r}
             rings.append(r)
             placed.append((shapely.Polygon(r), src, at(g)))
-            # its lakes are water: its exterior alone filled a 160,000 m2
-            # lake the filter had kept (review, round 12); each is chosen as
-            # an island is, and one neither outline can carry is filled and
-            # reported
             shell = shapely.Polygon(r)
-            n_filled, kept = 0, []
-            for lake_p in lakes_src:
+            kept, filled_idx = [], []
+            for j, lake_p in enumerate(lakes_src):
                 lake = np.asarray(lake_p.exterior.coords, dtype=float)[:-1, :2]
                 resampled = _ring_at_size(lake, size, fine_h=fine_h)
                 lr, why_l = choose(
-                    (resampled, lake) if mode == "resampled" else (lake, resampled), lake_p,
+                    (resampled, lake) if prefs[j] else (lake, resampled), lake_p,
                     lambda poly: shell.contains(poly),
                     lambda: bool(land_an_element_fits(lake_p, size, floor,
                                                       certified=floor_ok)),
@@ -2288,7 +2286,7 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
                     filled.append(lake_p)
                     skipped.append({"at": at(lake_p), "why": f"{why_l}; meshed as land",
                                     "lake_area_m2": round(float(lake_p.area), 1)})
-                    n_filled += 1
+                    filled_idx.append(j)
                     continue
                 if why_l:
                     tight[len(placed)] = {"at": at(lake_p), "why": why_l}
@@ -2296,15 +2294,38 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
                 placed.append((shapely.Polygon(lr), lake_p, at(lake_p)))
                 kept.append(shapely.Polygon(lr))
             land_now = shell.difference(shapely.union_all(kept)) if kept else shell
-            if shapely.difference(land_now, water).area > 1e-6 * max(shell.area, 1.0):
-                why = "island: a lake it cannot keep holds part of the rim"
+            if land_now.intersects(edge) or land_now.difference(water).area > 1e-6:
+                return None, "island: a lake it cannot keep holds part of the rim"
+            return (len(filled_idx), (list(rings[state[0]:]), list(placed[state[1]:]),
+                                      list(filled[state[2]:]), list(skipped[state[3]:]),
+                                      dict(tight), len(kept)), filled_idx), None
+
+        best = None
+        for shell_cand in (_ring_at_size(ext, size, fine_h=fine_h), ext):
+            prefs = [True] * len(lakes_src)          # True: resampled first
+            got, why_g = run_group(shell_cand, prefs)
+            if got is None:
+                why = why_g
                 continue
-            outcome = (list(rings[state[0]:]), list(placed[state[1]:]),
-                       list(filled[state[2]:]), list(skipped[state[3]:]), dict(tight),
-                       len(kept))
-            if best is None or n_filled < best[0]:
-                best = (n_filled, outcome)
-            if n_filled == 0:
+            for _round in range(2 * len(lakes_src)):
+                if got[0] == 0:
+                    break
+                better = None
+                for i in range(len(lakes_src)):
+                    if i in got[2]:
+                        continue
+                    trial = prefs.copy()
+                    trial[i] = not trial[i]
+                    t_got, _w = run_group(shell_cand, trial)
+                    if t_got is not None and t_got[0] < got[0]:
+                        better = (trial, t_got)
+                        break
+                if better is None:
+                    break
+                prefs, got = better
+            if best is None or got[0] < best[0]:
+                best = (got[0], got[1])
+            if best[0] == 0:
                 break
         del rings[state[0]:], placed[state[1]:], filled[state[2]:], skipped[state[3]:]
         tight.clear()

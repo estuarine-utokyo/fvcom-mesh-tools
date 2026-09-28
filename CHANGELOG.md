@@ -8,6 +8,12 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 20 (2026-09-28)
+
+- Each lake of an island gets its own outline preference (a local search
+  keeps every lake some mix keeps); an island whose land would hold any of
+  the rim is refused, however small the rim island.
+
 ### Fixed -- review of the coastline rules, round 19 (2026-09-28)
 
 - An island is added only if, with the lakes it keeps, it covers no
