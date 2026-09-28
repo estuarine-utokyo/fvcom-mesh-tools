@@ -8,6 +8,13 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 22 (2026-09-28)
+
+- `island_rings` repeats its pass preferring the source outline next to
+  anything it refused, so one island's resampled outline no longer costs
+  a sibling or an island in its lake; the lake-preference search is a
+  tested function that does not waste its budget.
+
 ### Fixed -- review of the coastline rules, round 21 (2026-09-28)
 
 - Island lakes: every combination of outline preferences is searched when

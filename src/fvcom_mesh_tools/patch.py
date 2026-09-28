@@ -2117,7 +2117,117 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
     water -- or fill a lake an element fits in as land -- so it is kept and
     named in ``tight``, and the QA gate judges the gap.
 
+    Each polygon's outline -- resampled or the source's -- is chosen with
+    its lakes, but that choice can make a NEIGHBOUR impossible: a sibling
+    island, or an island standing in its lake (review, round 22).  So the
+    whole pass is repeated, preferring the source outline for the placed
+    rings next to anything refused, while that loses less (bounded by the
+    number of polygons), and the pass losing least area is returned.
+
     Returns ``(rings, report)``; each ring is an (n, 2) array, not closed.
+    """
+    import shapely
+
+    polys = sorted(_polygons(land), key=lambda q: -shapely.Polygon(q.exterior).area)
+    src_keys = [frozenset((round(float(x), 6), round(float(y), 6)) for x, y in r.coords)
+                for g in polys for r in (g.exterior, *g.interiors)]
+
+    def owner(ring):
+        # the polygon one of whose source rings this ring was cut from --
+        # the nearest by Hausdorff distance; a resampled ring may stand a
+        # little outside its source
+        lr = shapely.LinearRing(ring)
+        return min(range(len(polys)), key=lambda i: min(
+            shapely.hausdorff_distance(lr, r)
+            for r in (polys[i].exterior, *polys[i].interiors)))
+
+    prefer: set = set()
+    best = None
+    for _pass in range(len(polys) + 1):
+        rings, rep, refused = _island_pass(polys, water, size, clearance_factor,
+                                           fine_h, prefer)
+        loss = float(sum(q.area for q in refused))
+        if best is None or loss < best[0] - 1e-6:
+            best = (loss, rings, rep)
+        if loss <= 0:
+            break
+        new = set()
+        for q in refused:
+            reach = 2.0 * float(np.max(_size_at(size, np.asarray(q.exterior.coords)[:, :2])))
+            for r in rings:
+                key = frozenset((round(float(x), 6), round(float(y), 6)) for x, y in r)
+                if key in src_keys:
+                    continue                      # already the source outline
+                if shapely.LinearRing(r).distance(q) < reach:
+                    i = owner(r)
+                    if i not in prefer:
+                        new.add(i)
+        if not new:
+            break
+        prefer |= new
+    _loss, rings, rep = best
+    rep["n_passes"] = _pass + 1
+    return rings, rep
+
+
+def _preference_search(n, first, run, *, exhaustive_limit=8):
+    """The best ``(cost, outcome)`` over per-lake preference tuples, and the
+    last reason a group was invalid.
+
+    ``run(prefs)`` returns ``((cost, outcome, ...), None)`` or ``(None,
+    why)``.  Up to ``exhaustive_limit`` lakes every tuple is tried, ``first``
+    ones first; beyond, a breadth-first search over single flips from
+    ``first``: deduplicated when queued, charged per evaluation (4 n^2),
+    expanding invalid groups and sideways moves alike -- a single-flip
+    search stopped where two flips at once keep a lake, duplicates spent the
+    budget, and an earlier shell's score stopped this one's search (reviews,
+    rounds 21-22).  Stops at the first cost of 0.
+    """
+    import itertools
+    from collections import deque
+
+    best, why = None, None
+    if n <= exhaustive_limit:
+        order = list(first) + [o for o in itertools.product((True, False), repeat=n)
+                               if o not in first]
+        for prefs in order:
+            got, why_g = run(prefs)
+            if got is None:
+                why = why_g
+                continue
+            if best is None or got[0] < best[0]:
+                best = (got[0], got[1])
+            if best[0] == 0:
+                break
+        return best, why
+    queue, queued = deque(first), set(first)
+    for _eval in range(4 * n * n):
+        if not queue:
+            break
+        prefs = queue.popleft()
+        got, why_g = run(prefs)
+        if got is None:
+            why = why_g
+            expand = True
+        else:
+            if best is None or got[0] < best[0]:
+                best = (got[0], got[1])
+            if got[0] == 0:
+                break
+            expand = got[0] <= best[0]
+        if expand:
+            for i in range(n):
+                nxt = prefs[:i] + (not prefs[i],) + prefs[i + 1:]
+                if nxt not in queued:
+                    queued.add(nxt)
+                    queue.append(nxt)
+    return best, why
+
+
+def _island_pass(polys, water, size, clearance_factor, fine_h, prefer):
+    """One pass of :func:`island_rings`: ``(rings, report, refused)``, where
+    ``refused`` are the source islands and lakes it could not deliver;
+    ``prefer`` holds the indices of ``polys`` to try source outline first.
     """
     import shapely
 
@@ -2140,8 +2250,10 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
     placed: list = []                   # (resampled polygon, source polygon, report point)
     filled: list = []                   # source lakes refused, meshed as land
     tight: dict = {}                    # placed index -> why it is kept although close
+    refused: list = []                  # source islands and lakes not delivered
     floor, floor_ok = resolve_size_floor(
-        size, None, shapely.get_coordinates(land)[:, :2]) if not land.is_empty else (1.0, False)
+        size, None, np.vstack([shapely.get_coordinates(g)[:, :2] for g in polys])) \
+        if polys else (1.0, False)
 
     def at(geom):
         c = np.asarray(geom.representative_point().coords)[0]
@@ -2214,7 +2326,7 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
     # 6).  Outside in, so an island is met after the lake it stands in.
     # By the SHELL's area: net area leaves out the lakes, and an island in a
     # large lake came before the island around it (review, round 14).
-    for g in sorted(_polygons(land), key=lambda q: -shapely.Polygon(q.exterior).area):
+    for gi, g in enumerate(polys):
         if not shapely.intersects(water, g):
             continue
         if any(f.contains(g) for f in filled):
@@ -2243,9 +2355,9 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
         # The shell and its lakes are chosen TOGETHER: a resampled shell
         # committed first filled a lake the source shell keeps (review,
         # round 18), and one lake's outline made a sibling fail that another
-        # choice keeps (rounds 19-20).  For each shell candidate the lakes
-        # start resampled-first; while a lake is filled, flipping another
-        # lake's preference is tried and kept when it fills fewer.  A group
+        # choice keeps (rounds 19-21).  Each shell candidate is tried with
+        # per-lake outline preferences, searched as described below, and the
+        # group filling fewest lakes is kept.  A group
         # whose land (the shell minus the lakes it keeps) holds any of the
         # rim -- a rim island inside a filled lake turned to water, whatever
         # its size (rounds 19-20) -- is no group at all.
@@ -2300,54 +2412,20 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
                                       list(filled[state[2]:]), list(skipped[state[3]:]),
                                       dict(tight), len(kept)), filled_idx), None
 
-        # Every combination of lake preferences when there are few lakes
-        # (all resampled-first, then all source-first, then the rest), and a
-        # search that also takes sideways moves when there are many: a
-        # single-flip search stopped where two flips at once keep a lake,
-        # and an invalid group ended it early (review, round 21).
         n_l = len(lakes_src)
-        if n_l <= 8:
-            import itertools
-
-            orders = [tuple([True] * n_l), tuple([False] * n_l)]
-            orders += [o for o in itertools.product((True, False), repeat=n_l)
-                       if o not in orders]
-        else:
-            orders = None
+        first = [tuple([True] * n_l), tuple([False] * n_l)]
+        shell_cands = (_ring_at_size(ext, size, fine_h=fine_h), ext)
+        if gi in prefer:                 # the outer pass asks for the source
+            first.reverse()
+            shell_cands = shell_cands[::-1]
         best = None
-        for shell_cand in (_ring_at_size(ext, size, fine_h=fine_h), ext):
-            if orders is not None:
-                for prefs in orders:
-                    got, why_g = run_group(shell_cand, list(prefs))
-                    if got is None:
-                        why = why_g
-                        continue
-                    if best is None or got[0] < best[0]:
-                        best = (got[0], got[1])
-                    if best[0] == 0:
-                        break
-            else:
-                seen, frontier = set(), [tuple([True] * n_l), tuple([False] * n_l)]
-                for _step in range(4 * n_l * n_l):
-                    if not frontier:
-                        break
-                    prefs = frontier.pop(0)
-                    if prefs in seen:
-                        continue
-                    seen.add(prefs)
-                    got, why_g = run_group(shell_cand, list(prefs))
-                    if got is None:
-                        why = why_g
-                        cost = n_l + 1
-                    else:
-                        cost = got[0]
-                        if best is None or cost < best[0]:
-                            best = (cost, got[1])
-                        if cost == 0:
-                            break
-                    if best is None or cost <= best[0]:
-                        frontier += [prefs[:i] + (not prefs[i],) + prefs[i + 1:]
-                                     for i in range(n_l)]
+        for shell_cand in shell_cands:
+            got, why_s = _preference_search(
+                n_l, first, lambda prefs, sc=shell_cand: run_group(sc, list(prefs)))
+            if why_s:
+                why = why_s
+            if got is not None and (best is None or got[0] < best[0]):
+                best = got
             if best is not None and best[0] == 0:
                 break
         del rings[state[0]:], placed[state[1]:], filled[state[2]:], skipped[state[3]:]
@@ -2355,8 +2433,10 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
         tight.update(state[4])
         if best is None:
             skipped.append({"at": at(g), "why": why})
+            refused.append(src)
             continue
         b_rings, b_placed, b_filled, b_skipped, b_tight, b_kept = best[1]
+        refused.extend(b_filled)
         rings.extend(b_rings)
         placed.extend(b_placed)
         filled.extend(b_filled)
@@ -2368,7 +2448,7 @@ def island_rings(land, water, size, clearance_factor=0.5, *, fine_h=None):
     tight = [tight[i] for i in sorted(tight)]
     return rings, {"n_islands_added": n_islands, "n_lakes_added": n_lakes,
                    "skipped": skipped, "tight": tight,
-                   "n_island_points": int(sum(len(r) for r in rings))}
+                   "n_island_points": int(sum(len(r) for r in rings))}, refused
 
 
 def _rim_layout(pfix, egfix):

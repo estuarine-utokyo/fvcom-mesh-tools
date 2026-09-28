@@ -288,6 +288,20 @@ In order:
    - write and run QA;
 6. keep the seed with the fewest violations introduced.
 
+**Islands and lakes (step 3).** Whether a feature is resolved at all is
+decided once, by the shoreline filter at the local element size (step 2):
+what the size cannot carry is not resolved, and in the transition zone
+efficiency comes before detail. Step 3 then delivers what the filter kept.
+Each island's outline, and each lake's, is either resampled at the local
+size or kept as the source draws it, and one outline's choice can crowd a
+neighbour. `island_rings` searches these choices -- every combination for
+up to eight lakes per island, a bounded search beyond, and a repeat of the
+pass preferring source outlines next to anything refused -- and keeps the
+result that loses least area. It is a best effort, not a proof of the
+optimum: whatever it still cannot deliver is named in `report.json`
+(`islands_added.skipped`, and `tight` for a feature kept closer than half an
+element, which the QA gate then judges), and land left as water stops the run.
+
 A port-sized region takes 5-10 minutes on one core.
 
 **Reproducibility.** The seeds are fixed (`LR_SEEDS`, default 0-4), and the
