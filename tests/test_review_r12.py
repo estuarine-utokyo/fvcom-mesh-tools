@@ -31,9 +31,18 @@ def test_an_island_keeps_its_lake():
     assert abs(after.area - 520000.0) < 2000.0
 
 
-def test_a_lake_too_close_to_its_island_coast_is_reported():
+def test_a_lake_whose_gap_carries_no_element_is_filled():
+    # 5 m from its coast where every element is 30 m: no element fits the gap
     land = Polygon(box(100, 100, 900, 900).exterior.coords,
                    [box(105, 300, 300, 700).exterior.coords])
+    rings, rep = island_rings(land, box(0, 0, 1000, 1000), _const(30.0))
+    assert rep["n_lakes_added"] == 0 and not rep["tight"]
+    assert any("lake" in s["why"] for s in rep["skipped"])
+
+
+def test_a_lake_too_close_and_too_narrow_for_an_element_is_filled():
+    land = Polygon(box(100, 100, 900, 900).exterior.coords,
+                   [box(105, 300, 125, 700).exterior.coords])
     rings, rep = island_rings(land, box(0, 0, 1000, 1000), _const(30.0))
     assert rep["n_lakes_added"] == 0
     assert any("lake" in s["why"] for s in rep["skipped"])

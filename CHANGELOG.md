@@ -8,6 +8,15 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Fixed -- review of the coastline rules, round 13 (2026-09-28)
+
+- Island rings: no two may touch (two lakes came out overlapping); land
+  inside a lake that is filled stays land; clearance from the rim and from
+  an island's coast is judged edge by edge at the local size. A piece
+  closer than half a local element is kept when an element fits on it and
+  its gap could carry one, and named in `tight` (a driver warning).
+- Provenance follows symlinked source directories, once each.
+
 ### Fixed -- review of the coastline rules, round 12 (2026-09-28)
 
 - An island added from the source keeps its lakes as water (only its

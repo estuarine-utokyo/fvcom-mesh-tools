@@ -719,6 +719,9 @@ if HIRES is not None and _land_filtered:
         f"({_irep['n_island_points']} point(s))"
         + (f"; {len(_irep['skipped'])} left out, e.g. {_irep['skipped'][:3]}"
            if _irep["skipped"] else ""))
+    if _irep.get("tight"):
+        say(f"WARNING: kept although closer than half a local element (the QA gate "
+            f"judges the gap): {_irep['tight'][:3]}")
     # Land left out for crossing the rim is meshed as water where it is in
     # the hole.  A sliver is harmless; a block of land is not (Yokohama: a
     # 1.6 km2 pier block, found only because a boundary edge went missing).

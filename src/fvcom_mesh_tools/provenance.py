@@ -124,10 +124,23 @@ def code_state(name: str, path) -> dict[str, Any]:
         # (review, round 5)
         # Path.rglob swallows a directory it cannot scan, and an unreadable
         # tree hashed as empty (review, round 6): walk with the errors kept
+        # Symlinked directories are followed -- Python imports through them,
+        # and a subpackage behind one went unhashed (review, round 13) -- once
+        # each, so a link back up the tree ends the walk there.
         h, failed = hashlib.sha256(), []
-        files = []
-        for d, _dirs, names in root.walk(on_error=lambda e: failed.append(
+        files, seen = [], set()
+        for d, dirs, names in root.walk(follow_symlinks=True, on_error=lambda e: failed.append(
                 str(e.filename) if e.filename else str(root))):
+            try:
+                real = d.resolve()
+            except OSError:
+                failed.append(str(d))
+                dirs[:] = []
+                continue
+            if real in seen:
+                dirs[:] = []
+                continue
+            seen.add(real)
             files.extend(d / n for n in names if n.endswith(".py"))
         for f in sorted(files):
             digest = file_sha256(f)
