@@ -8,6 +8,17 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Added -- extending a base mesh outward (2026-09-29)
+
+- A wide mesh from a base kept as it is: `recipes/extend/`, notebooks
+  444-448, `jobs/octopus/444,445,448`, `extend.py`, `extend_recipe.py`,
+  `obc_design.py` (USER_GUIDE section 13). The Tokyo Bay extension to
+  Enshu-nada and northern Kujukuri passes QA 22/22 and a two-day FVCOM
+  smoke run.
+- `dem/sources.py`: named bathymetry sources in a priority stack (Cabinet
+  Office nested grids, M7001 on T.P., SRTM15+, GEBCO).
+- `environment.yml`: xlrd, pyarrow.
+
 ### Changed -- the hires samples start from this project's base mesh (2026-09-28)
 
 - The six `recipes/refine/*_hires.yaml` samples refine

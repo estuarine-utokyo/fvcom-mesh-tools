@@ -619,7 +619,87 @@ a land window, and edits of its own. The two-zone sizing seam in notebook
 325 (`SR_ZW_LAT`, `SR_ZE_LAT`, and the seam longitudes in the code) is Tokyo
 Bay's.
 
-## 13. Improving the tool with AI
+## 13. Extending a base mesh outward
+
+A wider mesh keeps a finished base mesh **as it is** and adds the sea out to
+a new open boundary (owner, 2026-09-29). The base's open boundary becomes an
+interior line; the base's nodes, elements and depths come through bit for
+bit, which the build checks.
+
+```bash
+# 1. the open boundary (an input): design it, check it, write its nodes
+qsub -v FMESH_DESIGN=recipes/extend/tokyo_bay_enshu_obc_design.yaml,\
+FMESH_OBC_CSV=recipes/extend/tokyo_bay_enshu_obc.csv jobs/octopus/444_design_obc.sh
+# 2. the mesh (about 25 min)
+qsub -v FMESH_RECIPE=recipes/extend/tokyo_bay_enshu.yaml jobs/octopus/445_extend_mesh.sh
+# 3. does it run? (2 days, uniform M2 on the open boundary; stability only)
+qsub -v FMESH_CASE=outputs/extend_tokyo_bay_enshu/TokyoBayEnshu,\
+FMESH_RUN_ROOT=$WORK_DIR/scratch/smoke_<stamp>,WORK_DIR=$WORK_DIR jobs/octopus/448_extend_smoke.sh
+```
+
+**The open boundary** (`notebooks/444_design_obc.py`, `obc_design.py`):
+orthogonal to the coast at both ends (the coast direction is the chord
+3 km either side of the end point; ends sit on long straight coasts),
+straight sides, corners rounded with circular arcs, and a node spacing
+never below the time-step floor `dt*sqrt(g*H)/Cr`. The design YAML lists the
+sides as legs (`bearing`, and `until_lat`, `until_lon` or `until:
+end_normal`). The report beside the CSV gives the angles at the ends, the
+spacing, the depths and whether the line crosses land.
+
+**The recipe** (`recipes/extend/*.yaml`, `extend_recipe.py`) names the base
+case, the open boundary, the land window, the bathymetry sources, every
+sizing setting and the depth rules:
+
+| key | what |
+|---|---|
+| `base`, `base_case` | the finished FVCOM case adopted unchanged |
+| `open_boundary` | the new boundary's nodes (from 444) |
+| `bathymetry.sizing`, `bathymetry.depths` | source lists in priority order (below) |
+| `settings` | `coast_h_m`, `max_edge_m`, `gradation`, `cfl_dt_s`, `cfl_cr`, the band half-widths on the two constrained lines, `lattice_m`, `dm_scale`, the seeds |
+| `depths` | `min_m`, `max_m` (null = no cap), `rfactor` for the new nodes |
+
+**Bathymetry sources** (`dem/sources.py`), selectable by name; each point
+takes the first source that covers it:
+
+| name | datum | what |
+|---|---|---|
+| `cao_shutochokka_2025` | T.P. | Cabinet Office nested grids (10-2430 m), finest first |
+| `m7001` | T.P. | M7001 soundings and low-tide line, linear between points |
+| `m7001_tokyobay` | T.P. | M7001 gridded at ~180 m, Tokyo Bay only |
+| `srtm15_kanto`, `srtm15plus`, `gebco_2024` | mean sea level | global grids, to fill what the survey products do not cover |
+
+The Cabinet Office grids may not be redistributed as they are; they are read
+in place (see their README in `$DATA_DIR`). For dredged pits M7001 is the
+authority (the Cabinet Office grids miss or misplace them).
+
+**What a build does** (`notebooks/445` runs `446` then `447`):
+
+1. **Generation** (`446`): the base is land for this stage. The sizing is
+   the coast-distance field limited to the gradation, raised to the
+   time-step floor (a graded dilation, so the extension does not limit dt),
+   and set to each constrained line's own spacing on a band along it. The
+   base's open boundary and the new one are fixed points and edges, each
+   with a *ladder* (a second fixed line one local size inside, as the base's
+   own open boundary has). oceanmesh's default clean is off -- it deletes
+   fixed nodes -- and instead free nodes that DistMesh projected onto a fixed
+   line are dropped and the rest re-triangulated with the same constrained
+   Delaunay; flat elements are removed.
+2. **Finishing and merge** (`447`): the open-boundary finishing chain and
+   the coastline fit on the new part; the merge onto the base through the 13
+   shared nodes, with the frozen-base check; a repair restricted to the new
+   part (cape tips one element wide are dropped, `improve_patch` moves only
+   new interior nodes and flips only new elements, never on the open
+   boundary; the perpendicularity pass); depths of the new nodes from
+   `bathymetry.depths`, floored, optionally capped, and r-factor limited
+   with the base depths held fixed; the FVCOM case and QA.
+
+The first Tokyo Bay extension (`tokyo_bay_enshu`, 2026-09-29): 14,740 nodes,
+27,135 elements, QA 22/22, all new depths from the Cabinet Office grids,
+and a two-day FVCOM smoke run finite (max |zeta| 0.47 m, max speed
+0.56 m/s at the Uraga strait). Its real forcing will come from JCOPE-T DA
+re-extracted over the wider domain.
+
+## 14. Improving the tool with AI
 
 Every new mesh is a new coastline, and it will find a case the tool has not
 met: a pier at an unusual angle, a basin narrower than expected, a feature
