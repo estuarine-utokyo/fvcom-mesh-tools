@@ -27,6 +27,7 @@ import shapely  # noqa: E402
 from oceanmesh import Shoreline  # noqa: E402
 from pyproj import Transformer  # noqa: E402
 from scipy.spatial import cKDTree  # noqa: E402
+from shapely.prepared import prep  # noqa: E402
 
 from fvcom_mesh_tools.algorithms.obc_finish import prune_one_wide_protected  # noqa: E402
 from fvcom_mesh_tools.base_recipe import read_open_boundary  # noqa: E402
@@ -35,6 +36,7 @@ from fvcom_mesh_tools.extend import band_field, compose_sizing, land_segments  #
 from fvcom_mesh_tools.extend_recipe import load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case  # noqa: E402
+from fvcom_mesh_tools.obc_band import build_obc_band  # noqa: E402
 
 T0 = time.time()
 MESH_EPSG = 32654
@@ -118,10 +120,47 @@ say("sizing " + json.dumps(srep))
 np.savez_compressed(OUT / "sizing.npz", lon=lon_g, lat=lat_g, h=h, floor=floor, depth=depth_g)
 
 # ------------------------------------------------------------- generation
-PFIX = np.vstack([iface_ll, OBC])
+# Each constrained line gets a LADDER: a second fixed line inside it, one
+# local size away (obc_band.build_obc_band, as the base's own open boundary
+# has). Without it DistMesh projects free points onto the constrained line,
+# and a free node sitting on a fixed edge makes a zero-area sliver there --
+# the third build had 13 such on the new boundary's south side.
+land_test = prep(land_all)
+
+
+def ladder(arc_ll, h_m):
+    """The inner guide line of ``arc_ll`` (sea on its left), off land."""
+    band = build_obc_band(arc_ll, h_m, k_offset=1.25, skip_ends=2, taper="local")
+    inner = band["inner_ll"]
+    keep = np.array([not land_test.intersects(shapely.Point(q).buffer(0.25 * h / 111e3))
+                     for q, h in zip(inner, h_m[2:len(h_m) - 2])])
+    return inner, keep
+
+
+pts = [iface_ll, OBC]
+segs = []
+off = 0
+for arc in pts:
+    segs.append(off + np.column_stack([np.arange(len(arc) - 1), np.arange(1, len(arc))]))
+    off += len(arc)
+ladders = {}
+for name, arc, h_arc, flip in (("interface", iface_ll, spacing(iface_m), True),
+                               ("open boundary", OBC, spacing(metric(OBC)), False)):
+    a = arc[::-1] if flip else arc
+    hh = h_arc[::-1] if flip else h_arc
+    inner, keep = ladder(a, hh)
+    ladders[name] = {"n_inner": int(len(inner)), "n_kept": int(keep.sum())}
+    idx = np.flatnonzero(keep)
+    pts.append(inner[idx])
+    run = [(i, j) for i, j in zip(range(len(idx) - 1), range(1, len(idx)))
+           if idx[j] - idx[i] == 1]
+    if run:
+        segs.append(off + np.array(run))
+    off += len(idx)
+PFIX = np.vstack(pts)
+SEGS = np.vstack(segs)
 ni = len(iface_ll)
-SEGS = np.vstack([np.column_stack([np.arange(ni - 1), np.arange(1, ni)]),
-                  ni + np.column_stack([np.arange(len(OBC) - 1), np.arange(1, len(OBC))])])
+say("ladders " + json.dumps(ladders))
 # cleanup="none": oceanmesh's default clean deletes low-quality boundary
 # faces with no protection for fixed points (only faces carrying a fixed edge
 # are spared), and the first build lost 14 of the new boundary's nodes that
@@ -146,12 +185,13 @@ if (d > 1e-8).any():
     np.savez(OUT / "generate_failed.npz", p=p, t=t, pfix=PFIX, segs=SEGS)
     lost = np.flatnonzero(d > 1e-8)
     for k in lost:
-        which = "interface" if k < ni else "open boundary"
+        which = ("interface" if k < ni else "open boundary" if k < ni + len(OBC)
+                 else "ladder")
         print(f"[gen]   lost pfix {k} ({which}) at {PFIX[k].round(5).tolist()}, "
               f"nearest node {d[k] / DEG:.0f} m away", flush=True)
     raise SystemExit(f"{len(lost)} fixed boundary node(s) lost in generation "
                      f"(mesh kept in {OUT / 'generate_failed.npz'})")
-chain_i, chain_o = idx[:ni], idx[ni:]
+chain_i, chain_o = idx[:ni], idx[ni:ni + len(OBC)]
 edges = {frozenset(e) for e in np.vstack([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]).tolist()}
 for name, c in (("interface", chain_i), ("open boundary", chain_o)):
     miss = [(int(a), int(b_)) for a, b_ in zip(c[:-1], c[1:]) if frozenset((a, b_)) not in edges]
@@ -170,6 +210,7 @@ mesh = Fort14Mesh("outer", nodes, dn, t.astype(np.int64),
 write_fort14(mesh, OUT / "outer_utm.14")
 (OUT / "generate.json").write_text(json.dumps({
     "n_nodes": int(len(p)), "n_elements": int(len(t)), "pruned": int(ne0 - len(t)),
+    "ladders": ladders,
     "interface_base_nodes": IB.tolist(), "interface_outer_nodes": chain_i.tolist(),
     "open_boundary_outer_nodes": chain_o.tolist(), "sizing": srep,
     "lattice_shape": list(lon_g.shape), "settings": S,
