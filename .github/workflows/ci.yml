@@ -25,7 +25,7 @@ jobs:
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-file: environment.yml
-          environment-name: fvcom-mesh
+          environment-name: fvcom-mesh-tools
           create-args: pre-commit
           cache-environment: true
       - name: Install

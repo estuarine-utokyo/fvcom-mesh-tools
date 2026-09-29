@@ -78,13 +78,14 @@ there.
 ### 2.2 Environment
 
 Python 3.12 in a conda environment built from this repository's
-`environment.yml`, conda-forge only. The three repositories above are
+`environment.yml`, conda-forge only, and named after the repository
+(`fvcom-mesh-tools`). The three repositories above are
 installed editable, without letting pip fetch anything:
 
 ```bash
 # on a login node (compute nodes have no network)
-mamba env create -n fvcom-mesh -f environment.yml
-mamba activate fvcom-mesh
+mamba env create -n fvcom-mesh-tools -f environment.yml
+mamba activate fvcom-mesh-tools
 git clone https://github.com/estuarine-utokyo/oceanmesh.git ~/Github/oceanmesh
 git clone https://github.com/estuarine-utokyo/xcoast.git ~/Github/xcoast
 (cd ~/Github/oceanmesh && pip install -e . --no-deps --no-build-isolation)  # compiles C++
@@ -608,7 +609,7 @@ reproduced all six files of the 2026-09-22 base byte for byte.
 - The same `DATA_DIR` files. `report.json` lists their hashes, and a
   different OSM extract gives a different coastline.
 - The oceanmesh fork (estuarine-utokyo/oceanmesh), current `main`.
-- The `fvcom-mesh` environment, built from `environment.yml` (§1).
+- The `fvcom-mesh-tools` environment, built from `environment.yml` (§1).
 
 M7001 is licensed (§2.3). Without it the mesh can be rebuilt, but not its
 depths.

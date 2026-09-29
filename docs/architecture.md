@@ -311,8 +311,10 @@ conda-forge) and a pure-pip install with layered extras.
 
 ### 6.1 Conda envs (GENKAI reproducible)
 
-On OCTOPUS the environment is `fvcom-mesh`, built from `environment.yml`
-(2026-09-29); the names below are the GENKAI-era history.
+On OCTOPUS the environment is `fvcom-mesh-tools`, built from `environment.yml`
+(2026-09-29). It carries the name of the repository it serves, as `xfvcom`
+does for the FVCOM pre- and post-processing, so there is one name to
+remember. The names below are the GENKAI-era history.
 
 Two reproducible conda environments cover the toolkit:
 

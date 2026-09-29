@@ -29,10 +29,10 @@ the owner's global settings, plus the rules for delegated work.
   write or edit the job script, and put the exact `qsub` command in
   your report. The delegating session submits it and reads the log.
 - Compute nodes have no network access.
-- Conda env: `fvcom-mesh` under
+- Conda env: `fvcom-mesh-tools` under
   `/octfs/work/G16445/v61021/miniforge3`. Activate with
   `. /octfs/work/G16445/v61021/miniforge3/etc/profile.d/conda.sh &&
-  conda activate fvcom-mesh`.
+  conda activate fvcom-mesh-tools`.
 - Dependencies come from conda-forge only (`mamba install -c
   conda-forge ...`). Do not use `pip install` except
   `pip install -e . --no-deps --no-build-isolation` for the owner's own

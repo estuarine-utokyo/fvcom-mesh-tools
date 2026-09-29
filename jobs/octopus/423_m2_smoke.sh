@@ -79,7 +79,7 @@ done
 # finite fields (review F6); it needs the conda Python back.
 module purge
 unset LD_LIBRARY_PATH
-set +u; conda activate "${FMESH_ENV:-fvcom-mesh}"; set -u
+set +u; conda activate "${FMESH_ENV:-fvcom-mesh-tools}"; set -u
 for case in base refined; do
     python -m fvcom_mesh_tools.cli.check_run "$SMOKE/$case" || fail=1
 done

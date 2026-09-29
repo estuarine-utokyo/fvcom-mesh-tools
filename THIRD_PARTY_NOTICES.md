@@ -49,7 +49,7 @@ Use the project's `environment.yml`:
 
 ```bash
 mamba env create -f environment.yml
-mamba activate fvcom-mesh
+mamba activate fvcom-mesh-tools
 pip install --no-deps oceanmesh        # GPL-3.0-or-later (PyPI)
 pip install --no-deps -e .             # this package, editable
 ```

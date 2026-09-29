@@ -1,4 +1,4 @@
-name: fvcom-mesh
+name: fvcom-mesh-tools
 channels:
   - conda-forge
   - nodefaults
