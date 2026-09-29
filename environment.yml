@@ -23,6 +23,7 @@ dependencies:
   - pyyaml      # recipe files
   - xlrd        # .xls area tables of the Cabinet Office topography
   - pyarrow     # M7001 soundings (parquet)
+  - utide       # tidal harmonic analysis and prediction (MIT)
   - plotly
   - pyogrio     # xcoast
   - triangle    # oceanmesh optional import
