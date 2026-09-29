@@ -12,7 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-__all__ = ["DEPTH_PRODUCTS", "REQUIRED_SETTINGS", "load_base_recipe", "read_open_boundary"]
+__all__ = ["DEPTH_PRODUCTS", "REFERENCE_KEYS", "REQUIRED_SETTINGS", "compare_to_reference",
+           "load_base_recipe", "read_open_boundary"]
 
 #: Depth products the build knows.
 DEPTH_PRODUCTS = ("m7001_production",)
@@ -27,6 +28,14 @@ REQUIRED_SETTINGS = (
     "SR_ONE_WIDE", "SR_COAST_FIT", "SR_FIN_SEED", "SR_GEN_SEED",
 )
 _OPTIONAL_SETTINGS = ("SR_OBC_H0", "SR_OBC_H1", "SR_EDITS_EXCLUDE")
+#: What a recipe's ``reference`` block records of the mesh it reproduces.
+#: Byte identity is not required: the environment follows the latest
+#: conda-forge releases and the oceanmesh fork evolves upward-compatibly
+#: (owner, 2026-09-29), so a mesh that differs slightly but keeps these
+#: within ``tolerance`` and passes every QA gate reproduces the reference.
+REFERENCE_KEYS = ("fort14_sha256", "n_nodes", "n_elements", "n_obc_nodes", "wet_area_km2",
+                  "tolerance")
+_TOLERANCE_KEYS = ("n_nodes", "n_elements", "wet_area_km2")
 _PATH_SETTINGS = ("SR_OUT", "SR_LAND", "SR_OBC_FILE", "SR_DOMAIN_FILE", "SR_EDITS_DIR",
                   "SR_SIZING")
 
@@ -107,7 +116,45 @@ def load_base_recipe(path) -> dict[str, Any]:
     out["settings"] = {k: str(v) for k, v in settings.items()}
     if raw["depths"] not in DEPTH_PRODUCTS:
         raise ValueError(f"{path}: depths must be one of {DEPTH_PRODUCTS}")
-    ref = raw.get("reference_fort14_sha256")
-    if ref is not None and not (isinstance(ref, str) and len(ref) == 64):
-        raise ValueError(f"{path}: reference_fort14_sha256 is a SHA-256 hex digest")
+    ref = raw.get("reference")
+    if ref is not None:
+        if not isinstance(ref, dict) or sorted(ref) != sorted(REFERENCE_KEYS):
+            raise ValueError(f"{path}: reference needs exactly {list(REFERENCE_KEYS)}")
+        sha = ref["fort14_sha256"]
+        if not (isinstance(sha, str) and len(sha) == 64):
+            raise ValueError(f"{path}: reference.fort14_sha256 is a SHA-256 hex digest")
+        tol = ref["tolerance"]
+        if not (isinstance(tol, dict) and sorted(tol) == sorted(_TOLERANCE_KEYS)
+                and all(isinstance(v, (int, float)) and 0 <= v < 1 for v in tol.values())):
+            raise ValueError(f"{path}: reference.tolerance gives a relative bound in [0, 1) "
+                             f"for each of {list(_TOLERANCE_KEYS)}")
+        for k in ("n_nodes", "n_elements", "n_obc_nodes", "wet_area_km2"):
+            if not (isinstance(ref[k], (int, float)) and ref[k] > 0):
+                raise ValueError(f"{path}: reference.{k} must be positive")
     return out
+
+
+def compare_to_reference(summary: dict[str, Any], reference: dict[str, Any],
+                         qa_passed: bool) -> dict[str, Any]:
+    """Does a built mesh reproduce the recipe's reference?
+
+    ``summary`` holds the built mesh's ``fort14_sha256``, ``n_nodes``,
+    ``n_elements``, ``n_obc_nodes`` and ``wet_area_km2``.  ``byte_identical``
+    compares the hashes; ``reproduces`` asks for every QA gate passed, the
+    same open-boundary node count (the boundary is an input), and node count,
+    element count and wet area each within its relative tolerance.
+    """
+    tol = reference["tolerance"]
+    rel = {k: (summary[k] - reference[k]) / reference[k] for k in _TOLERANCE_KEYS}
+    within = {k: abs(rel[k]) <= tol[k] for k in _TOLERANCE_KEYS}
+    same_obc = summary["n_obc_nodes"] == reference["n_obc_nodes"]
+    return {
+        "byte_identical": summary["fort14_sha256"] == reference["fort14_sha256"],
+        "reproduces": bool(qa_passed and same_obc and all(within.values())),
+        "qa_passed": bool(qa_passed),
+        "same_open_boundary_nodes": bool(same_obc),
+        "relative_difference": rel,
+        "within_tolerance": within,
+        "built": {k: summary[k] for k in ("n_nodes", "n_elements", "n_obc_nodes",
+                                          "wet_area_km2")},
+    }

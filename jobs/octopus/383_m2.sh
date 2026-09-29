@@ -68,7 +68,7 @@ done
 module purge
 unset LD_LIBRARY_PATH
 set +u
-conda activate "${FMESH_ENV:-oceanmesh-bench}"
+conda activate "${FMESH_ENV:-fvcom-mesh}"
 set -u
 cd "$REPO"
 "$PYTHON" notebooks/384_m2_analysis.py --root "$RUN_ROOT" || status=1

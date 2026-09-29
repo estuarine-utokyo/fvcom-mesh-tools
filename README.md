@@ -128,8 +128,8 @@ compiled scientific stack from conda-forge or a pip-only setup.
 ### Conda (recommended for full functionality)
 
 ```bash
-mamba env create -n oceanmesh-bench -f environment.yml   # conda-forge only
-mamba activate oceanmesh-bench
+mamba env create -n fvcom-mesh -f environment.yml   # conda-forge only
+mamba activate fvcom-mesh
 # Local repositories only; --no-build-isolation keeps pip off PyPI.
 # our fork, GPL-3.0-or-later: https://github.com/estuarine-utokyo/oceanmesh
 # (clone it to ~/Github/oceanmesh; the PyPI/upstream oceanmesh lacks pfix/egfix CDT)

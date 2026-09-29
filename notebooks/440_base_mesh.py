@@ -31,7 +31,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
-from fvcom_mesh_tools.base_recipe import load_base_recipe  # noqa: E402
+import numpy as np  # noqa: E402
+
+from fvcom_mesh_tools.base_recipe import compare_to_reference, load_base_recipe  # noqa: E402
 from fvcom_mesh_tools.provenance import collect, dataset_files, file_sha256  # noqa: E402
 
 T0 = time.time()
@@ -108,7 +110,23 @@ report = json.loads(report_path.read_text())
 case = recipe["case"]
 products = {p.name: file_sha256(p) for p in sorted(OUT.glob(f"{case}*"))}
 fort14 = products.get(f"{case}.14")
-ref = recipe.get("reference_fort14_sha256")
+ref = recipe.get("reference")
+qa = json.loads((OUT / f"{case}_qa.json").read_text())
+
+
+def wet_area_km2(grd):
+    lines = Path(grd).read_text().splitlines()
+    nn, ne = (int(lines[k].split("=")[1]) for k in (0, 1))
+    tri = np.array([ln.split()[1:4] for ln in lines[2:2 + ne]], dtype=np.int64) - 1
+    xy = np.array([ln.split()[1:3] for ln in lines[2 + ne:2 + ne + nn]], dtype=float)
+    a, b = xy[tri[:, 1]] - xy[tri[:, 0]], xy[tri[:, 2]] - xy[tri[:, 0]]
+    return float(np.abs(0.5 * (a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0])).sum() / 1e6)
+
+
+summary = {"fort14_sha256": fort14, "n_nodes": qa["mesh"]["n_nodes"],
+           "n_elements": qa["mesh"]["n_elements"], "n_obc_nodes": qa["mesh"]["n_obc_nodes"],
+           "wet_area_km2": wet_area_km2(OUT / f"{case}_grd.dat")}
+verdict = None if ref is None else compare_to_reference(summary, ref, qa["passed"])
 
 
 def spec_path(name):
@@ -120,8 +138,8 @@ edits = sorted(Path(recipe["edits"]).glob("*.json"))
 report.update(
     recipe=recipe["recipe_path"],
     products_sha256=products,
-    reference_fort14_sha256=ref,
-    reproduces_reference=(None if ref is None else fort14 == ref),
+    reference=ref,
+    reproduction=verdict,
     settings=recipe["settings"],
     seeds={"generate": int(recipe["settings"]["SR_GEN_SEED"]),
            "finish": int(recipe["settings"]["SR_FIN_SEED"])},
@@ -141,10 +159,14 @@ report.update(
     ),
 )
 report_path.write_text(json.dumps(report, indent=1, default=str))
-if ref is None:
+if verdict is None:
     say(f"fort.14 sha256 {fort14}")
-elif fort14 == ref:
-    say("fort.14 reproduces the recipe's reference byte for byte")
 else:
-    say(f"fort.14 differs from the recipe's reference ({fort14} vs {ref})")
+    rel = ", ".join(f"{k} {v:+.2%}" for k, v in verdict["relative_difference"].items())
+    say(("REPRODUCES" if verdict["reproduces"] else "DOES NOT REPRODUCE")
+        + f" the recipe's reference ({rel}; QA "
+        + ("passed" if verdict["qa_passed"] else "FAILED") + "; "
+        + ("byte-identical" if verdict["byte_identical"] else "not byte-identical") + ")")
 say("done")
+if verdict is not None and not verdict["reproduces"]:
+    sys.exit(3)

@@ -33,6 +33,6 @@ export DATA_DIR="${DATA_DIR:-/octfs/work/G16445/share/Data}"
 # conda's activate scripts are not `set -u` clean.
 set +u
 . /octfs/work/G16445/v61021/miniforge3/etc/profile.d/conda.sh
-conda activate "${FMESH_ENV:-oceanmesh-bench}"
+conda activate "${FMESH_ENV:-fvcom-mesh}"
 set -u
 echo "python=$(command -v python) DATA_DIR=${DATA_DIR}"

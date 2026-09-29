@@ -56,7 +56,7 @@ fi
 # the run is judged on its output as well as its log (review F6)
 module purge
 unset LD_LIBRARY_PATH
-set +u; conda activate "${FMESH_ENV:-oceanmesh-bench}"; set -u
+set +u; conda activate "${FMESH_ENV:-fvcom-mesh}"; set -u
 # RUN_OK only when the solver's own exit AND the output check both pass
 # (review 2, R2); the check always runs, for its diagnosis
 if [ "$status" -eq 0 ]; then

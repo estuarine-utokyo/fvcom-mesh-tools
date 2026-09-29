@@ -6,7 +6,12 @@ import numpy as np
 import pytest
 import yaml
 
-from fvcom_mesh_tools.base_recipe import REQUIRED_SETTINGS, load_base_recipe, read_open_boundary
+from fvcom_mesh_tools.base_recipe import (
+    REQUIRED_SETTINGS,
+    compare_to_reference,
+    load_base_recipe,
+    read_open_boundary,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 RECIPE = REPO / "recipes/base/tokyo_bay_tool.yaml"
@@ -24,7 +29,7 @@ def test_the_tokyo_bay_recipe_loads_and_writes_out_every_setting():
     r = load_base_recipe(RECIPE)
     assert set(REQUIRED_SETTINGS) <= set(r["settings"])
     assert Path(r["open_boundary"]).is_file() and Path(r["edits"]).is_dir()
-    assert r["reference_fort14_sha256"]
+    assert r["reference"]["n_nodes"] == 4734
 
 
 def test_the_open_boundary_input_is_the_arc_the_code_carried_bit_for_bit():
@@ -77,3 +82,41 @@ def test_a_bad_open_boundary_is_refused(tmp_path, text):
     p.write_text(text)
     with pytest.raises(ValueError):
         read_open_boundary(p)
+
+
+def test_a_malformed_reference_is_refused(tmp_path):
+    ref = yaml.safe_load(RECIPE.read_text())["reference"]
+    for bad in ({k: v for k, v in ref.items() if k != "wet_area_km2"},
+                dict(ref, fort14_sha256="abc"),
+                dict(ref, tolerance={"n_nodes": 0.05}),
+                dict(ref, tolerance=dict(ref["tolerance"], n_nodes=1.5)),
+                dict(ref, n_nodes=0)):
+        with pytest.raises(ValueError, match="reference"):
+            load_base_recipe(_write(tmp_path, reference=bad))
+
+
+def _summary(ref, **kw):
+    s = {k: ref[k] for k in ("fort14_sha256", "n_nodes", "n_elements", "n_obc_nodes",
+                             "wet_area_km2")}
+    s.update(kw)
+    return s
+
+
+def test_the_reference_is_reproduced_without_byte_identity():
+    """A slightly different mesh reproduces; byte identity is reported apart."""
+    ref = load_base_recipe(RECIPE)["reference"]
+    same = compare_to_reference(_summary(ref), ref, qa_passed=True)
+    assert same["byte_identical"] and same["reproduces"]
+    near = compare_to_reference(
+        _summary(ref, fort14_sha256="0" * 64, n_nodes=ref["n_nodes"] + 100,
+                 wet_area_km2=ref["wet_area_km2"] * 1.005), ref, qa_passed=True)
+    assert near["reproduces"] and not near["byte_identical"]
+
+
+@pytest.mark.parametrize("kw, qa", [({}, False),
+                                    ({"n_obc_nodes": 14}, True),
+                                    ({"n_elements": 9000}, True),
+                                    ({"wet_area_km2": 1400.0}, True)])
+def test_the_reference_is_not_reproduced(kw, qa):
+    ref = load_base_recipe(RECIPE)["reference"]
+    assert not compare_to_reference(_summary(ref, **kw), ref, qa_passed=qa)["reproduces"]

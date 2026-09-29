@@ -83,8 +83,8 @@ installed editable, without letting pip fetch anything:
 
 ```bash
 # on a login node (compute nodes have no network)
-mamba env create -n oceanmesh-bench -f environment.yml
-mamba activate oceanmesh-bench
+mamba env create -n fvcom-mesh -f environment.yml
+mamba activate fvcom-mesh
 git clone https://github.com/estuarine-utokyo/oceanmesh.git ~/Github/oceanmesh
 git clone https://github.com/estuarine-utokyo/xcoast.git ~/Github/xcoast
 (cd ~/Github/oceanmesh && pip install -e . --no-deps --no-build-isolation)  # compiles C++
@@ -580,25 +580,35 @@ It takes about six minutes on 16 cores. The steps
 | `edits` | the directory of hand-drawn corrections, applied in file-name order |
 | `settings` | every generation and finishing setting, written out -- a default changed in the code must not change the mesh -- including the seeds (`SR_GEN_SEED`, `SR_FIN_SEED`) |
 | `depths` | the depth product (`m7001_production`) |
-| `reference_fort14_sha256` | the mesh the recipe is meant to reproduce |
+| `reference` | the mesh the recipe reproduces: its fort.14 hash, node and element counts, open-boundary node count, wet area, and the relative tolerances |
 
-**What makes it reproducible.** The seeds are fixed and the thread count is
-fixed at 16. `report.json` records:
+**What "reproduce" means.** The environment is not pinned: it follows the
+latest conda-forge releases, and the oceanmesh fork evolves
+upward-compatibly -- a new feature must leave the existing examples
+substantively reproducible. A mesh may therefore change slightly (and may
+get better). The build **reproduces** the reference when every QA gate
+passes, the open boundary keeps its node count, and the node count, element
+count and wet area stay within the recipe's relative tolerances (5 %, 5 %,
+1 %). Otherwise `440_base_mesh.py` exits with status 3. Byte identity is
+reported separately.
+
+The seeds are fixed and the thread count is fixed at 16. `report.json`
+records:
 - the commit of this repository and of the oceanmesh fork, with any changes
-  not committed;
+  not committed, and the version of every library;
 - the SHA-256 of the recipe, its files and every raw input;
 - the effective settings and seeds;
-- the hashes of the products, and whether the fort.14 reproduces the
-  reference byte for byte.
+- the hashes of the products and the comparison with the reference
+  (`reproduction`).
 
-The build of 2026-09-28 (`aa6e1c6`) reproduced all six files of the
-2026-09-22 base.
+The build of 2026-09-28 (`aa6e1c6`, environment `oceanmesh-bench`)
+reproduced all six files of the 2026-09-22 base byte for byte.
 
 **What another user needs.**
 - The same `DATA_DIR` files. `report.json` lists their hashes, and a
   different OSM extract gives a different coastline.
-- The oceanmesh fork, installed at the recorded commit.
-- The `oceanmesh-bench` environment.
+- The oceanmesh fork (estuarine-utokyo/oceanmesh), current `main`.
+- The `fvcom-mesh` environment, built from `environment.yml` (§1).
 
 M7001 is licensed (§2.3). Without it the mesh can be rebuilt, but not its
 depths.

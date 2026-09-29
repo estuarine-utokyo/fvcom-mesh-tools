@@ -13,7 +13,7 @@
 #
 # The env itself is created on the LOGIN node (compute nodes have no
 # network), from conda-forge only:
-#   mamba env create -n oceanmesh-bench -f environment.yml
+#   mamba env create -n fvcom-mesh -f environment.yml
 # This job then builds, without network and without PyPI:
 #   ../oceanmesh   (our fork; C++/CGAL extensions compiled in place)
 #   .              (fvcom-mesh-tools)

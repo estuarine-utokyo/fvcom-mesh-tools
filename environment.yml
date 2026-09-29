@@ -42,6 +42,7 @@ dependencies:
   # Dev tooling
   - pytest
   - ruff
+  - pre-commit
   - pip
   # oceanmesh is GPL-3.0-or-later and NOT on conda-forge/PyPI —
   # install our fork (constrained Delaunay / pfix / egfix) from a

@@ -62,6 +62,17 @@ settings:
 # licensed data (USER_GUIDE section 2.3).
 depths: m7001_production
 
-# The mesh of 2026-09-22 (outputs/base_tool/TokyoBayTool.14). The run says
-# whether it reproduced it byte for byte.
-reference_fort14_sha256: db4d461a7c8f4e27e8146be98ea7b0b0cfc424a64d56fd581e341d154698b56c
+# The mesh of 2026-09-22 (outputs/base_tool/TokyoBayTool.14). The build is
+# not expected to match it byte for byte: the environment follows the latest
+# conda-forge releases and the oceanmesh fork evolves upward-compatibly. It
+# REPRODUCES the reference when every QA gate passes, the open boundary keeps
+# its node count, and the node count, element count and wet area stay within
+# the relative tolerances below; report.json also says whether it is
+# byte-identical.
+reference:
+  fort14_sha256: db4d461a7c8f4e27e8146be98ea7b0b0cfc424a64d56fd581e341d154698b56c
+  n_nodes: 4734
+  n_elements: 8252
+  n_obc_nodes: 13
+  wet_area_km2: 1354.417
+  tolerance: {n_nodes: 0.05, n_elements: 0.05, wet_area_km2: 0.01}
