@@ -115,14 +115,19 @@ h, srep = compose_sizing(ambient, x, y, grade=S["gradation"], floor=floor, bands
 fd.values = h / S["dm_scale"] * DEG
 fd.build_interpolant()
 say("sizing " + json.dumps(srep))
+np.savez_compressed(OUT / "sizing.npz", lon=lon_g, lat=lat_g, h=h, floor=floor, depth=depth_g)
 
 # ------------------------------------------------------------- generation
 PFIX = np.vstack([iface_ll, OBC])
 ni = len(iface_ll)
 SEGS = np.vstack([np.column_stack([np.arange(ni - 1), np.arange(1, ni)]),
                   ni + np.column_stack([np.arange(len(OBC) - 1), np.arange(1, len(OBC))])])
+# cleanup="none": oceanmesh's default clean deletes low-quality boundary
+# faces with no protection for fixed points (only faces carrying a fixed edge
+# are spared), and the first build lost 14 of the new boundary's nodes that
+# way. The finishing chain in 447 repairs quality with the lines held fixed.
 p, t = om.generate_mesh(sdf, fd, max_iter=int(S["max_iter"]), seed=int(S["gen_seed"]),
-                        pfix=PFIX, egfix=SEGS)
+                        pfix=PFIX, egfix=SEGS, cleanup="none")
 ne0 = len(t)
 
 
