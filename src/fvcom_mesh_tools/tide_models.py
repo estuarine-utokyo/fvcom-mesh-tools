@@ -21,11 +21,15 @@ is land.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 
-__all__ = ["NAO_CONSTITUENTS", "load_nao", "read_nao", "sample_constants"]
+__all__ = [
+    "NAO_CONSTITUENTS", "fvcom_spectral", "load_nao", "read_nao", "sample_constants",
+    "spectral_text",
+]
 
 #: The 16 constituents of NAO.99 and their file stems.
 NAO_CONSTITUENTS = {
@@ -121,3 +125,62 @@ def sample_constants(grid: dict, lon, lat, fill_cells: int = 3):
         val[filled] = got
         filled[np.flatnonzero(filled)[~ok]] = False
     return np.abs(val), np.degrees(-np.angle(val)) % 360, filled
+
+
+def fvcom_spectral(names, amp, phase, start: datetime, mid: datetime, lat: float):
+    """Greenwich constants -> FVCOM spectral forcing (period s, amplitude m, phase deg).
+
+    FVCOM's spectral open-boundary forcing is ``A cos(2 pi t / T - phi)`` with
+    ``t`` in seconds since the file's Time Origin, so the astronomical
+    argument has to go into the phase: ``phi = G - V0(start) - u`` and
+    ``A = f * amp``. ``V0`` is taken at ``start`` (the Time Origin); the
+    nodal factors ``f`` and ``u`` are frozen at ``mid`` -- FVCOM cannot vary
+    them, and over a few months they change by a few percent / degrees at
+    most (K1, O1). Astronomy is utide's (``FUV``, Greenwich, exact nodal),
+    so that a harmonic analysis with utide sees the same convention.
+
+    ``amp`` and ``phase`` have shape ``(n_names, n_points)``; times are UTC.
+    """
+    from utide._ut_constants import ut_constants
+    from utide.harmonics import FUV
+
+    all_names = list(ut_constants.const.name)
+    try:
+        lind = np.array([all_names.index(n.upper()) for n in names])
+    except ValueError as err:
+        raise ValueError(f"utide does not know a constituent in {list(names)}") from err
+    flags = np.array([0, 0, 0, 0])
+    t0, tm = (np.array([d.toordinal() + (d - datetime(d.year, d.month, d.day)).total_seconds()
+                        / 86400.0]) for d in (start, mid))
+    _, _, v0 = FUV(t0, t0[0], lind, float(lat), flags)
+    f, u, _ = FUV(tm, tm[0], lind, float(lat), flags)
+    f, u, v0 = f.ravel(), u.ravel() * 360.0, v0.ravel() * 360.0
+    period = 3600.0 / ut_constants.const.freq[lind]
+    amp = np.asarray(amp, float)
+    phase = np.asarray(phase, float)
+    return (period, f[:, None] * amp,
+            (phase - v0[:, None] - u[:, None]) % 360.0)
+
+
+def spectral_text(names, period, amp, phase, origin: str) -> str:
+    """An FVCOM non-Julian (spectral) tidal forcing file, several constituents.
+
+    ``amp`` and ``phase`` have shape ``(n_names, n_obc)``, in open-boundary
+    order; the first column of each row is the open-boundary ordinal, not the
+    mesh node number.
+    """
+    amp = np.atleast_2d(np.asarray(amp, float))
+    phase = np.atleast_2d(np.asarray(phase, float))
+    if amp.shape != phase.shape or not amp.shape[0] == len(names) == len(period):
+        raise ValueError("names, period, amp and phase disagree in shape")
+    if not (np.isfinite(amp).all() and np.isfinite(phase).all()):
+        raise ValueError("non-finite amplitude or phase")
+    n = amp.shape[1]
+    lines = [f"Tidal Component Number = {len(names)}"]
+    lines += [f"{i} = {c} {p:.10f}" for i, (c, p) in enumerate(zip(names, period), 1)]
+    lines += [f"Time Origin = {origin}", f"OBC Node Number = {n}"]
+    for label, values in (("Amplitude", amp), ("Phase", phase), ("Eref", np.zeros((1, n)))):
+        lines.append(label)
+        lines += [f"{j + 1} " + " ".join(f"{v:.8f}" for v in values[:, j]) for j in range(n)]
+        lines.append(label)
+    return "\n".join(lines) + "\n"

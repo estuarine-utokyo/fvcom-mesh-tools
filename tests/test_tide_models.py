@@ -1,9 +1,17 @@
 """Ocean tide model constants (tide_models.py)."""
 
+from datetime import datetime
+
 import numpy as np
 import pytest
 
-from fvcom_mesh_tools.tide_models import load_nao, read_nao, sample_constants
+from fvcom_mesh_tools.tide_models import (
+    fvcom_spectral,
+    load_nao,
+    read_nao,
+    sample_constants,
+    spectral_text,
+)
 
 
 def _write_nao(path, amp_cm, phase_deg, xmin=139.0, ymax=35.0, d="1/   12"):
@@ -68,3 +76,32 @@ def test_load_nao_names_its_constituents(tmp_path):
         load_nao(tmp_path, ["X9"])
     with pytest.raises(FileNotFoundError):
         load_nao(tmp_path, ["S2"])
+
+
+def test_fvcom_spectral_round_trips_through_utide():
+    # An FVCOM-style series built from the converted constants must analyse
+    # back to the Greenwich constants it came from.
+    import utide
+
+    names = ["M2", "K1", "O1"]
+    amp = np.array([[0.5], [0.25], [0.2]])
+    phase = np.array([[150.0], [200.0], [300.0]])
+    start = datetime(2021, 1, 1)
+    period, a, ph = fvcom_spectral(names, amp, phase, start, datetime(2021, 1, 31), 35.0)
+    t = np.arange(0, 60 * 86400, 1800.0)
+    eta = sum(a[k, 0] * np.cos(2 * np.pi * t / period[k] - np.radians(ph[k, 0]))
+              for k in range(3))
+    days = start.toordinal() + t / 86400   # Python ordinal days, as utide's epoch="python"
+    coef = utide.solve(days, eta, lat=35.0, constit=names, method="ols", conf_int="none",
+                       verbose=False, epoch="python")
+    got = dict(zip(coef.name, zip(coef.A, coef.g)))
+    for k, c in enumerate(names):
+        assert abs(got[c][0] - amp[k, 0]) < 0.003
+        assert abs((got[c][1] - phase[k, 0] + 180) % 360 - 180) < 0.3
+
+
+def test_spectral_text_rejects_bad_input():
+    with pytest.raises(ValueError):
+        spectral_text(["M2"], [44714.0], [[np.nan]], [[0.0]], "2021-01-01 00:00:00")
+    with pytest.raises(ValueError):
+        spectral_text(["M2", "K1"], [1.0, 2.0], [[1.0]], [[0.0]], "2021-01-01 00:00:00")
