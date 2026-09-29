@@ -13,6 +13,11 @@ harmonic analysis that uses the same astronomy (utide) on both series.
 200 days by default: K1/P1 and S2/K2 need 183 days to be told apart
 (Rayleigh), and the first 15 days are spin-up.
 
+With ``--equilibrium`` the forcing file also carries the tidal potential
+(equilibrium tide, ``tide_models.EQUILIBRIUM``, with the same f and V0+u as
+the open boundary); it needs an FVCOM built with -DEQUI_TIDE and the owner's
+extension that reads f and V0+u (FVCOM ``octopus/build_fvcom_equi.sh``).
+
 Everything else -- namelist, sigma, the external step rule, the sponge -- is
 448's, which is 383/414's.
 """
@@ -40,6 +45,7 @@ from fvcom_mesh_tools.io.fvcom_native import (  # noqa: E402
     read_fvcom_case,
 )
 from fvcom_mesh_tools.tide_models import (  # noqa: E402
+    astronomy,
     fvcom_spectral,
     load_nao,
     sample_constants,
@@ -67,6 +73,8 @@ p.add_argument("--start", default="2021-01-01")
 p.add_argument("--days", type=float, default=200.0)
 p.add_argument("--nao", type=Path, default=None,
                help="NAO.99Jb ocean/ directory (default $DATA_DIR/tides/models/NAO.99Jb/ocean)")
+p.add_argument("--equilibrium", action="store_true",
+               help="add the tidal potential (needs an FVCOM built with -DEQUI_TIDE)")
 a = p.parse_args()
 if a.nao is None:
     if not os.environ.get("DATA_DIR"):
@@ -118,7 +126,10 @@ if not (np.isfinite(amp).all() and np.isfinite(pha).all()):
     raise SystemExit(f"NAO.99Jb has no ocean near open-boundary node(s) {bad.tolist()}")
 mid = start + (end - start) / 2
 period, famp, fpha = fvcom_spectral(CONSTITUENTS, amp, pha, start, mid, float(lat[ob].mean()))
-(inp / "m2_tide.dat").write_text(spectral_text(CONSTITUENTS, period, famp, fpha, M383.START))
+_, f_nodal, v0u = astronomy(CONSTITUENTS, start, mid, float(lat[ob].mean()))
+(inp / "m2_tide.dat").write_text(spectral_text(
+    CONSTITUENTS, period, famp, fpha, M383.START,
+    equilibrium=(f_nodal, v0u) if a.equilibrium else None))
 with open(case / "obc_constants.csv", "w") as fh:
     fh.write("obc,node,lon,lat,filled,"
              + ",".join(f"{c}_amp_m,{c}_g_deg" for c in CONSTITUENTS) + "\n")
@@ -140,7 +151,8 @@ manifest = {
     "purpose": "astronomical tide hindcast, NAO.99Jb on the open boundary",
     "case": str(a.case), "start": M383.START, "end": M383.END, "days": a.days,
     "nodal_f_u_at": mid.isoformat(), "constituents": list(CONSTITUENTS),
-    "tide_model": str(a.nao), "n_obc_filled_from_nearest": int(filled.sum()),
+    "tide_model": str(a.nao), "equilibrium_tide": bool(a.equilibrium),
+    "n_obc_filled_from_nearest": int(filled.sum()),
     "obc_amp_range_m": {c: [float(amp[k].min()), float(amp[k].max())]
                         for k, c in enumerate(CONSTITUENTS)},
     "dte_seconds": M383.DTE, "isplit": M383.ISPLIT,

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from fvcom_mesh_tools.tide_models import (
+    astronomy,
     fvcom_spectral,
     load_nao,
     read_nao,
@@ -105,3 +106,19 @@ def test_spectral_text_rejects_bad_input():
         spectral_text(["M2"], [44714.0], [[np.nan]], [[0.0]], "2021-01-01 00:00:00")
     with pytest.raises(ValueError):
         spectral_text(["M2", "K1"], [1.0, 2.0], [[1.0]], [[0.0]], "2021-01-01 00:00:00")
+
+
+def test_spectral_text_writes_the_equilibrium_columns():
+    names = ["M2", "K1"]
+    period, f, v0u = astronomy(names, datetime(2021, 1, 1), datetime(2021, 1, 31), 35.0)
+    text = spectral_text(names, period, [[0.1], [0.1]], [[0.0], [0.0]], "2021-01-01 00:00:00",
+                         equilibrium=(f, v0u))
+    m2 = text.splitlines()[1].split()
+    k1 = text.splitlines()[2].split()
+    assert m2[3:] == [f"{period[0]:.10f}", "0.242334", "0.693", "SEMIDIURNAL",
+                      f"{f[0]:.8f}", f"{v0u[0]:.6f}"]
+    assert k1[6] == "DIURNAL" and len(k1) == 9
+    # V0 + u of M2 at 2021-01-01 00 UT: V0 306.02 deg, u about -2 deg
+    assert abs((v0u[0] - 304.06 + 180) % 360 - 180) < 0.5
+    with pytest.raises(ValueError, match="no equilibrium"):
+        spectral_text(["MU2"], [1.0], [[0.1]], [[0.0]], "x", equilibrium=([1.0], [0.0]))

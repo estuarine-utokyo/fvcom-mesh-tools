@@ -15,7 +15,9 @@
 #
 # Required: FMESH_CASE (a case prefix), FMESH_RUN_ROOT (under $WORK_DIR),
 #           WORK_DIR, DATA_DIR (pass them with qsub -v).
-# Optional: FMESH_DAYS (200), FMESH_START (2021-01-01), FMESH_RANKS (64).
+# Optional: FMESH_DAYS (200), FMESH_START (2021-01-01), FMESH_RANKS (64),
+#           FMESH_EQUI=1 (add the tidal potential; then FMESH_FVCOM must be an
+#           FVCOM built with -DEQUI_TIDE), FMESH_FVCOM (the FVCOM binary).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/RUN_OK"
@@ -23,9 +25,11 @@ rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/RUN_OK"
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=$FMESH_RUN_ROOT
 RANKS=${FMESH_RANKS:-64}
-FVCOM=${WORK_DIR:?set WORK_DIR}/Github/FVCOM/src/fvcom
+FVCOM=${FMESH_FVCOM:-${WORK_DIR:?set WORK_DIR}/Github/FVCOM/src/fvcom}
+equi=()
+[ "${FMESH_EQUI:-0}" = 1 ] && equi=(--equilibrium)
 python notebooks/449_tide_nao_run.py --case "${FMESH_CASE:?set FMESH_CASE}" --root "$RUN_ROOT" \
-    --days "${FMESH_DAYS:-200}" --start "${FMESH_START:-2021-01-01}"
+    --days "${FMESH_DAYS:-200}" --start "${FMESH_START:-2021-01-01}" "${equi[@]}"
 CASE_DIR=$RUN_ROOT
 set +u; conda deactivate; set -u
 if ! type module >/dev/null 2>&1; then

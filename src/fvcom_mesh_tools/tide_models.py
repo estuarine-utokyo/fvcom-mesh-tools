@@ -27,8 +27,8 @@ from pathlib import Path
 import numpy as np
 
 __all__ = [
-    "NAO_CONSTITUENTS", "fvcom_spectral", "load_nao", "read_nao", "sample_constants",
-    "spectral_text",
+    "EQUILIBRIUM", "NAO_CONSTITUENTS", "astronomy", "fvcom_spectral", "load_nao", "read_nao",
+    "sample_constants", "spectral_text",
 ]
 
 #: The 16 constituents of NAO.99 and their file stems.
@@ -38,6 +38,17 @@ NAO_CONSTITUENTS = {
     "MU2": "mu2", "NU2": "nu2", "L2": "l2", "T2": "t2",
 }
 _MISSING = 999999
+
+#: Equilibrium tide per constituent: amplitude (m, Cartwright and Tayler,
+#: 1971), the elasticity factor beta = 1 + k - h (Wahr, 1981), and the
+#: species, as FVCOM's -DEQUI_TIDE reads them. The values are the ones
+#: ADCIRC tables for its tidal potential.
+EQUILIBRIUM = {
+    "M2": (0.242334, 0.693, "SEMIDIURNAL"), "S2": (0.112841, 0.693, "SEMIDIURNAL"),
+    "N2": (0.046398, 0.693, "SEMIDIURNAL"), "K2": (0.030704, 0.693, "SEMIDIURNAL"),
+    "K1": (0.141565, 0.736, "DIURNAL"), "O1": (0.100514, 0.695, "DIURNAL"),
+    "P1": (0.046843, 0.706, "DIURNAL"), "Q1": (0.019256, 0.695, "DIURNAL"),
+}
 
 
 def read_nao(path) -> dict:
@@ -127,19 +138,13 @@ def sample_constants(grid: dict, lon, lat, fill_cells: int = 3):
     return np.abs(val), np.degrees(-np.angle(val)) % 360, filled
 
 
-def fvcom_spectral(names, amp, phase, start: datetime, mid: datetime, lat: float):
-    """Greenwich constants -> FVCOM spectral forcing (period s, amplitude m, phase deg).
+def astronomy(names, start: datetime, mid: datetime, lat: float):
+    """Period (s), nodal factor f, and V0 + u (deg) of each constituent.
 
-    FVCOM's spectral open-boundary forcing is ``A cos(2 pi t / T - phi)`` with
-    ``t`` in seconds since the file's Time Origin, so the astronomical
-    argument has to go into the phase: ``phi = G - V0(start) - u`` and
-    ``A = f * amp``. ``V0`` is taken at ``start`` (the Time Origin); the
-    nodal factors ``f`` and ``u`` are frozen at ``mid`` -- FVCOM cannot vary
-    them, and over a few months they change by a few percent / degrees at
-    most (K1, O1). Astronomy is utide's (``FUV``, Greenwich, exact nodal),
-    so that a harmonic analysis with utide sees the same convention.
-
-    ``amp`` and ``phase`` have shape ``(n_names, n_points)``; times are UTC.
+    ``V0`` is the Greenwich astronomical argument at ``start``; ``f`` and
+    ``u`` are frozen at ``mid``. Astronomy is utide's (``FUV``, Greenwich,
+    exact nodal corrections), so a harmonic analysis with utide sees the same
+    convention. Times are UTC.
     """
     from utide._ut_constants import ut_constants
     from utide.harmonics import FUV
@@ -154,20 +159,41 @@ def fvcom_spectral(names, amp, phase, start: datetime, mid: datetime, lat: float
                         / 86400.0]) for d in (start, mid))
     _, _, v0 = FUV(t0, t0[0], lind, float(lat), flags)
     f, u, _ = FUV(tm, tm[0], lind, float(lat), flags)
-    f, u, v0 = f.ravel(), u.ravel() * 360.0, v0.ravel() * 360.0
     period = 3600.0 / ut_constants.const.freq[lind]
+    return period, f.ravel(), (v0.ravel() + u.ravel()) * 360.0 % 360.0
+
+
+def fvcom_spectral(names, amp, phase, start: datetime, mid: datetime, lat: float):
+    """Greenwich constants -> FVCOM spectral forcing (period s, amplitude m, phase deg).
+
+    FVCOM's spectral open-boundary forcing is ``A cos(2 pi t / T - phi)`` with
+    ``t`` in seconds since the file's Time Origin, so the astronomical
+    argument has to go into the phase: ``phi = G - V0(start) - u`` and
+    ``A = f * amp``. ``V0`` is taken at ``start`` (the Time Origin); the
+    nodal factors ``f`` and ``u`` are frozen at ``mid`` -- FVCOM cannot vary
+    them, and over a few months they change by a few percent / degrees at
+    most (K1, O1). See :func:`astronomy`.
+
+    ``amp`` and ``phase`` have shape ``(n_names, n_points)``; times are UTC.
+    """
+    period, f, v0u = astronomy(names, start, mid, lat)
     amp = np.asarray(amp, float)
     phase = np.asarray(phase, float)
-    return (period, f[:, None] * amp,
-            (phase - v0[:, None] - u[:, None]) % 360.0)
+    return period, f[:, None] * amp, (phase - v0u[:, None]) % 360.0
 
 
-def spectral_text(names, period, amp, phase, origin: str) -> str:
+def spectral_text(names, period, amp, phase, origin: str, equilibrium=None) -> str:
     """An FVCOM non-Julian (spectral) tidal forcing file, several constituents.
 
     ``amp`` and ``phase`` have shape ``(n_names, n_obc)``, in open-boundary
     order; the first column of each row is the open-boundary ordinal, not the
     mesh node number.
+
+    ``equilibrium=(f, v0u)`` adds, to each component line, what an FVCOM built
+    with ``-DEQUI_TIDE`` reads: the equilibrium amplitude, beta and species
+    (:data:`EQUILIBRIUM`), then the nodal factor and V0 + u (deg) at the Time
+    Origin -- the owner's FVCOM extension, which makes the tidal potential use
+    the same astronomy as the open boundary.
     """
     amp = np.atleast_2d(np.asarray(amp, float))
     phase = np.atleast_2d(np.asarray(phase, float))
@@ -177,7 +203,15 @@ def spectral_text(names, period, amp, phase, origin: str) -> str:
         raise ValueError("non-finite amplitude or phase")
     n = amp.shape[1]
     lines = [f"Tidal Component Number = {len(names)}"]
-    lines += [f"{i} = {c} {p:.10f}" for i, (c, p) in enumerate(zip(names, period), 1)]
+    for i, (c, p) in enumerate(zip(names, period), 1):
+        line = f"{i} = {c} {p:.10f}"
+        if equilibrium is not None:
+            if c.upper() not in EQUILIBRIUM:
+                raise ValueError(f"no equilibrium tide for {c}; known {sorted(EQUILIBRIUM)}")
+            a_eq, beta, kind = EQUILIBRIUM[c.upper()]
+            f, v0u = equilibrium[0][i - 1], equilibrium[1][i - 1]
+            line += f" {a_eq:.6f} {beta:.3f} {kind} {f:.8f} {v0u:.6f}"
+        lines.append(line)
     lines += [f"Time Origin = {origin}", f"OBC Node Number = {n}"]
     for label, values in (("Amplitude", amp), ("Phase", phase), ("Eref", np.zeros((1, n)))):
         lines.append(label)
