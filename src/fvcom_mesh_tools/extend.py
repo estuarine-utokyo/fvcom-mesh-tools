@@ -36,6 +36,7 @@ __all__ = [
     "graded_up",
     "merge_outer",
     "rfactor_smooth_free",
+    "trim_lone_corners",
     "verify_frozen_base",
 ]
 
@@ -242,3 +243,43 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, max_iter=5000):
         h = np.where(free, np.maximum(h + step, hmin), h)
     hi, hj = h[ei], h[ej]
     return h, int(max_iter), float((np.abs(hi - hj) / (hi + hj)).max())
+
+
+def trim_lone_corners(elements, mutable, keep_nodes=(), max_rounds=20):
+    """Drop the element under a node that no other element shares.
+
+    A cape one element wide ends in a node that sits in a single element;
+    FVCOM never updates such a node. Bisecting the element (as
+    ``walls.open_lone_corners`` does for wall bends) leaves two slivers at a
+    cape tip, so here the tip is not resolved: the element goes, as the
+    resolution principle says for what the element size cannot carry. Only
+    ``mutable`` elements are dropped, never one holding a node in
+    ``keep_nodes`` (the open boundary). Repeats while new lone nodes appear.
+
+    Returns ``(elements, mutable, report)``.
+    """
+    t = np.asarray(elements, np.int64)
+    mut = np.asarray(mutable, bool)
+    keep = set(int(v) for v in keep_nodes)
+    dropped, left = 0, []
+    for _ in range(max_rounds):
+        count = np.bincount(t.ravel(), minlength=int(t.max()) + 1)
+        edge_count: dict[tuple[int, int], int] = {}
+        for a, b in np.sort(np.vstack([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1).tolist():
+            edge_count[(a, b)] = edge_count.get((a, b), 0) + 1
+        drop = np.zeros(len(t), bool)
+        left = []
+        for v in np.flatnonzero(count == 1).tolist():
+            k = int(np.flatnonzero((t == v).any(axis=1))[0])
+            a, b = sorted(int(x) for x in t[k] if x != v)
+            # only a spike: the side facing the lone node is shared, so the
+            # element's removal leaves no new lone node behind
+            if mut[k] and not (set(t[k].tolist()) & keep) and edge_count[(a, b)] == 2:
+                drop[k] = True
+            else:
+                left.append(v)
+        if not drop.any():
+            break
+        t, mut = t[~drop], mut[~drop]
+        dropped += int(drop.sum())
+    return t, mut, {"n_elements_dropped": dropped, "lone_nodes_left": left}

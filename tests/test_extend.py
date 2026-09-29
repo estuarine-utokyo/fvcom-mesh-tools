@@ -138,3 +138,27 @@ def test_rfactor_smooth_free_leaves_fixed_nodes_alone():
     h, it, r = rfactor_smooth_free(np.array([10.0, 100.0]), np.array([0]), np.array([1]),
                                    np.array([False, False]), rmax=0.2, hmin=3.0)
     assert h.tolist() == [10.0, 100.0] and it == 0
+
+
+def test_trim_lone_corners_drops_a_cape_tip_but_not_a_kept_or_frozen_one():
+    from fvcom_mesh_tools.extend import trim_lone_corners
+
+    # a hexagonal fan around node 0 (ring 1..6) and a spike on edge 1-2
+    fan = [[0, i, i % 6 + 1] for i in range(1, 7)]
+    t = np.array(fan + [[1, 7, 2]])
+    out, mut, rep = trim_lone_corners(t, np.ones(len(t), bool))
+    assert rep["n_elements_dropped"] == 1 and not (out == 7).any() and len(out) == 6
+    assert rep["lone_nodes_left"] == []
+    out, mut, rep = trim_lone_corners(t, np.r_[np.ones(6, bool), False])
+    assert len(out) == 7 and rep["lone_nodes_left"] == [7]
+    out, mut, rep = trim_lone_corners(t, np.ones(len(t), bool), keep_nodes=[7])
+    assert len(out) == 7
+
+
+def test_trim_lone_corners_leaves_a_lone_corner_that_is_not_a_spike():
+    from fvcom_mesh_tools.extend import trim_lone_corners
+
+    # a lone triangle: its sides are all boundary, dropping it would orphan more
+    t = np.array([[0, 1, 2]])
+    out, mut, rep = trim_lone_corners(t, np.ones(1, bool))
+    assert len(out) == 1 and sorted(rep["lone_nodes_left"]) == [0, 1, 2]

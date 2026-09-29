@@ -32,6 +32,7 @@ from fvcom_mesh_tools.extend import (  # noqa: E402
     land_segments,
     merge_outer,
     rfactor_smooth_free,
+    trim_lone_corners,
     verify_frozen_base,
 )
 from fvcom_mesh_tools.extend_recipe import load_extend_recipe  # noqa: E402
@@ -39,7 +40,6 @@ from fvcom_mesh_tools.io.fort14 import read_fort14, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.patch import improve_patch  # noqa: E402
 from fvcom_mesh_tools.qa import run_qa  # noqa: E402
-from fvcom_mesh_tools.walls import open_lone_corners  # noqa: E402
 
 T0 = time.time()
 MESH_EPSG = 32654
@@ -94,19 +94,35 @@ say("frozen base: " + json.dumps(contract))
 # ----------------------------------------------------------------- repair
 # The sixth build left 9 QA failures, all on new elements: a lone corner at a
 # cape, three coastal angles under 30 deg, three area jumps, one valence of 9
-# and one open-boundary node at 27 deg. They are repaired here with the same
-# tools the local refinement uses, restricted so that no base node moves and
-# no base element changes.
+# and one open-boundary node at 27 deg. They are repaired here, restricted so
+# that no base node moves and no base element changes.
 NB, EB = base.n_nodes, base.n_elements
-nodes, elems, parents, mutable, lone = open_lone_corners(
-    merged.nodes, merged.elements, np.arange(merged.n_elements) >= EB)
-merged = replace(merged, nodes=nodes, elements=elems,
-                 depths=np.r_[merged.depths, np.full(len(parents), np.nan)])
+obc_nodes = np.asarray(merged.open_boundaries[0], np.int64)
+# a cape tip one element wide: not resolved (resolution principle); bisecting
+# it instead (walls.open_lone_corners) left two 27.5 deg slivers (7th build)
+elems, mutable, lone = trim_lone_corners(merged.elements, np.arange(merged.n_elements) >= EB,
+                                         keep_nodes=obc_nodes)
+used = np.zeros(merged.n_nodes, bool)
+used[elems.ravel()] = True
+if not used[:NB].all():
+    raise SystemExit("trimming a lone corner orphaned a base node")
+renum = np.cumsum(used) - 1
+merged = replace(merged, nodes=merged.nodes[used], elements=renum[elems],
+                 depths=merged.depths[used], open_boundaries=[renum[obc_nodes]])
+obc_nodes = renum[obc_nodes]
+nodes, elems = merged.nodes, merged.elements
 _u, _c = np.unique(np.sort(np.vstack([elems[:, [0, 1]], elems[:, [1, 2]], elems[:, [2, 0]]]),
                            axis=1), axis=0, return_counts=True)
 on_boundary = np.zeros(len(nodes), bool)
 on_boundary[np.unique(_u[_c == 1])] = True
-movable = (np.arange(len(nodes)) >= NB) & ~on_boundary
+# the elements on the open boundary and the nodes just inside it are left as
+# finishing made them: flipping or moving them there broke the perpendicular
+# partner of 8 open-boundary nodes (39 deg, 7th build)
+at_obc = np.isin(elems, obc_nodes).any(axis=1)
+next_to_obc = np.zeros(len(nodes), bool)
+next_to_obc[elems[at_obc].ravel()] = True
+movable = (np.arange(len(nodes)) >= NB) & ~on_boundary & ~next_to_obc
+mutable = mutable & ~at_obc
 nodes, elems, imp = improve_patch(nodes, elems, movable, mutable, only_below=1.15)
 if imp["min_angle_deg"] < 30.0 or imp["max_angle_deg"] > 130.0:
     nodes, elems, imp2 = improve_patch(nodes, elems, movable, mutable, only_below=1.15,
