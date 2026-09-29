@@ -1,0 +1,37 @@
+# Design of the open boundary of the wide Tokyo Bay mesh (Enshu-nada plan),
+# decided with the owner on 2026-09-29. notebooks/444_design_obc.py turns it
+# into tokyo_bay_enshu_obc.csv, the boundary's nodes, which mesh generation
+# then takes as an input.
+#
+# Rules: orthogonal to the coast at both ends; straight sides; corners rounded
+# with circular arcs; node spacing never below the time-step floor.
+
+# End points (lon, lat); each is snapped to the nearest OSM coastline, and the
+# boundary leaves / enters along that coastline's seaward normal. Both sit on
+# long straight coasts (Enshu-nada near Iwata, 13 km east of the Tenryu
+# mouth; northern Kujukuri), where the normal hardly depends on the scale.
+start: [137.9458, 34.6674]
+end: [140.5873, 35.6474]
+# The coastline chord that defines "the coast direction" at an end, metres.
+chord_m: 3000
+
+# The sides after the first vertex. The first side leaves the start along its
+# normal; each side runs until its condition; the last side meets the end's
+# normal (the boundary then enters the coast at a right angle).
+legs:
+  - {bearing: start_normal, until_lat: 33.4}
+  - {bearing: 85.0, until_lon: 141.0}
+  - {bearing: 0.0, until: end_normal}
+# Corner radii, one per interior corner (three corners), metres.
+radii_m: [40000, 40000, 25000]
+
+# Node spacing: at least min_m, and never below dt*sqrt(g*depth)/Cr, the
+# floor the mesh sizing uses, so the boundary does not limit the time step.
+spacing:
+  min_m: 3000
+  cfl_dt_s: 18
+  cfl_cr: 0.9
+  bathymetry: [cao_shutochokka_2025, srtm15plus]
+
+# OSM land window read to find the coast and to check the boundary.
+land_bbox: [137.4, 33.0, 141.8, 36.1]

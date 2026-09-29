@@ -1,0 +1,58 @@
+{
+ "design": "/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/recipes/extend/tokyo_bay_enshu_obc_design.yaml",
+ "csv": "/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/recipes/extend/tokyo_bay_enshu_obc.csv",
+ "start_normal_deg": 184.2226637851271,
+ "end_normal_deg": 140.12260062422902,
+ "corners_lonlat": [
+  [
+   137.87950117888715,
+   33.40000000073034
+  ],
+  [
+   141.0000000000009,
+   33.66829683935644
+  ],
+  [
+   141.00000000000094,
+   35.24488794074256
+  ]
+ ],
+ "n_nodes": 193,
+ "length_km": 625.7170468917456,
+ "spacing_m": {
+  "min": 2998.1677738884123,
+  "median": 3000.0000000000314,
+  "max": 4841.636338720564
+ },
+ "end_angle_to_coast_deg": [
+  89.99999999999959,
+  89.99999999999969
+ ],
+ "crosses_land_m": 0.0,
+ "min_distance_to_land_km": 5.992217714716075,
+ "depth_m": {
+  "min": -2.338492406221212,
+  "max": 5973.864025591478
+ },
+ "bbox_lonlat": [
+  137.90128492494873,
+  33.44662819480425,
+  141.00000000000094,
+  35.64742975250259
+ ],
+ "bathymetry": [
+  "cao_shutochokka_2025",
+  "srtm15plus"
+ ],
+ "bathymetry_files": {
+  "cao_shutochokka_2025": [
+   "/octfs/work/G16445/share/Data/geodata/bathymetry/CAO_shutochokka_2025/extracted/\u8a08\u7b97\u7bc4\u56f2\u8a2d\u5b9a/\u8a08\u7b97\u7bc4\u56f2\u8a2d\u5b9a_\u7b2c08\u7cfb.xls",
+   "/octfs/work/G16445/share/Data/geodata/bathymetry/CAO_shutochokka_2025/extracted/\u8a08\u7b97\u7bc4\u56f2\u8a2d\u5b9a/\u8a08\u7b97\u7bc4\u56f2\u8a2d\u5b9a_\u7b2c09\u7cfb.xls",
+   "/octfs/work/G16445/share/Data/geodata/bathymetry/CAO_shutochokka_2025/extracted/\u8a08\u7b97\u7bc4\u56f2\u8a2d\u5b9a/\u8a08\u7b97\u7bc4\u56f2\u8a2d\u5b9a_\u7b2c14\u7cfb.xls"
+  ],
+  "srtm15plus": [
+   "/octfs/work/G16445/share/Data/geodata/bathymetry/SRTM15plus/SRTM15+.nc"
+  ]
+ },
+ "problems": []
+}

@@ -1,0 +1,74 @@
+"""Extension recipes (recipes/extend/*.yaml)."""
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+from fvcom_mesh_tools.extend_recipe import REQUIRED_SETTINGS, load_extend_recipe
+
+REPO = Path(__file__).resolve().parents[1]
+RECIPE = REPO / "recipes/extend/tokyo_bay_enshu.yaml"
+
+
+def _write(tmp_path, **change):
+    raw = yaml.safe_load(RECIPE.read_text())
+    base = tmp_path / "base"
+    base.mkdir(exist_ok=True)
+    for kind in ("grd", "dep", "obc"):
+        (base / f"{raw['base_case']}_{kind}.dat").write_text("x\n")
+    (tmp_path / "obc.csv").write_text("lon,lat\n139.0,34.0\n139.5,34.0\n")
+    raw.update(base="base", open_boundary="obc.csv")
+    for k, v in change.items():
+        if v is None:
+            raw.pop(k, None)
+        else:
+            raw[k] = v
+    p = tmp_path / "r.yaml"
+    p.write_text(yaml.safe_dump(raw))
+    return p
+
+
+def test_the_enshu_recipe_writes_out_every_setting():
+    raw = yaml.safe_load(RECIPE.read_text())
+    assert set(raw["settings"]) == set(REQUIRED_SETTINGS)
+
+
+def test_a_valid_recipe_loads_with_absolute_paths(tmp_path):
+    r = load_extend_recipe(_write(tmp_path))
+    assert Path(r["base"]).is_absolute() and Path(r["open_boundary"]).is_file()
+
+
+@pytest.mark.parametrize("change, match", [
+    ({"case": None}, "missing"),
+    ({"extra": 1}, "unknown"),
+    ({"bathymetry": {"sizing": ["nope"], "depths": ["srtm15plus"]}}, "unknown or repeated"),
+    ({"bathymetry": {"sizing": ["m7001", "m7001"], "depths": ["m7001"]}}, "unknown or repeated"),
+    ({"bathymetry": {"sizing": ["m7001"]}}, "exactly 'sizing' and 'depths'"),
+    ({"depths": {"min_m": 3, "max_m": 1, "rfactor": 0.2}}, "min_m < max_m"),
+    ({"depths": {"min_m": 3, "max_m": None, "rfactor": 1.5}}, "rfactor"),
+    ({"land": {"bbox": [1, 2, 3]}}, "land"),
+])
+def test_a_bad_recipe_is_refused(tmp_path, change, match):
+    with pytest.raises(ValueError, match=match):
+        load_extend_recipe(_write(tmp_path, **change))
+
+
+def test_settings_must_be_complete_and_positive(tmp_path):
+    s = dict(yaml.safe_load(RECIPE.read_text())["settings"])
+    s.pop("dm_scale")
+    with pytest.raises(ValueError, match="dm_scale"):
+        load_extend_recipe(_write(tmp_path, settings=s))
+    s = dict(yaml.safe_load(RECIPE.read_text())["settings"], max_edge_m=-1)
+    with pytest.raises(ValueError, match="positive"):
+        load_extend_recipe(_write(tmp_path, settings=s))
+    s = dict(yaml.safe_load(RECIPE.read_text())["settings"], coast_h_m=9000)
+    with pytest.raises(ValueError, match="exceeds"):
+        load_extend_recipe(_write(tmp_path, settings=s))
+
+
+def test_a_missing_base_file_is_refused(tmp_path):
+    p = _write(tmp_path)
+    next((tmp_path / "base").glob("*_dep.dat")).unlink()
+    with pytest.raises(ValueError, match="no .*_dep.dat"):
+        load_extend_recipe(p)

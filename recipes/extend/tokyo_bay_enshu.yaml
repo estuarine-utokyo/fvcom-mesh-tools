@@ -1,0 +1,56 @@
+# The wide Tokyo Bay mesh, Enshu-nada plan: the base mesh as it is, plus the
+# sea out to an open boundary from Enshu-nada (off Iwata) to northern
+# Kujukuri (owner, 2026-09-29).
+#
+# Build it on OCTOPUS, from the repository root:
+#   qsub -v FMESH_RECIPE=recipes/extend/tokyo_bay_enshu.yaml jobs/octopus/445_extend_mesh.sh
+#
+# Every setting is written out; outputs/extend_<name>/report.json records the
+# commit, the input hashes and the effective settings.
+name: tokyo_bay_enshu
+case: TokyoBayEnshu
+
+# The base: a finished FVCOM case (grd, dep, obc), adopted unchanged. Its
+# open boundary becomes an interior line; its nodes are fixed in the outer
+# generation and shared with the outer mesh.
+base: ../../outputs/base_tokyo_bay_tool
+base_case: TokyoBayTool
+
+# The new open boundary, an input (lon,lat nodes in order, from the coast at
+# Enshu-nada to the coast at Kujukuri). Made by notebooks/444_design_obc.py
+# from tokyo_bay_enshu_obc_design.yaml.
+open_boundary: tokyo_bay_enshu_obc.csv
+
+# Land: OSM land polygons (coastline) for this window; rivers are not opened.
+land:
+  bbox: [137.4, 33.0, 141.8, 36.1]
+
+# Bathymetry sources, in priority order (dem/sources.py): the first source
+# covering a point gives its depth. "sizing" decides the element sizes (the
+# time-step floor); "depths" gives the model depths of the new nodes.
+# Selectable: cao_shutochokka_2025, m7001, m7001_tokyobay, srtm15_kanto,
+# srtm15plus, gebco_2024.
+bathymetry:
+  sizing: [cao_shutochokka_2025, srtm15plus]
+  depths: [cao_shutochokka_2025, srtm15plus]
+
+settings:
+  coast_h_m: 600         # element size at the coast of the new sea
+  max_edge_m: 5000       # largest element
+  gradation: 0.15        # size growth per unit distance
+  cfl_dt_s: 18           # the base's time-step floor: size >= dt*sqrt(g*H)/Cr
+  cfl_cr: 0.9
+  interface_band_m: 2500 # half-width of the band where the size is the base's edge length
+  obc_band_m: 4000       # half-width of the band where the size is the boundary's spacing
+  lattice_m: 300         # sizing lattice and shoreline resolution
+  dm_scale: 1.2          # DistMesh edges come out ~1.2x the field; the field is size/dm_scale
+  gen_seed: 0            # DistMesh seed
+  max_iter: 60           # DistMesh iterations
+  fin_seed: 42           # finishing seed
+
+# Depths of the new nodes: floor, optional cap (null = none), r-factor
+# smoothing on the new elements and the seam only. Base depths are kept.
+depths:
+  min_m: 3.0
+  max_m: null
+  rfactor: 0.2

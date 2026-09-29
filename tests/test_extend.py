@@ -1,0 +1,140 @@
+"""Extension of a base mesh: sizing composition, merge, frozen contract."""
+
+import numpy as np
+import pytest
+
+from fvcom_mesh_tools.extend import (
+    band_field,
+    compose_sizing,
+    graded_up,
+    merge_outer,
+    verify_frozen_base,
+)
+from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+
+def _lattice(n=41, h=1000.0):
+    x, y = np.meshgrid(np.arange(n) * h, np.arange(n) * h)
+    return x, y
+
+
+def _grade_ok(v, x, y, grade):
+    for a, b in ((v[:, 1:], v[:, :-1]), (v[1:, :], v[:-1, :])):
+        if np.max(np.abs(a - b)) > grade * 1000.0 + 1e-6:
+            return False
+    return True
+
+
+def test_graded_up_is_the_smallest_feasible_field_above():
+    x, y = _lattice()
+    v = np.full(x.shape, 100.0)
+    v[20, 20] = 5000.0
+    up = graded_up(v, x, y, 0.2)
+    assert up[20, 20] == 5000.0 and np.all(up >= v) and _grade_ok(up, x, y, 0.2)
+    assert up[20, 25] == pytest.approx(5000.0 - 0.2 * 5000.0)
+
+
+def test_compose_respects_floor_band_and_gradation():
+    x, y = _lattice()
+    ambient = 300.0 + 0.3 * y                      # grows away from y = 0
+    floor = np.where(x > 30_000, 4000.0, 0.0)      # deep water on the east
+    band = band_field(x, y, [[0, 20_000], [40_000, 20_000]], [1500.0, 1500.0], 800.0)
+    h, rep = compose_sizing(ambient, x, y, grade=0.2, floor=floor, bands=[band])
+    on = np.isfinite(band)
+    assert np.allclose(h[on], 1500.0)             # the band is set, up or down
+    assert _grade_ok(h, x, y, 0.2 * 1.0000001)
+    off_band = ~on & (np.abs(y - 20_000) > 15_000)
+    assert np.all(h[off_band] >= floor[off_band] - 1e-6)
+    assert rep["band_0_cells"] == int(on.sum())
+
+
+def test_band_field_interpolates_along_the_line_and_refuses_bad_input():
+    x, y = _lattice()
+    b = band_field(x, y, [[0, 0], [40_000, 0]], [1000.0, 3000.0], 10.0)
+    assert b[0, 0] == pytest.approx(1000.0) and b[0, 40] == pytest.approx(3000.0)
+    assert b[0, 20] == pytest.approx(2000.0) and np.isnan(b[5, 5])
+    with pytest.raises(ValueError, match="one target per point"):
+        band_field(x, y, [[0, 0], [1, 1]], [1.0], 5.0)
+
+
+def _base():
+    """Two triangles over the unit square; the east side (1,2) is the open boundary."""
+    nodes = np.array([[0, 0], [1000, 0], [1000, 1000], [0, 1000]], float)
+    elems = np.array([[0, 1, 2], [0, 2, 3]])
+    return Fort14Mesh("base", nodes, np.array([5.0, 6.0, 7.0, 8.0]), elems,
+                      [np.array([1, 2])], [(0, np.array([2, 3, 0, 1]))])
+
+
+def _outer():
+    """Two triangles over the square to the east, sharing x = 1000."""
+    nodes = np.array([[1000, 0], [2000, 0], [2000, 1000], [1000, 1000.2]], float)
+    elems = np.array([[0, 2, 1], [0, 3, 2]])      # opposite orientation on purpose
+    return nodes, elems
+
+
+def test_merge_keeps_the_base_first_and_turns_outer_elements():
+    base = _base()
+    on, oe = _outer()
+    m = merge_outer(base, on, oe, [0, 3], [1, 2], [1, 2])
+    assert m.n_nodes == 6 and m.n_elements == 4
+    assert np.array_equal(m.nodes[:4], base.nodes) and np.array_equal(m.elements[:2], base.elements)
+    a = m.nodes[m.elements]
+    area = 0.5 * ((a[:, 1, 0] - a[:, 0, 0]) * (a[:, 2, 1] - a[:, 0, 1])
+                  - (a[:, 2, 0] - a[:, 0, 0]) * (a[:, 1, 1] - a[:, 0, 1]))
+    assert np.all(np.sign(area) == np.sign(area[0]))
+    assert m.open_boundaries[0].tolist() == [4, 5] and np.isnan(m.depths[4:]).all()
+    rep = verify_frozen_base(m, base, [1, 2])
+    assert rep["n_interface_edges"] == 1
+
+
+def test_merge_refuses_interface_nodes_that_do_not_coincide():
+    on, oe = _outer()
+    on[3, 1] = 1003.0
+    with pytest.raises(ValueError, match="differ from the base"):
+        merge_outer(_base(), on, oe, [0, 3], [1, 2], [1, 2])
+
+
+def test_verify_catches_a_moved_base_node_and_an_unshared_interface():
+    base = _base()
+    on, oe = _outer()
+    m = merge_outer(base, on, oe, [0, 3], [1, 2], [1, 2])
+    moved = m.nodes.copy()
+    moved[0, 0] += 1e-9
+    with pytest.raises(ValueError, match="node coordinates"):
+        verify_frozen_base(Fort14Mesh("m", moved, m.depths, m.elements, [], []), base, [1, 2])
+    with pytest.raises(ValueError, match="not shared"):
+        verify_frozen_base(m, base, [0, 3])
+
+
+def test_land_segments_split_loops_at_the_open_boundary():
+    from fvcom_mesh_tools.extend import land_segments
+
+    # a 3x3-node square (8 boundary nodes) with a hole-free interior
+    t = []
+    for j in range(2):
+        for i in range(2):
+            a = j * 3 + i
+            t += [[a, a + 1, a + 4], [a, a + 4, a + 3]]
+    t = np.array(t)
+    runs = land_segments(t, [np.array([2, 5, 8])])          # the east side is open
+    assert len(runs) == 1 and runs[0][0] == 0
+    run = runs[0][1].tolist()
+    assert run[0] in (2, 8) and run[-1] in (2, 8) and 5 not in run and len(run) == 7
+    islands = land_segments(t, [])
+    assert len(islands) == 1 and islands[0][0] == 1 and len(islands[0][1]) == 9
+
+
+def test_rfactor_smooth_free_leaves_fixed_nodes_alone():
+    from fvcom_mesh_tools.extend import rfactor_smooth_free
+
+    # a chain 0-1-2-3: node 0 fixed at 10 m, the rest free and deep
+    h0 = np.array([10.0, 200.0, 400.0, 800.0])
+    ei, ej = np.array([0, 1, 2]), np.array([1, 2, 3])
+    free = np.array([False, True, True, True])
+    h, it, r = rfactor_smooth_free(h0, ei, ej, free, rmax=0.2, hmin=3.0)
+    assert h[0] == 10.0 and r <= 0.2 + 1e-6
+    assert np.all(np.abs(h[ei] - h[ej]) / (h[ei] + h[ej]) <= 0.2 + 1e-6)
+    # an edge between two fixed nodes is not touched and not counted
+    h, it, r = rfactor_smooth_free(np.array([10.0, 100.0]), np.array([0]), np.array([1]),
+                                   np.array([False, False]), rmax=0.2, hmin=3.0)
+    assert h.tolist() == [10.0, 100.0] and it == 0
