@@ -174,7 +174,52 @@ def n_lost(p):
     return int((cKDTree(p).query(PFIX)[0] > 1e-8).sum())
 
 
-say(f"DistMesh: NP={len(p):,} NE={len(t):,}, fixed nodes lost {n_lost(p)}")
+def n_degenerate(p, t):
+    a = p[t] * [111e3 * np.cos(np.radians(lat0)), 111e3]
+    ar = 0.5 * ((a[:, 1, 0] - a[:, 0, 0]) * (a[:, 2, 1] - a[:, 0, 1])
+                - (a[:, 2, 0] - a[:, 0, 0]) * (a[:, 1, 1] - a[:, 0, 1]))
+    return int((np.abs(ar) < 1e3).sum())
+
+
+say(f"DistMesh: NP={len(p):,} NE={len(t):,}, fixed nodes lost {n_lost(p)}, "
+    f"near-zero-area elements {n_degenerate(p, t)}")
+
+# REPAIR along the constrained lines. DistMesh projects points that step
+# outside the domain back onto its boundary -- the open boundary included --
+# so a free node can end up on a fixed edge or 0.1 m from a fixed node; each
+# makes a zero-area element (the fourth build: 39, at the same places with or
+# without the ladders). oceanmesh's default clean removes them but takes fixed
+# nodes with them. Here the free nodes within 0.3 of a fixed edge's length of
+# that edge are dropped and the rest re-triangulated with the same CGAL
+# constrained Delaunay and the same inside test DistMesh uses.
+from _constrained_delaunay_class import ConstrainedDelaunayTriangulation as CDT  # noqa: E402
+from oceanmesh.fix_mesh import fix_mesh  # noqa: E402
+
+kxy = np.array([111e3 * np.cos(np.radians(lat0)), 111e3])
+d_fix, i_fix = cKDTree(p).query(PFIX)
+free = np.ones(len(p), bool)
+free[i_fix[d_fix < 1e-8]] = False
+q = p[free] * kxy
+too_close = np.zeros(len(q), bool)
+for a_, b_ in SEGS:
+    A, B = PFIX[a_] * kxy, PFIX[b_] * kxy
+    ab = B - A
+    L2 = float(ab @ ab)
+    s = np.clip(((q - A) @ ab) / L2, 0, 1)
+    dist = np.linalg.norm(q - (A + s[:, None] * ab), axis=1)
+    too_close |= dist < 0.3 * np.sqrt(L2)
+keep_free = p[free][~too_close]
+pts_all = np.vstack([PFIX, keep_free])
+dt_ = CDT()
+dt_.insert(pts_all.ravel().tolist())
+dt_.insert_constraints(np.hstack([PFIX[SEGS[:, 0]], PFIX[SEGS[:, 1]]]).ravel().tolist())
+p, t = dt_.get_finite_vertices(), dt_.get_finite_cells()
+geps = 1e-12 * float(np.amin(S["lattice_m"] * DEG))
+t = t[sdf.eval(p[t].sum(1) / 3) < -geps]
+p, t, _ = fix_mesh(p, t, dim=2, delete_unused=True)
+say(f"repair: dropped {int(too_close.sum())} free node(s) at the fixed lines; "
+    f"NP={len(p):,} NE={len(t):,}, fixed nodes lost {n_lost(p)}, "
+    f"near-zero-area elements {n_degenerate(p, t)}")
 p, t = prune_one_wide_protected(p, t, PFIX)
 say(f"after one-wide pruning: NE={len(t):,}, fixed nodes lost {n_lost(p)}")
 p, t = om.make_mesh_boundaries_traversable(p, t)
