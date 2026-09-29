@@ -124,12 +124,28 @@ SEGS = np.vstack([np.column_stack([np.arange(ni - 1), np.arange(1, ni)]),
 p, t = om.generate_mesh(sdf, fd, max_iter=int(S["max_iter"]), seed=int(S["gen_seed"]),
                         pfix=PFIX, egfix=SEGS)
 ne0 = len(t)
+
+
+def n_lost(p):
+    return int((cKDTree(p).query(PFIX)[0] > 1e-8).sum())
+
+
+say(f"DistMesh: NP={len(p):,} NE={len(t):,}, fixed nodes lost {n_lost(p)}")
 p, t = prune_one_wide_protected(p, t, PFIX)
+say(f"after one-wide pruning: NE={len(t):,}, fixed nodes lost {n_lost(p)}")
 p, t = om.make_mesh_boundaries_traversable(p, t)
+say(f"after boundary cleanup: NE={len(t):,}, fixed nodes lost {n_lost(p)}")
 say(f"generated NP={len(p):,} NE={len(t):,} (pruned {ne0 - len(t)})")
 d, idx = cKDTree(p).query(PFIX)
 if (d > 1e-8).any():
-    raise SystemExit(f"{int((d > 1e-8).sum())} fixed boundary node(s) lost in generation")
+    np.savez(OUT / "generate_failed.npz", p=p, t=t, pfix=PFIX, segs=SEGS)
+    lost = np.flatnonzero(d > 1e-8)
+    for k in lost:
+        which = "interface" if k < ni else "open boundary"
+        print(f"[gen]   lost pfix {k} ({which}) at {PFIX[k].round(5).tolist()}, "
+              f"nearest node {d[k] / DEG:.0f} m away", flush=True)
+    raise SystemExit(f"{len(lost)} fixed boundary node(s) lost in generation "
+                     f"(mesh kept in {OUT / 'generate_failed.npz'})")
 chain_i, chain_o = idx[:ni], idx[ni:]
 edges = {frozenset(e) for e in np.vstack([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]).tolist()}
 for name, c in (("interface", chain_i), ("open boundary", chain_o)):
