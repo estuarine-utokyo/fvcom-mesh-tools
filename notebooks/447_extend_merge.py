@@ -10,6 +10,7 @@
 import json
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ from pyproj import Transformer  # noqa: E402
 from scipy.spatial import cKDTree  # noqa: E402
 
 from fvcom_mesh_tools.algorithms.obc_finish import finish_obc_mesh  # noqa: E402
+from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local  # noqa: E402
 from fvcom_mesh_tools.coast_fit import fit_boundary_to_coast  # noqa: E402
 from fvcom_mesh_tools.dem.m7001 import node_edges  # noqa: E402
 from fvcom_mesh_tools.dem.sources import sample  # noqa: E402
@@ -35,7 +37,9 @@ from fvcom_mesh_tools.extend import (  # noqa: E402
 from fvcom_mesh_tools.extend_recipe import load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.io.fort14 import read_fort14, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
+from fvcom_mesh_tools.patch import improve_patch  # noqa: E402
 from fvcom_mesh_tools.qa import run_qa  # noqa: E402
+from fvcom_mesh_tools.walls import open_lone_corners  # noqa: E402
 
 T0 = time.time()
 MESH_EPSG = 32654
@@ -87,6 +91,36 @@ merged = merge_outer(base, outer.nodes[:, :2], outer.elements, io_, IB, open_new
 contract = verify_frozen_base(merged, base, IB)
 say("frozen base: " + json.dumps(contract))
 
+# ----------------------------------------------------------------- repair
+# The sixth build left 9 QA failures, all on new elements: a lone corner at a
+# cape, three coastal angles under 30 deg, three area jumps, one valence of 9
+# and one open-boundary node at 27 deg. They are repaired here with the same
+# tools the local refinement uses, restricted so that no base node moves and
+# no base element changes.
+NB, EB = base.n_nodes, base.n_elements
+nodes, elems, parents, mutable, lone = open_lone_corners(
+    merged.nodes, merged.elements, np.arange(merged.n_elements) >= EB)
+merged = replace(merged, nodes=nodes, elements=elems,
+                 depths=np.r_[merged.depths, np.full(len(parents), np.nan)])
+_u, _c = np.unique(np.sort(np.vstack([elems[:, [0, 1]], elems[:, [1, 2]], elems[:, [2, 0]]]),
+                           axis=1), axis=0, return_counts=True)
+on_boundary = np.zeros(len(nodes), bool)
+on_boundary[np.unique(_u[_c == 1])] = True
+movable = (np.arange(len(nodes)) >= NB) & ~on_boundary
+nodes, elems, imp = improve_patch(nodes, elems, movable, mutable, only_below=1.15)
+if imp["min_angle_deg"] < 30.0 or imp["max_angle_deg"] > 130.0:
+    nodes, elems, imp2 = improve_patch(nodes, elems, movable, mutable, only_below=1.15,
+                                       soft=True)
+    imp = {**imp2, "n_flips": imp["n_flips"] + imp2["n_flips"],
+           "n_moves": imp["n_moves"] + imp2["n_moves"], "soft_pass": True}
+merged = replace(merged, nodes=nodes, elements=elems)
+merged, perp = align_open_boundary_local(merged)
+verify_frozen_base(merged, base, IB)
+repair = {"lone_corners": lone, "improve": imp,
+          "perpendicularity": {k: v for k, v in perp.items() if not isinstance(v, list)},
+          "perp_remaining": len(perp.get("remaining", []))}
+say("repair: " + json.dumps(repair, default=str)[:700])
+
 # ----------------------------------------------------------------- depths
 to_ll = Transformer.from_crs(MESH_EPSG, 4326, always_xy=True)
 lon, lat = (np.asarray(v) for v in to_ll.transform(merged.nodes[:, 0], merged.nodes[:, 1]))
@@ -130,7 +164,8 @@ for c in qa.checks:
         say(f"  FAIL {c.check_id} {c.requirement} | {c.observed}")
 (OUT / "merge.json").write_text(json.dumps({
     "finish": {k: v for k, v in info.items() if not isinstance(v, (list, dict))},
-    "coast_fit": cf.to_dict(), "frozen_base": contract, "depths": depth_report,
+    "coast_fit": cf.to_dict(), "frozen_base": contract, "repair": repair,
+    "depths": depth_report,
     "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
     "n_nodes": merged.n_nodes, "n_elements": merged.n_elements,
     "n_open_boundary_nodes": int(len(merged.open_boundaries[0])),
