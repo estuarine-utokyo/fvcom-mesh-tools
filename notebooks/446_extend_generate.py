@@ -216,8 +216,18 @@ dt_.insert_constraints(np.hstack([PFIX[SEGS[:, 0]], PFIX[SEGS[:, 1]]]).ravel().t
 p, t = dt_.get_finite_vertices(), dt_.get_finite_cells()
 geps = 1e-12 * float(np.amin(S["lattice_m"] * DEG))
 t = t[sdf.eval(p[t].sum(1) / 3) < -geps]
+# three consecutive nodes of a straight fixed line form a flat triangle whose
+# centroid sits a hair inside the domain; kept, it buries the middle node
+# (the fifth build: 33 m2 on 3 km edges, open-boundary node 10 off the loop)
+_a = p[t] * kxy
+_area = 0.5 * np.abs((_a[:, 1, 0] - _a[:, 0, 0]) * (_a[:, 2, 1] - _a[:, 0, 1])
+                     - (_a[:, 2, 0] - _a[:, 0, 0]) * (_a[:, 1, 1] - _a[:, 0, 1]))
+_l2 = sum(((_a[:, i] - _a[:, (i + 1) % 3]) ** 2).sum(1) for i in range(3))
+flat = 4 * np.sqrt(3) * _area / _l2 < 0.01
+t = t[~flat]
 p, t, _ = fix_mesh(p, t, dim=2, delete_unused=True)
-say(f"repair: dropped {int(too_close.sum())} free node(s) at the fixed lines; "
+say(f"repair: dropped {int(too_close.sum())} free node(s) at the fixed lines and "
+    f"{int(flat.sum())} flat element(s); "
     f"NP={len(p):,} NE={len(t):,}, fixed nodes lost {n_lost(p)}, "
     f"near-zero-area elements {n_degenerate(p, t)}")
 p, t = prune_one_wide_protected(p, t, PFIX)
@@ -242,6 +252,13 @@ for name, c in (("interface", chain_i), ("open boundary", chain_o)):
     miss = [(int(a), int(b_)) for a, b_ in zip(c[:-1], c[1:]) if frozenset((a, b_)) not in edges]
     if miss:
         raise SystemExit(f"{name}: {len(miss)} fixed edge(s) are not mesh edges")
+_e = np.sort(np.vstack([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1)
+_u, _c = np.unique(_e, axis=0, return_counts=True)
+on_boundary = set(_u[_c == 1].ravel().tolist())
+for name, c in (("interface", chain_i), ("open boundary", chain_o)):
+    buried = [k for k, v in enumerate(c) if int(v) not in on_boundary]
+    if buried:
+        raise SystemExit(f"{name}: node(s) {buried} are not on the mesh boundary")
 
 # ------------------------------------------------------------------ write
 xu, yu = to_m.transform(p[:, 0], p[:, 1])
