@@ -759,6 +759,20 @@ the potential (base 2.3 cm), S2 0.6 cm (1.0 cm). The diurnal constituents
 come out 4-9 % too large on the Enshu mesh (K1 +2.2 cm); NAO.99Jb itself is
 3-5 % above the 2021 gauges for K1.
 
+**Where the diurnal excess comes from** (2026-09-30). Along the base mesh's
+open boundary, inside the Enshu run, K1 was 1.06 times NAO.99Jb. It did not
+move with the tidal potential (1.060), the bottom friction (Cd minimum
+0.0015 to 0.006: 1.062 to 1.058) or the bathymetry (the new nodes from
+M7001 instead of the Cabinet Office grids, 1.4 % mean change: 1.061). Forced
+by TPXO10-atlas-v2 instead (`--tide-model=tpxo10`), the same mesh carries
+K1 at exactly TPXO's amplitude there (1.000; O1 0.98), and the gauge error
+drops (K1 rms 2.3 to 1.5 cm, O1 1.4 to 0.8 cm) while the semidiurnal error
+rises (M2 1.7 to 2.1 cm, S2 0.6 to 1.2 cm). So the excess comes from the
+NAO.99Jb diurnal values on the wide open boundary, not from the mesh or the
+model physics: the mesh reproduces whichever tide model forces it. Which
+model to use is a choice per constituent group; a third model (FES2022)
+decides it.
+
 ### 14.1 Which constituents to use
 
 The open-boundary file may carry any number of constituents, and the tide
