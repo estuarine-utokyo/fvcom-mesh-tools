@@ -86,6 +86,8 @@ p.add_argument("--cd-min", type=float, default=None,
 p.add_argument("--flather", action="store_true",
                help="Flather boundary: also give the tide model's normal velocity "
                     "(TPXO transports / model depth); needs --tide-model=tpxo10")
+p.add_argument("--flather-alpha", type=float, default=None,
+               help="relaxation (0, 1] of the Flather correction term")
 p.add_argument("--no-obc-depth-control", action="store_true",
                help="keep the open-boundary depths as built (FVCOM's OBC_DEPTH_CONTROL_ON = F)")
 p.add_argument("--itd-coefficient", type=float, default=None,
@@ -196,7 +198,7 @@ if a.flather:
 (inp / "m2_tide.dat").write_text(spectral_text(
     CONSTITUENTS, period, famp, fpha, M383.START,
     equilibrium=(f_nodal, v0u) if a.equilibrium else None, sal_beta=a.sal_beta,
-    normal_velocity=normal))
+    normal_velocity=normal, flather_alpha=a.flather_alpha))
 with open(case / "obc_constants.csv", "w") as fh:
     fh.write("obc,node,lon,lat,filled,"
              + ",".join(f"{c}_amp_m,{c}_g_deg" for c in CONSTITUENTS) + "\n")
@@ -241,7 +243,7 @@ manifest = {
     "equilibrium_tide": bool(a.equilibrium),
     "bottom_z0_m": a.z0, "bottom_cd_min": a.cd_min,
     "obc_depth_control": not a.no_obc_depth_control, "sal_beta": a.sal_beta,
-    "flather": bool(a.flather),
+    "flather": bool(a.flather), "flather_alpha": a.flather_alpha,
     "obc_normal_velocity_m2_max_m_s": float(normal[0][0].max()) if normal else None,
     "itd_coefficient_per_s": a.itd_coefficient, "itd_min_depth_m": a.itd_min_depth,
     "n_obc_filled_from_nearest": int(filled.sum()),
