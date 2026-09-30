@@ -787,10 +787,21 @@ the 7 gauges, cm; `--tide-model`, all with the tidal potential):
   looks better for M2 only because its outer-boundary M2 is lower. So the
   wide mesh itself amplifies the tide between the outer boundary and the
   bay mouth by a few per cent, for all constituents; not the bathymetry
-  source, not the friction range tried. Still to test: the self-attraction
-  and loading term (absent from the model), the open-boundary depth control
-  (it changes depths on the outer boundary by up to 830 m) and the
-  resolution around Izu-Oshima.
+  source, not the friction range tried.
+- **Neither the open-boundary depth control nor self-attraction and loading
+  explains it.** Keeping the outer boundary depths as built
+  (`--no-obc-depth-control`; FVCOM would change them by up to 830 m) gives
+  the same constants to the last digit: the elevation is prescribed there.
+  Self-attraction and loading in the scalar approximation (`--sal-beta 0.1`,
+  the owner's FVCOM reads a `SAL Beta` line) slows the tide and makes the
+  excess larger (M2 at the gauges +2.4 cm instead of +1.2 cm on the Enshu
+  mesh, +1.0 instead of +0.1 cm on the base mesh): leave it off.
+- What remains points to missing dissipation between the outer boundary and
+  the bay mouth: the only change that lowered the excess was a larger bottom
+  drag (M2 rms 1.7 to 1.5 cm with Cd minimum 0.006). A barotropic model
+  loses no energy to internal tides, which the steep Sagami Trough and
+  Izu Ridge generate; global tide models parameterise that loss. A
+  topographic (internal-wave) drag in deep water is the next thing to try.
 
 ### 14.1 Which constituents to use
 
