@@ -808,10 +808,18 @@ the 7 gauges, cm; `--tide-model`, all with the tidal potential):
   Uraga channel region, where the wide run's M2 field differs in shape
   from the base run's (the base run, forced at the bay mouth by FES2022b,
   is within 1 % in the bay).
-- Not yet tried: the open-boundary condition itself (FVCOM clamps the
-  elevation; a boundary that also takes the tide model's transport, of
-  Flather type, lets the model's own response leave the domain), and the
-  outer mesh's resolution.
+- **A Flather boundary, first attempt: unstable.** FVCOM's radiation
+  boundaries (GWI, BKI, ORE) take no tide, so the owner's FVCOM gained a
+  Flather boundary (`eta = eta_T + sqrt(H/g)(u_n - u_T)`; the tide file's
+  optional `UnAmplitude` / `UnPhase` sections; 449 `--flather` with
+  `--tide-model=tpxo10`, TPXO transports divided by the model depth on the
+  outward normal FVCOM uses). As written it takes `u_n` from the elements
+  around each boundary node, and on both meshes the runs reached 5-6 m/s
+  next to the boundary and a mean set-up of 1-3 m: at 4000 m depth
+  `sqrt(H/g)` is about 20 s, so 0.1 m/s of velocity noise moves the
+  boundary by 2 m. It is marked experimental; a usable version needs the
+  normal velocity taken consistently with the boundary flux (and probably
+  a relaxation). The outer mesh's resolution is still untested.
 
 ### 14.1 Which constituents to use
 
