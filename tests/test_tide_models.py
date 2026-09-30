@@ -199,3 +199,18 @@ def test_spectral_text_writes_the_sal_line_only_with_equilibrium():
         spectral_text(names, period, [[0.1]], [[0.0]], "x", sal_beta=0.1)
     with pytest.raises(ValueError, match="sal_beta"):
         spectral_text(names, period, [[0.1]], [[0.0]], "x", equilibrium=(f, v0u), sal_beta=0.7)
+
+
+def test_spectral_text_writes_normal_velocity_sections():
+    names = ["M2", "K1"]
+    period, f, v0u = astronomy(names, datetime(2021, 1, 1), datetime(2021, 1, 31), 35.0)
+    amp = np.full((2, 3), 0.3)
+    text = spectral_text(names, period, amp, amp * 0, "2021-01-01 00:00:00",
+                         normal_velocity=(amp * 0.1, amp * 0 + 45.0))
+    lines = text.splitlines()
+    i = lines.index("UnAmplitude")
+    assert lines[i + 1].split() == ["1", "0.03000000", "0.03000000"]
+    assert lines[i + 4] == "UnAmplitude" and lines[i + 5] == "UnPhase"
+    assert lines[-1] == "UnPhase"
+    with pytest.raises(ValueError, match="shaped"):
+        spectral_text(names, period, amp, amp, "x", normal_velocity=(amp[:, :2], amp[:, :2]))

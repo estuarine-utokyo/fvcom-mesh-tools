@@ -34,7 +34,8 @@ import numpy as np
 
 __all__ = [
     "EQUILIBRIUM", "NAO_CONSTITUENTS", "astronomy", "fvcom_spectral", "load_nao", "load_tpxo",
-    "load_fes", "read_fes", "read_nao", "read_tpxo", "sample_constants", "spectral_text",
+    "load_fes", "load_tpxo_transport", "read_fes", "read_nao", "read_tpxo",
+    "read_tpxo_transport", "sample_constants", "spectral_text",
 ]
 
 #: The 16 constituents of NAO.99 and their file stems.
@@ -106,6 +107,55 @@ def load_nao(directory, constituents, suffix="_j") -> dict[str, dict]:
         if not path.exists():
             raise FileNotFoundError(path)
         out[key] = read_nao(path)
+    return out
+
+
+def _tpxo_complex(ds, re_name, im_name, xname, yname, window, path, scale):
+    lon = np.asarray(ds[xname][:], float)
+    lat = np.asarray(ds[yname][:], float)
+    if window is None:
+        ix, iy = slice(None), slice(None)
+    else:
+        lon0, lon1, lat0, lat1 = window
+        sel_x = np.flatnonzero((lon >= lon0) & (lon <= lon1))
+        sel_y = np.flatnonzero((lat >= lat0) & (lat <= lat1))
+        if len(sel_x) < 2 or len(sel_y) < 2:
+            raise ValueError(f"{path}: window {window} holds fewer than 2x2 nodes")
+        ix = slice(sel_x[0], sel_x[-1] + 1)
+        iy = slice(sel_y[0], sel_y[-1] + 1)
+    re_ = np.asarray(ds[re_name][ix, iy], float).T
+    im_ = np.asarray(ds[im_name][ix, iy], float).T
+    lon, lat = lon[ix], lat[iy]
+    if not (np.all(np.diff(lon) > 0) and np.all(np.diff(lat) > 0)):
+        raise ValueError(f"{path}: coordinates are not ascending")
+    land = (re_ == 0) & (im_ == 0)
+    amp = np.where(land, np.nan, np.hypot(re_, im_) * scale)
+    pha = np.where(land, np.nan, np.degrees(np.arctan2(-im_, re_)) % 360)
+    return {"lon": lon, "lat": lat, "amp": amp, "phase": pha}
+
+
+def read_tpxo_transport(path, window=None) -> dict:
+    """One TPXO atlas transport file (``u_<c>_*.nc``): ``{"u": grid, "v": grid}``.
+
+    West-east transport on the U nodes and south-north on the V nodes, each a
+    grid dictionary like :func:`read_tpxo` returns, amplitude in m^2/s (the
+    file holds cm^2/s).
+    """
+    import netCDF4
+
+    with netCDF4.Dataset(path) as ds:
+        return {c: _tpxo_complex(ds, f"{c}Re", f"{c}Im", f"lon_{c}", f"lat_{c}", window, path,
+                                 1e-4) for c in ("u", "v")}
+
+
+def load_tpxo_transport(directory, constituents, window=None,
+                        pattern="u_{c}_tpxo10_atlas_30_v2.nc") -> dict[str, dict]:
+    out = {}
+    for c in constituents:
+        path = Path(directory) / pattern.format(c=c.lower())
+        if not path.exists():
+            raise FileNotFoundError(path)
+        out[c.upper()] = read_tpxo_transport(path, window)
     return out
 
 
@@ -286,7 +336,7 @@ def fvcom_spectral(names, amp, phase, start: datetime, mid: datetime, lat: float
 
 
 def spectral_text(names, period, amp, phase, origin: str, equilibrium=None,
-                  sal_beta: float | None = None) -> str:
+                  sal_beta: float | None = None, normal_velocity=None) -> str:
     """An FVCOM non-Julian (spectral) tidal forcing file, several constituents.
 
     ``amp`` and ``phase`` have shape ``(n_names, n_obc)``, in open-boundary
@@ -303,6 +353,11 @@ def spectral_text(names, period, amp, phase, origin: str, equilibrium=None,
     in the scalar approximation (``beta * zeta`` added to the equilibrium
     tide; typically 0.08-0.12), which the same extension reads. It needs
     ``equilibrium``.
+
+    ``normal_velocity=(amp, phase)``, shaped like ``amp`` and ``phase``,
+    adds ``UnAmplitude`` / ``UnPhase`` sections: the outward normal
+    depth-mean velocity (m/s, FVCOM spectral phase) at each open-boundary
+    node, which makes the owner's FVCOM use a Flather boundary.
     """
     amp = np.atleast_2d(np.asarray(amp, float))
     phase = np.atleast_2d(np.asarray(phase, float))
@@ -326,7 +381,16 @@ def spectral_text(names, period, amp, phase, origin: str, equilibrium=None,
     if sal_beta is not None:
         lines.append(f"SAL Beta = {sal_beta:.6f}")
     lines += [f"Time Origin = {origin}", f"OBC Node Number = {n}"]
-    for label, values in (("Amplitude", amp), ("Phase", phase), ("Eref", np.zeros((1, n)))):
+    blocks = [("Amplitude", amp), ("Phase", phase), ("Eref", np.zeros((1, n)))]
+    if normal_velocity is not None:
+        un_amp = np.atleast_2d(np.asarray(normal_velocity[0], float))
+        un_pha = np.atleast_2d(np.asarray(normal_velocity[1], float))
+        if un_amp.shape != amp.shape or un_pha.shape != amp.shape:
+            raise ValueError("normal_velocity must be shaped like amp")
+        if not (np.isfinite(un_amp).all() and np.isfinite(un_pha).all()):
+            raise ValueError("non-finite normal velocity")
+        blocks += [("UnAmplitude", un_amp), ("UnPhase", un_pha)]
+    for label, values in blocks:
         lines.append(label)
         lines += [f"{j + 1} " + " ".join(f"{v:.8f}" for v in values[:, j]) for j in range(n)]
         lines.append(label)

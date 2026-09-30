@@ -43,6 +43,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from fvcom_mesh_tools.io.fvcom_native import (  # noqa: E402
     apply_obc_depth_control,
     export_fvcom_case,
+    fvcom_next_obc,
     read_fvcom_case,
 )
 from fvcom_mesh_tools.tide_models import (  # noqa: E402
@@ -51,6 +52,7 @@ from fvcom_mesh_tools.tide_models import (  # noqa: E402
     load_fes,
     load_nao,
     load_tpxo,
+    load_tpxo_transport,
     sample_constants,
     spectral_text,
 )
@@ -81,6 +83,9 @@ p.add_argument("--z0", type=float, default=None,
                help="bottom roughness length (m); default 383's 0.002693138")
 p.add_argument("--cd-min", type=float, default=None,
                help="minimum bottom drag coefficient; default 383's 0.003")
+p.add_argument("--flather", action="store_true",
+               help="Flather boundary: also give the tide model's normal velocity "
+                    "(TPXO transports / model depth); needs --tide-model=tpxo10")
 p.add_argument("--no-obc-depth-control", action="store_true",
                help="keep the open-boundary depths as built (FVCOM's OBC_DEPTH_CONTROL_ON = F)")
 p.add_argument("--itd-coefficient", type=float, default=None,
@@ -92,6 +97,8 @@ p.add_argument("--sal-beta", type=float, default=None,
 p.add_argument("--equilibrium", action="store_true",
                help="add the tidal potential (needs an FVCOM built with -DEQUI_TIDE)")
 a = p.parse_args()
+if a.flather and a.tide_model != "tpxo10":
+    raise SystemExit("--flather needs --tide-model=tpxo10 (the only model with transports here)")
 DEFAULT_DIR = {"nao99jb": "tides/models/NAO.99Jb/ocean", "tpxo10": "tides/models/TPXO10_atlas_v2",
                "fes2022": "tides/models/FES2022b/ocean_tide_extrapolated"}
 if a.nao is None:
@@ -154,9 +161,37 @@ if not (np.isfinite(amp).all() and np.isfinite(pha).all()):
 mid = start + (end - start) / 2
 period, famp, fpha = fvcom_spectral(CONSTITUENTS, amp, pha, start, mid, float(lat[ob].mean()))
 _, f_nodal, v0u = astronomy(CONSTITUENTS, start, mid, float(lat[ob].mean()))
+normal = None
+if a.flather:
+    # outward normal as FVCOM takes it: from NEXT_OBC to the node, expressed
+    # east/north through the two points' lon/lat (the UTM grid is rotated)
+    nxt, _ = fvcom_next_obc(mesh.nodes[:, :2], mesh.elements, ob)
+    lat0 = np.radians(lat[ob])
+    de = (lon[ob] - lon[nxt]) * np.cos(lat0)
+    dn = lat[ob] - lat[nxt]
+    norm = np.hypot(de, dn)
+    if (norm == 0).any():
+        raise SystemExit("an open-boundary node coincides with its NEXT_OBC")
+    ne, nn = de / norm, dn / norm
+    tr = load_tpxo_transport(a.nao, CONSTITUENTS, window=window)
+    h_obc = mesh.depths[ob]                     # the depth FVCOM runs with
+    un_amp = np.empty_like(amp)
+    un_pha = np.empty_like(amp)
+    for k, c in enumerate(CONSTITUENTS):
+        au, pu, _ = sample_constants(tr[c]["u"], lon[ob], lat[ob])
+        av, pv, _ = sample_constants(tr[c]["v"], lon[ob], lat[ob])
+        zn = (au * np.exp(-1j * np.radians(pu)) * ne
+              + av * np.exp(-1j * np.radians(pv)) * nn) / h_obc
+        if not np.isfinite(zn).all():
+            raise SystemExit(f"no TPXO transport near open-boundary node(s) for {c}")
+        un_amp[k], un_pha[k] = np.abs(zn), np.degrees(-np.angle(zn)) % 360
+    _, un_famp, un_fpha = fvcom_spectral(CONSTITUENTS, un_amp, un_pha, start, mid,
+                                         float(lat[ob].mean()))
+    normal = (un_famp, un_fpha)
 (inp / "m2_tide.dat").write_text(spectral_text(
     CONSTITUENTS, period, famp, fpha, M383.START,
-    equilibrium=(f_nodal, v0u) if a.equilibrium else None, sal_beta=a.sal_beta))
+    equilibrium=(f_nodal, v0u) if a.equilibrium else None, sal_beta=a.sal_beta,
+    normal_velocity=normal))
 with open(case / "obc_constants.csv", "w") as fh:
     fh.write("obc,node,lon,lat,filled,"
              + ",".join(f"{c}_amp_m,{c}_g_deg" for c in CONSTITUENTS) + "\n")
@@ -201,6 +236,8 @@ manifest = {
     "equilibrium_tide": bool(a.equilibrium),
     "bottom_z0_m": a.z0, "bottom_cd_min": a.cd_min,
     "obc_depth_control": not a.no_obc_depth_control, "sal_beta": a.sal_beta,
+    "flather": bool(a.flather),
+    "obc_normal_velocity_m2_max_m_s": float(normal[0][0].max()) if normal else None,
     "itd_coefficient_per_s": a.itd_coefficient, "itd_min_depth_m": a.itd_min_depth,
     "n_obc_filled_from_nearest": int(filled.sum()),
     "obc_amp_range_m": {c: [float(amp[k].min()), float(amp[k].max())]
