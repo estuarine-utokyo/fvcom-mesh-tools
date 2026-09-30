@@ -73,6 +73,10 @@ p.add_argument("--start", default="2021-01-01")
 p.add_argument("--days", type=float, default=200.0)
 p.add_argument("--nao", type=Path, default=None,
                help="NAO.99Jb ocean/ directory (default $DATA_DIR/tides/models/NAO.99Jb/ocean)")
+p.add_argument("--z0", type=float, default=None,
+               help="bottom roughness length (m); default 383's 0.002693138")
+p.add_argument("--cd-min", type=float, default=None,
+               help="minimum bottom drag coefficient; default 383's 0.003")
 p.add_argument("--equilibrium", action="store_true",
                help="add the tidal potential (needs an FVCOM built with -DEQUI_TIDE)")
 a = p.parse_args()
@@ -140,8 +144,13 @@ with open(case / "obc_constants.csv", "w") as fh:
 
 # namelist: 383's, with tide-only output (zeta and the depth-mean velocity)
 text = M383.namelist(inp, out)
-for key, value in (("CASE_TITLE", "'449 NAO.99Jb tide'"), ("NC_VELOCITY", "F"),
-                   ("NC_SALT_TEMP", "F"), ("NC_VERTICAL_VEL", "F")):
+changes = [("CASE_TITLE", "'449 NAO.99Jb tide'"), ("NC_VELOCITY", "F"),
+           ("NC_SALT_TEMP", "F"), ("NC_VERTICAL_VEL", "F")]
+if a.z0 is not None:
+    changes.append(("BOTTOM_ROUGHNESS_LENGTHSCALE", repr(a.z0)))
+if a.cd_min is not None:
+    changes.append(("BOTTOM_ROUGHNESS_MINIMUM", repr(a.cd_min)))
+for key, value in changes:
     text, count = re.subn(rf"(?im)^(\s*{key}\s*=)[^\n]*", rf"\g<1> {value},", text)
     if count != 1:
         raise SystemExit(f"namelist key {key}: expected once, found {count}")
@@ -152,6 +161,7 @@ manifest = {
     "case": str(a.case), "start": M383.START, "end": M383.END, "days": a.days,
     "nodal_f_u_at": mid.isoformat(), "constituents": list(CONSTITUENTS),
     "tide_model": str(a.nao), "equilibrium_tide": bool(a.equilibrium),
+    "bottom_z0_m": a.z0, "bottom_cd_min": a.cd_min,
     "n_obc_filled_from_nearest": int(filled.sum()),
     "obc_amp_range_m": {c: [float(amp[k].min()), float(amp[k].max())]
                         for k, c in enumerate(CONSTITUENTS)},

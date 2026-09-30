@@ -17,7 +17,9 @@
 #           WORK_DIR, DATA_DIR (pass them with qsub -v).
 # Optional: FMESH_DAYS (200), FMESH_START (2021-01-01), FMESH_RANKS (64),
 #           FMESH_EQUI=1 (add the tidal potential; then FMESH_FVCOM must be an
-#           FVCOM built with -DEQUI_TIDE), FMESH_FVCOM (the FVCOM binary).
+#           FVCOM built with -DEQUI_TIDE), FMESH_FVCOM (the FVCOM binary),
+#           FMESH_EXTRA (more 449 arguments joined by "+", e.g.
+#           '--cd-min=0.0015+--z0=0.0005'; qsub -v cannot pass spaces reliably).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/RUN_OK"
@@ -26,10 +28,11 @@ case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=$FMESH_RUN_ROOT
 RANKS=${FMESH_RANKS:-64}
 FVCOM=${FMESH_FVCOM:-${WORK_DIR:?set WORK_DIR}/Github/FVCOM/src/fvcom}
+extra=${FMESH_EXTRA:-}
 equi=()
 [ "${FMESH_EQUI:-0}" = 1 ] && equi=(--equilibrium)
 python notebooks/449_tide_nao_run.py --case "${FMESH_CASE:?set FMESH_CASE}" --root "$RUN_ROOT" \
-    --days "${FMESH_DAYS:-200}" --start "${FMESH_START:-2021-01-01}" "${equi[@]}"
+    --days "${FMESH_DAYS:-200}" --start "${FMESH_START:-2021-01-01}" "${equi[@]}" ${extra//+/ }
 CASE_DIR=$RUN_ROOT
 set +u; conda deactivate; set -u
 if ! type module >/dev/null 2>&1; then
