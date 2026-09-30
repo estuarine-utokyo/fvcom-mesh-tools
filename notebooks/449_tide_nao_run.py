@@ -83,6 +83,10 @@ p.add_argument("--cd-min", type=float, default=None,
                help="minimum bottom drag coefficient; default 383's 0.003")
 p.add_argument("--no-obc-depth-control", action="store_true",
                help="keep the open-boundary depths as built (FVCOM's OBC_DEPTH_CONTROL_ON = F)")
+p.add_argument("--itd-coefficient", type=float, default=None,
+               help="topographic (internal-tide) drag, 1/s: a linear bottom stress "
+                    "C*H*|grad H|**2*u below --itd-min-depth (owner's FVCOM)")
+p.add_argument("--itd-min-depth", type=float, default=200.0)
 p.add_argument("--sal-beta", type=float, default=None,
                help="self-attraction and loading, scalar approximation (needs --equilibrium)")
 p.add_argument("--equilibrium", action="store_true",
@@ -173,6 +177,14 @@ for key, value in changes:
     text, count = re.subn(rf"(?im)^(\s*{key}\s*=)[^\n]*", rf"\g<1> {value},", text)
     if count != 1:
         raise SystemExit(f"namelist key {key}: expected once, found {count}")
+if a.itd_coefficient is not None:
+    # the keys are not in the template (FVCOM's default is off): add them
+    text, count = re.subn(
+        r"(?im)^(\s*BOTTOM_ROUGHNESS_MINIMUM\s*=[^\n]*\n)",
+        rf"\g<1> BOTTOM_ITD_COEFFICIENT = {a.itd_coefficient!r},\n"
+        rf" BOTTOM_ITD_MIN_DEPTH = {a.itd_min_depth!r},\n", text)
+    if count != 1:
+        raise SystemExit(f"namelist key BOTTOM_ROUGHNESS_MINIMUM: expected once, found {count}")
 if a.no_obc_depth_control:
     # the key is not in the template (FVCOM's default is T): add it to its block
     text, count = re.subn(r"(?im)^(\s*OBC_ON\s*=[^\n]*\n)", r"\g<1> OBC_DEPTH_CONTROL_ON = F,\n",
@@ -189,6 +201,7 @@ manifest = {
     "equilibrium_tide": bool(a.equilibrium),
     "bottom_z0_m": a.z0, "bottom_cd_min": a.cd_min,
     "obc_depth_control": not a.no_obc_depth_control, "sal_beta": a.sal_beta,
+    "itd_coefficient_per_s": a.itd_coefficient, "itd_min_depth_m": a.itd_min_depth,
     "n_obc_filled_from_nearest": int(filled.sum()),
     "obc_amp_range_m": {c: [float(amp[k].min()), float(amp[k].max())]
                         for k, c in enumerate(CONSTITUENTS)},
