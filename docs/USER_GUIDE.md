@@ -699,7 +699,91 @@ and a two-day FVCOM smoke run finite (max |zeta| 0.47 m, max speed
 0.56 m/s at the Uraga strait). Its real forcing will come from JCOPE-T DA
 re-extracted over the wider domain.
 
-## 14. Improving the tool with AI
+## 14. Astronomical tide on the open boundary
+
+A tide-only run checks a mesh against tide gauges before any other forcing
+exists: no wind, rivers or density, only the astronomical tide on the open
+boundary (and, optionally, the tidal potential inside the domain).
+
+```bash
+# a 200-day run of one case, NAO.99Jb on its open boundary (about 40 min)
+qsub -v WORK_DIR=$WORK_DIR,DATA_DIR=$DATA_DIR,\
+FMESH_CASE=outputs/extend_tokyo_bay_enshu/TokyoBayEnshu,FMESH_RUN_ROOT=$WORK_DIR/scratch/tide_<stamp>/enshu,\
+FMESH_EQUI=1,FMESH_FVCOM=$WORK_DIR/local/fvcom-equi/bin/fvcom jobs/octopus/449_tide_nao_run.sh
+# harmonic constants against the gauges (several runs side by side)
+qsub -v DATA_DIR=$DATA_DIR,FMESH_RUNS=a=<run>+b=<run>,FMESH_OUT=<dir> jobs/octopus/450_tide_gauge_compare.sh
+# maps against the tide model that forces the run; time series at gauges
+qsub -v DATA_DIR=$DATA_DIR,FMESH_RUN=<run>,FMESH_OUT=<dir> jobs/octopus/451_tide_model_map.sh
+qsub -v DATA_DIR=$DATA_DIR,FMESH_RUNS=a=<run>+b=<run>,FMESH_OUT=<png> jobs/octopus/452_tide_timeseries.sh
+```
+
+`qsub -v` cannot pass commas (and passes spaces unreliably): lists in these
+jobs are joined by `+`.
+
+**The forcing** (`tide_models.py`, `notebooks/449`). The harmonic constants
+of a tide model (NAO.99Jb for now, `$DATA_DIR/tides/models`) are sampled at
+every open-boundary node and converted to FVCOM's spectral form
+`A cos(2 pi t/T - phi)`, with `t` counted from the file's Time Origin:
+
+- `phi = G - V0 - u` and `A = f * amplitude`, where `G` is the Greenwich
+  phase lag, `V0` the astronomical argument at the Time Origin, and `f`, `u`
+  the nodal factor and angle, frozen at the middle of the run (FVCOM cannot
+  vary them);
+- the astronomy is utide's, so a harmonic analysis with utide (450, 451)
+  uses the same convention. A test builds an FVCOM series from converted
+  constants and analyses it back to the constants it came from.
+
+The usual errors in this step are each much larger than anything else here:
+leaving out `V0` (a different phase error for every constituent: 306 deg for
+M2 and 295 deg for O1 at 2021-01-01 00 UT), mixing JST constants with a UTC
+run (nine hours, about 260 deg of M2), and leaving out `f` and `u` (K1 about
+10 %, O1 about 18 % in amplitude in some years).
+
+**The tidal potential** (`--equilibrium`, `FMESH_EQUI=1`). FVCOM's
+`-DEQUI_TIDE` adds the equilibrium tide to the pressure gradient. Its own
+astronomy for real dates is a monthly approximation; the owner's FVCOM now
+also reads `f` and `V0 + u` from each component line of the tide file, so
+that the potential uses exactly the open boundary's astronomy
+(`tide_models.EQUILIBRIUM`: Cartwright-Tayler amplitudes, elasticity factor
+`1 + k - h` after Wahr). That FVCOM is built out of tree by FVCOM's
+`octopus/build_fvcom_equi.sh` into `$WORK_DIR/local/fvcom-equi/bin/fvcom`.
+On the Enshu mesh (about 300 km across, down to 5.7 km deep) it raises M2 by
+0.6-1.0 cm (about 2 %) at the Tokyo Bay gauges and S2 by 0.2-0.4 cm, both
+towards the observations; diurnal constituents change by less than 0.1 cm.
+On the base mesh every change is under 0.4 cm. It is not essential at these
+sizes, but it is right and costs nothing: keep it on for wide meshes.
+
+**First results** (2021-01-16 to 07-20, 185 days, 7 gauges, NAO.99Jb,
+8 constituents): rms vector difference M2 1.7 cm on the Enshu mesh with
+the potential (base 2.3 cm), S2 0.6 cm (1.0 cm). The diurnal constituents
+come out 4-9 % too large on the Enshu mesh (K1 +2.2 cm); NAO.99Jb itself is
+3-5 % above the 2021 gauges for K1.
+
+### 14.1 Which constituents to use
+
+The open-boundary file may carry any number of constituents, and the tide
+models offer many (NAO.99Jb 16, FES2022 34, TPXO10-atlas about 15). The
+Japan Meteorological Agency predicts with 40 at a gauge. For the open
+boundary of a regional model, **use the diurnal and semidiurnal
+constituents; leave out the following**:
+
+| constituents | why they are left out |
+|---|---|
+| **Sa, Ssa** (annual, semiannual) | Mostly not astronomical: seasonal heating, steric height, winds and currents. The ocean model or the reanalysis that gives the non-tidal sea level (JCOPE-T DA) carries them; adding them as tide counts them twice. |
+| **Mm, Mf, Msf, Mtm, Msqm** (long period) | Small (a few cm at most) and close to equilibrium; a low-pass filtered reanalysis keeps them in its non-tidal part, so they would be counted twice. Their periods (9-32 days) also need long records to be told apart in a validation. |
+| **S1** | Radiational: driven by the daily cycle of air pressure and wind, not by gravity. It belongs to the meteorological forcing. (S2 also has a radiational part, but a small one, and the tide models include it; keep S2.) |
+| **M3, M4, M6, M8, MN4, MS4, MKS2, N4, S4** (shallow water, overtides) | Generated inside the bay by the model's own nonlinearity (advection, friction, the finite depth). At an open boundary on the shelf they are millimetres; a gauge in the inner bay needs them, which is why the JMA list is long, but the model makes them. Forcing them at the boundary adds a small, model-inconsistent signal. |
+
+**Worth adding** when a tide model has them: 2N2, MU2, NU2, L2, T2,
+LAMBDA2, EPS2, R2 (semidiurnal) and J1, OO1 (diurnal). Each is a few
+millimetres to 1 cm, but together they can improve a time series by 1-2 cm.
+Mind two points: M1 is defined differently in different tables, so check
+its convention before using it; and the tidal potential
+(`tide_models.EQUILIBRIUM`) has coefficients only for the major eight, so a
+run with `--equilibrium` needs the table extended (or the minor ones given a
+zero potential) first.
+
+## 15. Improving the tool with AI
 
 Every new mesh is a new coastline, and it will find a case the tool has not
 met: a pier at an unusual angle, a basin narrower than expected, a feature

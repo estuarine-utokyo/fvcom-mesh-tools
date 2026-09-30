@@ -8,6 +8,22 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Added -- astronomical tide on the open boundary (2026-09-30)
+
+- `tide_models.py`: NAO.99 reader and sampler; `astronomy` (period, f,
+  V0+u from utide); `fvcom_spectral` (Greenwich constants to FVCOM's
+  spectral phases); `spectral_text` (multi-constituent file, optionally with
+  the tidal potential); `EQUILIBRIUM` (equilibrium tide coefficients).
+- Notebooks 449-453 and their jobs: a tide-only run of a case (449),
+  harmonic comparison with tide gauges (450), maps against the forcing tide
+  model (451), gauge time series (452), and re-depthing the new part of an
+  extended case from another bathymetry stack (453). USER_GUIDE section 14,
+  including which constituents to leave out of the open boundary and why.
+- The tidal potential needs the owner's FVCOM built with `-DEQUI_TIDE`,
+  which now reads f and V0+u from the tide file (FVCOM
+  `octopus/build_fvcom_equi.sh`).
+- `environment.yml`: utide.
+
 ### Added -- extending a base mesh outward (2026-09-29)
 
 - A wide mesh from a base kept as it is: `recipes/extend/`, notebooks
