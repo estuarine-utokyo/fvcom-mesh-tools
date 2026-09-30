@@ -759,19 +759,38 @@ the potential (base 2.3 cm), S2 0.6 cm (1.0 cm). The diurnal constituents
 come out 4-9 % too large on the Enshu mesh (K1 +2.2 cm); NAO.99Jb itself is
 3-5 % above the 2021 gauges for K1.
 
-**Where the diurnal excess comes from** (2026-09-30). Along the base mesh's
-open boundary, inside the Enshu run, K1 was 1.06 times NAO.99Jb. It did not
-move with the tidal potential (1.060), the bottom friction (Cd minimum
-0.0015 to 0.006: 1.062 to 1.058) or the bathymetry (the new nodes from
-M7001 instead of the Cabinet Office grids, 1.4 % mean change: 1.061). Forced
-by TPXO10-atlas-v2 instead (`--tide-model=tpxo10`), the same mesh carries
-K1 at exactly TPXO's amplitude there (1.000; O1 0.98), and the gauge error
-drops (K1 rms 2.3 to 1.5 cm, O1 1.4 to 0.8 cm) while the semidiurnal error
-rises (M2 1.7 to 2.1 cm, S2 0.6 to 1.2 cm). So the excess comes from the
-NAO.99Jb diurnal values on the wide open boundary, not from the mesh or the
-model physics: the mesh reproduces whichever tide model forces it. Which
-model to use is a choice per constituent group; a third model (FES2022)
-decides it.
+**Which tide model, and where the excess comes from** (2026-09-30). Along
+the base mesh's open boundary, inside the Enshu run, K1 was 1.06 times
+NAO.99Jb. It did not move with the tidal potential (1.060), the bottom
+friction (Cd minimum 0.0015 to 0.006: 1.062 to 1.058) or the bathymetry
+(the new nodes from M7001 instead of the Cabinet Office grids, 1.4 % mean
+change: 1.061). The three tide models then gave (rms vector difference at
+the 7 gauges, cm; `--tide-model`, all with the tidal potential):
+
+| forcing | mesh | M2 | S2 | K1 | O1 | Q1 |
+|---|---|---|---|---|---|---|
+| NAO.99Jb | Enshu | **1.7** | **0.6** | 2.3 | 1.4 | 0.6 |
+| TPXO10-atlas-v2 | Enshu | 2.1 | 1.2 | 1.5 | 0.8 | 0.3 |
+| FES2022b | Enshu | 2.2 | 1.2 | 1.5 | **0.7** | **0.2** |
+| NAO.99Jb | base | 2.3 | 1.0 | 1.0 | 0.8 | 0.3 |
+| TPXO10-atlas-v2 | base | 2.4 | 1.6 | 1.3 | 0.7 | 0.2 |
+| FES2022b | base | **1.7** | 1.0 | **0.7** | **0.6** | **0.2** |
+
+- **FES2022b is the best forcing on the base mesh**, whose open boundary is
+  at the bay mouth: its constants there are close to the gauges
+  (mean amplitude error M2 +0.1 cm, K1 +0.4 cm).
+- **On the Enshu mesh every forcing comes out 3-5 % high at the bay
+  mouth.** Forced by FES2022b or TPXO10 (which agree on the outer
+  boundary), the run carries M2 0.362 m and K1 0.241 m along the base
+  mesh's open boundary, where FES2022b has 0.351 m and 0.231 m (ratios
+  1.03 and 1.045); the gauges then see M2 +1.2 cm and K1 +1.5 cm. NAO.99Jb
+  looks better for M2 only because its outer-boundary M2 is lower. So the
+  wide mesh itself amplifies the tide between the outer boundary and the
+  bay mouth by a few per cent, for all constituents; not the bathymetry
+  source, not the friction range tried. Still to test: the self-attraction
+  and loading term (absent from the model), the open-boundary depth control
+  (it changes depths on the outer boundary by up to 830 m) and the
+  resolution around Izu-Oshima.
 
 ### 14.1 Which constituents to use
 
