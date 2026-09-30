@@ -12,7 +12,8 @@
 # (notebooks/451_tide_model_map.py).
 #
 # Required: FMESH_RUN (a 449 run dir), FMESH_OUT, DATA_DIR (qsub -v).
-# Optional: FMESH_LINES ("label=obc.dat+label=obc.dat").
+# Optional: FMESH_LINES ("label=obc.dat+label=obc.dat"), FMESH_REFERENCE
+#           (forcing | nao99jb | tpxo10).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 451_tide_model_map 4
@@ -23,5 +24,5 @@ if [ -n "${FMESH_LINES:-}" ]; then
     for l in "${lines[@]}"; do args+=(--line "$l"); done
 fi
 python notebooks/451_tide_model_map.py --run "${FMESH_RUN:?set FMESH_RUN}" \
-    --out "${FMESH_OUT:?set FMESH_OUT}" "${args[@]}"
+    --out "${FMESH_OUT:?set FMESH_OUT}" --reference "${FMESH_REFERENCE:-forcing}" "${args[@]}"
 echo "end=$(date -Is)"

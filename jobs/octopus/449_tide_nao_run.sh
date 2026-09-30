@@ -19,7 +19,7 @@
 #           FMESH_EQUI=1 (add the tidal potential; then FMESH_FVCOM must be an
 #           FVCOM built with -DEQUI_TIDE), FMESH_FVCOM (the FVCOM binary),
 #           FMESH_EXTRA (more 449 arguments joined by "+", e.g.
-#           '--cd-min=0.0015+--z0=0.0005'; qsub -v cannot pass spaces reliably).
+#           '--cd-min=0.0015+--z0=0.0005' or '--tide-model=tpxo10'; qsub -v cannot pass spaces reliably).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/RUN_OK"

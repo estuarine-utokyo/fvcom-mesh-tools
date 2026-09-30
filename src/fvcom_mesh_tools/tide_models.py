@@ -1,8 +1,13 @@
 """Harmonic constants from ocean tide models, at arbitrary points.
 
-Only the NAO.99 format is read for now (NAO.99Jb, regional around Japan at
-1/12 deg, and NAO.99b, global at 0.5 deg; Matsumoto et al., 2000). The
-files live under ``$DATA_DIR/tides/models`` (see the README there).
+Two formats are read: NAO.99 (NAO.99Jb, regional around Japan at 1/12 deg,
+and NAO.99b, global at 0.5 deg; Matsumoto et al., 2000) and the netCDF of
+the OTIS/TPXO atlases (TPXO10-atlas-v2, global at 1/30 deg; Egbert and
+Erofeeva, 2002). The files live under ``$DATA_DIR/tides/models`` (see the
+README there). Both come out as the same grid dictionary -- ``lon`` and
+``lat`` ascending, ``amp`` (m) and ``phase`` (Greenwich lag, deg) indexed
+``[lat, lon]``, NaN where there is no ocean -- which ``sample_constants``
+takes.
 
 The NAO format, as checked against the coastline: seven header lines, then
 for each latitude row from NORTH to south the row of amplitudes (0.01 cm)
@@ -27,8 +32,8 @@ from pathlib import Path
 import numpy as np
 
 __all__ = [
-    "EQUILIBRIUM", "NAO_CONSTITUENTS", "astronomy", "fvcom_spectral", "load_nao", "read_nao",
-    "sample_constants", "spectral_text",
+    "EQUILIBRIUM", "NAO_CONSTITUENTS", "astronomy", "fvcom_spectral", "load_nao", "load_tpxo",
+    "read_nao", "read_tpxo", "sample_constants", "spectral_text",
 ]
 
 #: The 16 constituents of NAO.99 and their file stems.
@@ -100,6 +105,55 @@ def load_nao(directory, constituents, suffix="_j") -> dict[str, dict]:
         if not path.exists():
             raise FileNotFoundError(path)
         out[key] = read_nao(path)
+    return out
+
+
+def read_tpxo(path, window=None) -> dict:
+    """One TPXO atlas elevation file (``h_<c>_*.nc``), optionally a lon/lat window.
+
+    The file holds the complex amplitude ``hRe + i hIm`` in millimetres on
+    ``(nx, ny)``; amplitude ``|h|`` and Greenwich phase ``atan2(-hIm, hRe)``,
+    as its own attributes say. Land is exactly 0. ``window`` is
+    ``(lon0, lon1, lat0, lat1)`` in degrees east (0-360 as the file) and
+    north; reading only a window keeps a 1/30-deg global file cheap.
+    """
+    import netCDF4
+
+    with netCDF4.Dataset(path) as ds:
+        lon = np.asarray(ds["lon_z"][:], float)
+        lat = np.asarray(ds["lat_z"][:], float)
+        if window is None:
+            ix, iy = slice(None), slice(None)
+        else:
+            lon0, lon1, lat0, lat1 = window
+            sel_x = np.flatnonzero((lon >= lon0) & (lon <= lon1))
+            sel_y = np.flatnonzero((lat >= lat0) & (lat <= lat1))
+            if len(sel_x) < 2 or len(sel_y) < 2:
+                raise ValueError(f"{path}: window {window} holds fewer than 2x2 nodes")
+            ix = slice(sel_x[0], sel_x[-1] + 1)
+            iy = slice(sel_y[0], sel_y[-1] + 1)
+        re_ = np.asarray(ds["hRe"][ix, iy], float).T
+        im_ = np.asarray(ds["hIm"][ix, iy], float).T
+        name = bytes(np.asarray(ds["con"][:])).decode(errors="ignore").strip().upper() \
+            if "con" in ds.variables else None
+    lon, lat = lon[ix], lat[iy]
+    if not (np.all(np.diff(lon) > 0) and np.all(np.diff(lat) > 0)):
+        raise ValueError(f"{path}: coordinates are not ascending")
+    land = (re_ == 0) & (im_ == 0)
+    amp = np.where(land, np.nan, np.hypot(re_, im_) / 1000.0)
+    pha = np.where(land, np.nan, np.degrees(np.arctan2(-im_, re_)) % 360)
+    return {"constituent": name, "lon": lon, "lat": lat, "amp": amp, "phase": pha}
+
+
+def load_tpxo(directory, constituents, window=None,
+              pattern="h_{c}_tpxo10_atlas_30_v2.nc") -> dict[str, dict]:
+    """Read several constituents from a TPXO atlas directory (``pattern`` names a file)."""
+    out = {}
+    for c in constituents:
+        path = Path(directory) / pattern.format(c=c.lower())
+        if not path.exists():
+            raise FileNotFoundError(path)
+        out[c.upper()] = read_tpxo(path, window)
     return out
 
 

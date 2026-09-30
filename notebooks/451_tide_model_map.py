@@ -36,6 +36,7 @@ from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.tide_models import (  # noqa: E402
     fvcom_spectral,
     load_nao,
+    load_tpxo,
     sample_constants,
 )
 
@@ -49,6 +50,8 @@ p.add_argument("--run", type=Path, required=True)
 p.add_argument("--out", type=Path, required=True)
 p.add_argument("--spinup-days", type=float, default=15.0)
 p.add_argument("--show", default="M2,S2,K1,O1")
+p.add_argument("--reference", choices=("forcing", "nao99jb", "tpxo10"), default="forcing",
+               help="the tide model to compare with (default: the one forcing the run)")
 p.add_argument("--line", action="append", default=[],
                help="LABEL=obc.dat of another mesh: report the run along that line")
 a = p.parse_args()
@@ -66,9 +69,19 @@ man = json.loads((a.run / "manifest.json").read_text())
 names = man["constituents"]
 start = datetime.fromisoformat(man["start"])
 mid = datetime.fromisoformat(man["nodal_f_u_at"])
-nao_dir = Path(man["tide_model"])
-if not nao_dir.exists() and os.environ.get("DATA_DIR"):
-    nao_dir = Path(os.environ["DATA_DIR"]) / "tides/models/NAO.99Jb/ocean"
+LABEL = {"nao99jb": "NAO.99Jb", "tpxo10": "TPXO10-atlas-v2"}
+DEFAULT_DIR = {"nao99jb": "tides/models/NAO.99Jb/ocean", "tpxo10": "tides/models/TPXO10_atlas_v2"}
+forcing = man.get("tide_model_name", "nao99jb")
+model_name = forcing if a.reference == "forcing" else a.reference
+if model_name == forcing:
+    nao_dir = Path(man["tide_model"])
+elif os.environ.get("DATA_DIR"):
+    nao_dir = Path(os.environ["DATA_DIR"]) / DEFAULT_DIR[model_name]
+else:
+    raise SystemExit("set DATA_DIR to compare with another tide model")
+if not nao_dir.exists():
+    raise SystemExit(f"tide model directory {nao_dir} is missing")
+REF = LABEL[model_name]
 
 m = read_fvcom_case(a.run / "input/m2_grd.dat", a.run / "input/m2_dep.dat",
                     a.run / "input/m2_obc.dat", title="run")
@@ -98,7 +111,11 @@ A_mod = amp_fv / f[:, None]
 G_mod = (phi + v0u[:, None]) % 360
 resid = zeta - X @ coef
 
-grids = load_nao(nao_dir, names)
+if model_name == "nao99jb":
+    grids = load_nao(nao_dir, names)
+else:
+    grids = load_tpxo(nao_dir, names, window=(float(lon.min()) - 0.5, float(lon.max()) + 0.5,
+                                             float(lat.min()) - 0.5, float(lat.max()) + 0.5))
 A_nao = np.empty_like(A_mod)
 G_nao = np.empty_like(G_mod)
 for k, c in enumerate(names):
@@ -159,7 +176,7 @@ for label, s in summary["lines"].items():
     print(f"[451] line {label}: " + json.dumps(short), flush=True)
 for g, s in summary["gauges"].items():
     print(f"[451] {g}: " + ", ".join(f"{c} model {v['model_amp_m']:.3f}/{v['model_g_deg']:.1f} "
-                                     f"NAO {v['nao_amp_m']:.3f}/{v['nao_g_deg']:.1f}"
+                                     f"{REF} {v['nao_amp_m']:.3f}/{v['nao_g_deg']:.1f}"
                                      for c, v in s.items() if c in ("M2", "K1", "O1")), flush=True)
 
 # maps: coast (land boundary) black, open boundary red
@@ -175,9 +192,9 @@ for c in a.show.split(","):
     k = names.index(c)
     fig, ax = plt.subplots(1, 3, figsize=(17, 5.6), constrained_layout=True)
     panels = ((A_mod[k] * 100, "viridis", None, f"{c} model amplitude (cm)"),
-              (A_mod[k] / A_nao[k], "RdBu_r", (0.8, 1.2), f"{c} amplitude model / NAO.99Jb"),
+              (A_mod[k] / A_nao[k], "RdBu_r", (0.8, 1.2), f"{c} amplitude model / {REF}"),
               (dphase(G_mod[k], G_nao[k]), "RdBu_r", (-10, 10),
-               f"{c} phase model - NAO.99Jb (deg)"))
+               f"{c} phase model - {REF} (deg)"))
     for axi, (val, cmap, lim, title) in zip(ax, panels):
         v = np.where(np.isfinite(val), val, np.nan)
         kw = {"vmin": lim[0], "vmax": lim[1]} if lim else {}

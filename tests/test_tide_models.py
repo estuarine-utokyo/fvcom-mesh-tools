@@ -9,6 +9,7 @@ from fvcom_mesh_tools.tide_models import (
     astronomy,
     fvcom_spectral,
     load_nao,
+    load_tpxo,
     read_nao,
     sample_constants,
     spectral_text,
@@ -122,3 +123,40 @@ def test_spectral_text_writes_the_equilibrium_columns():
     assert abs((v0u[0] - 304.06 + 180) % 360 - 180) < 0.5
     with pytest.raises(ValueError, match="no equilibrium"):
         spectral_text(["MU2"], [1.0], [[0.1]], [[0.0]], "x", equilibrium=([1.0], [0.0]))
+
+
+def _write_tpxo(path, re_mm, im_mm, lon, lat):
+    import netCDF4
+
+    with netCDF4.Dataset(path, "w") as ds:
+        ds.createDimension("nx", len(lon))
+        ds.createDimension("ny", len(lat))
+        ds.createDimension("nct", 4)
+        ds.createVariable("con", "S1", ("nct",))[:] = np.array(list("m2  "), "S1")
+        ds.createVariable("lon_z", "f8", ("nx",))[:] = lon
+        ds.createVariable("lat_z", "f8", ("ny",))[:] = lat
+        ds.createVariable("hRe", "i4", ("nx", "ny"))[:] = re_mm
+        ds.createVariable("hIm", "i4", ("nx", "ny"))[:] = im_mm
+
+
+def test_read_tpxo_gives_amplitude_phase_and_land(tmp_path):
+    lon = np.array([139.0, 139.5, 140.0])
+    lat = np.array([34.0, 34.5])
+    # amplitude 500 mm, Greenwich phase 30 deg: hRe = A cos G, hIm = -A sin G
+    re_ = np.full((3, 2), round(500 * np.cos(np.radians(30))))
+    im_ = np.full((3, 2), -round(500 * np.sin(np.radians(30))))
+    re_[2, 1] = im_[2, 1] = 0                      # land at (140.0, 34.5)
+    _write_tpxo(tmp_path / "h_m2_tpxo10_atlas_30_v2.nc", re_, im_, lon, lat)
+    g = load_tpxo(tmp_path, ["M2"])["M2"]
+    assert g["amp"].shape == (2, 3)                  # [lat, lon]
+    assert g["amp"][0, 0] == pytest.approx(0.5, abs=1e-3)
+    assert g["phase"][0, 0] == pytest.approx(30.0, abs=0.2)
+    assert np.isnan(g["amp"][1, 2])
+    a, p, filled = sample_constants(g, np.array([139.25]), np.array([34.25]))
+    assert a[0] == pytest.approx(0.5, abs=1e-3) and p[0] == pytest.approx(30, abs=0.2)
+    w = load_tpxo(tmp_path, ["m2"], window=(139.4, 140.1, 33.9, 34.6))["M2"]
+    assert list(w["lon"]) == [139.5, 140.0]
+    with pytest.raises(ValueError, match="2x2"):
+        load_tpxo(tmp_path, ["m2"], window=(150, 151, 0, 1))
+    with pytest.raises(FileNotFoundError):
+        load_tpxo(tmp_path, ["k1"])
