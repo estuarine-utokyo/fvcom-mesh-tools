@@ -337,7 +337,8 @@ def fvcom_spectral(names, amp, phase, start: datetime, mid: datetime, lat: float
 
 def spectral_text(names, period, amp, phase, origin: str, equilibrium=None,
                   sal_beta: float | None = None, normal_velocity=None,
-                  flather_alpha: float | None = None) -> str:
+                  flather_alpha: float | None = None,
+                  flather_min_depth: float | None = None) -> str:
     """An FVCOM non-Julian (spectral) tidal forcing file, several constituents.
 
     ``amp`` and ``phase`` have shape ``(n_names, n_obc)``, in open-boundary
@@ -360,7 +361,8 @@ def spectral_text(names, period, amp, phase, origin: str, equilibrium=None,
     depth-mean velocity (m/s, FVCOM spectral phase) at each open-boundary
     node, which makes the owner's FVCOM use a Flather boundary;
     ``flather_alpha`` (0, 1] scales its correction term (a ``Flather Alpha``
-    line).
+    line); ``flather_min_depth`` keeps shallower boundary nodes clamped (a
+    ``Flather Min Depth`` line).
     """
     amp = np.atleast_2d(np.asarray(amp, float))
     phase = np.atleast_2d(np.asarray(phase, float))
@@ -387,6 +389,10 @@ def spectral_text(names, period, amp, phase, origin: str, equilibrium=None,
         if normal_velocity is None or not 0.0 < flather_alpha <= 1.0:
             raise ValueError("flather_alpha needs normal_velocity and must be in (0, 1]")
         lines.append(f"Flather Alpha = {flather_alpha:.6f}")
+    if flather_min_depth is not None:
+        if normal_velocity is None or flather_min_depth < 0:
+            raise ValueError("flather_min_depth needs normal_velocity and must be >= 0")
+        lines.append(f"Flather Min Depth = {flather_min_depth:.3f}")
     lines += [f"Time Origin = {origin}", f"OBC Node Number = {n}"]
     blocks = [("Amplitude", amp), ("Phase", phase), ("Eref", np.zeros((1, n)))]
     if normal_velocity is not None:
