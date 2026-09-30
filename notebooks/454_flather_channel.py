@@ -113,8 +113,11 @@ def stage(a):
     M383.RAMP_SECONDS = 43200.0
     tide = spectral_text(["M2"], [PERIOD], amp, pha, M383.START, normal_velocity=normal)
     # an FVCOM built with -DEQUI_TIDE needs the equilibrium items on the
-    # component line: a zero equilibrium tide (no potential in the channel)
-    tide = tide.replace(f"1 = M2 {PERIOD:.10f}", f"1 = M2 {PERIOD:.10f} 0.0 0.693 SEMIDIURNAL")
+    # component line: a zero equilibrium tide (no potential in the channel),
+    # with f and V0+u given -- without them FVCOM takes its own monthly
+    # astronomy, which crashed (SIGSEGV in ELEVATION_EQUI, 2026-09-30)
+    tide = tide.replace(f"1 = M2 {PERIOD:.10f}",
+                        f"1 = M2 {PERIOD:.10f} 0.0 0.693 SEMIDIURNAL 1.0 0.0")
     (inp / "m2_tide.dat").write_text(tide)
     text = M383.namelist(inp, out)
     for key, value in (("CASE_TITLE", f"'454 channel {a.mode}'"), ("NC_VELOCITY", "F"),
