@@ -752,6 +752,11 @@ On the Enshu mesh (about 300 km across, down to 5.7 km deep) it raises M2 by
 towards the observations; diurnal constituents change by less than 0.1 cm.
 On the base mesh every change is under 0.4 cm. It is not essential at these
 sizes, but it is right and costs nothing: keep it on for wide meshes.
+Without f and V0+u in the file FVCOM uses its own monthly astronomy; that
+path used to crash (SIGSEGV, fixed in FVCOM 30cc7c96), and in the channel of
+notebook 454 it now agrees with the utide path to 2 mm for a 1.4 cm
+potential response. The utide path stays the default here: it is the same
+astronomy as the open boundary.
 
 **First results** (2021-01-16 to 07-20, 185 days, 7 gauges, NAO.99Jb,
 8 constituents): rms vector difference M2 1.7 cm on the Enshu mesh with
