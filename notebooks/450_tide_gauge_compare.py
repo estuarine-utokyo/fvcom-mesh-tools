@@ -13,8 +13,15 @@ at the hours the gauge observed, and both series go through the same
 published constants instead would bring in another convention and another
 analysis period.
 
+The constants are compared for ``--constituents`` (default the major 8, so
+that runs forced by different sets compare alike). A second measure covers
+all constituents at once: the observation is analysed with utide's automatic
+constituent selection and its tide reconstructed from the diurnal and faster
+constituents; ``tide_rms`` is the rms of
+model minus that tide (both minus their mean) at the observed hours.
+
 Writes ``constants.csv`` (one row per run, station and constituent),
-``summary.json`` and ``compare.png``.
+``tide_rms.csv``, ``summary.json`` and ``compare.png``.
 """
 
 from __future__ import annotations
@@ -42,6 +49,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--run", action="append", required=True, help="LABEL=RUN_DIR")
 p.add_argument("--out", type=Path, required=True)
 p.add_argument("--spinup-days", type=float, default=15.0)
+p.add_argument("--constituents", default="M2,S2,N2,K2,K1,O1,P1,Q1")
 a = p.parse_args()
 if not os.environ.get("DATA_DIR"):
     raise SystemExit("set DATA_DIR")
@@ -61,10 +69,9 @@ for item in a.run:
     label, _, path = item.partition("=")
     runs[label] = Path(path).resolve()
 manifests = {k: json.loads((v / "manifest.json").read_text()) for k, v in runs.items()}
-names = manifests[next(iter(runs))]["constituents"]
-if any(m["constituents"] != names or m["start"] != manifests[next(iter(runs))]["start"]
-       for m in manifests.values()):
-    raise SystemExit("the runs differ in constituents or start")
+names = [c.strip().upper() for c in a.constituents.split(",") if c.strip()]
+if any(m["start"] != manifests[next(iter(runs))]["start"] for m in manifests.values()):
+    raise SystemExit("the runs differ in start")
 start = datetime.fromisoformat(manifests[next(iter(runs))]["start"])
 t_lo = start + timedelta(days=a.spinup_days)
 t_hi = min(datetime.fromisoformat(m["end"]) for m in manifests.values())
@@ -107,9 +114,23 @@ def analyse(t, z, lat):
     return {n: (float(A), float(g), float(e)) for n, A, g, e in zip(c.name, c.A, c.g, c.A_ci)}
 
 
+def observed_tide(station, t, z, lat):
+    """utide's own constituent choice on the observation, reconstructed at t."""
+    c = utide.solve(t, z, lat=lat, constit="auto", method="ols", conf_int="none",
+                    nodal=True, trend=True, verbose=False, epoch="python")
+    # diurnal and faster only: the long-period ones (Sa, Ssa, Mm, ...) are
+    # mostly weather and season here, and no run carries them
+    keep = [n for n, f in zip(c.name, c.aux.frq) if f > 1 / 30.0]
+    rec = utide.reconstruct(t, c, constit=keep, verbose=False, epoch="python")
+    # reconstruct adds the mean and the trend back: take them out again
+    return rec.h - c.mean - c.slope * (t - c.aux.reftime), keep
+
+
 rows = []
+tide_rows = []
 located = {}
 obs_cache = {}
+obs_tide_cache = {}
 for label, run in runs.items():
     m = read_fvcom_case(run / "input/m2_grd.dat", run / "input/m2_dep.dat",
                         run / "input/m2_obc.dat", title=label)
@@ -150,6 +171,14 @@ for label, run in runs.items():
             print(f"[450] {label}/{st}: only {len(tm)} common hours; skipped", flush=True)
             continue
         cm, co = analyse(tm, zm, lat), analyse(tm, zob, lat)
+        if st not in obs_tide_cache:
+            obs_tide_cache[st] = observed_tide(st, t, zo, lat)
+        tide_o, tide_names = obs_tide_cache[st]
+        to_ = tide_o[ok] - np.mean(tide_o[ok])
+        r_tide = float(np.sqrt(np.mean(((zm - zm.mean()) - to_) ** 2)))
+        tide_rows.append({"run": label, "station": st, "tide_rms_m": r_tide,
+                          "obs_tide_rms_m": float(np.sqrt(np.mean(to_ ** 2))),
+                          "n_obs_constituents": len(tide_names)})
         for n in names:
             Am, gm, _ = cm[n]
             Ao, go, eo = co[n]
@@ -183,12 +212,24 @@ for label in runs:
                 "mean_d_g_deg": float(np.mean([r["d_g_deg"] for r in rr])),
                 "n_stations": len(rr)}
     summary["runs"][label] = {"manifest": manifests[label], "by_constituent": s}
+for label in runs:
+    tr = [r for r in tide_rows if r["run"] == label]
+    summary["runs"][label]["tide_rms_m"] = {r["station"]: r["tide_rms_m"] for r in tr}
+    summary["runs"][label]["tide_rms_mean_m"] = float(np.mean([r["tide_rms_m"] for r in tr]))
+with open(a.out / "tide_rms.csv", "w") as fh:
+    fh.write("run,station,tide_rms_m,obs_tide_rms_m,n_obs_constituents\n")
+    for r in tide_rows:
+        fh.write(f"{r['run']},{r['station']},{r['tide_rms_m']:.5f},{r['obs_tide_rms_m']:.5f},"
+                 f"{r['n_obs_constituents']}\n")
 (a.out / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
 for label in runs:
     print(f"[450] {label}: " + ", ".join(
         f"{n} rmsD {v['rms_vector_diff_m'] * 100:.1f} cm dA {v['mean_d_amp_m'] * 100:+.1f} cm "
         f"dg {v['mean_d_g_deg']:+.1f}"
         for n, v in summary["runs"][label]["by_constituent"].items()), flush=True)
+    tr = summary["runs"][label]["tide_rms_m"]
+    print(f"[450] {label}: tide rms {summary['runs'][label]['tide_rms_mean_m'] * 100:.2f} cm "
+          "(" + ", ".join(f"{k} {v * 100:.1f}" for k, v in tr.items()) + ")", flush=True)
 
 # figure: amplitude and phase per station for the four largest constituents
 show = [n for n in ("M2", "S2", "K1", "O1") if n in names]

@@ -245,11 +245,16 @@ def read_fes(path, window=None) -> dict:
             "amp": amp, "phase": pha}
 
 
+#: FES2022 file stems that differ from the (utide) constituent name.
+FES_FILE_NAMES = {"LDA2": "lambda2"}
+
+
 def load_fes(directory, constituents, window=None, pattern="{c}_fes2022.nc") -> dict[str, dict]:
     """Read several constituents from a FES2022 directory (``pattern`` names a file)."""
     out = {}
     for c in constituents:
-        path = Path(directory) / pattern.format(c=c.lower())
+        stem = FES_FILE_NAMES.get(c.upper(), c.lower())
+        path = Path(directory) / pattern.format(c=stem)
         if not path.exists():
             raise FileNotFoundError(path)
         out[c.upper()] = read_fes(path, window)
@@ -338,7 +343,8 @@ def fvcom_spectral(names, amp, phase, start: datetime, mid: datetime, lat: float
 def spectral_text(names, period, amp, phase, origin: str, equilibrium=None,
                   sal_beta: float | None = None, normal_velocity=None,
                   flather_alpha: float | None = None,
-                  flather_min_depth: float | None = None) -> str:
+                  flather_min_depth: float | None = None,
+                  zero_unknown_equilibrium: bool = False) -> str:
     """An FVCOM non-Julian (spectral) tidal forcing file, several constituents.
 
     ``amp`` and ``phase`` have shape ``(n_names, n_obc)``, in open-boundary
@@ -360,6 +366,11 @@ def spectral_text(names, period, amp, phase, origin: str, equilibrium=None,
     adds ``UnAmplitude`` / ``UnPhase`` sections: the outward normal
     depth-mean velocity (m/s, FVCOM spectral phase) at each open-boundary
     node, which makes the owner's FVCOM use a Flather boundary;
+    ``zero_unknown_equilibrium`` gives a constituent missing from
+    :data:`EQUILIBRIUM` a zero equilibrium tide (species from its name)
+    instead of refusing it: the potential of the minor constituents is a
+    few mm at most over a regional domain.
+
     ``flather_alpha`` (0, 1] scales its correction term (a ``Flather Alpha``
     line); ``flather_min_depth`` keeps shallower boundary nodes clamped (a
     ``Flather Min Depth`` line).
@@ -377,9 +388,12 @@ def spectral_text(names, period, amp, phase, origin: str, equilibrium=None,
     for i, (c, p) in enumerate(zip(names, period), 1):
         line = f"{i} = {c} {p:.10f}"
         if equilibrium is not None:
-            if c.upper() not in EQUILIBRIUM:
+            if c.upper() in EQUILIBRIUM:
+                a_eq, beta, kind = EQUILIBRIUM[c.upper()]
+            elif zero_unknown_equilibrium and c[-1] in "12":
+                a_eq, beta, kind = 0.0, 0.693, "DIURNAL" if c[-1] == "1" else "SEMIDIURNAL"
+            else:
                 raise ValueError(f"no equilibrium tide for {c}; known {sorted(EQUILIBRIUM)}")
-            a_eq, beta, kind = EQUILIBRIUM[c.upper()]
             f, v0u = equilibrium[0][i - 1], equilibrium[1][i - 1]
             line += f" {a_eq:.6f} {beta:.3f} {kind} {f:.8f} {v0u:.6f}"
         lines.append(line)

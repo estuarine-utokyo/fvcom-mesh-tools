@@ -214,3 +214,15 @@ def test_spectral_text_writes_normal_velocity_sections():
     assert lines[-1] == "UnPhase"
     with pytest.raises(ValueError, match="shaped"):
         spectral_text(names, period, amp, amp, "x", normal_velocity=(amp[:, :2], amp[:, :2]))
+
+
+def test_spectral_text_zero_equilibrium_for_minor_constituents():
+    names = ["M2", "J1", "LDA2"]
+    period, f, v0u = astronomy(names, datetime(2021, 1, 1), datetime(2021, 1, 31), 35.0)
+    one = np.full((3, 1), 0.1)
+    with pytest.raises(ValueError, match="no equilibrium"):
+        spectral_text(names, period, one, one * 0, "x", equilibrium=(f, v0u))
+    lines = spectral_text(names, period, one, one * 0, "x", equilibrium=(f, v0u),
+                          zero_unknown_equilibrium=True).splitlines()
+    assert lines[2].split()[4:7] == ["0.000000", "0.693", "DIURNAL"]
+    assert lines[3].split()[4:7] == ["0.000000", "0.693", "SEMIDIURNAL"]
