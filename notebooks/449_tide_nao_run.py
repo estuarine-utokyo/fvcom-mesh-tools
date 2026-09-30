@@ -77,7 +77,7 @@ p.add_argument("--root", type=Path, required=True)
 p.add_argument("--start", default="2021-01-01")
 p.add_argument("--days", type=float, default=200.0)
 p.add_argument("--constituents", default=",".join(CONSTITUENTS),
-               help="comma-separated (utide names, e.g. LDA2 for lambda2); default the major 8")
+               help="separated by ',' or ':' (utide names, LDA2 = lambda2); default the major 8")
 p.add_argument("--tide-model", choices=("nao99jb", "tpxo10", "fes2022"), default="nao99jb")
 p.add_argument("--nao", type=Path, default=None,
                help="the tide model's directory (default under $DATA_DIR/tides/models)")
@@ -103,7 +103,8 @@ p.add_argument("--sal-beta", type=float, default=None,
 p.add_argument("--equilibrium", action="store_true",
                help="add the tidal potential (needs an FVCOM built with -DEQUI_TIDE)")
 a = p.parse_args()
-CONSTITUENTS = tuple(c.strip().upper() for c in a.constituents.split(",") if c.strip())
+# ',' or ':' (qsub -v cannot pass commas)
+CONSTITUENTS = tuple(c.strip().upper() for c in re.split(r"[,:]", a.constituents) if c.strip())
 if a.flather and a.tide_model != "tpxo10":
     raise SystemExit("--flather needs --tide-model=tpxo10 (the only model with transports here)")
 DEFAULT_DIR = {"nao99jb": "tides/models/NAO.99Jb/ocean", "tpxo10": "tides/models/TPXO10_atlas_v2",
