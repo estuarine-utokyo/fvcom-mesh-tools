@@ -808,18 +808,32 @@ the 7 gauges, cm; `--tide-model`, all with the tidal potential):
   Uraga channel region, where the wide run's M2 field differs in shape
   from the base run's (the base run, forced at the bay mouth by FES2022b,
   is within 1 % in the bay).
-- **A Flather boundary, first attempt: unstable.** FVCOM's radiation
-  boundaries (GWI, BKI, ORE) take no tide, so the owner's FVCOM gained a
-  Flather boundary (`eta = eta_T + sqrt(H/g)(u_n - u_T)`; the tide file's
-  optional `UnAmplitude` / `UnPhase` sections; 449 `--flather` with
-  `--tide-model=tpxo10`, TPXO transports divided by the model depth on the
-  outward normal FVCOM uses). As written it takes `u_n` from the elements
-  around each boundary node, and on both meshes the runs reached 5-6 m/s
-  next to the boundary and a mean set-up of 1-3 m: at 4000 m depth
-  `sqrt(H/g)` is about 20 s, so 0.1 m/s of velocity noise moves the
-  boundary by 2 m. It is marked experimental; a usable version needs the
-  normal velocity taken consistently with the boundary flux (and probably
-  a relaxation). The outer mesh's resolution is still untested.
+- **A Flather boundary** (owner's FVCOM; 449 `--flather` with
+  `--tide-model=tpxo10`). FVCOM's radiation boundaries (GWI, BKI, ORE)
+  take no tide, so a Flather boundary was added: the tide file's optional
+  `UnAmplitude` / `UnPhase` sections give the outward normal depth-mean
+  velocity (TPXO transport over the model depth, on the outward normal
+  FVCOM uses), and FVCOM solves `eta = eta_T + sqrt(D/g)(u_n - u_T)`
+  implicitly with the boundary node's continuity, `u_n` being the flux that
+  leaves the node's control volume. Two earlier versions failed and are
+  recorded in FVCOM's history: an explicit one (u_n from the surrounding
+  elements) and an implicit one that read the continuity value from ELF,
+  which FVCOM leaves unchanged at open-boundary nodes (the interior flux is
+  in `XFLUX_OBCN`). Found with **notebook 454**, an idealised channel
+  (200 km x 20 km x 100 m, closed at one end, M2) against linear theory:
+  clamped 0.35 cm rms, Flather with the theoretical velocity 0.15 cm rms,
+  and Flather with `u_T = 0` stable.
+- **Flather on the Tokyo Bay meshes** (TPXO10 elevation and transport,
+  tidal potential, 200 days): stable on both. On the Enshu mesh the bay-mouth
+  ratio to FES2022b moves from 1.03 (M2) and 1.045 (K1) to 0.984 and 1.027;
+  at the gauges M2 improves (rms 2.1 to 1.7 cm, amplitude +1.2 to -0.7 cm)
+  and K1 (1.5 to 1.2 cm), while S2 (1.2 to 1.5 cm) and O1 (0.8 to 1.3 cm)
+  get worse. On the base mesh it changes little. So the boundary condition
+  accounts for most of the wide mesh's few-per-cent excess; what remains
+  is of the size of the differences between the tide models themselves.
+  The best fit overall is still the base mesh forced by FES2022b (clamped).
+  FES2022 offers no transports here, so FES + Flather needs another
+  velocity source.
 
 ### 14.1 Which constituents to use
 
