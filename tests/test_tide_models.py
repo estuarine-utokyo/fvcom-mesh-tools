@@ -186,3 +186,16 @@ def test_read_fes_gives_amplitude_phase_and_missing(tmp_path):
     assert list(w["lon"]) == [139.5, 140.0]
     with pytest.raises(FileNotFoundError):
         load_fes(tmp_path, ["k1"])
+
+
+def test_spectral_text_writes_the_sal_line_only_with_equilibrium():
+    names = ["M2"]
+    period, f, v0u = astronomy(names, datetime(2021, 1, 1), datetime(2021, 1, 31), 35.0)
+    text = spectral_text(names, period, [[0.1]], [[0.0]], "2021-01-01 00:00:00",
+                         equilibrium=(f, v0u), sal_beta=0.1)
+    assert "SAL Beta = 0.100000" in text.splitlines()
+    assert text.index("SAL Beta") < text.index("Time Origin")
+    with pytest.raises(ValueError, match="sal_beta"):
+        spectral_text(names, period, [[0.1]], [[0.0]], "x", sal_beta=0.1)
+    with pytest.raises(ValueError, match="sal_beta"):
+        spectral_text(names, period, [[0.1]], [[0.0]], "x", equilibrium=(f, v0u), sal_beta=0.7)

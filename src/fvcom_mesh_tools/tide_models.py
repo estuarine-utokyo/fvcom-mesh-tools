@@ -285,7 +285,8 @@ def fvcom_spectral(names, amp, phase, start: datetime, mid: datetime, lat: float
     return period, f[:, None] * amp, (phase - v0u[:, None]) % 360.0
 
 
-def spectral_text(names, period, amp, phase, origin: str, equilibrium=None) -> str:
+def spectral_text(names, period, amp, phase, origin: str, equilibrium=None,
+                  sal_beta: float | None = None) -> str:
     """An FVCOM non-Julian (spectral) tidal forcing file, several constituents.
 
     ``amp`` and ``phase`` have shape ``(n_names, n_obc)``, in open-boundary
@@ -297,6 +298,11 @@ def spectral_text(names, period, amp, phase, origin: str, equilibrium=None) -> s
     (:data:`EQUILIBRIUM`), then the nodal factor and V0 + u (deg) at the Time
     Origin -- the owner's FVCOM extension, which makes the tidal potential use
     the same astronomy as the open boundary.
+
+    ``sal_beta`` adds a ``SAL Beta`` line: the self-attraction and loading
+    in the scalar approximation (``beta * zeta`` added to the equilibrium
+    tide; typically 0.08-0.12), which the same extension reads. It needs
+    ``equilibrium``.
     """
     amp = np.atleast_2d(np.asarray(amp, float))
     phase = np.atleast_2d(np.asarray(phase, float))
@@ -304,6 +310,8 @@ def spectral_text(names, period, amp, phase, origin: str, equilibrium=None) -> s
         raise ValueError("names, period, amp and phase disagree in shape")
     if not (np.isfinite(amp).all() and np.isfinite(phase).all()):
         raise ValueError("non-finite amplitude or phase")
+    if sal_beta is not None and (equilibrium is None or not 0.0 <= sal_beta < 0.5):
+        raise ValueError("sal_beta needs equilibrium and must be in [0, 0.5)")
     n = amp.shape[1]
     lines = [f"Tidal Component Number = {len(names)}"]
     for i, (c, p) in enumerate(zip(names, period), 1):
@@ -315,6 +323,8 @@ def spectral_text(names, period, amp, phase, origin: str, equilibrium=None) -> s
             f, v0u = equilibrium[0][i - 1], equilibrium[1][i - 1]
             line += f" {a_eq:.6f} {beta:.3f} {kind} {f:.8f} {v0u:.6f}"
         lines.append(line)
+    if sal_beta is not None:
+        lines.append(f"SAL Beta = {sal_beta:.6f}")
     lines += [f"Time Origin = {origin}", f"OBC Node Number = {n}"]
     for label, values in (("Amplitude", amp), ("Phase", phase), ("Eref", np.zeros((1, n)))):
         lines.append(label)

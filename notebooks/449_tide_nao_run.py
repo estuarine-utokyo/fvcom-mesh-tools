@@ -83,6 +83,8 @@ p.add_argument("--cd-min", type=float, default=None,
                help="minimum bottom drag coefficient; default 383's 0.003")
 p.add_argument("--no-obc-depth-control", action="store_true",
                help="keep the open-boundary depths as built (FVCOM's OBC_DEPTH_CONTROL_ON = F)")
+p.add_argument("--sal-beta", type=float, default=None,
+               help="self-attraction and loading, scalar approximation (needs --equilibrium)")
 p.add_argument("--equilibrium", action="store_true",
                help="add the tidal potential (needs an FVCOM built with -DEQUI_TIDE)")
 a = p.parse_args()
@@ -150,7 +152,7 @@ period, famp, fpha = fvcom_spectral(CONSTITUENTS, amp, pha, start, mid, float(la
 _, f_nodal, v0u = astronomy(CONSTITUENTS, start, mid, float(lat[ob].mean()))
 (inp / "m2_tide.dat").write_text(spectral_text(
     CONSTITUENTS, period, famp, fpha, M383.START,
-    equilibrium=(f_nodal, v0u) if a.equilibrium else None))
+    equilibrium=(f_nodal, v0u) if a.equilibrium else None, sal_beta=a.sal_beta))
 with open(case / "obc_constants.csv", "w") as fh:
     fh.write("obc,node,lon,lat,filled,"
              + ",".join(f"{c}_amp_m,{c}_g_deg" for c in CONSTITUENTS) + "\n")
@@ -186,7 +188,7 @@ manifest = {
     "tide_model_name": a.tide_model, "tide_model": str(a.nao),
     "equilibrium_tide": bool(a.equilibrium),
     "bottom_z0_m": a.z0, "bottom_cd_min": a.cd_min,
-    "obc_depth_control": not a.no_obc_depth_control,
+    "obc_depth_control": not a.no_obc_depth_control, "sal_beta": a.sal_beta,
     "n_obc_filled_from_nearest": int(filled.sum()),
     "obc_amp_range_m": {c: [float(amp[k].min()), float(amp[k].max())]
                         for k, c in enumerate(CONSTITUENTS)},
