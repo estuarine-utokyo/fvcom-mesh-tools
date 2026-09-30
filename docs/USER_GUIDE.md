@@ -796,12 +796,22 @@ the 7 gauges, cm; `--tide-model`, all with the tidal potential):
   the owner's FVCOM reads a `SAL Beta` line) slows the tide and makes the
   excess larger (M2 at the gauges +2.4 cm instead of +1.2 cm on the Enshu
   mesh, +1.0 instead of +0.1 cm on the base mesh): leave it off.
-- What remains points to missing dissipation between the outer boundary and
-  the bay mouth: the only change that lowered the excess was a larger bottom
-  drag (M2 rms 1.7 to 1.5 cm with Cd minimum 0.006). A barotropic model
-  loses no energy to internal tides, which the steep Sagami Trough and
-  Izu Ridge generate; global tide models parameterise that loss. A
-  topographic (internal-wave) drag in deep water is the next thing to try.
+- **Nor does a topographic (internal-tide) drag.** The owner's FVCOM takes
+  `BOTTOM_ITD_COEFFICIENT` / `BOTTOM_ITD_MIN_DEPTH` (449
+  `--itd-coefficient`): a linear bottom stress `C H |grad H|^2 u` below
+  200 m. With C = 5e-4 and 2e-3 1/s the ratio to FES2022b at the bay mouth
+  goes from 1.031 to 1.029 (M2) and 1.045 to 1.041 (K1): nearly nothing.
+- Where it arises, by gauge (model / observed amplitude, FES2022b forcing):
+  K1 is already 1.06 at Mera, on the open coast, and 1.05-1.08 in the bay;
+  M2 is 0.98 at Mera but 1.02-1.07 in the bay. So the diurnal excess builds
+  up outside, before the bay mouth, and the semidiurnal one inside the
+  Uraga channel region, where the wide run's M2 field differs in shape
+  from the base run's (the base run, forced at the bay mouth by FES2022b,
+  is within 1 % in the bay).
+- Not yet tried: the open-boundary condition itself (FVCOM clamps the
+  elevation; a boundary that also takes the tide model's transport, of
+  Flather type, lets the model's own response leave the domain), and the
+  outer mesh's resolution.
 
 ### 14.1 Which constituents to use
 
