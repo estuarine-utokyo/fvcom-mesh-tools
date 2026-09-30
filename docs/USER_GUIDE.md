@@ -855,6 +855,14 @@ constituents; leave out the following**:
 | **S1** | Radiational: driven by the daily cycle of air pressure and wind, not by gravity. It belongs to the meteorological forcing. (S2 also has a radiational part, but a small one, and the tide models include it; keep S2.) |
 | **M3, M4, M6, M8, MN4, MS4, MKS2, N4, S4** (shallow water, overtides) | Generated inside the bay by the model's own nonlinearity (advection, friction, the finite depth). At an open boundary on the shelf they are millimetres; a gauge in the inner bay needs them, which is why the JMA list is long, but the model makes them. Forcing them at the boundary adds a small, model-inconsistent signal. |
 
+**Measured (2026-10-01, FES2022b, clamped, tidal potential, 185 days):**
+the 9 minor diurnal/semidiurnal constituents (2N2 EPS2 J1 L2 LAMBDA2 MU2
+NU2 R2 T2) on top of the major 8 lower the tide-series error at the gauges
+(450 `tide_rms`: model minus the observation's own tide, diurnal and
+faster) from 3.00 to 2.77 cm on the base mesh and from 3.33 to 3.09 cm on
+the Enshu mesh; S2 improves most (rms 1.0 to 0.6 cm), since T2 and R2 no
+longer fold into it. Use them.
+
 **Worth adding** when a tide model has them: 2N2, MU2, NU2, L2, T2,
 LAMBDA2, EPS2, R2 (semidiurnal) and J1, OO1 (diurnal). Each is a few
 millimetres to 1 cm, but together they can improve a time series by 1-2 cm.
