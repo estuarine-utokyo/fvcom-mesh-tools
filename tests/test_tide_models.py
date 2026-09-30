@@ -8,6 +8,7 @@ import pytest
 from fvcom_mesh_tools.tide_models import (
     astronomy,
     fvcom_spectral,
+    load_fes,
     load_nao,
     load_tpxo,
     read_nao,
@@ -160,3 +161,28 @@ def test_read_tpxo_gives_amplitude_phase_and_land(tmp_path):
         load_tpxo(tmp_path, ["m2"], window=(150, 151, 0, 1))
     with pytest.raises(FileNotFoundError):
         load_tpxo(tmp_path, ["k1"])
+
+
+def test_read_fes_gives_amplitude_phase_and_missing(tmp_path):
+    import netCDF4
+
+    lon = np.array([139.0, 139.5, 140.0])
+    lat = np.array([34.0, 34.5])
+    amp = np.full((2, 3), 50.0)                      # cm
+    pha = np.full((2, 3), 30.0)
+    with netCDF4.Dataset(tmp_path / "m2_fes2022.nc", "w") as ds:
+        ds.createDimension("lat", 2)
+        ds.createDimension("lon", 3)
+        ds.createVariable("lon", "f8", ("lon",))[:] = lon
+        ds.createVariable("lat", "f8", ("lat",))[:] = lat
+        a = ds.createVariable("amplitude", "f4", ("lat", "lon"), fill_value=1.844674e19)
+        a.units = "cm"
+        a[:] = np.ma.masked_array(amp, mask=[[0, 0, 0], [0, 0, 1]])
+        ds.createVariable("phase", "f4", ("lat", "lon"), fill_value=1.844674e19)[:] = pha
+    g = load_fes(tmp_path, ["M2"])["M2"]
+    assert g["amp"][0, 0] == pytest.approx(0.5) and g["phase"][0, 0] == pytest.approx(30.0)
+    assert np.isnan(g["amp"][1, 2])
+    w = load_fes(tmp_path, ["m2"], window=(139.4, 140.1, 33.9, 34.6))["M2"]
+    assert list(w["lon"]) == [139.5, 140.0]
+    with pytest.raises(FileNotFoundError):
+        load_fes(tmp_path, ["k1"])

@@ -1,13 +1,14 @@
 """Harmonic constants from ocean tide models, at arbitrary points.
 
-Two formats are read: NAO.99 (NAO.99Jb, regional around Japan at 1/12 deg,
-and NAO.99b, global at 0.5 deg; Matsumoto et al., 2000) and the netCDF of
+Three formats are read: NAO.99 (NAO.99Jb, regional around Japan at 1/12
+deg, and NAO.99b, global at 0.5 deg; Matsumoto et al., 2000), the netCDF of
 the OTIS/TPXO atlases (TPXO10-atlas-v2, global at 1/30 deg; Egbert and
-Erofeeva, 2002). The files live under ``$DATA_DIR/tides/models`` (see the
-README there). Both come out as the same grid dictionary -- ``lon`` and
-``lat`` ascending, ``amp`` (m) and ``phase`` (Greenwich lag, deg) indexed
-``[lat, lon]``, NaN where there is no ocean -- which ``sample_constants``
-takes.
+Erofeeva, 2002), and the FES2022 netCDF (FES2022b from AVISO+, global at
+1/30 deg, extrapolated onto land near the coast). The files live under
+``$DATA_DIR/tides/models`` (see the README there). All come out as the same
+grid dictionary -- ``lon`` and ``lat`` ascending, ``amp`` (m) and ``phase``
+(Greenwich lag, deg) indexed ``[lat, lon]``, NaN where there is no ocean --
+which ``sample_constants`` takes.
 
 The NAO format, as checked against the coastline: seven header lines, then
 for each latitude row from NORTH to south the row of amplitudes (0.01 cm)
@@ -33,7 +34,7 @@ import numpy as np
 
 __all__ = [
     "EQUILIBRIUM", "NAO_CONSTITUENTS", "astronomy", "fvcom_spectral", "load_nao", "load_tpxo",
-    "read_nao", "read_tpxo", "sample_constants", "spectral_text",
+    "load_fes", "read_fes", "read_nao", "read_tpxo", "sample_constants", "spectral_text",
 ]
 
 #: The 16 constituents of NAO.99 and their file stems.
@@ -154,6 +155,54 @@ def load_tpxo(directory, constituents, window=None,
         if not path.exists():
             raise FileNotFoundError(path)
         out[c.upper()] = read_tpxo(path, window)
+    return out
+
+
+def read_fes(path, window=None) -> dict:
+    """One FES2022 file (``<c>_fes2022.nc``), optionally a lon/lat window.
+
+    ``amplitude`` (cm) and ``phase`` (Greenwich lag, deg) on ``(lat, lon)``,
+    NaN (or the fill value) where there is no ocean. ``window`` is
+    ``(lon0, lon1, lat0, lat1)``, degrees east 0-360 as the file.
+    """
+    import netCDF4
+
+    with netCDF4.Dataset(path) as ds:
+        lon = np.asarray(ds["lon"][:], float)
+        lat = np.asarray(ds["lat"][:], float)
+        if window is None:
+            ix, iy = slice(None), slice(None)
+        else:
+            lon0, lon1, lat0, lat1 = window
+            sel_x = np.flatnonzero((lon >= lon0) & (lon <= lon1))
+            sel_y = np.flatnonzero((lat >= lat0) & (lat <= lat1))
+            if len(sel_x) < 2 or len(sel_y) < 2:
+                raise ValueError(f"{path}: window {window} holds fewer than 2x2 nodes")
+            ix = slice(sel_x[0], sel_x[-1] + 1)
+            iy = slice(sel_y[0], sel_y[-1] + 1)
+        amp = np.ma.filled(np.ma.asarray(ds["amplitude"][iy, ix], float), np.nan)
+        pha = np.ma.filled(np.ma.asarray(ds["phase"][iy, ix], float), np.nan)
+        units = getattr(ds["amplitude"], "units", "cm")
+    lon, lat = lon[ix], lat[iy]
+    if not (np.all(np.diff(lon) > 0) and np.all(np.diff(lat) > 0)):
+        raise ValueError(f"{path}: coordinates are not ascending")
+    if units != "cm":
+        raise ValueError(f"{path}: amplitude in {units!r}, expected 'cm'")
+    bad = ~np.isfinite(amp) | ~np.isfinite(pha) | (np.abs(amp) > 1e5)
+    amp = np.where(bad, np.nan, amp / 100.0)
+    pha = np.where(bad, np.nan, pha % 360)
+    return {"constituent": Path(path).name.split("_")[0].upper(), "lon": lon, "lat": lat,
+            "amp": amp, "phase": pha}
+
+
+def load_fes(directory, constituents, window=None, pattern="{c}_fes2022.nc") -> dict[str, dict]:
+    """Read several constituents from a FES2022 directory (``pattern`` names a file)."""
+    out = {}
+    for c in constituents:
+        path = Path(directory) / pattern.format(c=c.lower())
+        if not path.exists():
+            raise FileNotFoundError(path)
+        out[c.upper()] = read_fes(path, window)
     return out
 
 

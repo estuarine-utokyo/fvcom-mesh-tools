@@ -13,7 +13,7 @@
 #
 # Required: FMESH_RUN (a 449 run dir), FMESH_OUT, DATA_DIR (qsub -v).
 # Optional: FMESH_LINES ("label=obc.dat+label=obc.dat"), FMESH_REFERENCE
-#           (forcing | nao99jb | tpxo10).
+#           (forcing | nao99jb | tpxo10 | fes2022).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 451_tide_model_map 4

@@ -5,7 +5,7 @@
 
 A tide-only hindcast: no wind, no rivers, no density. Each open-boundary
 node gets the eight major constituents of the tide model (``--tide-model``:
-NAO.99Jb, Matsumoto et al., 2000, by default; or TPXO10-atlas-v2) at its
+NAO.99Jb, Matsumoto et al., 2000, by default; TPXO10-atlas-v2; or FES2022b) at its
 position, converted to FVCOM's spectral form by
 ``tide_models.fvcom_spectral`` (V0 at the start, f and u frozen at the
 middle of the run). The result is meant to be compared with tide gauges by a
@@ -48,6 +48,7 @@ from fvcom_mesh_tools.io.fvcom_native import (  # noqa: E402
 from fvcom_mesh_tools.tide_models import (  # noqa: E402
     astronomy,
     fvcom_spectral,
+    load_fes,
     load_nao,
     load_tpxo,
     sample_constants,
@@ -73,7 +74,7 @@ p.add_argument("--case", type=Path, required=True, help="case prefix (…/<CASE>
 p.add_argument("--root", type=Path, required=True)
 p.add_argument("--start", default="2021-01-01")
 p.add_argument("--days", type=float, default=200.0)
-p.add_argument("--tide-model", choices=("nao99jb", "tpxo10"), default="nao99jb")
+p.add_argument("--tide-model", choices=("nao99jb", "tpxo10", "fes2022"), default="nao99jb")
 p.add_argument("--nao", type=Path, default=None,
                help="the tide model's directory (default under $DATA_DIR/tides/models)")
 p.add_argument("--z0", type=float, default=None,
@@ -83,7 +84,8 @@ p.add_argument("--cd-min", type=float, default=None,
 p.add_argument("--equilibrium", action="store_true",
                help="add the tidal potential (needs an FVCOM built with -DEQUI_TIDE)")
 a = p.parse_args()
-DEFAULT_DIR = {"nao99jb": "tides/models/NAO.99Jb/ocean", "tpxo10": "tides/models/TPXO10_atlas_v2"}
+DEFAULT_DIR = {"nao99jb": "tides/models/NAO.99Jb/ocean", "tpxo10": "tides/models/TPXO10_atlas_v2",
+               "fes2022": "tides/models/FES2022b/ocean_tide_extrapolated"}
 if a.nao is None:
     if not os.environ.get("DATA_DIR"):
         raise SystemExit("set DATA_DIR or pass --nao")
@@ -127,7 +129,8 @@ if a.tide_model == "nao99jb":
 else:
     window = (float(lon[ob].min()) - 0.5, float(lon[ob].max()) + 0.5,
               float(lat[ob].min()) - 0.5, float(lat[ob].max()) + 0.5)
-    grids = load_tpxo(a.nao, CONSTITUENTS, window=window)
+    load = load_tpxo if a.tide_model == "tpxo10" else load_fes
+    grids = load(a.nao, CONSTITUENTS, window=window)
 amp = np.empty((len(CONSTITUENTS), len(ob)))
 pha = np.empty_like(amp)
 filled = np.zeros(len(ob), bool)

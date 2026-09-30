@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.tide_models import (  # noqa: E402
     fvcom_spectral,
+    load_fes,
     load_nao,
     load_tpxo,
     sample_constants,
@@ -50,7 +51,8 @@ p.add_argument("--run", type=Path, required=True)
 p.add_argument("--out", type=Path, required=True)
 p.add_argument("--spinup-days", type=float, default=15.0)
 p.add_argument("--show", default="M2,S2,K1,O1")
-p.add_argument("--reference", choices=("forcing", "nao99jb", "tpxo10"), default="forcing",
+p.add_argument("--reference", choices=("forcing", "nao99jb", "tpxo10", "fes2022"),
+               default="forcing",
                help="the tide model to compare with (default: the one forcing the run)")
 p.add_argument("--line", action="append", default=[],
                help="LABEL=obc.dat of another mesh: report the run along that line")
@@ -69,8 +71,9 @@ man = json.loads((a.run / "manifest.json").read_text())
 names = man["constituents"]
 start = datetime.fromisoformat(man["start"])
 mid = datetime.fromisoformat(man["nodal_f_u_at"])
-LABEL = {"nao99jb": "NAO.99Jb", "tpxo10": "TPXO10-atlas-v2"}
-DEFAULT_DIR = {"nao99jb": "tides/models/NAO.99Jb/ocean", "tpxo10": "tides/models/TPXO10_atlas_v2"}
+LABEL = {"nao99jb": "NAO.99Jb", "tpxo10": "TPXO10-atlas-v2", "fes2022": "FES2022b"}
+DEFAULT_DIR = {"nao99jb": "tides/models/NAO.99Jb/ocean", "tpxo10": "tides/models/TPXO10_atlas_v2",
+               "fes2022": "tides/models/FES2022b/ocean_tide_extrapolated"}
 forcing = man.get("tide_model_name", "nao99jb")
 model_name = forcing if a.reference == "forcing" else a.reference
 if model_name == forcing:
@@ -114,8 +117,9 @@ resid = zeta - X @ coef
 if model_name == "nao99jb":
     grids = load_nao(nao_dir, names)
 else:
-    grids = load_tpxo(nao_dir, names, window=(float(lon.min()) - 0.5, float(lon.max()) + 0.5,
-                                             float(lat.min()) - 0.5, float(lat.max()) + 0.5))
+    load = load_tpxo if model_name == "tpxo10" else load_fes
+    grids = load(nao_dir, names, window=(float(lon.min()) - 0.5, float(lon.max()) + 0.5,
+                                        float(lat.min()) - 0.5, float(lat.max()) + 0.5))
 A_nao = np.empty_like(A_mod)
 G_nao = np.empty_like(G_mod)
 for k, c in enumerate(names):
