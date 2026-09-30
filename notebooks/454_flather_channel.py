@@ -17,7 +17,11 @@ k = w / sqrt(g H). Modes:
 - ``flather``: Flather with the theoretical u_n (must reproduce the same);
 - ``flather0``: Flather with u_T = 0 -- an inconsistent velocity on purpose,
   which a sound Flather boundary must survive (it then lets part of the
-  wave leave).
+  wave leave);
+- ``eq_given`` / ``eq_legacy``: clamped, plus the M2 tidal potential (FVCOM
+  -DEQUI_TIDE), with f and V0+u from utide in the file, or without them so
+  that FVCOM uses its own monthly astronomy -- the path that crashed before
+  FVCOM 2026-10-01. The two must agree.
 
 ``analyse`` fits M2 along the channel's centre line over the last 3 days
 and compares amplitude and phase with the theory.
@@ -39,7 +43,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case  # noqa: E402
-from fvcom_mesh_tools.tide_models import spectral_text  # noqa: E402
+from fvcom_mesh_tools.tide_models import astronomy, spectral_text  # noqa: E402
 
 G = 9.81
 L, W, H, DX = 200e3, 20e3, 100.0, 2e3
@@ -116,8 +120,18 @@ def stage(a):
     # component line: a zero equilibrium tide (no potential in the channel),
     # with f and V0+u given -- without them FVCOM takes its own monthly
     # astronomy, which crashed (SIGSEGV in ELEVATION_EQUI, 2026-09-30)
-    tide = tide.replace(f"1 = M2 {PERIOD:.10f}",
-                        f"1 = M2 {PERIOD:.10f} 0.0 0.693 SEMIDIURNAL 1.0 0.0")
+    if a.mode.startswith("eq_"):
+        from datetime import datetime
+
+        from pyproj import Transformer
+        lat = Transformer.from_crs(32654, 4326, always_xy=True).transform(X0, Y0)[1]
+        _, f, v0u = astronomy(["M2"], datetime(2021, 1, 1), datetime(2021, 1, 3, 12), lat)
+        extra = " 0.242334 0.693 SEMIDIURNAL"
+        if a.mode == "eq_given":
+            extra += f" {f[0]:.8f} {v0u[0]:.6f}"
+    else:
+        extra = " 0.0 0.693 SEMIDIURNAL 1.0 0.0"
+    tide = tide.replace(f"1 = M2 {PERIOD:.10f}", f"1 = M2 {PERIOD:.10f}{extra}")
     (inp / "m2_tide.dat").write_text(tide)
     text = M383.namelist(inp, out)
     for key, value in (("CASE_TITLE", f"'454 channel {a.mode}'"), ("NC_VELOCITY", "F"),
@@ -191,7 +205,8 @@ p = argparse.ArgumentParser(description=__doc__)
 sub = p.add_subparsers(dest="cmd", required=True)
 s = sub.add_parser("stage")
 s.add_argument("--root", type=Path, required=True)
-s.add_argument("--mode", choices=("clamped", "flather", "flather0"), required=True)
+s.add_argument("--mode", choices=("clamped", "flather", "flather0", "eq_given", "eq_legacy"),
+               required=True)
 n = sub.add_parser("analyse")
 n.add_argument("--root", type=Path, action="append", required=True)
 n.add_argument("--out", type=Path, required=True)
