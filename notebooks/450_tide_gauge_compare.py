@@ -214,7 +214,7 @@ for j, n in enumerate(show):
     for k in range(2):
         ax[k, j].set_xticks(range(len(sts)), sts, rotation=60, fontsize=8)
 ax[0, 0].legend(fontsize=8)
-fig.suptitle(f"NAO.99Jb tide runs vs gauges, {t_lo:%Y-%m-%d} .. {t_hi:%Y-%m-%d}")
+fig.suptitle(f"Tide runs vs gauges, {t_lo:%Y-%m-%d} .. {t_hi:%Y-%m-%d}")
 fig.tight_layout()
 fig.savefig(a.out / "compare.png", dpi=130)
 print(f"[450] wrote {a.out}", flush=True)

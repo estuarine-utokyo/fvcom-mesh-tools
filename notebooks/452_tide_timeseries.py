@@ -122,7 +122,7 @@ for i, s in enumerate(stations):
     axr.grid(alpha=0.3)
 axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
 axes[-1].set_xlabel(f"{t0:%Y} (UTC)")
-fig.suptitle(f"NAO.99Jb tide runs vs tide gauges, {t0:%Y-%m-%d} .. {t1:%Y-%m-%d}")
+fig.suptitle(f"Tide runs vs tide gauges, {t0:%Y-%m-%d} .. {t1:%Y-%m-%d}")
 fig.tight_layout()
 a.out.parent.mkdir(parents=True, exist_ok=True)
 fig.savefig(a.out, dpi=120)
