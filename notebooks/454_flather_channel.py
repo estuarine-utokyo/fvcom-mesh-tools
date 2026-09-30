@@ -106,7 +106,7 @@ def stage(a):
     amp = np.full((1, n), A)
     pha = np.zeros((1, n))                # eta_T = A cos(w t)
     normal = None
-    if a.mode != "clamped":
+    if a.mode.startswith("flather"):
         un = A * np.sqrt(G / H) * np.tan(theory(0.0)[1] * L) if a.mode == "flather" else 0.0
         # A sqrt(g/H) tan(kL) sin(w t) = ... cos(w t - 90 deg)
         normal = (np.full((1, n), abs(un)), np.full((1, n), 90.0 if un >= 0 else 270.0))
