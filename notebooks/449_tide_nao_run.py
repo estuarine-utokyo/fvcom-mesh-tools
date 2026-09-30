@@ -81,6 +81,8 @@ p.add_argument("--z0", type=float, default=None,
                help="bottom roughness length (m); default 383's 0.002693138")
 p.add_argument("--cd-min", type=float, default=None,
                help="minimum bottom drag coefficient; default 383's 0.003")
+p.add_argument("--no-obc-depth-control", action="store_true",
+               help="keep the open-boundary depths as built (FVCOM's OBC_DEPTH_CONTROL_ON = F)")
 p.add_argument("--equilibrium", action="store_true",
                help="add the tidal potential (needs an FVCOM built with -DEQUI_TIDE)")
 a = p.parse_args()
@@ -102,7 +104,10 @@ M383.END = end.strftime("%Y-%m-%d %H:%M:%S")
 M383.NC_OUT_INTERVAL_SECONDS = OUT_INTERVAL_S
 M383.DTE = M414.dividing_step(OUT_INTERVAL_S, M383.ISPLIT, M414.external_step(mesh))
 
-mesh, change = apply_obc_depth_control(mesh)
+if a.no_obc_depth_control:
+    change = np.zeros(len(np.asarray(mesh.open_boundaries[0])))
+else:
+    mesh, change = apply_obc_depth_control(mesh)
 case = a.root
 if (case / "STAGED").exists() or any((case / "output").glob("*.nc")):
     raise SystemExit(f"{case} already holds a run; give a new --root")
@@ -166,6 +171,12 @@ for key, value in changes:
     text, count = re.subn(rf"(?im)^(\s*{key}\s*=)[^\n]*", rf"\g<1> {value},", text)
     if count != 1:
         raise SystemExit(f"namelist key {key}: expected once, found {count}")
+if a.no_obc_depth_control:
+    # the key is not in the template (FVCOM's default is T): add it to its block
+    text, count = re.subn(r"(?im)^(\s*OBC_ON\s*=[^\n]*\n)", r"\g<1> OBC_DEPTH_CONTROL_ON = F,\n",
+                          text)
+    if count != 1:
+        raise SystemExit(f"namelist key OBC_ON: expected once, found {count}")
 (case / "m2_run.nml").write_text(text)
 
 manifest = {
@@ -175,6 +186,7 @@ manifest = {
     "tide_model_name": a.tide_model, "tide_model": str(a.nao),
     "equilibrium_tide": bool(a.equilibrium),
     "bottom_z0_m": a.z0, "bottom_cd_min": a.cd_min,
+    "obc_depth_control": not a.no_obc_depth_control,
     "n_obc_filled_from_nearest": int(filled.sum()),
     "obc_amp_range_m": {c: [float(amp[k].min()), float(amp[k].max())]
                         for k, c in enumerate(CONSTITUENTS)},
