@@ -176,6 +176,12 @@ say("depths: " + json.dumps(depth_report))
 merged.land_boundaries = land_segments(merged.elements, merged.open_boundaries)
 written = export_fvcom_case(merged, OUT, CASE, cor=lat, obc_depth_control=False)
 write_fort14(merged, OUT / f"{CASE}.14")
+# the fort.14 copy carries the same mesh, bit for bit (review round 3 F8)
+_f14 = read_fort14(OUT / f"{CASE}.14")
+if not (np.array_equal(_f14.nodes[:, :2], merged.nodes[:, :2])
+        and np.array_equal(_f14.elements, merged.elements)
+        and np.array_equal(_f14.depths, merged.depths)):
+    raise SystemExit(f"{CASE}.14 does not carry the mesh that was built")
 back = read_fvcom_case(written["grd"], written["dep"], written["obc"])
 if not np.array_equal(back.depths, merged.depths):
     raise SystemExit("the written case does not carry the depths that were built")
@@ -204,14 +210,20 @@ for c in qa.checks:
 problems = []
 if qa.n_gate_failed:
     problems.append(f"QA {qa.n_gate_failed} gate(s) failed")
+warnings_ = []
 if dt_new < dt_base:
-    problems.append(f"new elements limit the time step ({dt_new:.2f} s < base {dt_base:.2f} s)")
+    # reported, not refused: the time step is settled in the depth stage
+    # (maximum depth, smoothing), the mesh is made from the real depths
+    # (owner, 2026-10-01)
+    warnings_.append(f"new elements limit the time step ({dt_new:.2f} s < base "
+                     f"{dt_base:.2f} s, raw depths)")
 (OUT / "merge.json").write_text(json.dumps({
     "finish": {k: v for k, v in info.items() if not isinstance(v, (list, dict))},
     "coast_fit": cf.to_dict(), "frozen_base": contract, "repair": repair,
     "depths": depth_report,
     "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
     "dt_allowance_s": {"base": dt_base, "new": dt_new}, "problems": problems,
+    "warnings": warnings_,
     "overlap": overlap,
     "n_nodes": merged.n_nodes, "n_elements": merged.n_elements,
     "n_open_boundary_nodes": int(len(merged.open_boundaries[0])),
@@ -219,5 +231,7 @@ if dt_new < dt_base:
 say(f"wrote {', '.join(sorted(written))} + {CASE}.14 in {OUT}")
 # the reports stay for diagnosis, but a failed build must not exit as a
 # success (review F2)
+for w_ in warnings_:
+    say("WARNING: " + w_)
 if problems:
     raise SystemExit("the build failed: " + "; ".join(problems))

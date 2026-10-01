@@ -79,20 +79,15 @@ def compose_sizing(ambient, x, y, *, grade, floor=None, bands=()):
     """The final size field and a report; see the module docstring."""
     h = _limit(np.asarray(ambient, float), x, y, grade)
     report = {}
+    bands = [np.asarray(b, float) for b in bands]     # traversed twice (review r3 F3)
     if floor is not None:
         up = graded_up(floor, x, y, grade)
         report["raised_by_floor"] = int((up > h).sum())
         h = np.maximum(h, up)
     for k, band in enumerate(bands):
-        band = np.asarray(band, float)
         on = np.isfinite(band)
         if not on.any():
             raise ValueError(f"band {k} covers no lattice point")
-        if floor is not None:
-            # a band set below the time-step floor wins over it: say where
-            # (review F4) -- the caller decides whether that band may
-            under = on & (band < np.asarray(floor) - 1e-6)
-            report[f"band_{k}_below_floor_cells"] = int(under.sum())
         lo = _limit(np.where(on, band, np.inf), x, y, grade)
         hi = graded_up(np.where(on, band, -np.inf), x, y, grade)
         h = np.minimum(np.maximum(h, hi), lo)
@@ -104,8 +99,15 @@ def compose_sizing(ambient, x, y, *, grade, floor=None, bands=()):
     # (0.9 % on the Tokyo Bay interface, 2026-10-01); up to BAND_TOLERANCE
     # that is accepted and reported, beyond it refused.
     for k, band in enumerate(bands):
-        band = np.asarray(band, float)
         on = np.isfinite(band)
+        if floor is not None:
+            # where a band leaves the final field below the time-step floor
+            # (review F4; counted on the field that comes out, round 3 F1).
+            # The caller decides what to do: meshes are made from the real
+            # depths, and the time step is the depth stage's business (owner,
+            # 2026-10-01), so 446 reports it
+            report[f"band_{k}_below_floor_cells"] = int(
+                (on & (h < np.asarray(floor) - 1e-6)).sum())
         dev = float(np.max(np.abs(h[on] - band[on]) / band[on]))
         report[f"band_{k}_max_rel_deviation"] = dev
         if dev > BAND_TOLERANCE:

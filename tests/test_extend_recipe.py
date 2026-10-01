@@ -100,3 +100,14 @@ def test_land_bbox_must_be_finite_and_ordered(tmp_path, bbox):
     """Review round 2 F11."""
     with pytest.raises(ValueError, match="land.bbox"):
         load_extend_recipe(_write(tmp_path, land={"bbox": bbox}))
+
+
+def test_a_boundary_whose_report_hash_differs_is_refused(tmp_path):
+    """Review round 3 F5: a half-published boundary (new report, old CSV)."""
+    import json
+
+    p = _write(tmp_path)
+    obc = Path(load_extend_recipe(p)["open_boundary"])
+    obc.with_suffix(".json").write_text(json.dumps({"csv_sha256": "0" * 64}))
+    with pytest.raises(ValueError, match="hash mismatch"):
+        load_extend_recipe(p)

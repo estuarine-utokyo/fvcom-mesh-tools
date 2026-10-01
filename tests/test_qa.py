@@ -410,3 +410,20 @@ def test_lone_corner_on_the_open_boundary_is_not_a_violation():
                       + [_nid(i, 0) for i in range(1, N - 1)])
     report = run_qa(mesh, channel_check=False)
     assert _check(report, "no_lone_corner_nodes").passed
+
+
+def test_qa_catches_a_fan_that_winds_twice():
+    """Review of the extend tools, round 3 F9: a self-overlapping
+    triangulation passed every gate."""
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+    from fvcom_mesh_tools.qa import run_qa
+
+    ang = 4 * np.pi * np.arange(7) / 7
+    nodes = np.vstack([[0.0, 0.0], np.column_stack([1000 * np.cos(ang), 1000 * np.sin(ang)])])
+    elems = np.array([[0, 1 + k, 1 + (k + 1) % 7] for k in range(7)])
+    m = Fort14Mesh("fan", nodes, np.full(8, 10.0), elems, [], [])
+    rep = run_qa(m, coords="metric", channel_check=False)
+    c = next(c for c in rep.checks if c.check_id == "no_element_overlap")
+    assert c.status == "fail"

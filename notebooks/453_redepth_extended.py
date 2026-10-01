@@ -13,6 +13,7 @@ else. Writes the case, ``redepth.json`` and a map of the change.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import sys
 from pathlib import Path
@@ -66,6 +67,25 @@ a.outdir = reserve(a.outdir)          # atomically, before any work (review r2 F
 if a.case_name is not None:
     check_case_name(a.case_name)                      # review F28
 case = recipe["case"]
+# provenance captured before any work, and a report written whatever happens
+# (review round 3 F6)
+PROV = collect(
+    code={"fvcom_mesh_tools": str(ROOT / "src" / "fvcom_mesh_tools" / "__init__.py"),
+          "driver": __file__},
+    files={"recipe": recipe["recipe_path"],
+           "built_case": [str(src_dir / f"{case}_{k}.dat") for k in ("grd", "dep", "obc")],
+           **{f"bathymetry_{k}": [str(q) for q in v] for k, v in source_files(names).items()}})
+STATE = {"done": False}
+
+
+def _on_exit():
+    if not STATE["done"]:
+        (a.outdir / "redepth.json").write_text(json.dumps(
+            {"from": str(src_dir / case), "sources": names, "status": "failed",
+             "provenance": PROV}, indent=1, default=str) + "\n")
+
+
+atexit.register(_on_exit)
 b = Path(recipe["base"]) / recipe["base_case"]
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
 mesh = read_fvcom_case(src_dir / f"{case}_grd.dat", src_dir / f"{case}_dep.dat",
@@ -124,8 +144,13 @@ dt_new = float(_dt_allow(back, back.elements[base.n_elements:]).min())
 problems = []
 if qa.n_gate_failed:
     problems.append(f"QA {qa.n_gate_failed} gate(s) failed")
+warnings_ = []
 if dt_new < dt_base:
-    problems.append(f"new elements limit the time step ({dt_new:.2f} s < base {dt_base:.2f} s)")
+    # reported, not refused: the time step is settled in the depth stage
+    # (maximum depth, smoothing), the mesh is made from the real depths
+    # (owner, 2026-10-01)
+    warnings_.append(f"new elements limit the time step ({dt_new:.2f} s < base "
+                     f"{dt_base:.2f} s, raw depths)")
 
 d = h - old
 rel = d[new] / np.maximum(old[new], 1.0)
@@ -142,18 +167,14 @@ report = {
     "depth_controls": D, "allow_failing_gates": bool(a.allow_failing_gates),
     "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
     "dt_allowance_s": {"base": dt_base, "new": dt_new}, "problems": problems,
+    "warnings": warnings_,
     "status": "ok" if not problems else ("accepted sensitivity variant"
                                          if a.allow_failing_gates else "failed"),
-    # what made it (review round 2 F18)
-    "provenance": collect(
-        code={"fvcom_mesh_tools": str(ROOT / "src" / "fvcom_mesh_tools" / "__init__.py"),
-              "driver": __file__},
-        files={"recipe": recipe["recipe_path"],
-               "built_case": [str(src_dir / f"{case}_{k}.dat") for k in ("grd", "dep", "obc")],
-               **{f"bathymetry_{k}": [str(q) for q in v]
-                  for k, v in source_files(names).items()}}),
+    # what made it, captured before the work (review rounds 2 F18, 3 F6)
+    "provenance": PROV,
 }
 (a.outdir / "redepth.json").write_text(json.dumps(report, indent=1, default=str) + "\n")
+STATE["done"] = True
 print("[453] " + json.dumps({k: v for k, v in report.items() if k != "provenance"},
                             default=str), flush=True)
 if problems and not a.allow_failing_gates:

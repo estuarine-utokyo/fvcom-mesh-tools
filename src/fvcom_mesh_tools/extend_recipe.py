@@ -72,6 +72,19 @@ def load_extend_recipe(path) -> dict[str, Any]:
         if not f.exists():
             raise ValueError(f"{path}: the base case has no {f.name}")
     read_open_boundary(out["open_boundary"])
+    # a boundary published by 444 carries its report beside it, with the CSV's
+    # hash: a CSV that is not the one the report describes is refused (review
+    # round 3 F5)
+    side = Path(out["open_boundary"]).with_suffix(".json")
+    if side.exists():
+        import hashlib
+        import json
+
+        want = json.loads(side.read_text()).get("csv_sha256")
+        got = hashlib.sha256(Path(out["open_boundary"]).read_bytes()).hexdigest()
+        if want is not None and want != got:
+            raise ValueError(f"{path}: {Path(out['open_boundary']).name} is not the boundary "
+                             f"its report {side.name} describes (hash mismatch)")
     land = raw["land"]
     if not (isinstance(land, dict) and set(land) == {"bbox"} and len(land["bbox"]) == 4):
         raise ValueError(f"{path}: land is {{bbox: [lon_min, lat_min, lon_max, lat_max]}}")

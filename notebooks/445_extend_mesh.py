@@ -13,6 +13,7 @@ On OCTOPUS: ``qsub -v FMESH_RECIPE=... jobs/octopus/445_extend_mesh.sh``.
 settings), the hashes of the products and the stage reports.
 """
 
+import atexit
 import importlib.util
 import json
 import os
@@ -49,7 +50,39 @@ names = sorted(set(recipe["bathymetry"]["sizing"]) | set(recipe["bathymetry"]["d
 bathy = source_files(names)
 missing = [str(p) for p in [osm_land, *[f for v in bathy.values() for f in v]] if not p.exists()]
 if missing:
+    (OUT / "report.json").write_text(json.dumps(
+        {"recipe": recipe["recipe_path"], "status": "failed", "stage": "inputs",
+         "missing": missing}, indent=1))
     raise SystemExit("missing source data:\n  " + "\n  ".join(missing))
+
+
+def spec_path(name):
+    spec = importlib.util.find_spec(name)
+    return spec.origin if spec is not None else None
+
+
+# what makes this build, captured BEFORE it runs, and a report that is
+# written whatever happens (review round 3 F6): an exit handler writes a
+# failure report unless the final one was written
+code = {"fvcom_mesh_tools": str(REPO / "src" / "fvcom_mesh_tools" / "__init__.py"),
+        "driver": __file__}
+if spec_path("oceanmesh"):
+    code["oceanmesh"] = spec_path("oceanmesh")
+PROV = collect(code=code,
+               files={"recipe": recipe["recipe_path"], "open_boundary": recipe["open_boundary"],
+                      "osm_land": dataset_files(osm_land),
+                      **{f"bathymetry_{k}": [str(p) for p in v] for k, v in bathy.items()}})
+STATE = {"done": False, "stage": "start"}
+
+
+def _on_exit():
+    if not STATE["done"]:
+        (OUT / "report.json").write_text(json.dumps(
+            {"recipe": recipe["recipe_path"], "status": "failed", "stage": STATE["stage"],
+             "provenance": PROV}, indent=1, default=str))
+
+
+atexit.register(_on_exit)
 
 gen = OUT / "generate"
 env = dict(os.environ, PYTHONPATH=str(REPO / "src"))
@@ -60,16 +93,12 @@ failed = None
 for script, args in (("446_extend_generate.py", [recipe["recipe_path"], str(gen)]),
                      ("447_extend_merge.py", [recipe["recipe_path"], str(gen), str(OUT)])):
     say(f"run {script}")
+    STATE["stage"] = script
     rc = subprocess.run([sys.executable, str(REPO / "notebooks" / script), *args], cwd=REPO,
                         env=env).returncode
     if rc != 0:
         failed = {"stage": script, "returncode": rc}
         break
-
-
-def spec_path(name):
-    spec = importlib.util.find_spec(name)
-    return spec.origin if spec is not None else None
 
 
 case = recipe["case"]
@@ -87,15 +116,10 @@ report = {
               if (OUT / "merge.json").exists() else None),
     "threads": {k: os.environ.get(k) for k in ("OMP_NUM_THREADS", "NUMBA_NUM_THREADS",
                                                "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")},
-    "provenance": collect(
-        code={"fvcom_mesh_tools": str(REPO / "src" / "fvcom_mesh_tools" / "__init__.py"),
-              "driver": __file__, "oceanmesh": spec_path("oceanmesh")},
-        files={"recipe": recipe["recipe_path"], "open_boundary": recipe["open_boundary"],
-               "osm_land": dataset_files(osm_land),
-               **{f"bathymetry_{k}": [str(p) for p in v] for k, v in bathy.items()}},
-    ),
+    "provenance": PROV,
 }
 (OUT / "report.json").write_text(json.dumps(report, indent=1, default=str))
+STATE["done"] = True
 if failed:
     raise SystemExit(f"{failed['stage']} failed (exit {failed['returncode']}); "
                      f"report in {OUT / 'report.json'}")

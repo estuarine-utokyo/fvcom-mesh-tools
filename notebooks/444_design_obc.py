@@ -94,6 +94,11 @@ print(f"[obc] corners {ll(verts[1:-1]).round(4).tolist()}", flush=True)
 # ---------------------------------------------------------------- spacing
 sp = cfg["spacing"]
 names = sp["bathymetry"]
+# finite positive controls, or the floor silently vanishes (review round 3 F11)
+for key in ("min_m", "cfl_dt_s", "cfl_cr"):
+    v = sp.get(key)
+    if not (isinstance(v, (int, float)) and not isinstance(v, bool) and np.isfinite(v) and v > 0):
+        raise SystemExit(f"spacing.{key} must be a finite positive number, not {v!r}")
 
 
 def spacing(p):
@@ -107,6 +112,10 @@ def spacing(p):
 
 
 nodes = resample(line, spacing)
+if len(nodes) < 6:
+    # the generation puts a ladder inside the boundary, which needs six nodes,
+    # and the report's interior statistics need some (review round 3 F12)
+    raise SystemExit(f"the boundary has {len(nodes)} nodes; 6 or more are needed")
 # what is checked is what is published: the CSV holds lon/lat to 1e-9 deg
 # (about 0.1 mm), and the nodes are taken back from those rounded values
 # (review round 2 F7)
@@ -158,7 +167,9 @@ if any(abs(a - 90) > 1.0 for a in report["end_angle_to_coast_deg"]):
 # (review round 2 F6): 1 mm
 if report["crosses_land_m"] > 1e-3:
     bad.append(f"crosses land over {report['crosses_land_m']:.0f} m")
-if report["min_edge_over_floor"] < 0.995:      # a chord is a little shorter than its arc
+# on the published geometry: resample keeps chords at the floor, so only
+# round-off is tolerated (review round 3 F2)
+if report["min_edge_over_floor"] < 1 - 1e-6:
     bad.append(f"an edge is below the spacing floor: {report['min_edge_over_floor']:.4f}")
 report["problems"] = bad
 print("[obc] " + json.dumps({k: report[k] for k in (
@@ -179,23 +190,6 @@ header = (f"# Open boundary nodes (lon,lat, EPSG:4326) designed by notebooks/444
 csv_text = header + "".join(f"{a:.9f},{b:.9f}\n" for a, b in zip(lon, lat))
 # the report names the CSV it belongs to (review round 2 F2)
 report["csv_sha256"] = hashlib.sha256(csv_text.encode()).hexdigest()
-# one publisher at a time, each with its own temporary files: a shared
-# "<name>.tmp" let one writer rename another's payload (review round 2 F2)
-lock = out_csv.with_name(out_csv.name + ".lock")
-try:
-    os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-except FileExistsError:
-    raise SystemExit(f"{lock} exists: another design is being published") from None
-try:
-    for path, text in ((out_csv, csv_text),
-                       (out_csv.with_suffix(".json"), json.dumps(report, indent=1, default=float))):
-        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
-        with os.fdopen(fd, "w") as fh:
-            fh.write(text)
-        os.replace(tmp, path)              # atomic on one file system
-finally:
-    lock.unlink()
-
 import matplotlib  # noqa: E402
 
 matplotlib.use("Agg")
@@ -210,5 +204,35 @@ ax.set_ylim(bb[1], bb[3])
 ax.set_aspect(1 / np.cos(np.radians(np.mean(lat))))
 ax.legend(loc="lower right")
 ax.set_title(f"{out_csv.name} (black = land, red = open boundary)")
-fig.savefig(out_csv.with_suffix(".png"), dpi=110, bbox_inches="tight")
+
+# One publisher at a time, each with its own temporary files: a shared
+# "<name>.tmp" let one writer rename another's payload (review round 2 F2).
+# The report (with the CSV's hash) goes first, the CSV last: a failure in
+# between leaves an old CSV that the new report's hash does not match, which
+# the recipe loader refuses (round 3 F5). The figure is published under the
+# same lock; temporaries are removed on failure.
+lock = out_csv.with_name(out_csv.name + ".lock")
+try:
+    os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+except FileExistsError:
+    raise SystemExit(f"{lock} exists: another design is being published") from None
+try:
+    for path, payload in ((out_csv.with_suffix(".json"),
+                           json.dumps(report, indent=1, default=float)),
+                          (out_csv.with_suffix(".png"), fig),
+                          (out_csv, csv_text)):
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+        try:
+            if isinstance(payload, str):
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(payload)
+            else:
+                os.close(fd)
+                payload.savefig(tmp, dpi=110, bbox_inches="tight", format="png")
+            os.replace(tmp, path)          # atomic on one file system
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+finally:
+    lock.unlink()
 print(f"[obc] wrote {out_csv}", flush=True)

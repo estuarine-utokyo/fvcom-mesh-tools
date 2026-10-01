@@ -214,3 +214,14 @@ def test_cao_provenance_lists_the_depth_files(tmp_path):
     (tmp_path / "r" / "cao" / "計算範囲設定" / "計算範囲設定_第09系.xls").write_bytes(b"x")
     names = [p.name for p in CaoNested(rel="cao").files(tmp_path / "r")]
     assert "depth_0030-01.dat" in names and "計算範囲設定_第09系.xls" in names
+
+
+def test_a_masked_neighbour_with_zero_weight_keeps_the_sample():
+    """Review round 3 F7: a sample on a valid node beside a masked cell was NaN."""
+    from fvcom_mesh_tools.dem.sources import _bilinear
+
+    gx, gy = np.array([0.0, 1.0]), np.array([0.0, 1.0])
+    z = np.array([[-10.0, -20.0], [-30.0, np.nan]])
+    out = _bilinear(gx, gy, z, np.array([0.0, 0.5, 0.25]), np.array([0.0, 0.0, 0.75]))
+    assert out[0] == -10.0 and out[1] == -15.0 and np.isnan(out[2])
+    assert np.isnan(_bilinear(gx, gy, z, np.array([2.0]), np.array([0.5]))[0])

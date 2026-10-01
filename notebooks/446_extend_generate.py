@@ -124,13 +124,14 @@ for name, line in (("interface", iface_ll), ("open boundary", OBC)):
     if len(line) < 6:
         raise SystemExit(f"the {name} has {len(line)} nodes; its ladder needs 6 or more")
 h, srep = compose_sizing(ambient, x, y, grade=S["gradation"], floor=floor, bands=bands)
-# the new open boundary was designed at or above the floor (444): a band below
-# it there means the design and this sizing disagree (review F4). The base
-# interface keeps the base's own spacing, which may be below the floor: the
-# base, not the extension, then sets the time step.
-if srep.get("band_1_below_floor_cells", 0):
-    raise SystemExit(f"{srep['band_1_below_floor_cells']} open-boundary band cell(s) are set "
-                     "below the time-step floor; redesign the boundary spacing (444)")
+# Bands below the time-step floor are reported, not refused: meshes are made
+# from the real depths, and the time step is settled in the depth stage
+# (maximum depth, smoothing; owner, 2026-10-01). On the Enshu boundary the
+# band reaches deeper water than the boundary nodes (review F4, round 3).
+for k, name in enumerate(("interface", "open boundary")):
+    n = srep.get(f"band_{k}_below_floor_cells", 0)
+    if n:
+        say(f"WARNING: {n} {name} band cell(s) below the time-step floor (raw depths)")
 fd.values = h / S["dm_scale"] * DEG
 fd.build_interpolant()
 say("sizing " + json.dumps(srep))
@@ -165,22 +166,34 @@ def extension_on_left(arc_ll, h_m):
     """Is the extension (the generation domain) on the left of ``arc_ll``?
 
     The ladder is built on the left; which way an input line runs is not
-    guaranteed (review round 2 F16), so each line is tested: points a
-    quarter of the local size to the left of the middle edges must lie in
-    the domain (sdf < 0), or to the right if not.
+    guaranteed (review round 2 F16). Both sides are probed beside the middle
+    of every edge, at a quarter, a tenth and a thirtieth of the local size
+    (a narrow domain is caught by the shorter ones, round 3 F4): the side
+    whose probes lie in the domain (sdf < 0) at a clear majority wins; a
+    line with both or neither side in the domain is refused.
     """
     xy = metric(arc_ll)
     mid = 0.5 * (xy[1:] + xy[:-1])
     t = np.diff(xy, axis=0)
     t /= np.linalg.norm(t, axis=1)[:, None]
     left = np.column_stack([-t[:, 1], t[:, 0]])
-    d = 0.25 * 0.5 * (h_m[1:] + h_m[:-1])
-    probe_m = mid + left * d[:, None]
-    probe = np.column_stack([probe_m[:, 0] / kx + lon0, probe_m[:, 1] / 111e3 + lat0])
-    inside = sdf.eval(probe) < 0
-    if inside.mean() not in (0.0, 1.0) and abs(inside.mean() - 0.5) < 0.25:
-        raise SystemExit("cannot tell which side of a constrained line the extension is on")
-    return bool(inside.mean() > 0.5)
+    hm = 0.5 * (h_m[1:] + h_m[:-1])
+
+    def frac_inside(sign):
+        votes = []
+        for f in (0.25, 0.1, 1 / 30):
+            q = mid + sign * left * (f * hm)[:, None]
+            ll_ = np.column_stack([q[:, 0] / kx + lon0, q[:, 1] / 111e3 + lat0])
+            votes.append(sdf.eval(ll_) < 0)
+        return float(np.mean(np.any(votes, axis=0)))
+
+    on_left, on_right = frac_inside(+1), frac_inside(-1)
+    if on_left > 0.75 and on_right < 0.25:
+        return True
+    if on_right > 0.75 and on_left < 0.25:
+        return False
+    raise SystemExit(f"cannot tell which side of a constrained line the extension is on "
+                     f"(left {on_left:.2f}, right {on_right:.2f})")
 
 
 for name, arc, h_arc in (("interface", iface_ll, spacing(iface_m)),

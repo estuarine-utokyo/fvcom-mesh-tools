@@ -121,8 +121,12 @@ def prepare(run_root: Path, cases: dict[str, Path], dte: float | None) -> dict:
         raise SystemExit("the two cases do not share the same open-boundary arc; "
                          "the comparison would confound the patch with the forcing")
 
-    # One step for both, and it is the refined mesh's.
-    allowed = min(external_step(m) for m in meshes.values())
+    # The depths that run are the depth-controlled ones (FVCOM sets each
+    # open-boundary node to its NEXT_OBC depth): control first, then the step
+    # (review of the extend tools, round 3 F10). One step for both, and it
+    # is the refined mesh's.
+    controlled = {k: apply_obc_depth_control(m) for k, m in meshes.items()}
+    allowed = min(external_step(m) for m, _ in controlled.values())
     out_interval = float(M383.NC_OUT_INTERVAL_SECONDS)
     M383.DTE = (float(dte) if dte
                 else dividing_step(out_interval, M383.ISPLIT, allowed))
@@ -192,8 +196,7 @@ def prepare(run_root: Path, cases: dict[str, Path], dte: float | None) -> dict:
     )
 
     for label in cases:
-        mesh = meshes[label]
-        mesh, obc_change = apply_obc_depth_control(mesh)
+        mesh, obc_change = controlled[label]
         case = run_root / label
         inp, out = case / "input", case / "output"
         inp.mkdir(parents=True, exist_ok=True)

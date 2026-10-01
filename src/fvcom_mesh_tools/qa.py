@@ -94,6 +94,7 @@ _CHECK_LABELS: dict[str, dict[str, str]] = {
         "en": "R4: no extra bdy node on open-edge element",
     },
     "manifold_boundary": {"ja": "境界トポロジ多様体性", "en": "manifold boundary"},
+    "no_element_overlap": {"ja": "要素の重なりなし", "en": "no element overlap"},
     "no_duplicate_nodes": {"ja": "重複節点なし", "en": "no duplicate nodes"},
     "no_orphan_nodes": {"ja": "孤立節点なし", "en": "no orphan nodes"},
     "no_tiny_area": {"ja": "微小面積要素なし", "en": "no tiny-area elements"},
@@ -654,6 +655,33 @@ def run_qa(
         n_manifold_viol, offenders=manifold_off,
         offender_ids=[{"kind": "node", "id": int(i)} for i in pinch_nodes]
         + [{"kind": "edge", "id": [int(u), int(v)]} for u, v in over_edges],
+    ))
+
+    # No two elements overlap (review of the extend tools, round 3 F9): a
+    # connected, consistently oriented triangulation can still fold over
+    # itself (a fan winding twice round its centre passed every other gate).
+    # The summed element area must equal the area of their union.
+    import shapely
+
+    tri_polys = shapely.polygons(nodes_m[mesh.elements])
+    area_sum = float(np.abs(geom.signed_area).sum())
+    area_union = float(shapely.union_all(tri_polys).area) if ne else 0.0
+    excess = area_sum - area_union
+    overlap_ok = excess <= 1e-9 * max(area_sum, 1.0)
+    ov_off = []
+    if not overlap_ok:
+        tree = shapely.STRtree(tri_polys)
+        for i, j in zip(*tree.query(tri_polys, predicate="intersects")):
+            if i < j and shapely.intersection(tri_polys[i], tri_polys[j]).area > 1e-6:
+                ov_off.append({"kind": "element_pair", "id": [int(i), int(j)],
+                               "x": float(nodes_m[mesh.elements[i], 0].mean()),
+                               "y": float(nodes_m[mesh.elements[i], 1].mean())})
+                if len(ov_off) >= max_offenders:
+                    break
+    checks.append(QACheck(
+        "no_element_overlap", "fvcom", True, overlap_ok,
+        "sum of element areas = area of their union",
+        f"overlap = {excess:.6g} m2 of {area_sum:.6g} m2", excess, offenders=ov_off,
     ))
 
     # Duplicate nodes (silent in FVCOM).

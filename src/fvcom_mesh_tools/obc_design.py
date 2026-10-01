@@ -102,7 +102,11 @@ def fillet(vertices, radii, n_arc: int = 60) -> np.ndarray:
         u = (a - b) / np.linalg.norm(a - b)
         w = (c - b) / np.linalg.norm(c - b)
         th = np.arccos(np.clip(u @ w, -1, 1))
-        if th < 1e-6 or np.pi - th < 1e-6:
+        if th < 1e-6:
+            # the path doubles back on itself: no tangent arc exists (review
+            # of the extend tools, round 3 F13)
+            raise ValueError(f"the path reverses at corner {i}")
+        if np.pi - th < 1e-6:                # straight on: nothing to round
             out.append(b)
             last_tangent = 0.0
             continue

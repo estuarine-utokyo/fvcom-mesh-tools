@@ -121,3 +121,11 @@ def test_coast_normal_does_not_jump_a_50_m_strip():
     for land in (strip, shapely.Polygon(list(strip.exterior.coords)[::-1])):
         b, _ = coast_normal(land, 0, -10)
         assert b == pytest.approx(180.0)
+
+
+def test_fillet_refuses_a_reversal_and_passes_a_straight_continuation():
+    """Round 3 F13: a 180-degree reversal came back unchanged."""
+    with pytest.raises(ValueError, match="reverses"):
+        fillet(np.array([[0, 0], [10_000, 0], [0, 0]], float), [1_000])
+    line = fillet(np.array([[0, 0], [10_000, 0], [20_000, 0]], float), [1_000])
+    assert np.allclose(line[:, 1], 0)

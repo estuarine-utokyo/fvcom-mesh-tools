@@ -53,6 +53,36 @@ def _window(lon: np.ndarray, lat: np.ndarray, pad: float):
             float(np.nanmin(lat)) - pad, float(np.nanmax(lat)) + pad)
 
 
+def _bilinear(gx, gy, z, x, y) -> np.ndarray:
+    """Bilinear interpolation on a regular grid; NaN only where it matters.
+
+    A corner with no data (NaN) spoils a sample only when its weight is not
+    zero: a point on a valid grid node or edge keeps its value beside a
+    masked cell (review of the extend tools, round 3 F7). Outside the grid
+    is NaN.
+    """
+    x = np.ravel(np.asarray(x, float))
+    y = np.ravel(np.asarray(y, float))
+    shape_out = np.shape(x)
+    fi = np.interp(x, gx, np.arange(len(gx)), left=np.nan, right=np.nan)
+    fj = np.interp(y, gy, np.arange(len(gy)), left=np.nan, right=np.nan)
+    out = np.full(len(x), np.nan)
+    ok = np.isfinite(fi) & np.isfinite(fj)
+    i0 = np.clip(np.floor(fi[ok]).astype(int), 0, len(gx) - 2)
+    j0 = np.clip(np.floor(fj[ok]).astype(int), 0, len(gy) - 2)
+    ti, tj = fi[ok] - i0, fj[ok] - j0
+    acc = np.zeros(ok.sum())
+    bad = np.zeros(ok.sum(), bool)
+    for di, dj, w in ((0, 0, (1 - ti) * (1 - tj)), (1, 0, ti * (1 - tj)),
+                      (0, 1, (1 - ti) * tj), (1, 1, ti * tj)):
+        v = z[j0 + dj, i0 + di]
+        use = w > 0
+        bad |= use & ~np.isfinite(v)
+        acc += np.where(use & np.isfinite(v), w * np.nan_to_num(v), 0.0)
+    out[np.flatnonzero(ok)] = np.where(bad, np.nan, acc)
+    return out.reshape(shape_out)
+
+
 @dataclass
 class Grid:
     """A regular lon/lat grid; elevation positive up in ``var``."""
@@ -65,7 +95,6 @@ class Grid:
 
     def depth(self, lon, lat, root: Path) -> np.ndarray:
         import netCDF4
-        from scipy.interpolate import RegularGridInterpolator
 
         path = root / self.rel
         if not path.exists():
@@ -88,9 +117,7 @@ class Grid:
                 return out
             # masked cells (the file's _FillValue) are no data, not depths (review F1)
             z = np.ma.filled(np.ma.asarray(ds[self.var][j0:j1, i0:i1], float), np.nan)
-        g = RegularGridInterpolator((glat[j0:j1], glon[i0:i1]), z,
-                                    bounds_error=False, fill_value=np.nan)
-        return -g(np.column_stack([np.ravel(lat), np.ravel(lon)])).reshape(np.shape(lon))
+        return -_bilinear(glon[i0:i1], glat[j0:j1], z, lon, lat)
 
 
 @dataclass

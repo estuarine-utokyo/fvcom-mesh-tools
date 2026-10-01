@@ -179,7 +179,10 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
 
         for i in range(n_nodes):
             x, y = mesh.nodes[i]
-            f.write(f"{i + 1:>10d}  {x:.15f}  {y:.15f}  {mesh.depths[i]:.17g}\n")
+            # shortest round-trip-exact text, as the depths already were:
+            # .15f cut 0.12345678912345678 (review of the extend tools,
+            # round 3 F8)
+            f.write(f"{i + 1:>10d}  {float(x)!r}  {float(y)!r}  {mesh.depths[i]:.17g}\n")
 
         for i in range(n_elements):
             n0, n1, n2 = mesh.elements[i]

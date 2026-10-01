@@ -246,3 +246,16 @@ def test_check_no_overlap_finds_overlap_away_from_the_interface():
                      np.vstack([m.elements, [[4, 5, 6]]]), m.open_boundaries, [])
     with pytest.raises(ValueError, match="overlap the base"):
         check_no_overlap(bad, base.n_elements)
+
+
+def test_band_floor_count_is_taken_on_the_final_field():
+    """Round 3 F1: a band smoothed below its floor counted 0; F3: iterators."""
+    x, y = np.meshgrid(np.arange(5) * 100.0, np.arange(5) * 100.0)
+    b0 = np.where(y == 0, 1000.0, np.nan)
+    b1 = np.where(y == 400, np.array([1000, 1040, 1040, 1040, 1040.0])[None, :]
+                  * np.ones((5, 1)), np.nan)
+    floor = np.where(y == 400, b1, 0.0)
+    h, rep = compose_sizing(np.full(x.shape, 1000.0), x, y, grade=0.2, floor=floor,
+                            bands=iter([b0, b1]))
+    assert rep["band_1_below_floor_cells"] >= 1
+    assert "band_1_max_rel_deviation" in rep
