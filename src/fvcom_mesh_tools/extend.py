@@ -171,11 +171,19 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
     (one base element and one outer element on it).
     """
     nb, eb = base.n_nodes, base.n_elements
-    if not np.array_equal(merged.nodes[:nb, :2], base.nodes[:, :2]):
+
+    def same_bits(a, b):
+        # dtype and bit pattern: numerical equality lets -0.0 pass for +0.0
+        # (review round 8 F12)
+        a, b = np.ascontiguousarray(a), np.ascontiguousarray(b)
+        return a.dtype == b.dtype and a.shape == b.shape and a.tobytes() == b.tobytes()
+
+    if not same_bits(merged.nodes[:nb, :2], base.nodes[:, :2]):
         raise ValueError("base node coordinates changed")
-    if not np.array_equal(merged.elements[:eb], base.elements):
+    me, be = np.asarray(merged.elements[:eb]), np.asarray(base.elements)
+    if not (me.dtype.kind in "iu" and be.dtype.kind in "iu" and np.array_equal(me, be)):
         raise ValueError("base elements changed")
-    if not np.array_equal(merged.depths[:nb], base.depths):
+    if not same_bits(merged.depths[:nb], base.depths):
         raise ValueError("base depths changed")
     ib = np.asarray(interface_base, np.int64)
     e = np.sort(np.vstack([merged.elements[:, [0, 1]], merged.elements[:, [1, 2]],

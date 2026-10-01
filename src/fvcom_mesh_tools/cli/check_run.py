@@ -70,22 +70,52 @@ def _strip_comments(text: str) -> str:
     return "\n".join(out)
 
 
+def _mask_quoted(text: str) -> str:
+    """``text`` with the inside of every quoted value blanked, same length,
+    so that a search for ``KEY =`` cannot land inside a string."""
+    out, quote, i = list(text), None, 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == quote and i + 1 < len(text) and text[i + 1] == quote:
+                out[i] = out[i + 1] = " "          # a doubled delimiter
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            elif ch != "\n":
+                out[i] = " "
+        elif ch in "'\"":
+            quote = ch
+        i += 1
+    return "".join(out)
+
+
 def _nml_value(text: str, key: str) -> str | None:
     """A namelist value, single- or double-quoted or bare; None when absent.
 
     Inside a quoted value a doubled delimiter is one character, as Fortran
-    writes it (``'run''s'`` is ``run's``; review round 7 F3).
+    writes it (``'run''s'`` is ``run's``; review round 7 F3). Only real
+    assignments count -- ``KEY =`` inside another quoted value does not --
+    and a key assigned twice with different values is refused (round 8 F8).
     """
-    m = re.search(rf"\b{key}\s*=\s*(?:'((?:[^']|'')*)'|\"((?:[^\"]|\"\")*)\"|([^,\s/]+))",
-                  text, re.IGNORECASE)
-    if not m:
-        return None
-    single, double, bare = m.groups()
-    if single is not None:
-        return single.replace("''", "'").strip()
-    if double is not None:
-        return double.replace('""', '"').strip()
-    return bare.strip()
+    value = re.compile(r"\s*=\s*(?:'((?:[^']|'')*)'|\"((?:[^\"]|\"\")*)\"|([^,\s/]+))")
+    found = []
+    for m in re.finditer(rf"(?<![\w%]){re.escape(key)}(?=\s*=)", _mask_quoted(text),
+                         re.IGNORECASE):
+        v = value.match(text, m.end())
+        if v is None:
+            continue
+        single, double, bare = v.groups()
+        if single is not None:
+            found.append(single.replace("''", "'").strip())
+        elif double is not None:
+            found.append(double.replace('""', '"').strip())
+        else:
+            found.append(bare.strip())
+    if len(set(found)) > 1:
+        raise ValueError(f"{key} is set more than once, to {found}")
+    return found[0] if found else None
 
 
 def _grid_counts(path: Path) -> dict[str, int] | None:
@@ -153,15 +183,25 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
 
     end = first = interval = None
     nml_path = run / nml
+    nml_text = ""
+    vals: dict[str, str | None] = {}
     if not nml_path.exists():
         reasons.append(f"no namelist {nml}")
     else:
         nml_text = _strip_comments(nml_path.read_text())
-        v = _nml_value(nml_text, "END_DATE")
+        # a key set twice, differently, is a failure (review round 8 F8)
+        for key in ("END_DATE", "NC_FIRST_OUT", "START_DATE", "NC_OUT_INTERVAL",
+                    "OUTPUT_DIR", "GRID_FILE", "INPUT_DIR"):
+            try:
+                vals[key] = _nml_value(nml_text, key)
+            except ValueError as exc:
+                reasons.append(str(exc))
+                vals[key] = None
+        v = vals["END_DATE"]
         end = _parse_time(v) if v else None
-        v = _nml_value(nml_text, "NC_FIRST_OUT") or _nml_value(nml_text, "START_DATE")
+        v = vals["NC_FIRST_OUT"] or vals["START_DATE"]
         first = _parse_time(v) if v else None
-        v = _nml_value(nml_text, "NC_OUT_INTERVAL")
+        v = vals["NC_OUT_INTERVAL"]
         if v is not None:
             # present but unreadable fails closed: it used to switch the gap
             # check off (review 3, T3)
@@ -173,24 +213,21 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
     # the history is where the namelist sends it (review round 6 F3); a
     # namelist without OUTPUT_DIR falls back to <run>/output
     outdir = run / "output"
-    if nml_path.exists():
-        od = _nml_value(nml_text, "OUTPUT_DIR")
-        if od:
-            outdir = Path(od) if Path(od).is_absolute() else run / od
+    od = vals.get("OUTPUT_DIR")
+    if od:
+        outdir = Path(od) if Path(od).is_absolute() else run / od
     info["output_dir"] = str(outdir)
     # the staged mesh's size, when the namelist names a readable grid file:
     # the history must be on it (review of the extend tools, round 4 F14)
     staged = None
-    if nml_path.exists():
-        grid = _nml_value(nml_text, "GRID_FILE")
-        indir = _nml_value(nml_text, "INPUT_DIR")
-        if grid and indir:
-            gpath = Path(indir) / grid if Path(indir).is_absolute() else run / indir / grid
-            staged = _grid_counts(gpath)
-            # a grid named but unreadable is a failure, not a skipped check
-            # (review round 5 F6)
-            if staged is None:
-                reasons.append(f"the namelist's grid {gpath} cannot be read for its counts")
+    grid, indir = vals.get("GRID_FILE"), vals.get("INPUT_DIR")
+    if grid and indir:
+        gpath = Path(indir) / grid if Path(indir).is_absolute() else run / indir / grid
+        staged = _grid_counts(gpath)
+        # a grid named but unreadable is a failure, not a skipped check
+        # (review round 5 F6)
+        if staged is None:
+            reasons.append(f"the namelist's grid {gpath} cannot be read for its counts")
     if end is None:
         reasons.append(f"no END_DATE found in {nml}")
     else:

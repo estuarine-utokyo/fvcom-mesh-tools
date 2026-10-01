@@ -31,6 +31,7 @@ from fvcom_mesh_tools.outdir import reserve  # noqa: E402
 from fvcom_mesh_tools.provenance import (  # noqa: E402
     changed_files,
     changed_inventory,
+    code_identity,
     collect,
     dataset_files,
     file_sha256,
@@ -132,7 +133,8 @@ changed = sorted(set(changed_files(PROV, list(PROV["files"]))) | set(changed_inv
            **{f"bathymetry_{k}": v for k, v in source_files(names).items()}})))
 # the stages ran the live code: it must still be the code recorded (the
 # package, this driver, oceanmesh; round 7 F10)
-if collect(code=code, libraries=())["code"] != PROV["code"]:
+_now = collect(code=code, libraries=())["code"]
+if any(code_identity(_now[k]) != code_identity(PROV["code"][k]) for k in PROV["code"]):
     changed.append("code")
 if changed and not failed:
     failed = {"stage": "inputs", "changed_during_build": changed}

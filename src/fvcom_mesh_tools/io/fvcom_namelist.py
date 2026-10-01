@@ -83,9 +83,24 @@ def relocate_case(src: Path, dst: Path, nml: str = "m2_run.nml",
         shutil.copytree(src, work, ignore=shutil.ignore_patterns("output"))
         (work / "output").mkdir(exist_ok=True)
         (work / nml).write_text(text)
+        # the previous destination is moved aside, not deleted, until the new
+        # one is in place, and moved back if that fails (review round 8 F3)
+        prev = tmp / "previous"
         if dst.exists():
-            shutil.rmtree(dst)
-        work.rename(dst)
+            dst.rename(prev)
+        try:
+            work.rename(dst)
+        except BaseException:
+            if prev.exists():
+                try:
+                    prev.rename(dst)
+                except OSError:
+                    keep = tmp
+                    tmp = None                 # it holds the previous case
+                    raise OSError(f"could not put {dst} back; it is in {keep / 'previous'}"
+                                  ) from None
+            raise
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
     return dst / nml

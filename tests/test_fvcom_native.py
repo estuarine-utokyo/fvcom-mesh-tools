@@ -618,3 +618,50 @@ def test_bad_optional_inputs_leave_an_existing_case_untouched(tmp_path):
         with pytest.raises(ValueError):
             export_fvcom_case(m, out, "t", **kw)
     assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+
+
+def _tri(**kw):
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    nodes = np.array([[0.0, 0.0], [1000.0, 0.0], [0.0, 1000.0]])
+    return Fort14Mesh("t", nodes, np.full(3, 5.0), kw.get("els", np.array([[0, 1, 2]])),
+                      [np.array([0, 1])], [])
+
+
+def test_export_puts_the_previous_case_back_when_a_move_fails(tmp_path, monkeypatch):
+    """Review round 8 F2."""
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
+
+    out = tmp_path / "case"
+    export_fvcom_case(_tri(), out, "t")
+    before = {p.name: p.read_bytes() for p in out.iterdir()}
+    m = _tri()
+    m.depths[:] = 9.0
+    real, calls = Path.replace, {"n": 0}
+
+    def flaky(self, target):
+        if ".export." in str(self) and ".previous" not in str(self):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("injected")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky)
+    with pytest.raises(OSError, match="injected"):
+        export_fvcom_case(m, out, "t")
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+
+
+def test_export_types_and_values_are_written_as_given(tmp_path):
+    """Review round 8 F4, F5, F6, F11."""
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
+
+    with pytest.raises(ValueError, match="integers"):
+        export_fvcom_case(_tri(els=np.array([[0.0, 1.0, 2.0]])), tmp_path / "a", "t")
+    for t in ([1.9], True):
+        with pytest.raises(ValueError, match="whole number"):
+            write_obc(_tri(), tmp_path / "o.dat", obc_type=t)
+    w = export_fvcom_case(_tri(), tmp_path / "b", "t",
+                          sponge=iter([(0, 1e-5, 1e-9)]))
+    row = w["spg"].read_text().splitlines()[1].split()
+    assert row[0] == "1" and float(row[1]) == 1e-5 and float(row[2]) == 1e-9

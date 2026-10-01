@@ -176,3 +176,14 @@ def test_changed_inventory_sees_a_file_that_appeared(tmp_path):
     b.write_text("2")
     assert changed_inventory(prov, {"cao": [a, b]}) == ["cao"]
     assert changed_inventory(prov, {"new": [a]}) == ["new"]
+
+
+def test_code_identity_ignores_dirt_elsewhere_in_the_repository():
+    """Review of the extend tools, round 8 F7."""
+    from fvcom_mesh_tools.provenance import code_identity
+
+    a = {"path": "/r/src/p/__init__.py", "commit_identifies_code": True,
+         "git": {"root": "/r", "commit": "c", "dirty": [], "path_tracked": True}}
+    b = {**a, "git": {**a["git"], "dirty": ["docs/x.md"]}}
+    c = {**a, "git": {**a["git"], "commit": "d"}}
+    assert code_identity(a) == code_identity(b) != code_identity(c)

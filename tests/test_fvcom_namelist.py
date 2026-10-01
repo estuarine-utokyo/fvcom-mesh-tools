@@ -76,3 +76,25 @@ def test_relocate_refuses_to_overlap_its_source(tmp_path, monkeypatch):
         with pytest.raises(ValueError, match="overlaps"):
             relocate_case(case, dst)
     assert (case / "m2_run.nml").exists()
+
+
+def test_relocate_keeps_the_previous_copy_when_the_move_fails(tmp_path, monkeypatch):
+    """Review round 8 F3."""
+    from pathlib import Path
+
+    monkeypatch.setattr(fvcom_namelist, "FVCOM_DIR_MAX", 4096)
+    case = _case(tmp_path)
+    dst = tmp_path / "smoke" / "refined"
+    relocate_case(case, dst)
+    (dst / "marker").write_text("previous")
+    real = Path.rename
+
+    def flaky(self, target):
+        if self.name == "case":
+            raise OSError("injected")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky)
+    with pytest.raises(OSError, match="injected"):
+        relocate_case(case, dst)
+    assert (dst / "marker").read_text() == "previous"

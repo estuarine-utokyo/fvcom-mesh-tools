@@ -39,6 +39,7 @@ from fvcom_mesh_tools.outdir import reserve  # noqa: E402
 from fvcom_mesh_tools.provenance import (  # noqa: E402
     changed_files,
     changed_inventory,
+    code_identity,
     collect,
 )
 from fvcom_mesh_tools.qa import run_qa  # noqa: E402
@@ -174,7 +175,8 @@ if dt_new < dt_base:
 changed = sorted(set(changed_files(PROV, list(PROV["files"]))) | set(changed_inventory(
     PROV, {f"bathymetry_{k}": v for k, v in source_files(names).items()})))
 # the code that ran must still be the code recorded (round 7 F10)
-if collect(code=CODE, libraries=())["code"] != PROV["code"]:
+_now = collect(code=CODE, libraries=())["code"]
+if any(code_identity(_now[k]) != code_identity(PROV["code"][k]) for k in PROV["code"]):
     changed.append("code")
 
 d = h - old

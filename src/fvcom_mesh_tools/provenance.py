@@ -17,8 +17,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-__all__ = ["changed_files", "changed_inventory", "code_state", "collect", "dataset_files",
-           "file_sha256", "git_state"]
+__all__ = ["changed_files", "changed_inventory", "code_identity", "code_state", "collect",
+           "dataset_files", "file_sha256", "git_state"]
 
 # the libraries whose arithmetic or geometry decides the mesh
 LIBRARIES = ("numpy", "scipy", "shapely", "geopandas", "pyproj", "rasterio",
@@ -204,6 +204,19 @@ def code_state(name: str, path) -> dict[str, Any]:
             h.update(ln.encode())
         out["source_sha256"] = None if failed else h.hexdigest()
         out["source_unreadable"] = failed
+    return out
+
+
+def code_identity(state: dict[str, Any]) -> dict[str, Any]:
+    """The part of a :func:`code_state` record that identifies the code: all
+    of it except the repository-wide list of dirty paths, which is kept as a
+    diagnostic. A file changed elsewhere in the repository (a document, an
+    output) does not change the code (review of the extend tools, round 8
+    F7); a change under the code's own path does, through
+    ``dirty_under_path`` and ``source_sha256``."""
+    out = dict(state)
+    if out.get("git"):
+        out["git"] = {k: v for k, v in out["git"].items() if k != "dirty"}
     return out
 
 

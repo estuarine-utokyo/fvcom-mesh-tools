@@ -202,8 +202,9 @@ def test_cao_finer_grid_without_data_keeps_the_coarser_value(tmp_path):
     (d / "depth_0090-01.dat").write_text(
         "\n".join("".join(vals[i:i + 10]) for i in range(0, 400, 10)) + "\n")
     cao.areas = lambda root: [coarse, fine]
-    cao._cache[(str((tmp_path / "r").resolve()), "09", "0030-01", 10, 10)] = \
-        np.full((10, 10), np.nan)
+    f = d / "depth_0030-01.dat"
+    st = f.stat()
+    cao._cache[(str(f.resolve()), st.st_size, st.st_mtime_ns, 10, 10)] = np.full((10, 10), np.nan)
     assert cao.depth(np.array([139.8]), np.array([35.5]), tmp_path / "r")[0] == 12.5
 
 
@@ -279,3 +280,34 @@ def test_m7001_depth_does_not_depend_on_the_other_query_points(tmp_path, monkeyp
     batch, _ = sample(["pts"], np.array([140.0, 139.7, 140.3]), np.array([35.0, 34.7, 35.3]),
                       data_dir=tmp_path)
     assert alone[0] == pytest.approx(10.0) and batch[0] == alone[0]
+
+
+def test_cao_reads_a_depth_file_again_after_it_changes(tmp_path):
+    """Review round 8 F9: the cache served the old depths."""
+    import os
+
+    cao = CaoNested(rel="cao", zones={"09": 2451})
+    a = _cao_area(tmp_path, "r", 10.0)
+    cao.areas = lambda root: [a]
+    assert cao.depth(np.array([139.8]), np.array([35.5]), tmp_path / "r")[0] == 10.0
+    f = next((tmp_path / "r").rglob("depth_0030-01.dat"))
+    st = f.stat()
+    f.write_text(f.read_text().replace("   10.00", "   20.00"))
+    os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    assert cao.depth(np.array([139.8]), np.array([35.5]), tmp_path / "r")[0] == 20.0
+
+
+def test_a_grid_stored_lon_by_lat_is_not_transposed(tmp_path, monkeypatch):
+    """Review round 8 F10."""
+    import netCDF4
+
+    with netCDF4.Dataset(tmp_path / "t.nc", "w") as ds:
+        ds.createDimension("lon", 2)
+        ds.createDimension("lat", 2)
+        ds.createVariable("lon", "f8", ("lon",))[:] = [139.0, 139.1]
+        ds.createVariable("lat", "f8", ("lat",))[:] = [35.0, 35.1]
+        ds.createVariable("z", "f4", ("lon", "lat"))[:] = [[-10.0, -20.0], [-30.0, -40.0]]
+    monkeypatch.setitem(sources.SOURCES, "t", Grid("t.nc", "z"))
+    monkeypatch.setitem(sources.DATUM, "t", "T.P.")
+    d, _ = sample(["t"], np.array([139.0]), np.array([35.1]), data_dir=tmp_path)
+    assert d[0] == pytest.approx(20.0)

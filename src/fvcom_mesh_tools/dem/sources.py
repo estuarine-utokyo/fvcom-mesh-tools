@@ -139,8 +139,22 @@ class Grid:
             out = np.full(np.shape(lon), np.nan)
             if i1 - i0 < 2 or j1 - j0 < 2:
                 return out
+            # the variable's dimensions are those of lat and lon, in either
+            # order; equal axis lengths would hide a transposed grid (review
+            # round 8 F10)
+            lon_dim, lat_dim = ds["lon"].dimensions, ds["lat"].dimensions
+            var_dims = ds[self.var].dimensions
+            if len(lon_dim) != 1 or len(lat_dim) != 1:
+                raise ValueError(f"{path}: lon and lat must be one-dimensional")
+            if var_dims == lat_dim + lon_dim:
+                block = ds[self.var][j0:j1, i0:i1]
+            elif var_dims == lon_dim + lat_dim:
+                block = ds[self.var][i0:i1, j0:j1].T
+            else:
+                raise ValueError(f"{path}: {self.var} has dimensions {var_dims}, "
+                                 f"not ({lat_dim[0]}, {lon_dim[0]})")
             # masked cells (the file's _FillValue) are no data, not depths (review F1)
-            z = np.ma.filled(np.ma.asarray(ds[self.var][j0:j1, i0:i1], float), np.nan)
+            z = np.ma.filled(np.ma.asarray(block, float), np.nan)
         return -_bilinear(glon[i0:i1], glat[j0:j1], z, lon, lat)
 
 
@@ -239,14 +253,16 @@ class CaoNested:
 
     def grid(self, root: Path, zone: str, area: str, nx: int, ny: int) -> np.ndarray:
         """One area's depths, row 0 = north; parsed once per run."""
-        # the data root and the shape are part of the key: one process may read
-        # two roots (review F13)
-        key = (str(Path(root).resolve()), zone, area, nx, ny)
+        # the file itself (resolved path, size, modification time) and the
+        # shape are the key: one process may read two roots (review F13), and
+        # a file changed since must be read again (review round 8 F9)
+        hits = glob.glob(str(root / self.rel / "地形データ" / f"地形データ_第{zone}系"
+                             / "**" / f"depth_{area}.dat"), recursive=True)
+        if len(hits) != 1:
+            raise FileNotFoundError(f"depth_{area}.dat for zone {zone}: {hits}")
+        st = Path(hits[0]).stat()
+        key = (str(Path(hits[0]).resolve()), st.st_size, st.st_mtime_ns, nx, ny)
         if key not in self._cache:
-            hits = glob.glob(str(root / self.rel / "地形データ" / f"地形データ_第{zone}系"
-                                 / "**" / f"depth_{area}.dat"), recursive=True)
-            if len(hits) != 1:
-                raise FileNotFoundError(f"depth_{area}.dat for zone {zone}: {hits}")
             # Fortran (10f8.2): every value is exactly eight characters, so the
             # file minus its line breaks is a flat array of 8-byte fields
             raw = Path(hits[0]).read_bytes().replace(b"\r", b"").replace(b"\n", b"")

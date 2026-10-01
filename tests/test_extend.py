@@ -259,3 +259,21 @@ def test_band_floor_count_is_taken_on_the_final_field():
                             bands=iter([b0, b1]))
     assert rep["band_1_below_floor_cells"] >= 1
     assert "band_1_max_rel_deviation" in rep
+
+
+def test_frozen_base_is_checked_bit_for_bit():
+    """Review round 8 F12: -0.0 for +0.0 passed."""
+    from dataclasses import replace
+
+    import numpy as np
+    import pytest
+
+    from fvcom_mesh_tools.extend import verify_frozen_base
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    nodes = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    base = Fort14Mesh("b", nodes, np.array([0.0, 5.0, 5.0]), np.array([[0, 1, 2]]), [], [])
+    with pytest.raises(ValueError, match="depths changed"):
+        verify_frozen_base(replace(base, depths=np.array([-0.0, 5.0, 5.0])), base, [])
+    with pytest.raises(ValueError, match="coordinates changed"):
+        verify_frozen_base(replace(base, nodes=nodes.astype(np.float32)), base, [])

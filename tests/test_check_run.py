@@ -160,3 +160,17 @@ def test_quoted_values_round_trip_with_the_namelist_writer():
     for d in ("/x/current'case/", "/x/plain/"):
         assert _nml_value(f" OUTPUT_DIR = {fortran_string(d)},\n", "OUTPUT_DIR") == d
     assert _nml_value(' OUTPUT_DIR = "/x/a""b/",\n', "OUTPUT_DIR") == '/x/a"b/'
+
+
+def test_an_assignment_inside_another_value_is_not_read():
+    """Review round 8 F8."""
+    import pytest
+
+    from fvcom_mesh_tools.cli.check_run import _nml_value
+
+    text = ("&NML_CASE\n CASE_TITLE = \"OUTPUT_DIR = '/x/stale/'\",\n/\n"
+            "&NML_IO\n OUTPUT_DIR = '/x/current/',\n/\n")
+    assert _nml_value(text, "OUTPUT_DIR") == "/x/current/"
+    assert _nml_value(" A = 'it''s OUTPUT_DIR = 1',\n OUTPUT_DIR = 'b/',\n", "OUTPUT_DIR") == "b/"
+    with pytest.raises(ValueError, match="more than once"):
+        _nml_value(" OUTPUT_DIR = 'a/',\n OUTPUT_DIR = 'b/',\n", "OUTPUT_DIR")

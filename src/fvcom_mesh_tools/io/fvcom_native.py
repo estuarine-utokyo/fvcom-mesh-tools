@@ -127,10 +127,21 @@ def write_obc(
     a valid 0-node file.
     """
     n_segs = len(mesh.open_boundaries)
-    if isinstance(obc_type, int):
-        seg_types = [obc_type] * n_segs
+
+    def _type(t):
+        # a whole number, not a bool: int(1.9) would quietly be type 1
+        # (review round 8 F6)
+        if isinstance(t, (bool, np.bool_)) or not isinstance(t, (int, float, np.integer,
+                                                                  np.floating)):
+            raise ValueError(f"OBC type must be a whole number, not {t!r}")
+        if not (np.isfinite(t) and float(t) == int(t)):
+            raise ValueError(f"OBC type must be a whole number, not {t!r}")
+        return int(t)
+
+    if isinstance(obc_type, (int, float, np.integer, np.floating, bool, np.bool_)):
+        seg_types = [_type(obc_type)] * n_segs
     else:
-        seg_types = [int(t) for t in obc_type]
+        seg_types = [_type(t) for t in obc_type]
         if len(seg_types) != n_segs:
             raise ValueError(
                 f"obc_type has {len(seg_types)} entries for {n_segs} open segments"
@@ -184,7 +195,9 @@ def write_spg(
     with path.open("w") as f:
         f.write(f"Sponge Node Number = {len(rows)}\n")
         for node, radius, damping in rows:
-            f.write(f"{int(node) + 1} {float(radius):.4f} {float(damping):.6f}\n")
+            # round-trip exact: a small radius must not be written as 0, which
+            # FVCOM divides by (mod_setup.F; review round 8 F11)
+            f.write(f"{int(node) + 1} {_num(radius)} {_num(damping)}\n")
     return path
 
 
@@ -332,6 +345,10 @@ def _check_exportable(mesh: Fort14Mesh) -> None:
     n = len(nodes)
     if nodes.ndim != 2 or nodes.shape[1] < 2 or depths.shape != (n,):
         raise ValueError(f"nodes {nodes.shape} and depths {depths.shape} do not match")
+    if np.asarray(mesh.elements).dtype.kind not in "iu":
+        # the elements index arrays later on; whole floats would be accepted
+        # here and fail there (review round 8 F4)
+        raise ValueError(f"elements must be integers, not {np.asarray(mesh.elements).dtype}")
     els = _indices(mesh.elements, n, "elements", ndim=2)
     if els.size and els.shape[1] != 3:
         raise ValueError(f"elements must be (NE, 3), not {els.shape}")
@@ -408,7 +425,9 @@ def export_fvcom_case(
     _validate_for_export(mesh)
     if cor is not None:
         _check_cor(mesh, cor)
-    _check_sponge(mesh, sponge)
+    # normalised once and passed on: an iterator would be spent by the check
+    # and write an empty sponge (review round 8 F5)
+    sponge_rows = _check_sponge(mesh, sponge) if sponge is not None else None
     if obc_depth_control and mesh.open_boundaries:
         mesh, _ = apply_obc_depth_control(mesh)
     outdir = Path(outdir).resolve()
@@ -426,17 +445,44 @@ def export_fvcom_case(
         if cor is not None:
             staged["cor"] = write_cor(mesh, stage / f"{casename}_cor.dat", cor)
         if sponge is not None or write_empty_spg:
-            staged["spg"] = write_spg(mesh, stage / f"{casename}_spg.dat", sponge)
+            staged["spg"] = write_spg(mesh, stage / f"{casename}_spg.dat", sponge_rows)
         if twodm:
             staged["2dm"] = write_2dm(
                 mesh, stage / f"{casename}.2dm", z_convention=z_convention,
             )
+        # Publication keeps every file it replaces until all are in place,
+        # and puts them back if one move fails; if that fails too, the stage
+        # directory is kept and named (review round 8 F2).
+        keep = stage / ".previous"
+        keep.mkdir()
         written: dict[str, Path] = {}
-        for kind, p in staged.items():
-            written[kind] = outdir / p.name
-            p.replace(written[kind])
+        moved: list[Path] = []
+        try:
+            for kind, p in staged.items():
+                dst = outdir / p.name
+                if dst.exists():
+                    shutil.copy2(dst, keep / p.name)
+                p.replace(dst)
+                moved.append(dst)
+                written[kind] = dst
+        except BaseException:
+            unrestored = []
+            for dst in moved:
+                try:
+                    if (keep / dst.name).exists():
+                        (keep / dst.name).replace(dst)
+                    else:
+                        dst.unlink()
+                except OSError:
+                    unrestored.append(dst.name)
+            if unrestored:
+                stage = None          # keep it: it holds the previous files
+                raise OSError(f"export into {outdir} failed and {unrestored} could not be "
+                              f"restored; the previous files are in {keep}") from None
+            raise
     finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        if stage is not None:
+            shutil.rmtree(stage, ignore_errors=True)
     return written
 
 
