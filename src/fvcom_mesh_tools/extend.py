@@ -42,6 +42,10 @@ __all__ = [
 ]
 
 
+#: Largest relative departure of a band from its target sizes that is accepted.
+BAND_TOLERANCE = 0.05
+
+
 def graded_up(values, x, y, grade):
     """The smallest gradation-feasible field that is >= ``values``."""
     return -_limit(-np.asarray(values, float), x, y, grade)
@@ -95,15 +99,19 @@ def compose_sizing(ambient, x, y, *, grade, floor=None, bands=()):
         report[f"band_{k}_cells"] = int(on.sum())
     # every band must come out at its own target: two bands closer than their
     # sizes allow under the gradation cannot both hold, and the later one
-    # would silently win (review round 2 F17)
+    # would silently win (review round 2 F17). A band whose own sizes change
+    # faster along the line than the gradation allows is smoothed a little
+    # (0.9 % on the Tokyo Bay interface, 2026-10-01); up to BAND_TOLERANCE
+    # that is accepted and reported, beyond it refused.
     for k, band in enumerate(bands):
         band = np.asarray(band, float)
         on = np.isfinite(band)
         dev = float(np.max(np.abs(h[on] - band[on]) / band[on]))
         report[f"band_{k}_max_rel_deviation"] = dev
-        if dev > 1e-6:
+        if dev > BAND_TOLERANCE:
             raise ValueError(f"band {k} cannot hold its sizes (off by up to {dev:.1%}): "
-                             "another band is too close for the gradation")
+                             "its own sizes vary faster than the gradation allows, or "
+                             "another band is too close")
     if floor is not None:
         report["below_floor_fraction"] = float(np.mean(h < np.asarray(floor) - 1e-6))
     return h, report
