@@ -53,7 +53,11 @@ def test_r1_failed_prerequisite_invalidates_old_marker(tmp_path, script, start, 
     old.parent.mkdir(parents=True, exist_ok=True)
     old.write_text("previous successful attempt\n")
     source = (ROOT / "jobs/octopus" / script).read_text()
-    inv = source[source.index('rm -f "${FMESH_RUN_ROOT'):source.index(". jobs/octopus/common.sh")]
+    # 412 takes its per-case lock before the invalidation (extend tools
+    # review, round 9 F2): its block starts at CASE_DIR=
+    first = ('CASE_DIR=${FMESH_RUN_ROOT' if 'CASE_DIR=${FMESH_RUN_ROOT' in source
+             else 'rm -f "${FMESH_RUN_ROOT')
+    inv = source[source.index(first):source.index(". jobs/octopus/common.sh")]
     block = source[source.index(start):source.index(stop, source.index(start))]
     env = {**os.environ, "OUTDIR": str(tmp_path / "unaccepted"),
            "RUN_ROOT": str(tmp_path), "FMESH_RUN_ROOT": str(tmp_path),
