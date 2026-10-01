@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from pyproj import Transformer  # noqa: E402
 
 from fvcom_mesh_tools.dem.m7001 import node_edges  # noqa: E402
-from fvcom_mesh_tools.dem.sources import SOURCES, sample  # noqa: E402
+from fvcom_mesh_tools.dem.sources import SOURCES, non_tp_count, sample  # noqa: E402
 from fvcom_mesh_tools.extend import land_segments, rfactor_smooth_free  # noqa: E402
 from fvcom_mesh_tools.extend_recipe import load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
@@ -90,6 +90,7 @@ report = {
     "from": str(src_dir / case), "sources": names,
     "nodes_per_source": {n: int((which == k).sum()) for k, n in enumerate(names)},
     "rfactor_iterations": iters, "r_max_on_free_edges": r_after,
+    "nodes_not_on_tp": non_tp_count(names, which)[0],
     "change_m": {"mean": float(d[new].mean()), "abs_mean": float(np.abs(d[new]).mean()),
                  "min": float(d[new].min()), "max": float(d[new].max())},
     "relative_change": {"mean": float(rel.mean()), "abs_mean": float(np.abs(rel).mean()),

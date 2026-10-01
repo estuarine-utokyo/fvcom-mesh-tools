@@ -668,8 +668,10 @@ takes the first source that covers it:
 | `m7001_tokyobay` | T.P. | M7001 gridded at ~180 m, Tokyo Bay only |
 | `srtm15_kanto`, `srtm15plus`, `gebco_2024` | mean sea level | global grids, to fill what the survey products do not cover |
 
-The Cabinet Office grids may not be redistributed as they are; they are read
-in place (see their README in `$DATA_DIR`). For dredged pits M7001 is the
+`dem/sources.py` keeps each source's datum (`DATUM`); `sample` warns when
+points take their depth from a source not on T.P., and 447/453 report the
+count (`nodes_not_on_tp`). The Cabinet Office grids may not be redistributed
+as they are; they are read in place (see their README in `$DATA_DIR`). For dredged pits M7001 is the
 authority (the Cabinet Office grids miss or misplace them).
 
 **What a build does** (`notebooks/445` runs `446` then `447`):

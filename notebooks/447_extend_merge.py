@@ -27,7 +27,7 @@ from fvcom_mesh_tools.algorithms.obc_finish import finish_obc_mesh  # noqa: E402
 from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local  # noqa: E402
 from fvcom_mesh_tools.coast_fit import fit_boundary_to_coast  # noqa: E402
 from fvcom_mesh_tools.dem.m7001 import node_edges  # noqa: E402
-from fvcom_mesh_tools.dem.sources import sample  # noqa: E402
+from fvcom_mesh_tools.dem.sources import non_tp_count, sample  # noqa: E402
 from fvcom_mesh_tools.extend import (  # noqa: E402
     land_segments,
     merge_outer,
@@ -162,6 +162,7 @@ depth_report = {
     "raw_min_m": float(raw.min()), "raw_max_m": float(raw.max()),
     "new_min_m": float(h[new].min()), "new_max_m": float(h[new].max()),
     "rfactor_iterations": iters, "r_max_on_free_edges": r_after,
+    "nodes_not_on_tp": non_tp_count(names, which)[0],
 }
 say("depths: " + json.dumps(depth_report))
 

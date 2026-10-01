@@ -38,7 +38,7 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["SOURCES", "sample", "source_files"]
+__all__ = ["DATUM", "SOURCES", "non_tp_count", "sample", "source_files"]
 
 
 def _data_dir(data_dir=None) -> Path:
@@ -210,6 +210,16 @@ SOURCES: dict[str, Any] = {
     "gebco_2024": Grid("geodata/bathymetry/GEBCO/GEBCO_2024.nc", "elevation"),
 }
 
+#: Vertical datum of each source. Depths for a model on T.P. should come from
+#: T.P. sources; the global grids are on mean sea level (tens of cm off T.P.,
+#: below their own error offshore but not on tidal flats).
+DATUM: dict[str, str] = {
+    "cao_shutochokka_2025": "T.P.", "m7001": "T.P.", "m7001_tokyobay": "T.P.",
+    "srtm15_kanto": "MSL", "srtm15plus": "MSL", "gebco_2024": "MSL",
+}
+if set(DATUM) != set(SOURCES):
+    raise RuntimeError("every bathymetry source needs a datum in DATUM")
+
 
 def _check(names) -> list[str]:
     names = list(names)
@@ -233,7 +243,8 @@ def sample(names, lon, lat, data_dir=None) -> tuple[np.ndarray, np.ndarray]:
     """Depth (positive down, m) at the points, from the first source covering each.
 
     Returns ``(depth, which)``: ``which`` is the index into ``names`` of the
-    source used, -1 where none covers the point (depth NaN there).
+    source used, -1 where none covers the point (depth NaN there). A warning
+    names the points taken from a source not on T.P. (:data:`DATUM`).
     """
     names = _check(names)
     root = _data_dir(data_dir)
@@ -250,4 +261,20 @@ def sample(names, lon, lat, data_dir=None) -> tuple[np.ndarray, np.ndarray]:
         idx = np.flatnonzero(todo.ravel())[got.ravel()]
         depth.ravel()[idx] = d.ravel()[got.ravel()]
         which.ravel()[idx] = k
+    n_off, off = non_tp_count(names, which)
+    if n_off:
+        import warnings
+
+        warnings.warn(f"{n_off} point(s) take their depth from a source not on T.P. "
+                      f"({', '.join(off)})", stacklevel=2)
     return depth, which
+
+
+def non_tp_count(names, which) -> tuple[int, list[str]]:
+    """How many points (``which`` from :func:`sample`) came from non-T.P. sources, and which."""
+    names = _check(names)
+    which = np.asarray(which)
+    off = [n for k, n in enumerate(names)
+           if DATUM.get(n, "unknown") != "T.P." and (which == k).any()]
+    n = int(sum((which == names.index(o)).sum() for o in off))
+    return n, off

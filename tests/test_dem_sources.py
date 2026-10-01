@@ -33,6 +33,8 @@ def fake_sources(tmp_path, monkeypatch):
              var="elevation")
     monkeypatch.setitem(sources.SOURCES, "fine", Grid("fine.nc", "elevation"))
     monkeypatch.setitem(sources.SOURCES, "coarse", Grid("coarse.nc", "z"))
+    monkeypatch.setitem(sources.DATUM, "fine", "T.P.")
+    monkeypatch.setitem(sources.DATUM, "coarse", "MSL")
     return tmp_path
 
 
@@ -114,3 +116,17 @@ def test_cao_refuses_a_file_of_the_wrong_size(tmp_path):
     (d / "depth_0010-01.dat").write_text("    1.00    2.00\n")
     with pytest.raises(ValueError, match="bytes, expected"):
         cao.grid(tmp_path, "09", "0010-01", 3, 1)
+
+
+def test_points_from_a_source_not_on_tp_are_named(fake_sources):
+    lon = np.array([139.6, 140.5, 140.6])
+    lat = np.array([35.1, 35.5, 35.6])
+    with pytest.warns(UserWarning, match=r"2 point\(s\).*not on T\.P\..*coarse"):
+        d, w = sample(["fine", "coarse"], lon, lat, data_dir=fake_sources)
+    assert sources.non_tp_count(["fine", "coarse"], w) == (2, ["coarse"])
+    assert sources.non_tp_count(["fine", "coarse"], np.array([0, 0])) == (0, [])
+
+
+def test_every_registered_source_has_a_datum():
+    assert set(sources.DATUM) >= set(sources.SOURCES)
+    assert sources.DATUM["m7001"] == "T.P." and sources.DATUM["srtm15plus"] == "MSL"
