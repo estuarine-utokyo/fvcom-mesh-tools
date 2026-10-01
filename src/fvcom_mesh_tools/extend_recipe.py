@@ -9,12 +9,14 @@ and checks the recipe.
 
 from __future__ import annotations
 
+import math
+import re
 from pathlib import Path
 from typing import Any
 
 from fvcom_mesh_tools.base_recipe import read_open_boundary
 
-__all__ = ["REQUIRED_SETTINGS", "load_extend_recipe"]
+__all__ = ["REQUIRED_SETTINGS", "check_case_name", "load_extend_recipe"]
 
 #: Every sizing and generation setting must be written out.
 REQUIRED_SETTINGS = ("coast_h_m", "max_edge_m", "gradation", "cfl_dt_s", "cfl_cr",
@@ -22,6 +24,21 @@ REQUIRED_SETTINGS = ("coast_h_m", "max_edge_m", "gradation", "cfl_dt_s", "cfl_cr
                      "max_iter", "fin_seed")
 _KEYS = ("name", "case", "base", "base_case", "open_boundary", "land", "bathymetry",
          "settings", "depths")
+#: Settings that are counts or seeds: integral, not truncated (review F18).
+_INTEGRAL = ("gen_seed", "fin_seed", "max_iter")
+
+
+def check_case_name(name) -> str:
+    """A case name is one plain file-name component (review F28).
+
+    It prefixes every output file (``<case>_grd.dat``); a path in it could
+    leave the reserved output directory.
+    """
+    if not (isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name)
+            and name not in (".", "..")):
+        raise ValueError(f"case name {name!r} must be one file-name component "
+                         "(letters, digits, '_', '-', '.')")
+    return name
 
 
 def load_extend_recipe(path) -> dict[str, Any]:
@@ -40,6 +57,11 @@ def load_extend_recipe(path) -> dict[str, Any]:
         raise ValueError(f"{path}: missing {missing}, unknown {unknown}")
     out = dict(raw)
     out["recipe_path"] = str(path)
+    try:
+        check_case_name(raw["case"])
+        check_case_name(raw["base_case"])
+    except ValueError as err:
+        raise ValueError(f"{path}: {err}") from None
     for key in ("base", "open_boundary"):
         p = (path.parent / str(raw[key])).resolve()
         if not p.exists():
@@ -73,6 +95,12 @@ def load_extend_recipe(path) -> dict[str, Any]:
     for k in REQUIRED_SETTINGS:
         if not (isinstance(s[k], (int, float)) and not isinstance(s[k], bool)):
             raise ValueError(f"{path}: settings.{k} must be a number")
+        if not math.isfinite(s[k]):
+            raise ValueError(f"{path}: settings.{k} must be finite")
+        if k in _INTEGRAL and s[k] != int(s[k]):
+            raise ValueError(f"{path}: settings.{k} must be an integer")
+        if k in ("gen_seed", "fin_seed") and not 0 <= s[k] < 2**32:
+            raise ValueError(f"{path}: settings.{k} must be in [0, 2**32)")
         if k not in ("gen_seed", "fin_seed") and s[k] <= 0:
             raise ValueError(f"{path}: settings.{k} must be positive")
     if s["coast_h_m"] > s["max_edge_m"]:
@@ -80,6 +108,12 @@ def load_extend_recipe(path) -> dict[str, Any]:
     d = raw["depths"]
     if not (isinstance(d, dict) and set(d) == {"min_m", "max_m", "rfactor"}):
         raise ValueError(f"{path}: depths has exactly min_m, max_m, rfactor")
+    for k in ("min_m", "max_m", "rfactor"):
+        v = d[k]
+        if k == "max_m" and v is None:
+            continue
+        if not (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)):
+            raise ValueError(f"{path}: depths.{k} must be a finite number")
     if not d["min_m"] > 0 or (d["max_m"] is not None and not d["max_m"] > d["min_m"]):
         raise ValueError(f"{path}: depths need 0 < min_m < max_m (max_m may be null)")
     if not 0 < d["rfactor"] < 1:

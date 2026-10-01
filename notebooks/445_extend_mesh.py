@@ -38,9 +38,19 @@ def say(msg):
 recipe = load_extend_recipe(sys.argv[1] if len(sys.argv) > 1 else os.environ["FMESH_RECIPE"])
 OUT = Path(sys.argv[2] if len(sys.argv) > 2 else REPO / "outputs" / f"extend_{recipe['name']}")
 OUT = OUT.resolve()
-if OUT.exists() and any(OUT.iterdir()):
-    raise SystemExit(f"{OUT} is not empty; move it first -- a build never mixes with another")
-OUT.mkdir(parents=True, exist_ok=True)
+# reserve the output atomically: checking that it is empty and then creating
+# it let two builds into the same directory (review F20)
+OUT.parent.mkdir(parents=True, exist_ok=True)
+try:
+    OUT.mkdir()
+except FileExistsError:
+    if any(p.name != ".reserved" for p in OUT.iterdir()):
+        raise SystemExit(f"{OUT} is not empty; move it first -- a build never mixes "
+                         "with another") from None
+try:
+    os.close(os.open(OUT / ".reserved", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+except FileExistsError:
+    raise SystemExit(f"{OUT} is reserved by another build") from None
 say(f"recipe {recipe['recipe_path']} -> {OUT}")
 DATA = Path(os.environ.get("DATA_DIR") or sys.exit("DATA_DIR is not set"))
 osm_land = DATA / "geodata/OSM/land-polygons-split-4326/land_polygons.shp"

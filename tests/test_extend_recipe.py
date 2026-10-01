@@ -72,3 +72,23 @@ def test_a_missing_base_file_is_refused(tmp_path):
     next((tmp_path / "base").glob("*_dep.dat")).unlink()
     with pytest.raises(ValueError, match="no .*_dep.dat"):
         load_extend_recipe(p)
+
+
+@pytest.mark.parametrize("key, value, match", [
+    ("cfl_dt_s", float("nan"), "finite"),
+    ("max_iter", 0.5, "integer"),
+    ("gen_seed", 0.5, "integer"),
+    ("fin_seed", -1, r"\[0, 2\*\*32\)"),
+])
+def test_settings_must_be_finite_and_integral_where_counted(tmp_path, key, value, match):
+    """Review F18: NaN steps and fractional seeds/iterations were accepted."""
+    s = dict(yaml.safe_load(RECIPE.read_text())["settings"], **{key: value})
+    with pytest.raises(ValueError, match=match):
+        load_extend_recipe(_write(tmp_path, settings=s))
+
+
+@pytest.mark.parametrize("case", ["../escape", "/abs/path", "a/b", "", "."])
+def test_case_names_are_one_file_name_component(tmp_path, case):
+    """Review F28: a path in the case name could leave the output directory."""
+    with pytest.raises(ValueError, match="file-name component"):
+        load_extend_recipe(_write(tmp_path, case=case))

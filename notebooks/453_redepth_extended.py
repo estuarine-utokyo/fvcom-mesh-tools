@@ -27,7 +27,7 @@ from pyproj import Transformer  # noqa: E402
 from fvcom_mesh_tools.dem.m7001 import node_edges  # noqa: E402
 from fvcom_mesh_tools.dem.sources import SOURCES, non_tp_count, sample  # noqa: E402
 from fvcom_mesh_tools.extend import land_segments, rfactor_smooth_free  # noqa: E402
-from fvcom_mesh_tools.extend_recipe import load_extend_recipe  # noqa: E402
+from fvcom_mesh_tools.extend_recipe import check_case_name, load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
 
 MESH_EPSG = 32654
@@ -47,6 +47,14 @@ unknown = [n for n in names if n not in SOURCES]
 if unknown:
     raise SystemExit(f"unknown source(s) {unknown}; known {sorted(SOURCES)}")
 src_dir = a.built_dir.resolve()
+a.outdir = a.outdir.resolve()
+# never write over the source case or another experiment (review F21)
+if a.outdir == src_dir or src_dir in a.outdir.parents or a.outdir in src_dir.parents:
+    raise SystemExit(f"OUTDIR {a.outdir} overlaps the built case {src_dir}")
+if a.outdir.exists() and any(a.outdir.iterdir()):
+    raise SystemExit(f"{a.outdir} is not empty; give a fresh OUTDIR")
+if a.case_name is not None:
+    check_case_name(a.case_name)                      # review F28
 case = recipe["case"]
 b = Path(recipe["base"]) / recipe["base_case"]
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")

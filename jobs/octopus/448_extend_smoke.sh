@@ -14,7 +14,7 @@
 # fmesh-check-run (TADA, output reaching END_DATE, finite fields).
 #
 # Required: FMESH_CASE (a case prefix), FMESH_RUN_ROOT (under $WORK_DIR).
-# Optional: FMESH_DAYS (2), FMESH_RANKS (64), FMESH_GAUGE (MERA).
+# Optional: FMESH_DAYS (2), FMESH_RANKS (64), FMESH_GAUGE (MERA), FMESH_FVCOM.
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/SMOKE_OK"
@@ -22,7 +22,8 @@ rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/SMOKE_OK"
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=$FMESH_RUN_ROOT
 RANKS=${FMESH_RANKS:-64}
-FVCOM=${WORK_DIR:?set WORK_DIR}/Github/FVCOM/src/fvcom
+FVCOM=${FMESH_FVCOM:-${WORK_DIR:?set WORK_DIR}/Github/FVCOM/src/fvcom}
+echo "[448] fvcom $FVCOM $(sha256sum "$FVCOM" | cut -c1-16)"
 python notebooks/448_extend_smoke.py --case "${FMESH_CASE:?set FMESH_CASE}" --root "$RUN_ROOT" \
     --days "${FMESH_DAYS:-2}" --gauge "${FMESH_GAUGE:-MERA}"
 CASE_DIR=$RUN_ROOT/extended

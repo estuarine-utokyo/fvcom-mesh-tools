@@ -178,18 +178,43 @@ write_fort14(merged, OUT / f"{CASE}.14")
 back = read_fvcom_case(written["grd"], written["dep"], written["obc"])
 if not np.array_equal(back.depths, merged.depths):
     raise SystemExit("the written case does not carry the depths that were built")
+# the frozen contract on what was written, not only on what was built: the
+# writer rounds coordinates (review F9)
+contract = verify_frozen_base(back, base, IB)
+
+# the extension must not be what limits the time step (review F4): the
+# smallest edge / sqrt(g H) over the new elements against the base's
+def _dt_allow(mesh, elems):
+    xy = mesh.nodes[elems, :2]
+    edge = np.linalg.norm(xy - np.roll(xy, 1, axis=1), axis=2).min(axis=1)
+    return edge / np.sqrt(9.81 * np.maximum(mesh.depths[elems].max(axis=1), 1e-9))
+
+
+dt_base = float(_dt_allow(back, back.elements[:base.n_elements]).min())
+dt_new = float(_dt_allow(back, back.elements[base.n_elements:]).min())
+say(f"time-step allowance: base {dt_base:.2f} s, new elements {dt_new:.2f} s")
 qa = run_qa(back, name=CASE, path=written["grd"], max_offenders=10_000)
 (OUT / f"{CASE}_qa.json").write_text(json.dumps(qa.to_dict(), indent=1, default=float))
 say(f"QA {qa.n_gate_total - qa.n_gate_failed}/{qa.n_gate_total}")
 for c in qa.checks:
     if c.status == "fail":
         say(f"  FAIL {c.check_id} {c.requirement} | {c.observed}")
+problems = []
+if qa.n_gate_failed:
+    problems.append(f"QA {qa.n_gate_failed} gate(s) failed")
+if dt_new < dt_base:
+    problems.append(f"new elements limit the time step ({dt_new:.2f} s < base {dt_base:.2f} s)")
 (OUT / "merge.json").write_text(json.dumps({
     "finish": {k: v for k, v in info.items() if not isinstance(v, (list, dict))},
     "coast_fit": cf.to_dict(), "frozen_base": contract, "repair": repair,
     "depths": depth_report,
     "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
+    "dt_allowance_s": {"base": dt_base, "new": dt_new}, "problems": problems,
     "n_nodes": merged.n_nodes, "n_elements": merged.n_elements,
     "n_open_boundary_nodes": int(len(merged.open_boundaries[0])),
 }, indent=1, default=str))
 say(f"wrote {', '.join(sorted(written))} + {CASE}.14 in {OUT}")
+# the reports stay for diagnosis, but a failed build must not exit as a
+# success (review F2)
+if problems:
+    raise SystemExit("the build failed: " + "; ".join(problems))

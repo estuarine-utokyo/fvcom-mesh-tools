@@ -54,11 +54,19 @@ p.add_argument("--root", type=Path, required=True)
 p.add_argument("--days", type=float, default=2.0)
 p.add_argument("--gauge", default="MERA")
 a = p.parse_args()
+# absolute paths: the namelist is read from inside the case directory (review F24)
+a.case, a.root = a.case.resolve(), a.root.resolve()
+if a.root.exists() and any(a.root.iterdir()):
+    # a reused root could leave an old history beside new inputs (review F22)
+    raise SystemExit(f"{a.root} is not empty; give a fresh --root")
 
 grd, dep, obc = (Path(f"{a.case}_{k}.dat") for k in ("grd", "dep", "obc"))
 mesh = read_fvcom_case(grd, dep, obc, title="smoke")
 if len(mesh.open_boundaries) != 1:
     raise SystemExit("one open boundary is needed")
+# every depth change first, then the time step from the depths that run
+# (review F23)
+mesh, change = apply_obc_depth_control(mesh)
 M383.DTE = M414.dividing_step(M383.NC_OUT_INTERVAL_SECONDS, M383.ISPLIT,
                               M414.external_step(mesh))
 start = datetime.fromisoformat(M383.START)
@@ -68,7 +76,6 @@ if gauges is None:
     raise SystemExit("--gauge must be ABURATUBO or MERA (the gauges 383 reads)")
 g = gauges[a.gauge]
 
-mesh, change = apply_obc_depth_control(mesh)
 case = a.root / "extended"
 inp, out = case / "input", case / "output"
 inp.mkdir(parents=True, exist_ok=True)
