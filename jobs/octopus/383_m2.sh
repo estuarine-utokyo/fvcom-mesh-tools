@@ -21,7 +21,7 @@ FVCOM=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
 export PYTHONDONTWRITEBYTECODE=1
 # Avoid stale output being interpreted as a successful rerun. Move previous
 # scratch run directories aside manually before resubmitting a completed case.
-for case in A B_own B_Adepth; do
+for case in A B_own B_m7001; do
     if compgen -G "$RUN_ROOT/$case/output/m2_*.nc" >/dev/null; then
         echo "Existing model output: $RUN_ROOT/$case/output; archive before rerunning"
         exit 2
@@ -51,10 +51,16 @@ mpiexec --version
 ldd "$FVCOM"
 sha256sum "$FVCOM"
 status=0
-for case in A B_own B_Adepth; do
+for case in A B_own B_m7001; do
     echo "START $case $(date -Is)"
+    # the case names are 383's (B_m7001, review of the extend tools, round 1,
+    # F26); a missing directory is a failure, and set -e does not reach into a
+    # subshell on the left of ||, so the cd is checked explicitly
+    if [[ ! -d $RUN_ROOT/$case ]]; then
+        echo "missing case directory $RUN_ROOT/$case"; status=1; continue
+    fi
     (
-        cd "$RUN_ROOT/$case"
+        cd "$RUN_ROOT/$case" || exit 1
         mpiexec -np 8 "$FVCOM" --casename=m2 > fvcom.log 2>&1
     ) || status=1
     tail -30 "$RUN_ROOT/$case/fvcom.log"

@@ -505,3 +505,32 @@ def test_the_obc_type_survives_a_rebuild_not_only_a_replace(tmp_path: Path) -> N
                                 cor=out.nodes[:, 1] * 0 + 35.0,
                                 obc_depth_control=False)
     assert read_obc_types(written["obc"]) == [3]
+
+
+def test_reader_refuses_an_open_boundary_that_is_not_a_walk(tmp_path):
+    """Review of the extend tools, round 1, F29: a scrambled list with the
+    right ends and node set was accepted."""
+    import numpy as np
+    import pytest
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case
+
+    xs, ys = np.meshgrid(np.arange(3) * 1000.0, np.arange(3) * 1000.0, indexing="ij")
+    nodes = np.column_stack([xs.ravel(), ys.ravel()])          # node = 3 i + j
+    tri = []
+    for i in range(2):
+        for j in range(2):
+            a = 3 * i + j
+            tri += [[a, a + 3, a + 4], [a, a + 4, a + 1]]
+    good = np.array([0, 1, 2])                                 # the west side, in order
+    for obc, ok in ((good, True), (np.array([0, 2, 1]), False)):
+        m = Fort14Mesh("t", nodes, np.full(9, 10.0), np.array(tri), [obc], [])
+        out = tmp_path / ("ok" if ok else "bad")
+        w = export_fvcom_case(m, out, "t", twodm=False, obc_depth_control=False)
+        if ok:
+            assert read_fvcom_case(w["grd"], w["dep"], w["obc"]).open_boundaries[0].tolist() \
+                == [0, 1, 2]
+        else:
+            with pytest.raises(ValueError, match="consecutive walk"):
+                read_fvcom_case(w["grd"], w["dep"], w["obc"])

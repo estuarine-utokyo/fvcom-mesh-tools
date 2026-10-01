@@ -116,3 +116,22 @@ def test_code_outside_git_is_identified_by_its_sources(tmp_path):
     assert one["git"] is None and one["path"] == str((pkg / "a.py").resolve())
     (pkg / "a.py").write_text("x = 2\n")
     assert code_state("no_such_dist", pkg / "a.py")["source_sha256"] != one["source_sha256"]
+
+
+def test_code_state_does_not_trust_the_commit_with_local_changes(tmp_path, monkeypatch):
+    """Review of the extend tools, round 1, F17: a dirty tracked tree was
+    identified by its commit alone."""
+    from fvcom_mesh_tools import provenance
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "mod.py").write_text("x = 1\n")
+    state = {"root": str(tmp_path), "commit": "abc", "dirty": [], "path_tracked": True}
+    monkeypatch.setattr(provenance, "git_state", lambda p: dict(state))
+    clean = provenance.code_state("nothing-installed", pkg / "mod.py")
+    assert clean["commit_identifies_code"] is True
+    state["dirty"] = ["pkg/mod.py"]
+    dirty = provenance.code_state("nothing-installed", pkg / "mod.py")
+    assert dirty["commit_identifies_code"] is False and dirty["dirty_under_path"] == ["pkg/mod.py"]
+    state["dirty"] = ["elsewhere/other.py"]
+    assert provenance.code_state("nothing-installed", pkg / "mod.py")["commit_identifies_code"]

@@ -564,8 +564,13 @@ def read_fvcom_case(
         if ring[1] not in arc:
             ring = np.roll(ring[::-1], 1)
         stop = int(np.where(ring == open_boundaries[0][-1])[0][0])
-        if set(ring[:stop + 1].tolist()) != arc:
-            raise ValueError("the outer loop between the OBC ends is not the OBC")
+        # the list must BE the walk along the loop, in order and without
+        # repeats, not only the same set of nodes (review of the extend tools,
+        # round 1, F29: [0, 2, 1, 5, 8] passed on a 3x3 grid)
+        if (len(open_boundaries[0]) != len(arc)
+                or not np.array_equal(ring[:stop + 1], open_boundaries[0])):
+            raise ValueError("the open-boundary nodes are not a consecutive walk along "
+                             "the outer loop (repeated, out of order, or with gaps)")
         land.append((20, np.append(ring[stop:], ring[0])))
     else:
         land.append((20, np.append(outer, outer[0])))

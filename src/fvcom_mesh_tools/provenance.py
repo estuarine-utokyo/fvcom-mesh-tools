@@ -124,6 +124,17 @@ def code_state(name: str, path) -> dict[str, Any]:
     out: dict[str, Any] = {"path": str(p), "distribution": _version(name),
                            "git": git_state(p)}
     out["commit_identifies_code"] = bool(out["git"] and out["git"].get("path_tracked"))
+    if out["commit_identifies_code"]:
+        # a tracked tree with uncommitted changes under it is not what the
+        # commit says (review of the extend tools, round 1, F17)
+        top = Path(out["git"]["root"])
+        here = p.parent if p.is_file() else p
+        dirty_here = [d for d in out["git"].get("dirty") or []
+                      if (top / d.strip('"')).resolve() == here
+                      or here in (top / d.strip('"')).resolve().parents]
+        if dirty_here:
+            out["commit_identifies_code"] = False
+            out["dirty_under_path"] = dirty_here
     if not out["commit_identifies_code"]:
         root = p.parent if p.is_file() else p
         # each file is read once, and one that cannot be read makes the
