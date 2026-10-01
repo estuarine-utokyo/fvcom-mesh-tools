@@ -27,6 +27,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -100,6 +101,10 @@ def external_step(mesh, safety: float = 2.0) -> float:
 
 
 def prepare(run_root: Path, cases: dict[str, Path], dte: float | None) -> dict:
+    # a supplied step must be a step (review of the extend tools, round 4 F11)
+    if dte is not None and not (math.isfinite(dte) and dte > 0):
+        raise SystemExit(f"--dte must be a finite positive number of seconds, not {dte}")
+    M383.check_fvcom_dirs(*(run_root / k / d for k in cases for d in ("input", "output")))
     meshes = {}
     for label, prefix in cases.items():
         grd, dep, obc = case_paths(prefix)
@@ -128,7 +133,7 @@ def prepare(run_root: Path, cases: dict[str, Path], dte: float | None) -> dict:
     controlled = {k: apply_obc_depth_control(m) for k, m in meshes.items()}
     allowed = min(external_step(m) for m, _ in controlled.values())
     out_interval = float(M383.NC_OUT_INTERVAL_SECONDS)
-    M383.DTE = (float(dte) if dte
+    M383.DTE = (float(dte) if dte is not None
                 else dividing_step(out_interval, M383.ISPLIT, allowed))
     if abs(M383.DTE * M383.ISPLIT
            * round(out_interval / (M383.DTE * M383.ISPLIT))

@@ -20,7 +20,7 @@ rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/RUN_OK"
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=$FMESH_RUN_ROOT
 RANKS=${FMESH_RANKS:-8}
-FVCOM=${FMESH_FVCOM:-${WORK_DIR:?set WORK_DIR}/Github/FVCOM/src/fvcom}
+FVCOM=$(fmesh_fvcom)
 python notebooks/454_flather_channel.py stage --root "$RUN_ROOT" --mode "${FMESH_MODE:?set FMESH_MODE}"
 CASE_DIR=$RUN_ROOT
 set +u; conda deactivate; set -u

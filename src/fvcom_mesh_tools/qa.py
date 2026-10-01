@@ -660,28 +660,40 @@ def run_qa(
     # No two elements overlap (review of the extend tools, round 3 F9): a
     # connected, consistently oriented triangulation can still fold over
     # itself (a fan winding twice round its centre passed every other gate).
-    # The summed element area must equal the area of their union.
+    # Each pair of elements that meets is checked on its own, against the
+    # smaller element's area: a global area balance would let a local fold
+    # vanish in a large mesh (round 4 F4). The global excess of summed over
+    # union area is reported as a diagnostic.
     import shapely
 
     tri_polys = shapely.polygons(nodes_m[mesh.elements])
-    area_sum = float(np.abs(geom.signed_area).sum())
+    tri_area = np.abs(geom.signed_area)
+    area_sum = float(tri_area.sum())
     area_union = float(shapely.union_all(tri_polys).area) if ne else 0.0
-    excess = area_sum - area_union
-    overlap_ok = excess <= 1e-9 * max(area_sum, 1.0)
-    ov_off = []
-    if not overlap_ok:
+    ov_pairs = np.empty((0, 2), np.int64)
+    if ne:
         tree = shapely.STRtree(tri_polys)
-        for i, j in zip(*tree.query(tri_polys, predicate="intersects")):
-            if i < j and shapely.intersection(tri_polys[i], tri_polys[j]).area > 1e-6:
-                ov_off.append({"kind": "element_pair", "id": [int(i), int(j)],
-                               "x": float(nodes_m[mesh.elements[i], 0].mean()),
-                               "y": float(nodes_m[mesh.elements[i], 1].mean())})
-                if len(ov_off) >= max_offenders:
-                    break
+        pi, pj = tree.query(tri_polys, predicate="intersects")
+        keep = pi < pj
+        pi, pj = pi[keep], pj[keep]
+        # elements that only share an edge or a node touch; skip them cheaply
+        meet = ~shapely.touches(tri_polys[pi], tri_polys[pj])
+        pi, pj = pi[meet], pj[meet]
+        if pi.size:
+            inter = shapely.area(shapely.intersection(tri_polys[pi], tri_polys[pj]))
+            bad = inter > 1e-9 * np.minimum(tri_area[pi], tri_area[pj])
+            ov_pairs = np.column_stack([pi[bad], pj[bad]])
+    ov_off = [{"kind": "element_pair", "id": [int(i), int(j)],
+               "x": float(nodes_m[mesh.elements[i], 0].mean()),
+               "y": float(nodes_m[mesh.elements[i], 1].mean())}
+              for i, j in ov_pairs[:max_offenders]]
     checks.append(QACheck(
-        "no_element_overlap", "fvcom", True, overlap_ok,
-        "sum of element areas = area of their union",
-        f"overlap = {excess:.6g} m2 of {area_sum:.6g} m2", excess, offenders=ov_off,
+        "no_element_overlap", "fvcom", True, len(ov_pairs) == 0,
+        "overlapping element pairs = 0",
+        f"overlapping pairs = {len(ov_pairs)}; "
+        f"summed minus union area = {area_sum - area_union:.6g} m2 of {area_sum:.6g} m2",
+        len(ov_pairs), offenders=ov_off,
+        offender_ids=[{"kind": "element_pair", "id": [int(i), int(j)]} for i, j in ov_pairs],
     ))
 
     # Duplicate nodes (silent in FVCOM).

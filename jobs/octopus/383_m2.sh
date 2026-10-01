@@ -17,7 +17,7 @@ case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 REPO=$(pwd)
 PYTHON=$(command -v python)
 RUN_ROOT=${WORK_DIR:?set WORK_DIR}/scratch/m2_383
-FVCOM=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
+FVCOM=$(fmesh_fvcom)
 export PYTHONDONTWRITEBYTECODE=1
 # Avoid stale output being interpreted as a successful rerun. Move previous
 # scratch run directories aside manually before resubmitting a completed case.

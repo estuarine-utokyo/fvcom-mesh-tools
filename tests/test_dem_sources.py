@@ -225,3 +225,34 @@ def test_a_masked_neighbour_with_zero_weight_keeps_the_sample():
     out = _bilinear(gx, gy, z, np.array([0.0, 0.5, 0.25]), np.array([0.0, 0.0, 0.75]))
     assert out[0] == -10.0 and out[1] == -15.0 and np.isnan(out[2])
     assert np.isnan(_bilinear(gx, gy, z, np.array([2.0]), np.array([0.5]))[0])
+
+
+def test_bilinear_keeps_the_query_shape():
+    """Review round 4 F3: a (2, 2) query came back flat."""
+    from fvcom_mesh_tools.dem.sources import _bilinear
+
+    gx, gy = np.array([0.0, 1.0]), np.array([0.0, 1.0])
+    q = np.array([[0.0, 0.5], [0.5, 1.0]])
+    out = _bilinear(gx, gy, np.full((2, 2), 3.0), q, q)
+    assert out.shape == (2, 2) and np.all(out == 3.0)
+
+
+def test_cao_keeps_valid_centres_beside_no_data_and_on_the_last_column():
+    """Review round 4 F9: a valid centre beside a NaN cell, and the last
+    column of centres, came back NaN."""
+    from pyproj import Transformer
+
+    h, x0, y0 = 30.0, -30000.0, -90000.0
+    area = dict(zone="09", area="0030-01", h=h, x0=x0, y0=y0, nx=2, ny=2)
+    to_ll = Transformer.from_crs(2451, 4326, always_xy=True)
+
+    def centre(i, j):   # row 0 is north
+        return to_ll.transform(x0 + (i + 0.5) * h, y0 + 2 * h - (j + 0.5) * h)
+
+    for grid, (i, j), want in (([[10.0, 20.0], [30.0, np.nan]], (0, 0), 10.0),
+                               ([[7.0, 7.0], [7.0, 7.0]], (1, 0), 7.0)):
+        cao = CaoNested(rel="cao", zones={"09": 2451})
+        cao.areas = lambda root: [area]
+        cao.grid = lambda *a, g=np.array(grid): g
+        lon, lat = centre(i, j)
+        assert cao.depth(np.array([lon]), np.array([lat]), Path("."))[0] == pytest.approx(want)

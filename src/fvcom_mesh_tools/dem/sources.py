@@ -53,23 +53,33 @@ def _window(lon: np.ndarray, lat: np.ndarray, pad: float):
             float(np.nanmin(lat)) - pad, float(np.nanmax(lat)) + pad)
 
 
-def _bilinear(gx, gy, z, x, y) -> np.ndarray:
-    """Bilinear interpolation on a regular grid; NaN only where it matters.
+def _snap(f) -> np.ndarray:
+    """Fractional grid indices, put on a grid line when within 1e-9 of it."""
+    f = np.asarray(f, float)
+    with np.errstate(invalid="ignore"):
+        return np.where(np.abs(f - np.round(f)) < 1e-9, np.round(f), f)
+
+
+def _bilinear_index(z, fi, fj) -> np.ndarray:
+    """Bilinear interpolation of ``z[j, i]`` at fractional indices.
 
     A corner with no data (NaN) spoils a sample only when its weight is not
     zero: a point on a valid grid node or edge keeps its value beside a
-    masked cell (review of the extend tools, round 3 F7). Outside the grid
-    is NaN.
+    masked cell (review of the extend tools, round 3 F7). Indices outside
+    ``[0, n-1]`` or not finite give NaN; the last row and column are inside.
+    An index within 1e-9 of a grid line is put on it, so that a projection's
+    round-off does not give a no-data corner a weight of 1e-20 (round 4 F9).
     """
-    x = np.ravel(np.asarray(x, float))
-    y = np.ravel(np.asarray(y, float))
-    shape_out = np.shape(x)
-    fi = np.interp(x, gx, np.arange(len(gx)), left=np.nan, right=np.nan)
-    fj = np.interp(y, gy, np.arange(len(gy)), left=np.nan, right=np.nan)
-    out = np.full(len(x), np.nan)
-    ok = np.isfinite(fi) & np.isfinite(fj)
-    i0 = np.clip(np.floor(fi[ok]).astype(int), 0, len(gx) - 2)
-    j0 = np.clip(np.floor(fj[ok]).astype(int), 0, len(gy) - 2)
+    fi = _snap(fi)
+    fj = _snap(fj)
+    ny, nx = z.shape
+    out = np.full(fi.shape, np.nan)
+    ok = (np.isfinite(fi) & np.isfinite(fj) & (fi >= 0) & (fi <= nx - 1)
+          & (fj >= 0) & (fj <= ny - 1))
+    if nx < 2 or ny < 2 or not ok.any():
+        return out
+    i0 = np.clip(np.floor(fi[ok]).astype(int), 0, nx - 2)
+    j0 = np.clip(np.floor(fj[ok]).astype(int), 0, ny - 2)
     ti, tj = fi[ok] - i0, fj[ok] - j0
     acc = np.zeros(ok.sum())
     bad = np.zeros(ok.sum(), bool)
@@ -79,8 +89,22 @@ def _bilinear(gx, gy, z, x, y) -> np.ndarray:
         use = w > 0
         bad |= use & ~np.isfinite(v)
         acc += np.where(use & np.isfinite(v), w * np.nan_to_num(v), 0.0)
-    out[np.flatnonzero(ok)] = np.where(bad, np.nan, acc)
-    return out.reshape(shape_out)
+    out[ok] = np.where(bad, np.nan, acc)
+    return out
+
+
+def _bilinear(gx, gy, z, x, y) -> np.ndarray:
+    """Bilinear interpolation on a regular grid; outside the grid is NaN.
+
+    The result has the shape of the query ``x`` (review round 4 F3).
+    """
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    if x.shape != y.shape:
+        raise ValueError(f"query shapes differ: {x.shape} and {y.shape}")
+    fi = np.interp(np.ravel(x), gx, np.arange(len(gx)), left=np.nan, right=np.nan)
+    fj = np.interp(np.ravel(y), gy, np.arange(len(gy)), left=np.nan, right=np.nan)
+    return _bilinear_index(z, fi, fj).reshape(x.shape)
 
 
 @dataclass
@@ -224,18 +248,16 @@ class CaoNested:
         for a in sorted(self.areas(root), key=lambda r: -r["h"]):   # coarse first
             tf = Transformer.from_crs(4326, self.zones[a["zone"]], always_xy=True)
             x, y = tf.transform(lon, lat)
-            fi = (x - a["x0"]) / a["h"] - 0.5                  # cell centres
-            fj = (a["y0"] + a["ny"] * a["h"] - y) / a["h"] - 0.5
-            ok = ((fi >= 0) & (fi < a["nx"] - 1) & (fj >= 0) & (fj < a["ny"] - 1)
+            fi = _snap((x - a["x0"]) / a["h"] - 0.5)           # cell centres
+            fj = _snap((a["y0"] + a["ny"] * a["h"] - y) / a["h"] - 0.5)
+            # the last row and column of centres are inside (review round 4 F9)
+            ok = ((fi >= 0) & (fi <= a["nx"] - 1) & (fj >= 0) & (fj <= a["ny"] - 1)
                   & (a["h"] <= best))
             if not ok.any():
                 continue
             g = self.grid(root, a["zone"], a["area"], a["nx"], a["ny"])
-            i0 = np.floor(fi[ok]).astype(int)
-            j0 = np.floor(fj[ok]).astype(int)
-            ti, tj = fi[ok] - i0, fj[ok] - j0
-            val = (g[j0, i0] * (1 - ti) * (1 - tj) + g[j0, i0 + 1] * ti * (1 - tj)
-                   + g[j0 + 1, i0] * (1 - ti) * tj + g[j0 + 1, i0 + 1] * ti * tj)
+            # zero-weight NaN corners do not spoil a valid centre (round 4 F9)
+            val = _bilinear_index(g, fi[ok], fj[ok])
             # a finer grid replaces a coarser one only where it has a value
             # (review F14)
             idx = np.flatnonzero(ok)[np.isfinite(val)]

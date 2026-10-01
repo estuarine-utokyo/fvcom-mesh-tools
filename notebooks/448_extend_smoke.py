@@ -59,6 +59,9 @@ a = p.parse_args()
 a.case, a.root = a.case.resolve(), a.root.resolve()
 # a reused root could leave an old history beside new inputs (review F22);
 # reserved atomically, before any work (review r2 F1)
+# FVCOM would cut a longer run directory (round 4 F13): checked before the
+# root is taken
+M383.check_fvcom_dirs(a.root / "extended" / "input", a.root / "extended" / "output")
 a.root = reserve(a.root)
 
 grd, dep, obc = (Path(f"{a.case}_{k}.dat") for k in ("grd", "dep", "obc"))

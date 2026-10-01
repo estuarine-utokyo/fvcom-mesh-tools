@@ -147,12 +147,26 @@ land_test = prep(land_all)
 
 
 def ladder(arc_ll, h_m):
-    """The inner guide line of ``arc_ll`` (sea on its left), off land."""
+    """The inner guide line of ``arc_ll`` (sea on its left), off land.
+
+    A guide point is kept only inside the generation domain, a quarter of the
+    local size from its edge, and away from land; a guide segment only when
+    it stays inside the domain too. Probing beside the line does not show
+    that the guide itself, 1.25 sizes in, is inside (review round 4 F5).
+    Returns the guide points, which to keep, and which consecutive kept
+    pairs may be joined.
+    """
     band = build_obc_band(arc_ll, h_m, k_offset=1.25, skip_ends=2, taper="local")
     inner = band["inner_ll"]
-    keep = np.array([not land_test.intersects(shapely.Point(q).buffer(0.25 * h / 111e3))
-                     for q, h in zip(inner, h_m[2:len(h_m) - 2])])
-    return inner, keep
+    h_in = h_m[2:len(h_m) - 2]
+    keep = sdf.eval(inner) < -0.25 * h_in / 111e3
+    keep &= np.array([not land_test.intersects(shapely.Point(q).buffer(0.25 * h / 111e3))
+                      for q, h in zip(inner, h_in)])
+    f = np.linspace(0, 1, 11)[1:-1, None, None]
+    along = inner[:-1][None] + f * (inner[1:] - inner[:-1])[None]
+    join = (sdf.eval(along.reshape(-1, 2)).reshape(len(f), -1) < 0).all(axis=0)
+    join &= keep[:-1] & keep[1:]
+    return inner, keep, join
 
 
 pts = [iface_ll, OBC]
@@ -201,12 +215,13 @@ for name, arc, h_arc in (("interface", iface_ll, spacing(iface_m)),
     flip = not extension_on_left(arc, h_arc)
     a = arc[::-1] if flip else arc
     hh = h_arc[::-1] if flip else h_arc
-    inner, keep = ladder(a, hh)
-    ladders[name] = {"n_inner": int(len(inner)), "n_kept": int(keep.sum()), "reversed": flip}
+    inner, keep, join = ladder(a, hh)
+    ladders[name] = {"n_inner": int(len(inner)), "n_kept": int(keep.sum()),
+                     "n_joined": int(join.sum()), "reversed": flip}
     idx = np.flatnonzero(keep)
     pts.append(inner[idx])
     run = [(i, j) for i, j in zip(range(len(idx) - 1), range(1, len(idx)))
-           if idx[j] - idx[i] == 1]
+           if idx[j] - idx[i] == 1 and join[idx[i]]]
     if run:
         segs.append(off + np.array(run))
     off += len(idx)

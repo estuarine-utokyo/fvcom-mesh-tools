@@ -17,7 +17,7 @@ case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
 [ -e "$ROOT" ] && { echo "exists: $ROOT"; exit 2; }
 python notebooks/426_wall_fvcom_test.py prep "$ROOT"
-FVCOM=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
+FVCOM=$(fmesh_fvcom)
 (
 set +u; conda deactivate; set -u
 if ! type module >/dev/null 2>&1; then

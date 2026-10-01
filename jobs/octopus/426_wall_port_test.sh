@@ -16,7 +16,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 CASE=${FMESH_CASE:?}; OUT=${FMESH_OUT:?}
 python notebooks/427_wall_port_test.py prep "$CASE" "$OUT"
-FVCOM=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
+FVCOM=$(fmesh_fvcom)
 (
 set +u; conda deactivate; set -u
 if ! type module >/dev/null 2>&1; then

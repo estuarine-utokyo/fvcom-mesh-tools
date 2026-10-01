@@ -27,7 +27,7 @@ rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/RUN_OK"
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=$FMESH_RUN_ROOT
 RANKS=${FMESH_RANKS:-64}
-FVCOM=${FMESH_FVCOM:-${WORK_DIR:?set WORK_DIR}/Github/FVCOM/src/fvcom}
+FVCOM=$(fmesh_fvcom)
 extra=${FMESH_EXTRA:-}
 equi=()
 [ "${FMESH_EQUI:-0}" = 1 ] && equi=(--equilibrium)

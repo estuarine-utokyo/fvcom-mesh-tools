@@ -11,6 +11,7 @@
 import hashlib
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -171,6 +172,12 @@ if report["crosses_land_m"] > 1e-3:
 # round-off is tolerated (review round 3 F2)
 if report["min_edge_over_floor"] < 1 - 1e-6:
     bad.append(f"an edge is below the spacing floor: {report['min_edge_over_floor']:.4f}")
+# a line that crosses or touches itself, or repeats a node, cannot bound the
+# domain; generation would refuse it only later (review round 4 F10)
+if not full.is_simple:
+    bad.append("the boundary crosses or touches itself")
+if (steps <= 0).any():
+    bad.append(f"{int((steps <= 0).sum())} repeated node(s)")
 report["problems"] = bad
 print("[obc] " + json.dumps({k: report[k] for k in (
     "n_nodes", "length_km", "spacing_m", "end_angle_to_coast_deg", "crosses_land_m",
@@ -207,32 +214,51 @@ ax.set_title(f"{out_csv.name} (black = land, red = open boundary)")
 
 # One publisher at a time, each with its own temporary files: a shared
 # "<name>.tmp" let one writer rename another's payload (review round 2 F2).
-# The report (with the CSV's hash) goes first, the CSV last: a failure in
-# between leaves an old CSV that the new report's hash does not match, which
-# the recipe loader refuses (round 3 F5). The figure is published under the
-# same lock; temporaries are removed on failure.
+# All three products are written to temporaries first; only then is each
+# published file kept as "<name>.prev" and replaced. A failure while
+# replacing puts the previous set back, so a failed redesign leaves the
+# previous boundary usable (round 4 F6). If the process dies half-way, the
+# report's hash no longer matches the CSV and the recipe loader refuses it
+# (round 3 F5); the ".prev" files hold the previous set.
 lock = out_csv.with_name(out_csv.name + ".lock")
 try:
     os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
 except FileExistsError:
     raise SystemExit(f"{lock} exists: another design is being published") from None
+staged, kept, done = [], {}, []
 try:
     for path, payload in ((out_csv.with_suffix(".json"),
                            json.dumps(report, indent=1, default=float)),
                           (out_csv.with_suffix(".png"), fig),
                           (out_csv, csv_text)):
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
-        try:
-            if isinstance(payload, str):
-                with os.fdopen(fd, "w") as fh:
-                    fh.write(payload)
-            else:
-                os.close(fd)
-                payload.savefig(tmp, dpi=110, bbox_inches="tight", format="png")
+        staged.append((Path(tmp), path))
+        if isinstance(payload, str):
+            with os.fdopen(fd, "w") as fh:
+                fh.write(payload)
+        else:
+            os.close(fd)
+            payload.savefig(tmp, dpi=110, bbox_inches="tight", format="png")
+    for _, path in staged:
+        if path.exists():
+            prev = path.with_name(path.name + ".prev")
+            shutil.copy2(path, prev)
+            kept[path] = prev
+    try:
+        for tmp, path in staged:
             os.replace(tmp, path)          # atomic on one file system
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
+            done.append(path)
+    except BaseException:
+        for path in done:                  # put the previous set back
+            if path in kept:
+                os.replace(kept.pop(path), path)
+            else:
+                path.unlink(missing_ok=True)
+        raise
 finally:
+    for prev in kept.values():             # copies of files now in place
+        prev.unlink(missing_ok=True)
+    for tmp, _ in staged:
+        tmp.unlink(missing_ok=True)
     lock.unlink()
 print(f"[obc] wrote {out_csv}", flush=True)

@@ -427,3 +427,23 @@ def test_qa_catches_a_fan_that_winds_twice():
     rep = run_qa(m, coords="metric", channel_check=False)
     c = next(c for c in rep.checks if c.check_id == "no_element_overlap")
     assert c.status == "fail"
+
+
+def test_overlap_gate_is_local_not_diluted_by_a_large_mesh():
+    """Round 4 F4: a 1 m fan beside a 5e9 m2 element passed the old
+    global-area gate."""
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+    from fvcom_mesh_tools.qa import run_qa
+
+    ang = 4 * np.pi * np.arange(7) / 7
+    fan = np.vstack([[0.0, 0.0], np.column_stack([np.cos(ang), np.sin(ang)])])
+    big = np.array([[1e3, 0.0], [1e5 + 1e3, 0.0], [1e3, 1e5]])
+    nodes = np.vstack([fan, big])
+    elems = np.array([[0, 1 + k, 1 + (k + 1) % 7] for k in range(7)] + [[8, 9, 10]])
+    m = Fort14Mesh("fan", nodes, np.full(len(nodes), 10.0), elems, [], [])
+    rep = run_qa(m, coords="metric", channel_check=False)
+    c = next(c for c in rep.checks if c.check_id == "no_element_overlap")
+    assert c.status == "fail"
+    assert all(max(p["id"]) < 7 for p in c.offender_ids)

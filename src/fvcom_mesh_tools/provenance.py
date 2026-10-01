@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-__all__ = ["code_state", "collect", "dataset_files", "file_sha256", "git_state"]
+__all__ = ["changed_files", "code_state", "collect", "dataset_files", "file_sha256", "git_state"]
 
 # the libraries whose arithmetic or geometry decides the mesh
 LIBRARIES = ("numpy", "scipy", "shapely", "geopandas", "pyproj", "rasterio",
@@ -247,3 +247,20 @@ def collect(*, code: dict[str, Any] | None = None,
         else:
             out["files"][name] = {"path": str(p), "sha256": file_sha256(p)}
     return out
+
+
+def changed_files(prov: dict[str, Any], names) -> list[str]:
+    """The entries ``names`` of ``prov["files"]`` whose content is not what
+    :func:`collect` recorded: changed, removed or created since.
+
+    A build reads its inputs after its provenance is taken; checking them
+    again at the end binds the record to what was consumed (review of the
+    extend tools, round 4 F8).
+    """
+    spec = {}
+    for k in names:
+        v = prov["files"][k]
+        spec[k] = v["paths"] if "paths" in v else v["path"]
+    now = collect(files=spec, libraries=())["files"]
+    return [k for k in spec if now[k]["sha256"] != prov["files"][k]["sha256"]]
+

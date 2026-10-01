@@ -145,3 +145,20 @@ def test_porcelain_z_gives_both_sides_of_a_rename():
     assert parse_porcelain_z(out) == ["src/pkg/new.py", "other/old.py", "a b.py",
                                       "un tracked.py"]
     assert parse_porcelain_z("") == []
+
+
+def test_changed_files_names_inputs_that_moved_after_collect(tmp_path):
+    """Review of the extend tools, round 4 F8."""
+    from fvcom_mesh_tools.provenance import changed_files, collect
+
+    a, b, c = (tmp_path / n for n in ("a.yaml", "b1.dat", "b2.dat"))
+    a.write_text("fin_seed: 42\n")
+    b.write_text("1")
+    c.write_text("2")
+    gone = tmp_path / "never.json"
+    prov = collect(files={"recipe": str(a), "base": [str(b), str(c)], "side": str(gone)},
+                   libraries=())
+    assert changed_files(prov, ["recipe", "base", "side"]) == []
+    a.write_text("fin_seed: 99\n")
+    c.unlink()
+    assert changed_files(prov, ["recipe", "base", "side"]) == ["recipe", "base"]

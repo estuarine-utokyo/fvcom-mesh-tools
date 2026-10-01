@@ -247,10 +247,10 @@ def analyze(run_root, output, figure):
             amp, phase, coef = harmonic_fit(t[select], z[select], manifest["period_seconds"])
             # Independent halves show whether the nominal spin-up was sufficient.
             half = (t[select][0] + t[-1]) / 2
-            a1, p1, _ = harmonic_fit(
+            _, _, k1 = harmonic_fit(
                 t[select & (t < half)], z[select & (t < half)], manifest["period_seconds"]
             )
-            a2, p2, _ = harmonic_fit(t[t >= half], z[t >= half], manifest["period_seconds"])
+            _, _, k2 = harmonic_fit(t[t >= half], z[t >= half], manifest["period_seconds"])
             if not np.flatnonzero(wet).size:
                 raise ValueError("No nodes remain wet throughout the run")
             sids, sw, sdist = station_weights(mesh["xy"], mesh["tri"], station_xy, wet)
@@ -261,10 +261,12 @@ def analyze(run_root, output, figure):
             s_amp = np.hypot(c_cos, c_sin)
             s_phase = np.degrees(np.arctan2(c_sin, c_cos)) % 360
             s_mean = (coef[0][sids] * sw).sum(axis=1)
-            h1c = (a1[sids] * sw).sum(axis=1)
-            h2c = (a2[sids] * sw).sum(axis=1)
-            hp1 = (p1[sids] * sw).sum(axis=1)
-            hp2 = (p2[sids] * sw).sum(axis=1)
+            # The half windows are interpolated the same way.
+            h1 = (k1[1][sids] * sw).sum(axis=1) + 1j * (k1[2][sids] * sw).sum(axis=1)
+            h2 = (k2[1][sids] * sw).sum(axis=1) + 1j * (k2[2][sids] * sw).sum(axis=1)
+            h1c, h2c = np.abs(h1), np.abs(h2)
+            hp1 = np.degrees(np.angle(h1)) % 360
+            hp2 = np.degrees(np.angle(h2)) % 360
             lon, lat = ll.transform(mesh["xy"][:, 0], mesh["xy"][:, 1])
             # the open boundary, for the figure's fixed boundary colours
             obc_files = sorted((run_root / label / "input").glob("*_obc.dat"))

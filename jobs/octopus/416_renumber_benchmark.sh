@@ -42,7 +42,7 @@ RANKS_LIST=${FMESH_BENCH_RANKS:-"1:64"}
 RANKS_LIST=${RANKS_LIST//:/ }
 DAYS=${FMESH_BENCH_DAYS:-2}
 REPEATS=${FMESH_BENCH_REPEATS:-3}
-FVCOM=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
+FVCOM=$(fmesh_fvcom)
 for case in base refined; do
     [ -f "$RUN_ROOT/$case/m2_run.nml" ] || { echo "not staged: $RUN_ROOT/$case"; exit 2; }
 done

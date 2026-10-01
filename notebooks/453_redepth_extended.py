@@ -36,7 +36,7 @@ from fvcom_mesh_tools.extend import (  # noqa: E402
 from fvcom_mesh_tools.extend_recipe import check_case_name, load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.outdir import reserve  # noqa: E402
-from fvcom_mesh_tools.provenance import collect  # noqa: E402
+from fvcom_mesh_tools.provenance import changed_files, collect  # noqa: E402
 from fvcom_mesh_tools.qa import run_qa  # noqa: E402
 
 MESH_EPSG = 32654
@@ -63,30 +63,37 @@ a.outdir = a.outdir.resolve()
 # never write over the source case or another experiment (review F21)
 if a.outdir == src_dir or src_dir in a.outdir.parents or a.outdir in src_dir.parents:
     raise SystemExit(f"OUTDIR {a.outdir} overlaps the built case {src_dir}")
-a.outdir = reserve(a.outdir)          # atomically, before any work (review r2 F1)
 if a.case_name is not None:
     check_case_name(a.case_name)                      # review F28
+a.outdir = reserve(a.outdir)          # atomically, before any work (review r2 F1)
 case = recipe["case"]
-# provenance captured before any work, and a report written whatever happens
-# (review round 3 F6)
-PROV = collect(
-    code={"fvcom_mesh_tools": str(ROOT / "src" / "fvcom_mesh_tools" / "__init__.py"),
-          "driver": __file__},
-    files={"recipe": recipe["recipe_path"],
-           "built_case": [str(src_dir / f"{case}_{k}.dat") for k in ("grd", "dep", "obc")],
-           **{f"bathymetry_{k}": [str(q) for q in v] for k, v in source_files(names).items()}})
-STATE = {"done": False}
+# A report is written whatever happens, from the moment the output is
+# reserved (review round 3 F6, round 4 F7); a failure before the provenance
+# is taken says so ("provenance": null).
+STATE = {"done": False, "provenance": None}
 
 
 def _on_exit():
     if not STATE["done"]:
         (a.outdir / "redepth.json").write_text(json.dumps(
             {"from": str(src_dir / case), "sources": names, "status": "failed",
-             "provenance": PROV}, indent=1, default=str) + "\n")
+             "provenance": STATE["provenance"],
+             "provenance_complete": STATE["provenance"] is not None},
+            indent=1, default=str) + "\n")
 
 
 atexit.register(_on_exit)
+# provenance captured before any work; the inputs read below (recipe, built
+# case, base) are hashed again at the end and a change fails the run (round 4 F8)
 b = Path(recipe["base"]) / recipe["base_case"]
+INPUTS = {"recipe": recipe["recipe_path"],
+          "built_case": [str(src_dir / f"{case}_{k}.dat") for k in ("grd", "dep", "obc")],
+          "base": [f"{b}_{k}.dat" for k in ("grd", "dep", "obc")]}
+STATE["provenance"] = PROV = collect(
+    code={"fvcom_mesh_tools": str(ROOT / "src" / "fvcom_mesh_tools" / "__init__.py"),
+          "driver": __file__},
+    files={**INPUTS,
+           **{f"bathymetry_{k}": [str(q) for q in v] for k, v in source_files(names).items()}})
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
 mesh = read_fvcom_case(src_dir / f"{case}_grd.dat", src_dir / f"{case}_dep.dat",
                        src_dir / f"{case}_obc.dat")
@@ -152,6 +159,10 @@ if dt_new < dt_base:
     warnings_.append(f"new elements limit the time step ({dt_new:.2f} s < base "
                      f"{dt_base:.2f} s, raw depths)")
 
+# the inputs this run read must still be the ones its provenance names
+# (round 4 F8); no override accepts a variant built from moving inputs
+changed = changed_files(PROV, INPUTS)
+
 d = h - old
 rel = d[new] / np.maximum(old[new], 1.0)
 report = {
@@ -167,9 +178,9 @@ report = {
     "depth_controls": D, "allow_failing_gates": bool(a.allow_failing_gates),
     "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
     "dt_allowance_s": {"base": dt_base, "new": dt_new}, "problems": problems,
-    "warnings": warnings_,
-    "status": "ok" if not problems else ("accepted sensitivity variant"
-                                         if a.allow_failing_gates else "failed"),
+    "warnings": warnings_, "inputs_changed_during_run": changed,
+    "status": "failed" if changed else "ok" if not problems else (
+        "accepted sensitivity variant" if a.allow_failing_gates else "failed"),
     # what made it, captured before the work (review rounds 2 F18, 3 F6)
     "provenance": PROV,
 }
@@ -177,6 +188,8 @@ report = {
 STATE["done"] = True
 print("[453] " + json.dumps({k: v for k, v in report.items() if k != "provenance"},
                             default=str), flush=True)
+if changed:
+    raise SystemExit(f"input(s) changed during the run: {changed}")
 if problems and not a.allow_failing_gates:
     raise SystemExit("the variant fails: " + "; ".join(problems)
                      + " (--allow-failing-gates writes it as a sensitivity case)")

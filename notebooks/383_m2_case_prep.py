@@ -146,7 +146,22 @@ def spectral_text(period, amp, phase):
     return "\n".join(lines) + "\n"
 
 
+# FVCOM keeps INPUT_DIR and OUTPUT_DIR in CHARACTER(LEN=80) (mod_main.F): a
+# longer path is cut silently and the run reads or writes elsewhere (review
+# of the extend tools, round 4 F13)
+FVCOM_DIR_MAX = 80
+
+
+def check_fvcom_dirs(*dirs):
+    """Refuse any run directory FVCOM would truncate."""
+    long = [f"{Path(d).resolve()}/" for d in dirs if len(f"{Path(d).resolve()}/") > FVCOM_DIR_MAX]
+    if long:
+        raise SystemExit(f"FVCOM keeps {FVCOM_DIR_MAX} characters of a run directory; "
+                         f"use a shorter root: {long}")
+
+
 def namelist(input_dir, output_dir):
+    check_fvcom_dirs(input_dir, output_dir)
     text = TEMPLATE.read_text()
     text = text[text.index("&NML_CASE") :]
     changes = dict(
@@ -296,6 +311,8 @@ def prepare(run_root):
     a_order = np.argsort(a_pos)
     spg_radius = np.array([spg[n][0] for n in a_obc])[a_order]
     spg_coef = np.array([spg[n][1] for n in a_obc])[a_order]
+    check_fvcom_dirs(*(run_root / k / d for k in ("A", "B_own", "B_m7001")
+                       for d in ("input", "output")))
     for label, mesh in [("A", a), ("B_own", b), ("B_m7001", ba)]:
         case = run_root / label
         inp, out = case / "input", case / "output"

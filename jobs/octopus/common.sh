@@ -43,3 +43,15 @@ set +u
 conda activate "${FMESH_ENV:-fvcom-mesh-tools}"
 set -u
 echo "python=$(command -v python) DATA_DIR=${DATA_DIR} WORK_DIR=${WORK_DIR}"
+
+# The FVCOM executable: FMESH_FVCOM, or the repository build under WORK_DIR,
+# resolved to an absolute path here -- before a job changes into its run
+# directory, where a relative override would name another file (review of
+# the extend tools, round 4 F12) -- and required to be executable.
+fmesh_fvcom() {
+    local want exe
+    want=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
+    exe=$(realpath -e -- "$want") || { echo "FVCOM executable not found: $want" >&2; return 1; }
+    [[ -f $exe && -x $exe ]] || { echo "not an executable file: $exe" >&2; return 1; }
+    printf '%s\n' "$exe"
+}

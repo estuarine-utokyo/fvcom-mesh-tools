@@ -12,25 +12,31 @@ from fvcom_mesh_tools.cli.check_run import check_run, main
 
 def _run(tmp_path, *, tada=True, times=("2020-01-01T00:00:00.000000",
                                          "2020-01-02T00:00:00.000000"),
-         zeta=0.1, end="2020-01-02 00:00:00", extra_log=""):
+         zeta=0.1, end="2020-01-02 00:00:00", extra_log="", n=3, grid=None):
     run = tmp_path / "run"
     (run / "output").mkdir(parents=True)
     (run / "m2_run.nml").write_text(f" END_DATE = '{end}',\n"
-                                    " NC_OUT_INTERVAL = 'seconds = 86400.0',\n")
+                                    " NC_OUT_INTERVAL = 'seconds = 86400.0',\n"
+                                    + (f" INPUT_DIR = '{run}/input/',\n"
+                                       " GRID_FILE = 'm2_grd.dat',\n" if grid else ""))
+    if grid:
+        (run / "input").mkdir()
+        (run / "input" / "m2_grd.dat").write_text(
+            f"Node Number = {grid[0]}\nCell Number = {grid[1]}\n")
     (run / "fvcom.log").write_text("step ...\n" + extra_log + ("TADA!\n" if tada else ""))
     with netCDF4.Dataset(run / "output" / "m2_0001.nc", "w") as ds:
         ds.createDimension("time", None)
         ds.createDimension("DateStrLen", 26)
-        ds.createDimension("node", 3)
+        ds.createDimension("node", n)
         t = ds.createVariable("Times", "S1", ("time", "DateStrLen"))
         z = ds.createVariable("zeta", "f4", ("time", "node"))
         u = ds.createVariable("ua", "f4", ("time", "node"))
         v = ds.createVariable("va", "f4", ("time", "node"))
         for k, s in enumerate(times):
             t[k] = np.array(list(s.ljust(26)), dtype="S1")
-            z[k] = np.full(3, zeta)
-            u[k] = np.zeros(3)
-            v[k] = np.zeros(3)
+            z[k] = np.full(n, zeta)
+            u[k] = np.zeros(n)
+            v[k] = np.zeros(n)
     return run
 
 
@@ -110,3 +116,15 @@ def test_comments_are_stripped_outside_quotes_only():
     clean = _strip_comments(text)
     assert _nml_value(clean, "NC_OUT_INTERVAL") == "seconds = 3600."
     assert _nml_value(clean, "CASE_TITLE") == "a ! inside quotes"
+
+
+def test_history_without_spatial_data_fails(tmp_path):
+    """Review of the extend tools, round 4 F14: (time, 0) arrays passed."""
+    info = check_run(_run(tmp_path, n=0))
+    assert not info["ok"] and any("shape" in r for r in info["reasons"])
+
+
+def test_history_must_be_on_the_staged_mesh(tmp_path):
+    assert check_run(_run(tmp_path / "a", grid=(3, 3)))["ok"]
+    info = check_run(_run(tmp_path / "b", grid=(4, 3)))
+    assert not info["ok"] and any("staged mesh" in r for r in info["reasons"])

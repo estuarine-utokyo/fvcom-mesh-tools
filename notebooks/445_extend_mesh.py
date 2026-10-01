@@ -28,7 +28,12 @@ sys.path.insert(0, str(REPO / "src"))
 from fvcom_mesh_tools.dem.sources import source_files  # noqa: E402
 from fvcom_mesh_tools.extend_recipe import load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.outdir import reserve  # noqa: E402
-from fvcom_mesh_tools.provenance import collect, dataset_files, file_sha256  # noqa: E402
+from fvcom_mesh_tools.provenance import (  # noqa: E402
+    changed_files,
+    collect,
+    dataset_files,
+    file_sha256,
+)
 
 T0 = time.time()
 
@@ -44,15 +49,32 @@ OUT = OUT.resolve()
 # it let two builds into the same directory (review F20)
 OUT = reserve(OUT)
 say(f"recipe {recipe['recipe_path']} -> {OUT}")
-DATA = Path(os.environ.get("DATA_DIR") or sys.exit("DATA_DIR is not set"))
+
+# A report is written whatever happens, from the moment the output is
+# reserved (review round 3 F6, round 4 F7): an exit handler writes a failure
+# report unless the final one was written. A failure before the provenance
+# is taken says so ("provenance": null).
+STATE = {"done": False, "stage": "inputs", "provenance": None, "extra": {}}
+
+
+def _on_exit():
+    if not STATE["done"]:
+        (OUT / "report.json").write_text(json.dumps(
+            {"recipe": recipe["recipe_path"], "status": "failed", "stage": STATE["stage"],
+             **STATE["extra"], "provenance": STATE["provenance"],
+             "provenance_complete": STATE["provenance"] is not None}, indent=1, default=str))
+
+
+atexit.register(_on_exit)
+if not os.environ.get("DATA_DIR"):
+    raise SystemExit("DATA_DIR is not set")
+DATA = Path(os.environ["DATA_DIR"])
 osm_land = DATA / "geodata/OSM/land-polygons-split-4326/land_polygons.shp"
 names = sorted(set(recipe["bathymetry"]["sizing"]) | set(recipe["bathymetry"]["depths"]))
 bathy = source_files(names)
 missing = [str(p) for p in [osm_land, *[f for v in bathy.values() for f in v]] if not p.exists()]
 if missing:
-    (OUT / "report.json").write_text(json.dumps(
-        {"recipe": recipe["recipe_path"], "status": "failed", "stage": "inputs",
-         "missing": missing}, indent=1))
+    STATE["extra"]["missing"] = missing
     raise SystemExit("missing source data:\n  " + "\n  ".join(missing))
 
 
@@ -61,28 +83,23 @@ def spec_path(name):
     return spec.origin if spec is not None else None
 
 
-# what makes this build, captured BEFORE it runs, and a report that is
-# written whatever happens (review round 3 F6): an exit handler writes a
-# failure report unless the final one was written
+# what makes this build, captured BEFORE it runs. The stages read the
+# recipe, the open boundary and the base themselves; these are hashed again
+# at the end and a change fails the build (round 4 F8).
+STATE["stage"] = "provenance"
 code = {"fvcom_mesh_tools": str(REPO / "src" / "fvcom_mesh_tools" / "__init__.py"),
         "driver": __file__}
 if spec_path("oceanmesh"):
     code["oceanmesh"] = spec_path("oceanmesh")
-PROV = collect(code=code,
-               files={"recipe": recipe["recipe_path"], "open_boundary": recipe["open_boundary"],
-                      "osm_land": dataset_files(osm_land),
-                      **{f"bathymetry_{k}": [str(p) for p in v] for k, v in bathy.items()}})
-STATE = {"done": False, "stage": "start"}
-
-
-def _on_exit():
-    if not STATE["done"]:
-        (OUT / "report.json").write_text(json.dumps(
-            {"recipe": recipe["recipe_path"], "status": "failed", "stage": STATE["stage"],
-             "provenance": PROV}, indent=1, default=str))
-
-
-atexit.register(_on_exit)
+b = Path(recipe["base"]) / recipe["base_case"]
+INPUTS = {"recipe": recipe["recipe_path"], "open_boundary": recipe["open_boundary"],
+          "base": [f"{b}_{k}.dat" for k in ("grd", "dep", "obc")]}
+if Path(recipe["open_boundary"]).with_suffix(".json").exists():     # 444's report
+    INPUTS["open_boundary_report"] = str(Path(recipe["open_boundary"]).with_suffix(".json"))
+STATE["provenance"] = PROV = collect(
+    code=code,
+    files={**INPUTS, "osm_land": dataset_files(osm_land),
+           **{f"bathymetry_{k}": [str(p) for p in v] for k, v in bathy.items()}})
 
 gen = OUT / "generate"
 env = dict(os.environ, PYTHONPATH=str(REPO / "src"))
@@ -99,17 +116,19 @@ for script, args in (("446_extend_generate.py", [recipe["recipe_path"], str(gen)
     if rc != 0:
         failed = {"stage": script, "returncode": rc}
         break
-
+STATE["stage"] = "report"
+changed = changed_files(PROV, INPUTS)
+if changed and not failed:
+    failed = {"stage": "inputs", "changed_during_build": changed}
 
 case = recipe["case"]
-b = Path(recipe["base"]) / recipe["base_case"]
 report = {
     "recipe": recipe["recipe_path"],
     "products_sha256": {p.name: file_sha256(p) for p in sorted(OUT.glob(f"{case}*"))},
-    "base_sha256": {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")},
     "settings": recipe["settings"], "depths": recipe["depths"],
     "bathymetry": recipe["bathymetry"],
     "status": "failed" if failed else "ok", "failure": failed,
+    "inputs_changed_during_build": changed,
     "generate": (json.loads((gen / "generate.json").read_text())
                  if (gen / "generate.json").exists() else None),
     "merge": (json.loads((OUT / "merge.json").read_text())
@@ -121,7 +140,7 @@ report = {
 (OUT / "report.json").write_text(json.dumps(report, indent=1, default=str))
 STATE["done"] = True
 if failed:
-    raise SystemExit(f"{failed['stage']} failed (exit {failed['returncode']}); "
+    raise SystemExit(f"{failed['stage']} failed ({failed.get('returncode', 'inputs changed')}); "
                      f"report in {OUT / 'report.json'}")
 qa = report["merge"]["qa"]
 say(f"QA {qa['n_gate_total'] - qa['n_gate_failed']}/{qa['n_gate_total']}; "

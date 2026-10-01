@@ -79,6 +79,18 @@ def _nml_value(text: str, key: str) -> str | None:
     return next(g for g in m.groups() if g is not None).strip()
 
 
+def _grid_counts(path: Path) -> dict[str, int] | None:
+    """``{"node": NP, "nele": NE}`` from an FVCOM ``_grd.dat`` header, or None
+    when the file cannot be read as one."""
+    try:
+        with open(path) as fh:
+            head = [next(fh) for _ in range(2)]
+        np_, ne_ = (int(line.split("=")[1]) for line in head)
+    except (OSError, StopIteration, IndexError, ValueError):
+        return None
+    return {"node": np_, "nele": ne_}
+
+
 def _fortran_float(text: str) -> float:
     """A Fortran real as a namelist writes it: ``1.``, ``1.5d0``, ``10``."""
     t = text.strip().lower().replace("d", "e")
@@ -147,6 +159,15 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                 info["output_interval_s"] = interval.total_seconds()
             except ValueError as exc:
                 reasons.append(str(exc))
+    # the staged mesh's size, when the namelist names a readable grid file:
+    # the history must be on it (review of the extend tools, round 4 F14)
+    staged = None
+    if nml_path.exists():
+        grid = _nml_value(nml_text, "GRID_FILE")
+        indir = _nml_value(nml_text, "INPUT_DIR")
+        if grid and indir:
+            staged = _grid_counts(Path(indir) / grid if Path(indir).is_absolute()
+                                  else run / indir / grid)
     if end is None:
         reasons.append(f"no END_DATE found in {nml}")
     else:
@@ -163,6 +184,7 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
         reasons.append("the history stacks are not numbered 0001.. without a gap: "
                        + ", ".join(f.name for _, f in history))
     stamps: list = []
+    sizes: dict[str, int] = {}
     for _, f in history:
         try:
             with netCDF4.Dataset(f) as ds:
@@ -176,8 +198,20 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                     reasons.append(f"{f.name}: no records")
                     continue
                 stamps += times
-                for var in ("zeta", "ua", "va"):
+                for var, dim in (("zeta", "node"), ("ua", "nele"), ("va", "nele")):
                     a = np.ma.filled(ds[var][:], np.nan)
+                    # time by space, with space not empty and the same in
+                    # every stack and on the staged mesh (round 4 F14)
+                    if a.ndim != 2 or a.shape[1] == 0:
+                        reasons.append(f"{f.name}: {var} has shape {a.shape}, not "
+                                       f"(time, {dim}) with {dim} > 0")
+                        continue
+                    if sizes.setdefault(dim, a.shape[1]) != a.shape[1]:
+                        reasons.append(f"{f.name}: {var} has {a.shape[1]} {dim}, other "
+                                       f"output {sizes[dim]}")
+                    if staged is not None and a.shape[1] != staged[dim]:
+                        reasons.append(f"{f.name}: {var} has {a.shape[1]} {dim}, the staged "
+                                       f"mesh {staged[dim]}")
                     if a.shape[0] != len(times):
                         reasons.append(f"{f.name}: {var} has {a.shape[0]} records for "
                                        f"{len(times)} times")

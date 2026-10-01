@@ -26,7 +26,7 @@ case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
 DAYS=${FMESH_DAYS:-2}
 RANKS=${FMESH_RANKS:-64}
-FVCOM=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
+FVCOM=$(fmesh_fvcom)
 SMOKE=$RUN_ROOT/smoke
 [ -f "$RUN_ROOT/STAGED" ] || { echo "not staged: $RUN_ROOT (no STAGED marker)"; exit 2; }
 python - "$RUN_ROOT" "$SMOKE" "$DAYS" <<'PY'
