@@ -161,6 +161,14 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                 info["output_interval_s"] = interval.total_seconds()
             except ValueError as exc:
                 reasons.append(str(exc))
+    # the history is where the namelist sends it (review round 6 F3); a
+    # namelist without OUTPUT_DIR falls back to <run>/output
+    outdir = run / "output"
+    if nml_path.exists():
+        od = _nml_value(nml_text, "OUTPUT_DIR")
+        if od:
+            outdir = Path(od) if Path(od).is_absolute() else run / od
+    info["output_dir"] = str(outdir)
     # the staged mesh's size, when the namelist names a readable grid file:
     # the history must be on it (review of the extend tools, round 4 F14)
     staged = None
@@ -182,10 +190,10 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
 
     # the history stacks, in number order, from 0001 without a gap (T2)
     pat = re.compile(rf"^{re.escape(case)}_(\d{{4}})\.nc$")
-    history = sorted((int(m.group(1)), f) for f in (run / "output").glob("*.nc")
+    history = sorted((int(m.group(1)), f) for f in outdir.glob("*.nc")
                      if (m := pat.match(f.name)))
     if not history:
-        reasons.append(f"no history output ({case}_0001.nc ...)")
+        reasons.append(f"no history output ({case}_0001.nc ...) in {outdir}")
     elif [k for k, _ in history] != list(range(1, len(history) + 1)):
         reasons.append("the history stacks are not numbered 0001.. without a gap: "
                        + ", ".join(f.name for _, f in history))

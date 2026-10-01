@@ -164,7 +164,9 @@ if dt_new < dt_base:
 
 # the inputs this run read must still be the ones its provenance names
 # (round 4 F8); no override accepts a variant built from moving inputs
-changed = changed_files(PROV, INPUTS)
+# every input the provenance names, the bathymetry and land data included
+# (review round 6 F8)
+changed = changed_files(PROV, list(PROV["files"]))
 
 d = h - old
 rel = d[new] / np.maximum(old[new], 1.0)

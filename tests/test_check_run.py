@@ -136,3 +136,17 @@ def test_a_named_grid_that_cannot_be_read_fails(tmp_path):
     (run / "input" / "m2_grd.dat").unlink()
     info = check_run(run)
     assert not info["ok"] and any("cannot be read" in r for r in info["reasons"])
+
+
+def test_the_history_is_looked_for_in_the_namelists_output_dir(tmp_path):
+    """Review round 6 F3: an old history in run/output passed although the
+    namelist sends the output elsewhere."""
+    run = _run(tmp_path)
+    nml = run / "m2_run.nml"
+    nml.write_text(nml.read_text() + " OUTPUT_DIR = 'current_output/',\n")
+    (run / "current_output").mkdir()
+    info = check_run(run)
+    assert not info["ok"] and info["output_dir"].endswith("current_output")
+    for f in (run / "output").iterdir():
+        f.rename(run / "current_output" / f.name)
+    assert check_run(run)["ok"]

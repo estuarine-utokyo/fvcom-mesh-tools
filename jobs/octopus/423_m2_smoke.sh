@@ -30,22 +30,18 @@ FVCOM=$(fmesh_fvcom)
 SMOKE=$RUN_ROOT/smoke
 [ -f "$RUN_ROOT/STAGED" ] || { echo "not staged: $RUN_ROOT (no STAGED marker)"; exit 2; }
 python - "$RUN_ROOT" "$SMOKE" "$DAYS" <<'PY'
-import re, shutil, sys
+import re, sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from fvcom_mesh_tools.io.fvcom_namelist import relocate_case
 root, smoke, days = Path(sys.argv[1]), Path(sys.argv[2]), float(sys.argv[3])
 for case in ("base", "refined"):
-    dst = smoke / case
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(root / case, dst, ignore=shutil.ignore_patterns("output"))
-    (dst / "output").mkdir(exist_ok=True)
-    nml = (dst / "m2_run.nml").read_text()
+    nml = (root / case / "m2_run.nml").read_text()
     start = datetime.fromisoformat(re.search(r"START_DATE\s*=\s*'([^']+)'", nml).group(1))
     end = (start + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    nml = re.sub(r"(END_DATE\s*=\s*')[^']+(')", rf"\g<1>{end}\g<2>", nml)
-    nml = nml.replace(str(root / case), str(dst))
-    (dst / "m2_run.nml").write_text(nml)
+    # the moved directories are checked against FVCOM's 80 bytes before
+    # anything is written (review round 6 F11)
+    relocate_case(root / case, smoke / case, end_date=end)
     print(f"[423] {case}: end -> {end}")
 PY
 set +u; conda deactivate; set -u

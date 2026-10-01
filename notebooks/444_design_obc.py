@@ -178,6 +178,15 @@ if not full.is_simple:
     bad.append("the boundary crosses or touches itself")
 if (steps <= 0).any():
     bad.append(f"{int((steps <= 0).sum())} repeated node(s)")
+# The land is read inside land_bbox and clipped to it, so the clip edges
+# look like coast. The whole boundary, with its end chords and a margin,
+# must lie inside the window, where every coast is real (review round 6 F2).
+window = shapely.ops.transform(lambda x, y, z=None: to_m.transform(x, y),
+                               shapely.box(*bb).segmentize(0.01))
+reach = chord + 5000.0
+if not full.buffer(reach).within(window):
+    bad.append(f"the boundary comes within {reach / 1e3:.0f} km of the land window's edge "
+               f"{list(bb)}; widen land_bbox")
 report["problems"] = bad
 print("[obc] " + json.dumps({k: report[k] for k in (
     "n_nodes", "length_km", "spacing_m", "end_angle_to_coast_deg", "crosses_land_m",
@@ -252,10 +261,11 @@ try:
             os.replace(tmp, path)          # atomic on one file system
             done.append(path)
     except BaseException:
-        # put the previous set back, each file on its own; a backup leaves
-        # tracking only once restored, and any that could not be is kept with
-        # a marker naming it (review round 5 F5)
-        stuck = []
+        # Put the previous set back, each file on its own. A backup leaves
+        # tracking only once restored; the recovery marker is written, and
+        # unrestored backups are taken out of cleanup, before anything else
+        # that can fail (review rounds 5 F5, 6 F7).
+        stuck = {}
         for path in done:
             try:
                 if path in kept:
@@ -264,19 +274,25 @@ try:
                 else:
                     path.unlink(missing_ok=True)
             except OSError as exc:
-                stuck.append(f"{path}: {exc}")
+                stuck[path] = exc
         if stuck:
-            unrestored = {str(p): str(q) for p, q in kept.items() if p in done}
-            for p in [p for p in kept if p not in done]:
-                kept.pop(p).unlink(missing_ok=True)   # never replaced: no backup needed
-            kept.clear()                              # the rest stay on disk
+            unrestored = {str(p): str(kept.pop(p)) for p in list(kept) if p in stuck}
             out_csv.with_name(out_csv.name + ".RECOVER").write_text(json.dumps(
-                {"restore_from_prev": unrestored, "errors": stuck}, indent=1))
+                {"restore_from_prev": unrestored,
+                 "errors": [f"{p}: {e}" for p, e in stuck.items()]}, indent=1))
         raise
 finally:
-    for prev in kept.values():             # copies of files now in place
-        prev.unlink(missing_ok=True)
+    # copies of files now in place, or never replaced; each removal is on
+    # its own, and a failure only leaves a stray copy
+    for prev in kept.values():
+        try:
+            prev.unlink(missing_ok=True)
+        except OSError:
+            pass
     for tmp, _ in staged:
-        tmp.unlink(missing_ok=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
     lock.unlink()
 print(f"[obc] wrote {out_csv}", flush=True)

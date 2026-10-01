@@ -12,7 +12,6 @@ import argparse
 import hashlib
 import importlib.util
 import json
-import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +25,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from fvcom_mesh_tools.dem.m7001 import production_depths  # noqa: E402
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14  # noqa: E402
+from fvcom_mesh_tools.io.fvcom_namelist import (  # noqa: E402
+    check_fvcom_dirs as _check_fvcom_dirs,
+)
+from fvcom_mesh_tools.io.fvcom_namelist import fortran_string, set_value  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import apply_obc_depth_control, write_dep  # noqa: E402
 
 
@@ -146,26 +149,13 @@ def spectral_text(period, amp, phase):
     return "\n".join(lines) + "\n"
 
 
-# FVCOM keeps INPUT_DIR and OUTPUT_DIR in CHARACTER(LEN=80) (mod_main.F): a
-# longer path is cut silently and the run reads or writes elsewhere (review
-# of the extend tools, round 4 F13)
-FVCOM_DIR_MAX = 80
-
-
 def check_fvcom_dirs(*dirs):
-    """Refuse any run directory FVCOM would truncate or misread.
-
-    The limit is on bytes, and the namelist is plain ASCII to Fortran: a
-    non-ASCII path is refused outright (review round 5 F7).
-    """
-    paths = [f"{Path(d).resolve()}/" for d in dirs]
-    bad = [p for p in paths if not p.isascii()]
-    if bad:
-        raise SystemExit(f"FVCOM run directories must be ASCII: {bad}")
-    long = [p for p in paths if len(p.encode("ascii")) > FVCOM_DIR_MAX]
-    if long:
-        raise SystemExit(f"FVCOM keeps {FVCOM_DIR_MAX} bytes of a run directory; "
-                         f"use a shorter root: {long}")
+    """Refuse a run directory FVCOM would truncate or misread (printable
+    ASCII, at most 80 bytes; review of the extend tools, rounds 4-5)."""
+    try:
+        _check_fvcom_dirs(*dirs)
+    except ValueError as err:
+        raise SystemExit(str(err)) from None
 
 
 def namelist(input_dir, output_dir):
@@ -173,10 +163,11 @@ def namelist(input_dir, output_dir):
     text = TEMPLATE.read_text()
     text = text[text.index("&NML_CASE") :]
     changes = dict(
-        CASE_TITLE="'383 M2 mesh comparison'",
-        END_DATE=f"'{END}'",
-        INPUT_DIR=f"'{input_dir}/'",
-        OUTPUT_DIR=f"'{output_dir}/'",
+        CASE_TITLE=fortran_string("383 M2 mesh comparison"),
+        END_DATE=fortran_string(END),
+        # quoted for Fortran (an apostrophe is doubled; review round 6 F10)
+        INPUT_DIR=fortran_string(f"{input_dir}/"),
+        OUTPUT_DIR=fortran_string(f"{output_dir}/"),
         EXTSTEP_SECONDS=str(DTE),
         ISPLIT=str(ISPLIT),
         IRAMP=str(max(1, round(RAMP_SECONDS / (DTE * ISPLIT)))),
@@ -201,9 +192,8 @@ def namelist(input_dir, output_dir):
         BOTTOM_ROUGHNESS_MINIMUM="0.003",
     )
     for key, value in changes.items():
-        text, count = re.subn(rf"(?im)^(\s*{key}\s*=)[^\n]*", rf"\g<1> {value},", text)
-        if count != 1:
-            raise ValueError(f"Template key {key}: expected once, found {count}")
+        # a replacement function, so a backslash in a value stays literal
+        text = set_value(text, key, value)
     return text
 
 

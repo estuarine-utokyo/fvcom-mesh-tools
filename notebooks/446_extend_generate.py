@@ -83,6 +83,14 @@ north = bb[3] - 0.05
 poly = np.vstack([OBC, [OBC[-1, 0], north], [OBC[0, 0], north]])
 if not shapely.Polygon(poly).is_valid:
     raise SystemExit("the domain polygon (boundary closed northward) is not simple")
+# The land is clipped to land.bbox, so its edges look like coast: the sea to
+# mesh must stay clear of them, or a clip edge would become a coastline
+# (review round 6 F2). 0.02 deg is inside the 0.05 deg northern closure.
+sea = shapely.Polygon(poly).difference(land_all)
+inner_window = shapely.box(*bb).buffer(-0.02)
+if sea.difference(inner_window).area > 0:
+    raise SystemExit(f"the sea to mesh reaches the land window's edge {list(bb)}; "
+                     f"widen land.bbox in the recipe")
 say(f"inputs: open boundary {len(OBC)} nodes, land {len(land)} polygon(s)")
 
 # ----------------------------------------------------------------- sizing

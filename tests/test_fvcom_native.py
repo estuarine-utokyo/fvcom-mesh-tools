@@ -564,3 +564,24 @@ def test_reader_accepts_either_direction_when_every_boundary_node_is_open(tmp_pa
         m = Fort14Mesh("t", nodes, np.full(5, 10.0), tri, [np.array(obc)], [])
         w = export_fvcom_case(m, tmp_path / str(k), "t", twodm=False, obc_depth_control=False)
         assert read_fvcom_case(w["grd"], w["dep"], w["obc"]).open_boundaries[0].tolist() == obc
+
+
+@pytest.mark.parametrize("change", ["negative_index", "nan_x", "nan_depth"])
+def test_export_refuses_a_mesh_fvcom_cannot_read(tmp_path, change):
+    """Review of the extend tools, round 6 F9: -1 was written as a node."""
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
+
+    nodes = np.array([[0.0, 0.0], [1000.0, 0.0], [0.0, 1000.0]])
+    els = np.array([[0, 1, 2]])
+    depths = np.full(3, 5.0)
+    if change == "negative_index":
+        els = np.array([[-1, 0, 1]])
+    elif change == "nan_x":
+        nodes[1, 0] = np.nan
+    else:
+        depths[2] = np.nan
+    m = Fort14Mesh("t", nodes, depths, els, [], [])
+    with pytest.raises(ValueError):
+        export_fvcom_case(m, tmp_path / "out", "t")
+    assert not (tmp_path / "out").exists()

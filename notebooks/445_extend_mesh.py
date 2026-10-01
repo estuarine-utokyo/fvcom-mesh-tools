@@ -123,7 +123,9 @@ for script, args in (("446_extend_generate.py", [recipe["recipe_path"], str(gen)
         failed = {"stage": script, "returncode": rc}
         break
 STATE["stage"] = "report"
-changed = changed_files(PROV, INPUTS)
+# every input the provenance names, the bathymetry and land data included
+# (review round 6 F8)
+changed = changed_files(PROV, list(PROV["files"]))
 if changed and not failed:
     failed = {"stage": "inputs", "changed_during_build": changed}
 

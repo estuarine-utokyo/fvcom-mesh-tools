@@ -50,26 +50,23 @@ done
 # A shortened copy of each case, so the staged twenty-day run is untouched.
 BENCH=$RUN_ROOT/bench
 python - "$RUN_ROOT" "$BENCH" "$DAYS" <<'PY'
-import re, shutil, sys
+import re, sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from fvcom_mesh_tools.io.fvcom_namelist import relocate_case
 root, bench, days = Path(sys.argv[1]), Path(sys.argv[2]), float(sys.argv[3])
 for case in ("base", "refined"):
-    dst = bench / case
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(root / case, dst, ignore=shutil.ignore_patterns("output"))
-    (dst / "output").mkdir(exist_ok=True)
-    nml = (dst / "m2_run.nml").read_text()
-    start = datetime.fromisoformat(
-        re.search(r"START_DATE\s*=\s*'([^']+)'", nml).group(1))
+    nml = (root / case / "m2_run.nml").read_text()
+    start = datetime.fromisoformat(re.search(r"START_DATE\s*=\s*'([^']+)'", nml).group(1))
     end = (start + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    nml = re.sub(r"(END_DATE\s*=\s*')[^']+(')", rf"\g<1>{end}\g<2>", nml)
-    nml = nml.replace(str(root / case), str(dst))
-    (dst / "m2_run.nml").write_text(nml)
+    # the moved directories are checked against FVCOM's 80 bytes before
+    # anything is written (review round 6 F11)
+    relocate_case(root / case, bench / case, end_date=end)
     print(f"[416] {case}: end -> {end}")
 PY
 
+# the conda Python, kept for fmesh-check-run while conda is off for MPI
+PYBIN=$(command -v python)
 set +u
 conda deactivate
 set -u
@@ -106,6 +103,13 @@ for ranks in $RANKS_LIST; do
             if grep -Ei 'fatal|non[ -]?finite|segmentation|nan detected' \
                     "$BENCH/$case/fvcom_${ranks}_${rep}.log" >/dev/null; then
                 echo "UNHEALTHY ranks=$ranks rep=$rep case=$case"; exit 1
+            fi
+            # A zero exit and a quiet log are not a finished run: some STOP
+            # paths return 0 and would time as very fast (review round 6 F4).
+            # The run must reach END_DATE with finite fields and say TADA.
+            if ! env -u LD_LIBRARY_PATH "$PYBIN" -m fvcom_mesh_tools.cli.check_run \
+                    "$BENCH/$case" --log "fvcom_${ranks}_${rep}.log"; then
+                echo "INVALID ranks=$ranks rep=$rep case=$case"; exit 1
             fi
             printf 'BENCH ranks=%s rep=%s case=%-8s seconds=%.2f\n' \
                 "$ranks" "$rep" "$case" "$(echo "$t1 - $t0" | bc)"

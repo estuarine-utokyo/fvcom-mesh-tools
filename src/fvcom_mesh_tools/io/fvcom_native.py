@@ -303,6 +303,34 @@ def apply_obc_depth_control(mesh: Fort14Mesh) -> tuple[Fort14Mesh, np.ndarray]:
     return replace(mesh, depths=depths), change
 
 
+def _check_exportable(mesh: Fort14Mesh) -> None:
+    """Refuse, before any file is written, a mesh FVCOM cannot read: element
+    indices that are not integers in ``[0, NP)`` (NumPy would take -1 as the
+    last node), boundary indices out of range, or coordinates and depths
+    that are not finite (review of the extend tools, round 6 F9)."""
+    nodes = np.asarray(mesh.nodes)
+    els = np.asarray(mesh.elements)
+    depths = np.asarray(mesh.depths)
+    n = len(nodes)
+    if nodes.ndim != 2 or nodes.shape[1] < 2 or depths.shape != (n,):
+        raise ValueError(f"nodes {nodes.shape} and depths {depths.shape} do not match")
+    if els.ndim != 2 or els.shape[1] != 3 or not np.issubdtype(els.dtype, np.integer):
+        raise ValueError(f"elements must be an integer (NE, 3) array, not {els.dtype} "
+                         f"{els.shape}")
+    if els.size and (els.min() < 0 or els.max() >= n):
+        raise ValueError(f"element node index outside [0, {n}): "
+                         f"{int(els.min())}..{int(els.max())}")
+    for seg in [*mesh.open_boundaries, *(s for _t, s in mesh.land_boundaries)]:
+        seg = np.asarray(seg)
+        if seg.size and (seg.min() < 0 or seg.max() >= n):
+            raise ValueError(f"boundary node index outside [0, {n})")
+    if not np.isfinite(nodes[:, :2]).all():
+        raise ValueError(f"{int((~np.isfinite(nodes[:, :2])).any(axis=1).sum())} node(s) "
+                         "with a coordinate that is not finite")
+    if not np.isfinite(depths).all():
+        raise ValueError(f"{int((~np.isfinite(depths)).sum())} depth(s) not finite")
+
+
 def export_fvcom_case(
     mesh: Fort14Mesh,
     outdir: str | Path,
@@ -333,6 +361,7 @@ def export_fvcom_case(
     # said (fourth review).
     if obc_type is None:
         obc_type = getattr(mesh, "obc_type", 1)
+    _check_exportable(mesh)
     if obc_depth_control and mesh.open_boundaries:
         mesh, _ = apply_obc_depth_control(mesh)
     outdir = Path(outdir).resolve()

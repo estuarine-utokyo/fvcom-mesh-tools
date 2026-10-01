@@ -20,7 +20,11 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 407_speed_verify 16
 
 REPO=$(pwd)
-REF=${FMESH_REF:?Set FMESH_REF to the reference sample_repro_final.14}
+# resolved before the job changes into its work area: a relative path would
+# there name the file this run writes (review round 6 F6)
+REF=$(realpath -e -- "${FMESH_REF:?Set FMESH_REF to the reference sample_repro_final.14}") \
+    || { echo "reference not found: $FMESH_REF"; exit 2; }
+[[ -f $REF ]] || { echo "reference is not a file: $REF"; exit 2; }
 WORK=${WORK_DIR:?set WORK_DIR}/scratch/speed_407.${JOBID}
 mkdir -p "$WORK"
 for d in notebooks recipes; do rsync -a --delete "$REPO/$d/" "$WORK/$d/"; done
@@ -41,13 +45,24 @@ t2=$(date +%s)
 grep -E "inputs \+|sizing done" "$WORK/325.log" || true
 grep -E "coast fit" "$WORK/331.log" || true
 echo "325 wall = $((t1 - t0)) s   331 wall = $((t2 - t1)) s"
-fmesh-mesh-qa outputs/sample_repro/sample_repro_final.14 | tail -4 || true
+# QA and the identity check decide the job's exit (review round 6 F5); the
+# diagnostics are printed either way
+fail=0
+OUT14=$WORK/outputs/sample_repro/sample_repro_final.14
+if [[ $(realpath -m -- "$OUT14") == "$REF" ]]; then
+    echo "the reference is the file this run wrote: $REF"; exit 2
+fi
+qa_rc=0
+fmesh-mesh-qa "$OUT14" > "$WORK/qa.txt" 2>&1 || qa_rc=$?
+tail -4 "$WORK/qa.txt"
+[[ $qa_rc -eq 0 ]] || { echo "QA failed (exit $qa_rc)"; fail=1; }
 echo "=== identity check against $REF ==="
-if cmp -s outputs/sample_repro/sample_repro_final.14 "$REF"; then
+if cmp -s "$OUT14" "$REF"; then
     echo "IDENTICAL to the reference"
 else
+    fail=1
     echo "DIFFERS from the reference:"
-    python - "$REF" outputs/sample_repro/sample_repro_final.14 <<'PY'
+    python - "$REF" "$OUT14" <<'PY'
 import sys
 import numpy as np
 def load(p):
@@ -64,4 +79,5 @@ if a.shape == b.shape:
     print(f"  node displacement: max {d.max():.6f} m, >1 m: {(d > 1).sum()}")
 PY
 fi
-echo "end=$(date -Is)"
+echo "end=$(date -Is) fail=$fail"
+exit $fail
