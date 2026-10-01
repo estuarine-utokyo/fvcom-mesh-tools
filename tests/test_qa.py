@@ -457,3 +457,13 @@ def test_a_depth_that_is_not_finite_fails_qa(bad):
     report = run_qa(mesh, channel_check=False)
     c = _check(report, "min_depth_clip")
     assert not c.passed and c.data["n_nonfinite_depths"] == 1
+
+
+def test_fractional_boundary_ids_fail_the_index_gate():
+    """Review of the extend tools, round 9 F5: QA passed 23/23."""
+    import numpy as np
+
+    mesh = _pristine()
+    mesh.open_boundaries = [np.array([4.9, 8.9])]
+    report = run_qa(mesh, channel_check=False)
+    assert not _check(report, "node_index_valid").passed

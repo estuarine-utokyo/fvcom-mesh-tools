@@ -139,3 +139,38 @@ def test_a_computed_depth_round_trips(tmp_path: Path) -> None:
     path = tmp_path / "precision.14"
     write_fort14(mesh, path)
     assert np.array_equal(read_fort14(path).depths, depths)
+
+
+def _fort14_text(nodes, elems, ids=None, eids=None, etype=3):
+    ids = ids or list(range(1, len(nodes) + 1))
+    eids = eids or list(range(1, len(elems) + 1))
+    lines = ["t", f"{len(elems)} {len(nodes)}"]
+    lines += [f"{i} {x} {y} 5.0" for i, (x, y) in zip(ids, nodes)]
+    lines += [f"{k} {etype} {a} {b} {c}" for k, (a, b, c) in zip(eids, elems)]
+    lines += ["0", "0", "0", "0"]
+    return "\n".join(lines) + "\n"
+
+
+def test_a_single_triangle_mesh_reads(tmp_path):
+    """Review of the extend tools, round 9 F11."""
+    from fvcom_mesh_tools.io.fort14 import read_fort14
+
+    p = tmp_path / "one.14"
+    p.write_text(_fort14_text([(0, 0), (1, 0), (0, 1)], [(1, 2, 3)]))
+    m = read_fort14(p)
+    assert m.n_nodes == 3 and m.elements.tolist() == [[0, 1, 2]]
+
+
+@pytest.mark.parametrize("kw, match", [
+    ({"ids": [1, 1, 3, 4]}, "node ids"),
+    ({"eids": [1, 1]}, "element ids"),
+    ({"etype": 4}, "type 3"),
+])
+def test_record_ids_and_element_type_are_checked(tmp_path, kw, match):
+    """Review round 9 F12."""
+    from fvcom_mesh_tools.io.fort14 import read_fort14
+
+    p = tmp_path / "bad.14"
+    p.write_text(_fort14_text([(0, 0), (1, 0), (0, 1), (1, 1)], [(1, 2, 3), (2, 4, 3)], **kw))
+    with pytest.raises(ValueError, match=match):
+        read_fort14(p)

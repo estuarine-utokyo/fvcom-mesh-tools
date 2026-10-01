@@ -26,8 +26,16 @@ for p in "${BASE}_grd.dat" "${BASE}_dep.dat" "${BASE}_obc.dat" \
     [ -f "$p" ] || { echo "not found: $p"; exit 2; }
 done
 STAMP=$(date +%Y%m%d_%H%M%S)
-RUN_ROOT=${WORK_DIR:?set WORK_DIR}/scratch/m2r_$STAMP
-mkdir -p "$RUN_ROOT"
+# a fresh root, taken atomically: two chains started in the same second
+# shared one (review round 9 F2)
+mkdir -p "${WORK_DIR:?set WORK_DIR}/scratch"
+RUN_ROOT=$(mktemp -d "$WORK_DIR/scratch/m2r_${STAMP}_XXXX")
+# qsub -v separates variables with commas: a comma inside a value would
+# become another variable (review round 9 F13)
+for v in "$RUN_ROOT" "$BASE" "$REFINED" "$DTE"; do
+    case "$v" in *,*) echo "a comma in '$v' cannot pass through qsub -v; rename it"
+                      rmdir "$RUN_ROOT"; exit 2 ;; esac
+done
 echo "run root: $RUN_ROOT"
 echo "base    : $BASE"
 echo "refined : $REFINED"

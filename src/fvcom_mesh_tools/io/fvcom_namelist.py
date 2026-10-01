@@ -41,17 +41,46 @@ def check_fvcom_dirs(*dirs) -> list[str]:
     return paths
 
 
-def set_value(text: str, key: str, value: str) -> str:
-    """Replace the one line ``key = ...`` of a namelist with ``key = value,``.
+_VALUE = re.compile(r"""'(?:[^']|'')*'|"(?:[^"]|"")*"|[^,\s/]+""")
 
-    ``value`` is written as given (quote strings with :func:`fortran_string`);
-    a replacement function keeps backslashes in it literal.
+
+def _mask_quoted(text: str) -> str:
+    """``text`` with quoted contents blanked (same length), so a search for
+    ``KEY =`` cannot land inside a string."""
+    out, quote, i = list(text), None, 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == quote and i + 1 < len(text) and text[i + 1] == quote:
+                out[i] = out[i + 1] = " "
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            elif ch != "\n":
+                out[i] = " "
+        elif ch in "'\"":
+            quote = ch
+        i += 1
+    return "".join(out)
+
+
+def set_value(text: str, key: str, value: str) -> str:
+    """Replace the value of the one assignment ``key = ...`` with ``value``.
+
+    Only that value is replaced: other assignments on the same line stay
+    (review round 9 F7), and ``key =`` inside a quoted string is not an
+    assignment. ``value`` is written as given (quote strings with
+    :func:`fortran_string`).
     """
-    out, count = re.subn(rf"(?im)^(\s*{re.escape(key)}\s*=)[^\n]*",
-                         lambda m: f"{m.group(1)} {value},", text)
-    if count != 1:
-        raise ValueError(f"namelist key {key}: expected once, found {count}")
-    return out
+    hits = [m for m in re.finditer(rf"(?<![\w%]){re.escape(key)}\s*=\s*",
+                                   _mask_quoted(text), re.IGNORECASE)]
+    if len(hits) != 1:
+        raise ValueError(f"namelist key {key}: expected once, found {len(hits)}")
+    start = hits[0].end()
+    m = _VALUE.match(text, start)
+    end = m.end() if m else start
+    return text[:start] + value + text[end:]
 
 
 def relocate_case(src: Path, dst: Path, nml: str = "m2_run.nml",
@@ -78,6 +107,9 @@ def relocate_case(src: Path, dst: Path, nml: str = "m2_run.nml",
     import tempfile
 
     tmp = Path(tempfile.mkdtemp(dir=dst.parent, prefix=f".{dst.name}."))
+    # removed only after a known outcome; an exit in the middle of putting
+    # the previous copy back keeps it in tmp/previous (review round 9 F3)
+    state = "staging"
     try:
         work = tmp / "case"
         shutil.copytree(src, work, ignore=shutil.ignore_patterns("output"))
@@ -88,19 +120,20 @@ def relocate_case(src: Path, dst: Path, nml: str = "m2_run.nml",
         prev = tmp / "previous"
         if dst.exists():
             dst.rename(prev)
+        state = "publishing"
         try:
             work.rename(dst)
         except BaseException:
+            state = "restoring"
             if prev.exists():
                 try:
                     prev.rename(dst)
                 except OSError:
-                    keep = tmp
-                    tmp = None                 # it holds the previous case
-                    raise OSError(f"could not put {dst} back; it is in {keep / 'previous'}"
-                                  ) from None
+                    raise OSError(f"could not put {dst} back; it is in {prev}") from None
+            state = "restored"
             raise
+        state = "done"
     finally:
-        if tmp is not None:
+        if state in ("staging", "done", "restored"):
             shutil.rmtree(tmp, ignore_errors=True)
     return dst / nml

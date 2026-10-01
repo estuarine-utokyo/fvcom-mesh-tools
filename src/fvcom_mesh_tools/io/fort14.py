@@ -108,21 +108,35 @@ def read_fort14(path: str | Path) -> Fort14Mesh:
         title = f.readline().rstrip("\n")
         ne, np_ = _read_two_ints(f)
 
-        node_block = np.loadtxt(f, max_rows=np_, dtype=np.float64)
+        # ndmin=2: a single row would otherwise come back one-dimensional
+        # (review of the extend tools, round 9 F11)
+        node_block = np.loadtxt(f, max_rows=np_, dtype=np.float64, ndmin=2)
         if node_block.shape != (np_, 4):
             raise ValueError(
                 f"node block shape {node_block.shape} does not match expected ({np_}, 4); "
                 f"check whether the header is 'NE NP' (ADCIRC convention)"
             )
+        # The record ids are what the connectivity and boundaries refer to:
+        # they must be 1..NP and 1..NE in order, and every element a
+        # triangle (type 3) -- otherwise a reference would be read as another
+        # node (round 9 F12).
+        if not np.array_equal(node_block[:, 0], np.arange(1, np_ + 1)):
+            raise ValueError("node ids must run 1..NP in order")
         nodes = node_block[:, 1:3].copy()
         depths = node_block[:, 3].copy()
 
-        elem_block = np.loadtxt(f, max_rows=ne, dtype=np.int64)
+        elem_block = np.loadtxt(f, max_rows=ne, dtype=np.int64, ndmin=2)
         if elem_block.shape != (ne, 5):
             raise ValueError(
                 f"element block shape {elem_block.shape} does not match expected ({ne}, 5)"
             )
+        if not np.array_equal(elem_block[:, 0], np.arange(1, ne + 1)):
+            raise ValueError("element ids must run 1..NE in order")
+        if ne and not (elem_block[:, 1] == 3).all():
+            raise ValueError("every element must be a triangle (type 3)")
         elements = (elem_block[:, 2:5] - 1).copy()
+        if ne and (elements.min() < 0 or elements.max() >= np_):
+            raise ValueError(f"element node references outside 1..{np_}")
 
         nope = _read_first_int(f)
         _ = f.readline()  # NETA: redundant total of open boundary nodes

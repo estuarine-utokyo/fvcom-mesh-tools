@@ -15,8 +15,16 @@ REPO=$(pwd)
 B_MESH=${1:-$REPO/outputs/verify_409.115302/fit/sample_repro_final.14}
 [ -f "$B_MESH" ] || { echo "mesh not found: $B_MESH"; exit 2; }
 STAMP=$(date +%Y%m%d_%H%M%S)
-RUN_ROOT=${WORK_DIR:?set WORK_DIR}/scratch/m2_$STAMP
-mkdir -p "$RUN_ROOT"
+# a fresh root, taken atomically: two chains started in the same second
+# shared one (review round 9 F2)
+mkdir -p "${WORK_DIR:?set WORK_DIR}/scratch"
+RUN_ROOT=$(mktemp -d "$WORK_DIR/scratch/m2_${STAMP}_XXXX")
+# qsub -v separates variables with commas: a comma inside a value would
+# become another variable (review round 9 F13)
+for v in "$RUN_ROOT" "$B_MESH"; do
+    case "$v" in *,*) echo "a comma in '$v' cannot pass through qsub -v; rename it"
+                      rmdir "$RUN_ROOT"; exit 2 ;; esac
+done
 echo "run root: $RUN_ROOT"
 echo "B mesh  : $B_MESH"
 

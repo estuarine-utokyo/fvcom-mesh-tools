@@ -16,17 +16,14 @@ trap 'echo "ERROR line $LINENO: $BASH_COMMAND" >&2' ERR
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 REPO=$(pwd)
 PYTHON=$(command -v python)
-RUN_ROOT=${WORK_DIR:?set WORK_DIR}/scratch/m2_383
+# one root per job, taken atomically: a fixed root let two submissions
+# stage and run into the same directories (review round 9 F2)
+RUN_ROOT=${FMESH_RUN_ROOT:-${WORK_DIR:?set WORK_DIR}/scratch/m2_383.$JOBID}
+mkdir -p "$(dirname "$RUN_ROOT")"
+mkdir -- "$RUN_ROOT" || { echo "run root exists: $RUN_ROOT; choose another"; exit 2; }
+echo "run root: $RUN_ROOT"
 FVCOM=$(fmesh_fvcom)
 export PYTHONDONTWRITEBYTECODE=1
-# Avoid stale output being interpreted as a successful rerun. Move previous
-# scratch run directories aside manually before resubmitting a completed case.
-for case in A B_own B_m7001; do
-    if compgen -G "$RUN_ROOT/$case/output/m2_*.nc" >/dev/null; then
-        echo "Existing model output: $RUN_ROOT/$case/output; archive before rerunning"
-        exit 2
-    fi
-done
 # Capture Python/conda first; keep its shared libraries out of the MPI runtime.
 "$PYTHON" notebooks/383_m2_case_prep.py --root "$RUN_ROOT"
 set +u

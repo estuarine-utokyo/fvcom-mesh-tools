@@ -135,11 +135,27 @@ def merge_outer(base: Fort14Mesh, outer_nodes, outer_elements, interface_outer,
     elements are turned to the base's orientation.  ``outer_open`` is the new
     open boundary in outer indices; it becomes the only open boundary.
     Depths of the outer nodes are NaN until a depth stage fills them.
+
+    The base must hold float64 coordinates and depths (what the readers
+    give): the merged arrays are float64, and the base is carried bit for
+    bit (review round 9 F6). Every index is checked to be a whole number in
+    range before it is used (round 9 F4).
     """
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
+    if np.asarray(base.nodes).dtype != np.float64 or np.asarray(base.depths).dtype != np.float64:
+        raise ValueError(f"the base must be float64 (nodes {np.asarray(base.nodes).dtype}, "
+                         f"depths {np.asarray(base.depths).dtype})")
     outer_nodes = np.asarray(outer_nodes, float)
-    outer_elements = np.asarray(outer_elements, np.int64)
-    io_ = np.asarray(interface_outer, np.int64)
-    ib = np.asarray(interface_base, np.int64)
+    if outer_nodes.ndim != 2 or outer_nodes.shape[1] < 2 or not np.isfinite(outer_nodes).all():
+        raise ValueError("outer nodes must be finite (N, 2) coordinates")
+    n_out = len(outer_nodes)
+    outer_elements = _indices(outer_elements, n_out, "outer elements", ndim=2)
+    if outer_elements.shape[1:] != (3,):
+        raise ValueError(f"outer elements must be (NE, 3), not {outer_elements.shape}")
+    io_ = _indices(interface_outer, n_out, "interface_outer")
+    ib = _indices(interface_base, base.n_nodes, "interface_base")
+    outer_open = _indices(outer_open, n_out, "outer_open")
     if io_.shape != ib.shape or len(io_) < 2:
         raise ValueError("the interface needs two nodes or more, paired one to one")
     gap = np.hypot(*(outer_nodes[io_] - base.nodes[ib, :2]).T)
@@ -302,14 +318,17 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=500
     live = free[ei] | free[ej]
     ei, ej = ei[live], ej[live]
     fi, fj = free[ei], free[ej]
-    if not len(ei):
-        return h, 0, 0.0
-    used = np.unique(np.r_[ei, ej])
+    used = np.unique(np.r_[ei, ej, np.flatnonzero(free)])
     if not (np.isfinite(h[used]).all() and (h[used] > 0).all()):
-        raise ValueError("depths on the limited edges must be finite and positive")
+        raise ValueError("depths on the limited edges and free nodes must be finite and "
+                         "positive")
+    # the bounds hold for every free node, on an edge or not (review round 9
+    # F10)
     if hmax is not None:
         h = np.where(free, np.minimum(h, hmax), h)
     h = np.where(free, np.maximum(h, hmin), h)
+    if not len(ei):
+        return h, 0, 0.0
     for it in range(int(max_iter)):
         hi, hj = h[ei], h[ej]
         r = np.abs(hi - hj) / (hi + hj)
@@ -360,6 +379,8 @@ def trim_lone_corners(elements, mutable, keep_nodes=(), max_rounds=20):
     keep = set(int(v) for v in keep_nodes)
     dropped, left = 0, []
     for _ in range(max_rounds):
+        if len(t) == 0:
+            break
         count = np.bincount(t.ravel(), minlength=int(t.max()) + 1)
         edge_count: dict[tuple[int, int], int] = {}
         for a, b in np.sort(np.vstack([t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]]), axis=1).tolist():
@@ -371,9 +392,15 @@ def trim_lone_corners(elements, mutable, keep_nodes=(), max_rounds=20):
             a, b = sorted(int(x) for x in t[k] if x != v)
             # only a spike: the side facing the lone node is shared, so the
             # element's removal leaves no new lone node behind
-            if mut[k] and not (set(t[k].tolist()) & keep) and edge_count[(a, b)] == 2:
+            # Removals are judged against what survives: each one takes its
+            # edges out of the count, so two elements that each lean on the
+            # other's shared side are not both dropped (review round 9 F9).
+            if (not drop[k] and mut[k] and not (set(t[k].tolist()) & keep)
+                    and edge_count[(a, b)] == 2):
                 drop[k] = True
-            else:
+                for e in ((t[k, 0], t[k, 1]), (t[k, 1], t[k, 2]), (t[k, 2], t[k, 0])):
+                    edge_count[tuple(sorted(int(x) for x in e))] -= 1
+            elif not drop[k]:
                 left.append(v)
         if not drop.any():
             break

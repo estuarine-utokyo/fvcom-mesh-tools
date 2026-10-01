@@ -665,3 +665,30 @@ def test_export_types_and_values_are_written_as_given(tmp_path):
                           sponge=iter([(0, 1e-5, 1e-9)]))
     row = w["spg"].read_text().splitlines()[1].split()
     assert row[0] == "1" and float(row[1]) == 1e-5 and float(row[2]) == 1e-9
+
+
+def test_an_interrupted_restore_keeps_the_previous_files(tmp_path, monkeypatch):
+    """Review round 9 F3: an interrupt while putting files back deleted them."""
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
+
+    out = tmp_path / "case"
+    export_fvcom_case(_tri(), out, "t")
+    old_grd = (out / "t_grd.dat").read_bytes()
+    m = _tri()
+    m.nodes[2, 0] = 10.0
+    real, calls = Path.replace, {"n": 0}
+
+    def flaky(self, target):
+        if ".previous" in str(self):
+            raise KeyboardInterrupt
+        if ".export." in str(self):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("injected")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky)
+    with pytest.raises(KeyboardInterrupt):
+        export_fvcom_case(m, out, "t")
+    kept = list(out.glob(".t.export.*/.previous/t_grd.dat"))
+    assert len(kept) == 1 and kept[0].read_bytes() == old_grd

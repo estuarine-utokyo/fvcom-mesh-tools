@@ -277,3 +277,47 @@ def test_frozen_base_is_checked_bit_for_bit():
         verify_frozen_base(replace(base, depths=np.array([-0.0, 5.0, 5.0])), base, [])
     with pytest.raises(ValueError, match="coordinates changed"):
         verify_frozen_base(replace(base, nodes=nodes.astype(np.float32)), base, [])
+
+
+def test_trim_lone_corners_does_not_drop_mutually_supporting_elements():
+    """Review round 9 F9: both triangles of a square were dropped, then the
+    next round reduced an empty array."""
+    import numpy as np
+
+    from fvcom_mesh_tools.extend import trim_lone_corners
+
+    out, mut, rep = trim_lone_corners(np.array([[0, 1, 2], [0, 2, 3]]), [True, True])
+    assert len(out) == 1 and rep["n_elements_dropped"] == 1
+    out, _, _ = trim_lone_corners(np.empty((0, 3), np.int64), np.empty(0, bool))
+    assert out.shape == (0, 3)
+
+
+def test_free_depth_bounds_hold_without_any_live_edge():
+    """Review round 9 F10."""
+    import numpy as np
+
+    from fvcom_mesh_tools.extend import rfactor_smooth_free
+
+    h, it, r = rfactor_smooth_free([5, 5, 1], np.array([0]), np.array([1]),
+                                   [False, False, True], rmax=0.2, hmin=3, hmax=4)
+    assert list(h) == [5, 5, 3] and it == 0
+
+
+def test_merge_refuses_fractional_indices_and_a_float32_base():
+    """Review round 9 F4 and F6."""
+    import numpy as np
+    import pytest
+
+    from fvcom_mesh_tools.extend import merge_outer
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    base = Fort14Mesh("b", np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
+                      np.full(4, 5.0), np.array([[0, 1, 2], [0, 2, 3]]), [np.array([1, 2])], [])
+    outer = np.array([[1.0, 0.0], [1.0, 1.0], [2.0, 0.0], [2.0, 1.0]])
+    with pytest.raises(ValueError, match="whole number"):
+        merge_outer(base, outer, np.array([[0.0, 2.0, 1.9], [2.0, 3.0, 1.0]]),
+                    [0, 1], [1, 2], [2, 3])
+    b32 = Fort14Mesh("b", base.nodes.astype(np.float32), base.depths.astype(np.float32),
+                     base.elements, base.open_boundaries, [])
+    with pytest.raises(ValueError, match="float64"):
+        merge_outer(b32, outer, np.array([[0, 2, 1], [2, 3, 1]]), [0, 1], [1, 2], [2, 3])

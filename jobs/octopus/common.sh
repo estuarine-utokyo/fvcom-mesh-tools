@@ -35,7 +35,10 @@ export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
 export DATA_DIR WORK_DIR
 # OCTOPUS site layer: the shared FVCOM library install, beside $DATA_DIR in
 # the group area (override with FVCOM_LIBS).
-export FVCOM_LIBS="${FVCOM_LIBS:-$(dirname "$DATA_DIR")/local/fvcom/libs/install-oneapi-2025.3.1}"
+# Made absolute here, before any job changes directory: a relative override
+# would otherwise name another place inside the case (review round 9 F14).
+export FVCOM_LIBS
+FVCOM_LIBS=$(realpath -m -- "${FVCOM_LIBS:-$(dirname "$DATA_DIR")/local/fvcom/libs/install-oneapi-2025.3.1}")
 
 # conda's activate scripts are not `set -u` clean.
 set +u

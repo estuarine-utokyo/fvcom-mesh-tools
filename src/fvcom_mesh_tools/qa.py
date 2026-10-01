@@ -567,13 +567,26 @@ def run_qa(
         )
 
     # -- 0. node index integrity (must hold before any geometry work) ------
-    bad_idx = int(((mesh.elements < 0) | (mesh.elements >= n_nodes)).sum()) if ne else 0
-    seg_ids = [np.asarray(s, dtype=np.int64) for s in mesh.open_boundaries] + [
-        np.asarray(s, dtype=np.int64) for _ib, s in mesh.land_boundaries
-    ]
-    for s in seg_ids:
-        if s.size:
-            bad_idx += int(((s < 0) | (s >= n_nodes)).sum())
+    # Counted on the values as given, before any cast: a fractional or
+    # non-finite id would otherwise be truncated to a valid one and pass
+    # (review round 9 F5). Elements must be integers outright: the geometry
+    # below indexes with them.
+    def _bad_ids(a, integer_only=False) -> int:
+        arr = np.asarray(a)
+        if arr.size == 0:
+            return 0
+        if arr.dtype.kind == "b" or arr.dtype.kind not in "iuf" or (
+                integer_only and arr.dtype.kind == "f"):
+            return int(arr.size)
+        bad = (arr < 0) | (arr >= n_nodes)
+        if arr.dtype.kind == "f":
+            with np.errstate(invalid="ignore"):
+                bad |= ~np.isfinite(arr) | (arr != np.round(arr))
+        return int(bad.sum())
+
+    bad_idx = _bad_ids(mesh.elements, integer_only=True) if ne else 0
+    for s in [*mesh.open_boundaries, *(s for _ib, s in mesh.land_boundaries)]:
+        bad_idx += _bad_ids(s)
     checks.append(QACheck(
         "node_index_valid", "fvcom", True, bad_idx == 0,
         f"0 <= id < {n_nodes}", f"out-of-range refs = {bad_idx}", bad_idx,

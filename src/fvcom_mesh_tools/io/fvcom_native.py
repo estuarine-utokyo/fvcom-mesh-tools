@@ -373,7 +373,9 @@ def _check_cor(mesh: Fort14Mesh, cor) -> np.ndarray:
 
 
 def _check_sponge(mesh: Fort14Mesh, sponge) -> list[tuple[int, float, float]]:
-    rows = list(sponge) if sponge else []
+    # ``is None``, not truthiness: a NumPy row array has no truth value
+    # (review round 9 F8)
+    rows = [] if sponge is None else list(sponge)
     if not rows:
         return []
     arr = np.asarray(rows, dtype=float)
@@ -436,6 +438,11 @@ def export_fvcom_case(
     import tempfile
 
     stage = Path(tempfile.mkdtemp(dir=outdir, prefix=f".{casename}.export."))
+    # The stage directory is removed only after a known outcome: nothing
+    # replaced yet, everything published, or everything put back. Any other
+    # exit -- a failed restore, or an interrupt in the middle of one -- keeps
+    # it, with the previous files in .previous (review rounds 8 F2, 9 F3).
+    state = "staging"
     try:
         staged: dict[str, Path] = {
             "grd": write_grd(mesh, stage / f"{casename}_grd.dat"),
@@ -450,13 +457,11 @@ def export_fvcom_case(
             staged["2dm"] = write_2dm(
                 mesh, stage / f"{casename}.2dm", z_convention=z_convention,
             )
-        # Publication keeps every file it replaces until all are in place,
-        # and puts them back if one move fails; if that fails too, the stage
-        # directory is kept and named (review round 8 F2).
         keep = stage / ".previous"
         keep.mkdir()
         written: dict[str, Path] = {}
         moved: list[Path] = []
+        state = "publishing"
         try:
             for kind, p in staged.items():
                 dst = outdir / p.name
@@ -466,6 +471,7 @@ def export_fvcom_case(
                 moved.append(dst)
                 written[kind] = dst
         except BaseException:
+            state = "restoring"
             unrestored = []
             for dst in moved:
                 try:
@@ -476,12 +482,13 @@ def export_fvcom_case(
                 except OSError:
                     unrestored.append(dst.name)
             if unrestored:
-                stage = None          # keep it: it holds the previous files
                 raise OSError(f"export into {outdir} failed and {unrestored} could not be "
                               f"restored; the previous files are in {keep}") from None
+            state = "restored"
             raise
+        state = "done"
     finally:
-        if stage is not None:
+        if state in ("staging", "done", "restored"):
             shutil.rmtree(stage, ignore_errors=True)
     return written
 

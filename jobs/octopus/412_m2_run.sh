@@ -13,8 +13,16 @@
 # Required: FMESH_RUN_ROOT, FMESH_CASE.
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
-# INVALIDATE first, before anything that can fail (review 2, R1)
-rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/${FMESH_CASE:?set FMESH_CASE}/RUN_OK"
+# One job per case: the lock is taken atomically before the marker is
+# invalidated or any history removed (review round 9 F2); a lock left by a
+# killed job names itself and must be removed by hand.
+CASE_DIR=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/${FMESH_CASE:?set FMESH_CASE}
+[ -d "$CASE_DIR" ] || { echo "not staged: $CASE_DIR"; exit 2; }
+mkdir -- "$CASE_DIR/.running" 2>/dev/null \
+    || { echo "another job is running $CASE_DIR (or left $CASE_DIR/.running)"; exit 2; }
+trap 'rmdir -- "$CASE_DIR/.running"' EXIT
+# INVALIDATE next, before anything that can fail (review 2, R1)
+rm -f "$CASE_DIR/RUN_OK"
 . jobs/octopus/common.sh "412_m2_run" 1
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}

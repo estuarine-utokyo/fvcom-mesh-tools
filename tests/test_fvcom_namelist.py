@@ -98,3 +98,12 @@ def test_relocate_keeps_the_previous_copy_when_the_move_fails(tmp_path, monkeypa
     with pytest.raises(OSError, match="injected"):
         relocate_case(case, dst)
     assert (dst / "marker").read_text() == "previous"
+
+
+def test_set_value_keeps_other_assignments_on_the_line():
+    """Review round 9 F7."""
+    line = " INPUT_DIR='old/', NC_OUT_INTERVAL='seconds = 1800.',\n"
+    out = set_value(line, "INPUT_DIR", fortran_string("/new/input/"))
+    assert out == " INPUT_DIR='/new/input/', NC_OUT_INTERVAL='seconds = 1800.',\n"
+    t = " CASE_TITLE = 'INPUT_DIR = x',\n INPUT_DIR = 'a/',\n"
+    assert set_value(t, "INPUT_DIR", "'b/'").endswith(" INPUT_DIR = 'b/',\n")
