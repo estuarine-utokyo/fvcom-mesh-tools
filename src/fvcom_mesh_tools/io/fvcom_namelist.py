@@ -13,10 +13,29 @@ import re
 import shutil
 from pathlib import Path
 
-__all__ = ["FVCOM_DIR_MAX", "check_fvcom_dirs", "fortran_string", "relocate_case",
-           "set_value"]
+__all__ = ["FVCOM_DIR_MAX", "check_fvcom_dirs", "end_after", "fortran_string",
+           "relocate_case", "set_value"]
 
 FVCOM_DIR_MAX = 80
+
+
+def end_after(start: str, days: float) -> str:
+    """``start`` (``YYYY-MM-DD HH:MM:SS``) plus ``days``, formatted the same way.
+
+    ``days`` must be finite and positive, and the formatted end must come
+    after the start: a zero or sub-second run stages and "passes" with one
+    record (review of the extend tools, round 12 F5).
+    """
+    import math
+    from datetime import datetime, timedelta
+
+    if not (isinstance(days, (int, float)) and math.isfinite(days) and days > 0):
+        raise ValueError(f"the run length must be a finite positive number of days, not {days!r}")
+    t0 = datetime.fromisoformat(start)
+    end = (t0 + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    if datetime.fromisoformat(end) <= t0:
+        raise ValueError(f"{days} days ends where it starts ({start})")
+    return end
 
 
 def fortran_string(text: str) -> str:

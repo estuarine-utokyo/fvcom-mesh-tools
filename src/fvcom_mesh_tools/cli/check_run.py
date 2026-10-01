@@ -228,6 +228,11 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
         # (review round 5 F6)
         if staged is None:
             reasons.append(f"the namelist's grid {gpath} cannot be read for its counts")
+    # a run must integrate over a positive interval: END_DATE after
+    # START_DATE (output may start as late as END_DATE; review round 12 F5)
+    start = _parse_time(vals["START_DATE"]) if vals.get("START_DATE") else None
+    if end is not None and start is not None and end <= start:
+        reasons.append(f"END_DATE {end} is not after the start {start}")
     if end is None:
         reasons.append(f"no END_DATE found in {nml}")
     else:
@@ -282,8 +287,14 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                 # failed 3-D solution can sit under healthy barotropic fields
                 # (review round 10 F4). One record at a time, to bound memory.
                 for name, v in ds.variables.items():
-                    if (name in ("zeta", "ua", "va") or not v.dimensions
-                            or v.dimensions[0] != "time" or v.dtype.kind != "f"):
+                    if (name in ("zeta", "ua", "va") or "time" not in v.dimensions
+                            or v.dtype.kind != "f"):
+                        continue
+                    # FVCOM writes time first; a field with time elsewhere is
+                    # refused, not skipped (review round 12 F4)
+                    if v.dimensions[0] != "time":
+                        reasons.append(f"{f.name}: {name} has time at position "
+                                       f"{v.dimensions.index('time')} of {v.dimensions}")
                         continue
                     if v.shape[0] != len(times):
                         reasons.append(f"{f.name}: {name} has {v.shape[0]} records for "

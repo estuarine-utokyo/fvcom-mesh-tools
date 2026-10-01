@@ -198,3 +198,18 @@ def test_an_empty_three_dimensional_field_fails(tmp_path):
         ds.createVariable("u", "f4", ("time", "siglay", "node"))
     info = check_run(run)
     assert not info["ok"] and any("empty" in r for r in info["reasons"])
+
+
+def test_time_not_first_and_a_zero_length_run_fail(tmp_path):
+    """Review round 12 F4 and F5."""
+    run = _run(tmp_path / "a")
+    with netCDF4.Dataset(run / "output" / "m2_0001.nc", "a") as ds:
+        ds.createDimension("siglay", 2)
+        ds.createVariable("u", "f4", ("siglay", "time", "node"))[:] = np.nan
+    info = check_run(run)
+    assert not info["ok"] and any("time at position" in r for r in info["reasons"])
+    run = _run(tmp_path / "b", times=("2020-01-01T00:00:00.000000",), end="2020-01-01 00:00:00")
+    nml = run / "m2_run.nml"
+    nml.write_text(nml.read_text() + " START_DATE = '2020-01-01 00:00:00',\n")
+    info = check_run(run)
+    assert not info["ok"] and any("not after the start" in r for r in info["reasons"])

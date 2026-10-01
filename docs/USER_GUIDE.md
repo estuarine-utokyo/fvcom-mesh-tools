@@ -678,7 +678,9 @@ authority (the Cabinet Office grids miss or misplace them).
 
 1. **Generation** (`446`): the base is land for this stage. The sizing is
    the coast-distance field limited to the gradation, raised to the
-   time-step floor (a graded dilation, so the extension does not limit dt),
+   time-step floor (a graded dilation that aims to keep the extension from
+   limiting dt; bands along the constrained lines and the final depths can
+   still undercut it, which is reported as a warning, not a failure),
    and set to each constrained line's own spacing on a band along it. The
    base's open boundary and the new one are fixed points and edges, each
    with a *ladder* (a second fixed line one local size inside, as the base's

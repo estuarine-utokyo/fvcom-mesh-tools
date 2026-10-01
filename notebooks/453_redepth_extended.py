@@ -28,6 +28,7 @@ from pyproj import Transformer  # noqa: E402
 from fvcom_mesh_tools.dem.m7001 import node_edges  # noqa: E402
 from fvcom_mesh_tools.dem.sources import SOURCES, non_tp_count, sample, source_files  # noqa: E402
 from fvcom_mesh_tools.extend import (  # noqa: E402
+    check_island_holes,
     check_no_overlap,
     land_segments,
     rfactor_smooth_free,
@@ -42,6 +43,8 @@ from fvcom_mesh_tools.provenance import (  # noqa: E402
     changed_inventory,
     code_identity,
     collect,
+    dataset_files,
+    file_sha256,
 )
 from fvcom_mesh_tools.qa import run_qa  # noqa: E402
 
@@ -54,8 +57,8 @@ p.add_argument("outdir", type=Path)
 p.add_argument("--sources", required=True, help="comma-separated, first covering source wins")
 p.add_argument("--case-name", default=None)
 p.add_argument("--allow-failing-gates", action="store_true",
-               help="write a variant that fails QA or the time-step gate (a deliberate "
-                    "sensitivity case; the report says so)")
+               help="write a variant that fails QA (a deliberate sensitivity case; the "
+                    "report says so); time-step differences are only warnings")
 a = p.parse_args()
 
 recipe = load_extend_recipe(a.recipe)
@@ -92,8 +95,25 @@ atexit.register(_on_exit)
 # provenance captured before any work; the inputs read below (recipe, built
 # case, base) are hashed again at the end and a change fails the run (round 4 F8)
 b = Path(recipe["base"]) / recipe["base_case"]
+# The source must be a build that 447 accepted, and these its very files:
+# a depth-only run must not promote geometry the build refused (review
+# round 12 F2). The island gate is run again below on that build's land.
+built_report = src_dir / "report.json"
+if not built_report.exists():
+    raise SystemExit(f"{built_report} is missing: re-depth takes an accepted build only")
+_built = json.loads(built_report.read_text())
+if _built.get("status") != "ok":
+    raise SystemExit(f"the build in {src_dir} was not accepted (status "
+                     f"{_built.get('status')!r})")
+for k in ("grd", "dep", "obc"):
+    f = src_dir / f"{case}_{k}.dat"
+    if _built.get("products_sha256", {}).get(f.name) != file_sha256(f):
+        raise SystemExit(f"{f.name} is not the file the accepted build wrote")
+LAND = src_dir / "generate" / "land_with_base.shp"
 INPUTS = {"recipe": recipe["recipe_path"],
           "built_case": [str(src_dir / f"{case}_{k}.dat") for k in ("grd", "dep", "obc")],
+          "built_report": str(built_report),
+          "land": [str(q) for q in dataset_files(LAND)],
           "base": [f"{b}_{k}.dat" for k in ("grd", "dep", "obc")]}
 CODE = {"fvcom_mesh_tools": str(ROOT / "src" / "fvcom_mesh_tools" / "__init__.py"),
         "driver": __file__}
@@ -111,6 +131,11 @@ NB = base.n_nodes
 IB = np.asarray(base.open_boundaries[0], np.int64)
 # the full frozen contract on the input, connectivity included (review r2 F3)
 verify_frozen_base(mesh, base, IB)
+import geopandas as gpd  # noqa: E402
+import shapely  # noqa: E402
+
+islands = check_island_holes(mesh, shapely.union_all(list(
+    gpd.read_file(LAND).to_crs(MESH_EPSG).geometry)), NB)
 
 to_ll = Transformer.from_crs(MESH_EPSG, 4326, always_xy=True)
 lon, lat = (np.asarray(v) for v in to_ll.transform(mesh.nodes[:, 0], mesh.nodes[:, 1]))
@@ -146,7 +171,8 @@ back = read_fvcom_case(written["grd"], written["dep"], written["obc"])
 if not np.array_equal(back.depths, h):
     raise SystemExit("the written case does not carry the depths that were built")
 # the acceptance of a build, repeated on the variant (review round 2 F3):
-# the frozen base on what was written, no overlap, QA, the time-step gate
+# the frozen base on what was written, no overlap, QA, and the time-step
+# comparison (a warning)
 verify_frozen_base(back, base, IB)
 check_no_overlap(back, base.n_elements)
 qa = run_qa(back, name=name, path=written["grd"], max_offenders=10_000)
@@ -195,6 +221,7 @@ report = {
                         "p05": float(np.percentile(rel, 5)), "p95": float(np.percentile(rel, 95))},
     "case": name, "n_nodes": mesh.n_nodes,
     "depth_controls": D, "allow_failing_gates": bool(a.allow_failing_gates),
+    "islands": islands,
     "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
     "dt_allowance_s": {"base": dt_base, "new": dt_new}, "problems": problems,
     "warnings": warnings_, "inputs_changed_during_run": changed,

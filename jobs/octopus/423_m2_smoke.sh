@@ -42,14 +42,13 @@ SMOKE=$RUN_ROOT/smoke
 [ -f "$RUN_ROOT/STAGED" ] || { echo "not staged: $RUN_ROOT (no STAGED marker)"; exit 2; }
 python - "$RUN_ROOT" "$SMOKE" "$DAYS" <<'PY'
 import re, sys
-from datetime import datetime, timedelta
 from pathlib import Path
-from fvcom_mesh_tools.io.fvcom_namelist import relocate_case
+from fvcom_mesh_tools.io.fvcom_namelist import end_after, relocate_case
 root, smoke, days = Path(sys.argv[1]), Path(sys.argv[2]), float(sys.argv[3])
 for case in ("base", "refined"):
     nml = (root / case / "m2_run.nml").read_text()
-    start = datetime.fromisoformat(re.search(r"START_DATE\s*=\s*'([^']+)'", nml).group(1))
-    end = (start + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    start = re.search(r"START_DATE\s*=\s*'([^']+)'", nml).group(1)
+    end = end_after(start, days)           # finite, positive (review round 12 F5)
     # the moved directories are checked against FVCOM's 80 bytes before
     # anything is written (review round 6 F11)
     relocate_case(root / case, smoke / case, end_date=end)

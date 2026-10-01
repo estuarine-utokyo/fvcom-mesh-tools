@@ -161,3 +161,13 @@ def test_relocate_into_a_new_place_interrupted_leaves_nothing(tmp_path, monkeypa
     with pytest.raises(KeyboardInterrupt):
         relocate_case(case, dst)
     assert not dst.exists()
+
+
+@pytest.mark.parametrize("days", [0, -1, float("nan"), 1e-9])
+def test_end_after_refuses_an_empty_run(days):
+    """Review round 12 F5."""
+    from fvcom_mesh_tools.io.fvcom_namelist import end_after
+
+    with pytest.raises(ValueError):
+        end_after("2021-01-01 00:00:00", days)
+    assert end_after("2021-01-01 00:00:00", 2) == "2021-01-03 00:00:00"

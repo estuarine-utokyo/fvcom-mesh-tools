@@ -218,3 +218,23 @@ def test_write_fort14_leaves_an_existing_file_on_a_bad_mesh(tmp_path):
     umask = os.umask(0)
     os.umask(umask)
     assert p.stat().st_mode & 0o777 == 0o666 & ~umask
+
+
+@pytest.mark.parametrize("change", ["land_type", "empty_wide"])
+def test_write_fort14_refuses_what_it_cannot_read_back(tmp_path, change):
+    """Review of the extend tools, round 12 F6."""
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh, write_fort14
+
+    nodes = np.array([[0.0, 0], [1, 0], [0, 1]])
+    if change == "land_type":
+        m = Fort14Mesh("t", nodes, np.ones(3), np.array([[0, 1, 2]]), [],
+                       [(0.5, np.array([0, 1]))])
+    else:
+        m = Fort14Mesh("t", nodes, np.ones(3), np.empty((0, 4), np.int64), [], [])
+    p = tmp_path / "x.14"
+    p.write_text("OLD\n")
+    with pytest.raises(ValueError):
+        write_fort14(m, p)
+    assert p.read_text() == "OLD\n"

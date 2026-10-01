@@ -213,12 +213,18 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
     if nodes_a.ndim != 2 or nodes_a.shape[1] != 2 or depths_a.shape != (n_nodes,):
         raise ValueError(f"nodes must be (NP, 2) and depths (NP,), not {nodes_a.shape} "
                          f"and {depths_a.shape}")
-    if mesh.n_elements:
-        if np.asarray(mesh.elements).dtype.kind not in "iu":
-            raise ValueError("elements must be integers")
-        if np.asarray(mesh.elements).shape[1:] != (3,):
-            raise ValueError(f"elements must be (NE, 3), not {np.asarray(mesh.elements).shape}")
-        _indices(mesh.elements, n_nodes, "elements", ndim=2)
+    # whatever the row count: a (0, 4) array is no mesh either, and the
+    # reader cannot read an empty one (review round 12 F6)
+    els_a = np.asarray(mesh.elements)
+    if els_a.ndim != 2 or els_a.shape[1:] != (3,) or els_a.dtype.kind not in "iu":
+        raise ValueError(f"elements must be an integer (NE, 3) array, not {els_a.dtype} "
+                         f"{els_a.shape}")
+    if n_nodes == 0 or len(els_a) == 0:
+        raise ValueError("cannot write an empty mesh")
+    _indices(els_a, n_nodes, "elements", ndim=2)
+    for ibtype, _b in mesh.land_boundaries:
+        if isinstance(ibtype, (bool, np.bool_)) or not isinstance(ibtype, (int, np.integer)):
+            raise ValueError(f"a land boundary type must be a whole number, not {ibtype!r}")
     for b in mesh.open_boundaries:
         _indices(b, n_nodes, "an open boundary")
     for _t, b in mesh.land_boundaries:

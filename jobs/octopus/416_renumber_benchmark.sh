@@ -48,17 +48,20 @@ for case in base refined; do
 done
 
 # A shortened copy of each case, so the staged twenty-day run is untouched.
-BENCH=$RUN_ROOT/bench
+# one working directory per invocation, taken atomically: a shared bench/
+# let a second benchmark restage the cases under the first (review round
+# 12 F3)
+BENCH=$(mktemp -d "$RUN_ROOT/bench_XXXX")
+echo "bench = $BENCH"
 python - "$RUN_ROOT" "$BENCH" "$DAYS" <<'PY'
 import re, sys
-from datetime import datetime, timedelta
 from pathlib import Path
-from fvcom_mesh_tools.io.fvcom_namelist import relocate_case
+from fvcom_mesh_tools.io.fvcom_namelist import end_after, relocate_case
 root, bench, days = Path(sys.argv[1]), Path(sys.argv[2]), float(sys.argv[3])
 for case in ("base", "refined"):
     nml = (root / case / "m2_run.nml").read_text()
-    start = datetime.fromisoformat(re.search(r"START_DATE\s*=\s*'([^']+)'", nml).group(1))
-    end = (start + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    start = re.search(r"START_DATE\s*=\s*'([^']+)'", nml).group(1)
+    end = end_after(start, days)           # finite, positive (review round 12 F5)
     # the moved directories are checked against FVCOM's 80 bytes before
     # anything is written (review round 6 F11)
     relocate_case(root / case, bench / case, end_date=end)

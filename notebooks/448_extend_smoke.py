@@ -21,7 +21,7 @@ import argparse
 import importlib.util
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +30,7 @@ from pyproj import Transformer
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from fvcom_mesh_tools.io.fvcom_namelist import end_after  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import (  # noqa: E402
     apply_obc_depth_control,
     export_fvcom_case,
@@ -62,6 +63,11 @@ a.case, a.root = a.case.resolve(), a.root.resolve()
 # FVCOM would cut a longer run directory (round 4 F13): checked before the
 # root is taken
 M383.check_fvcom_dirs(a.root / "extended" / "input", a.root / "extended" / "output")
+# a finite positive run, checked before the root is taken (review round 12 F5)
+try:
+    M383.END = end_after(M383.START, a.days)
+except ValueError as err:
+    raise SystemExit(str(err)) from None
 a.root = reserve(a.root)
 
 grd, dep, obc = (Path(f"{a.case}_{k}.dat") for k in ("grd", "dep", "obc"))
@@ -73,8 +79,6 @@ if len(mesh.open_boundaries) != 1:
 mesh, change = apply_obc_depth_control(mesh)
 M383.DTE = M414.dividing_step(M383.NC_OUT_INTERVAL_SECONDS, M383.ISPLIT,
                               M414.external_step(mesh))
-start = datetime.fromisoformat(M383.START)
-M383.END = (start + timedelta(days=a.days)).strftime("%Y-%m-%d %H:%M:%S")
 period, gauges = M383.tide_constants() if a.gauge in ("ABURATUBO", "MERA") else (None, None)
 if gauges is None:
     raise SystemExit("--gauge must be ABURATUBO or MERA (the gauges 383 reads)")

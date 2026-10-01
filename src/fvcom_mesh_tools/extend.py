@@ -11,7 +11,9 @@ Sizing (all in metres on a lon/lat lattice with metric ``x``, ``y``):
 * the ambient field (coast distance, max edge) is limited to the gradation;
 * the time-step floor ``dt * sqrt(g * depth) / Cr`` is raised into a field
   that is itself gradation-feasible (a graded dilation), and the ambient
-  field may not go below it -- the extension must not be what limits dt;
+  field may not go below it -- the aim is that the extension does not limit
+  dt; where bands or the final depths undercut it, the build reports a
+  warning (owner, 2026-10-01);
 * along each constrained line (the base interface, the new open boundary)
   the size is **set** to the line's own spacing on a band, and graded away
   from it both upward and downward.

@@ -178,6 +178,10 @@ depth_report = {
 say("depths: " + json.dumps(depth_report))
 
 # ----------------------------------------------------------------- export
+# no hole in the new sea without land in it (review round 11 F7), checked
+# before anything is written (round 12 F2)
+islands = check_island_holes(merged, land_utm, base.n_nodes)
+say("islands: " + json.dumps(islands))
 merged.land_boundaries = land_segments(merged.elements, merged.open_boundaries)
 written = export_fvcom_case(merged, OUT, CASE, cor=lat, obc_depth_control=False)
 write_fort14(merged, OUT / f"{CASE}.14")
@@ -194,12 +198,10 @@ if not np.array_equal(back.depths, merged.depths):
 # writer rounds coordinates (review F9)
 contract = verify_frozen_base(back, base, IB)
 overlap = check_no_overlap(back, base.n_elements)      # anywhere, not only the seam (r2 F9)
-# no hole in the new sea without land in it (review round 11 F7)
-islands = check_island_holes(back, land_utm, base.n_nodes)
-say("islands: " + json.dumps(islands))
 
-# the extension must not be what limits the time step (review F4): the
-# smallest edge / sqrt(g H) over the new elements against the base's
+# whether the extension limits the time step (review F4; a warning, not a
+# failure -- owner, 2026-10-01): the smallest edge / sqrt(g H) over the new
+# elements against the base's
 def _dt_allow(mesh, elems):
     xy = mesh.nodes[elems, :2]
     edge = np.linalg.norm(xy - np.roll(xy, 1, axis=1), axis=2).min(axis=1)
