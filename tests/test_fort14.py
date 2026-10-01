@@ -196,3 +196,25 @@ def test_boundary_ids_are_checked_on_read_and_write(tmp_path):
     with pytest.raises(ValueError, match="whole number"):
         write_fort14(m, tmp_path / "w.14")
     assert not (tmp_path / "w.14").exists()
+
+
+def test_write_fort14_leaves_an_existing_file_on_a_bad_mesh(tmp_path):
+    """Review of the extend tools, round 11 F5."""
+    import os
+
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh, write_fort14
+
+    p = tmp_path / "case.14"
+    p.write_text("OLD CASE\n")
+    bad = Fort14Mesh("t", np.array([[0.0, 0], [1, 0], [0, 1]]), np.ones(3),
+                     np.array([[0, 1, 2, 0]]), [], [])
+    with pytest.raises(ValueError, match=r"\(NE, 3\)"):
+        write_fort14(bad, p)
+    assert p.read_text() == "OLD CASE\n" and list(tmp_path.iterdir()) == [p]
+    good = Fort14Mesh("t", bad.nodes, bad.depths, np.array([[0, 1, 2]]), [], [])
+    write_fort14(good, p)
+    umask = os.umask(0)
+    os.umask(umask)
+    assert p.stat().st_mode & 0o777 == 0o666 & ~umask

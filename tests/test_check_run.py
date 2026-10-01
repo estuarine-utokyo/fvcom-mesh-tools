@@ -188,3 +188,13 @@ def test_a_non_finite_three_dimensional_field_fails(tmp_path):
     assert not info["ok"]
     assert any(" u is not finite" in r for r in info["reasons"])
     assert any(" w is not finite" in r for r in info["reasons"])
+
+
+def test_an_empty_three_dimensional_field_fails(tmp_path):
+    """Review round 11 F4."""
+    run = _run(tmp_path)
+    with netCDF4.Dataset(run / "output" / "m2_0001.nc", "a") as ds:
+        ds.createDimension("siglay", 0)
+        ds.createVariable("u", "f4", ("time", "siglay", "node"))
+    info = check_run(run)
+    assert not info["ok"] and any("empty" in r for r in info["reasons"])

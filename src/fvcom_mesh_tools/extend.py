@@ -31,6 +31,7 @@ from fvcom_mesh_tools.sizing import _limit
 
 __all__ = [
     "band_field",
+    "check_island_holes",
     "check_no_overlap",
     "land_segments",
     "compose_sizing",
@@ -256,6 +257,40 @@ def check_no_overlap(merged: Fort14Mesh, n_base_elements: int, rel_tol: float = 
             raise ValueError(f"{len(bad)} new element(s) overlap the base, e.g. element "
                              f"{n_base_elements + k} ({float(area[cand == k][0]):.3g} m2)")
     return {"n_outer_touching_base": int(len(cand))}
+
+
+def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int) -> dict:
+    """Every hole in the new part of the mesh must hold some real land.
+
+    A closed boundary loop without an open-boundary node, touching a node
+    beyond the base's ``n_base_nodes``, is an island; the polygon it bounds
+    must intersect ``land`` (the supplied land, in the mesh's coordinates)
+    over a positive area. A hole in open water -- elements lost in finishing
+    or repair -- passed every other check (review round 11 F7). Raises on
+    the first such hole; returns counts.
+    """
+    import shapely
+
+    from fvcom_mesh_tools.io.fvcom_native import boundary_loops
+
+    xy = np.asarray(mesh.nodes)[:, :2]
+    obc = set(int(v) for c in mesh.open_boundaries for v in np.asarray(c).tolist())
+    n_islands, bad = 0, []
+    for loop in boundary_loops(np.asarray(mesh.elements)):
+        loop = [int(v) for v in loop]
+        if obc & set(loop) or max(loop) < n_base_nodes:
+            continue
+        n_islands += 1
+        hole = shapely.Polygon(xy[loop])
+        if not hole.is_valid:
+            hole = hole.buffer(0)
+        if land.intersection(hole).area <= 0:
+            bad.append((loop[0], float(hole.area)))
+    if bad:
+        v, a = bad[0]
+        raise ValueError(f"{len(bad)} hole(s) in the new mesh hold no land, e.g. at node {v} "
+                         f"({a:.0f} m2): sea is missing there")
+    return {"n_new_islands": n_islands}
 
 
 def land_segments(elements, open_chains) -> list[tuple[int, np.ndarray]]:

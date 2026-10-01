@@ -289,6 +289,15 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                         reasons.append(f"{f.name}: {name} has {v.shape[0]} records for "
                                        f"{len(times)} times")
                         continue
+                    # an empty record is finite only vacuously (round 11 F4)
+                    if any(n == 0 for n in v.shape[1:]):
+                        reasons.append(f"{f.name}: {name} has shape {v.shape}, an empty "
+                                       f"dimension")
+                        continue
+                    for dim, n in zip(v.dimensions[1:], v.shape[1:]):
+                        if dim in ("node", "nele") and n != sizes.get(dim, n):
+                            reasons.append(f"{f.name}: {name} has {n} {dim}, the history "
+                                           f"{sizes[dim]}")
                     for k in range(v.shape[0]):
                         if not np.isfinite(np.ma.filled(v[k], np.nan)).all():
                             reasons.append(f"{f.name}: {name} is not finite at record {k}")

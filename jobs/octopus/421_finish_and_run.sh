@@ -39,11 +39,18 @@ RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
 # accepted product may be finished and staged (review F5).
 [ -f "$OUTDIR/ACCEPTED" ] || { echo "not accepted: $OUTDIR (no ACCEPTED marker)"; exit 2; }
 # exits 3 -- and stops this job -- when the r-factor limit is not reached
-python -m fvcom_mesh_tools.cli.finish_depths "$OUTDIR" \
+# Finished into this run's own root, not the refinement's shared
+# fvcom_finished/: two runs of one refinement with different depth controls
+# overwrote each other there (review round 11 F2).
+FINDIR=$RUN_ROOT/finished
+python -m fvcom_mesh_tools.cli.finish_depths "$OUTDIR" --outdir "$FINDIR" \
     --hmin "${FMESH_HMIN:-3}" --hmax "${FMESH_HMAX:-300}" \
     --rfactor "${FMESH_RFACTOR:-0.2}" --method "${FMESH_METHOD:-equal}"
-FIN=$(ls "$OUTDIR"/fvcom_finished/*_grd.dat)
-FIN=${FIN%_grd.dat}
+shopt -s nullglob
+grds=("$FINDIR"/*_grd.dat)
+shopt -u nullglob
+[ "${#grds[@]}" -eq 1 ] || { echo "expected one finished case in $FINDIR, found ${#grds[@]}"; exit 2; }
+FIN=${grds[0]%_grd.dat}
 echo "finished case = $FIN"
 # The base is the one the refinement started from, as its report names it:
 # the same grid, open boundary and depth product. goto2023 was hard-coded
@@ -53,19 +60,24 @@ echo "finished case = $FIN"
 # staging the other would compare bathymetry products as well as meshes.
 BASEDIR=$RUN_ROOT/base_case
 mkdir -p "$BASEDIR"
-read -r B_GRD B_DEP B_OBC < <(python -c "
-import json, sys
+# checked and copied in Python: the paths never pass through shell word
+# splitting, which broke a path with a space (review round 11 F8)
+python - "$OUTDIR/report.json" "$BASEDIR" <<'PY'
+import json, shutil, sys
+from pathlib import Path
 r = json.load(open(sys.argv[1]))
-print(r['base_mesh'], r['base_depth'], r['base_obc'])" "$OUTDIR/report.json")
-for f in "$B_GRD" "$B_DEP" "$B_OBC"; do
-    [ -f "$f" ] || { echo "the base named in the report is missing: $f"; exit 2; }
-done
-echo "base = $B_GRD"
-cp "$B_GRD" "$BASEDIR/TokyoBayB_grd.dat"
-cp "$B_OBC" "$BASEDIR/TokyoBayB_obc.dat"
-B_COR=${B_GRD%_grd.dat}_cor.dat
-[ -f "$B_COR" ] && cp "$B_COR" "$BASEDIR/TokyoBayB_cor.dat"
-cp "$B_DEP" "$BASEDIR/TokyoBayB_dep.dat"
+dst = Path(sys.argv[2])
+src = {"grd": Path(r["base_mesh"]), "dep": Path(r["base_depth"]), "obc": Path(r["base_obc"])}
+missing = [str(p) for p in src.values() if not p.is_file()]
+if missing:
+    sys.exit(f"the base named in the report is missing: {missing}")
+for kind, p in src.items():
+    shutil.copy2(p, dst / f"TokyoBayB_{kind}.dat")
+cor = src["grd"].with_name(src["grd"].name.removesuffix("_grd.dat") + "_cor.dat")
+if cor.is_file():
+    shutil.copy2(cor, dst / "TokyoBayB_cor.dat")
+print(f"base = {src['grd']}")
+PY
 python notebooks/414_refine_m2_prep.py --root "$RUN_ROOT" \
     --base "$BASEDIR/TokyoBayB" --refined "$FIN"
 date -Is > "$RUN_ROOT/STAGED"

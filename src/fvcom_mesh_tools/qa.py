@@ -533,16 +533,26 @@ def run_qa(
     """
     n_nodes = mesh.n_nodes
     ne = mesh.n_elements
-    # counted only from well-formed boundaries; a malformed one fails the
-    # index gate below instead of raising here (review round 10 F8)
-    try:
-        obc_nodes_all = (
-            np.unique(np.concatenate([np.asarray(s).astype(np.int64, casting="safe")
-                                      for s in mesh.open_boundaries]))
-            if mesh.open_boundaries else np.empty(0, dtype=np.int64)
-        )
-    except (TypeError, ValueError):
-        obc_nodes_all = np.empty(0, dtype=np.int64)
+    # Validated, then normalised: whole floats and unsigned ids in range are
+    # ids; anything else is left out here and fails the index gate below,
+    # which then ends the QA (review rounds 10 F8, 11 F3).
+    def _as_ids(a):
+        try:
+            arr = np.asarray(a)
+        except (TypeError, ValueError):
+            return None
+        if arr.ndim != 1 or arr.dtype.kind not in "iuf":
+            return None
+        if arr.dtype.kind == "f" and not (np.isfinite(arr).all()
+                                          and (arr == np.round(arr)).all()):
+            return None
+        if arr.size and (arr.min() < 0 or arr.max() >= n_nodes):
+            return None
+        return arr.astype(np.int64)
+
+    obc_ids = [_as_ids(s) for s in mesh.open_boundaries]
+    obc_nodes_all = (np.unique(np.concatenate([a for a in obc_ids if a is not None]))
+                     if any(a is not None for a in obc_ids) else np.empty(0, dtype=np.int64))
     params: dict[str, Any] = {
         "min_angle_deg": min_angle_deg,
         "max_angle_deg": max_angle_deg,

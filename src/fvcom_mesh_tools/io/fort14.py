@@ -208,9 +208,16 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
     path = Path(path).resolve()
     n_nodes = mesh.n_nodes
     n_elements = mesh.n_elements
+    # shapes too, before the destination is touched (review round 11 F5)
+    nodes_a, depths_a = np.asarray(mesh.nodes), np.asarray(mesh.depths)
+    if nodes_a.ndim != 2 or nodes_a.shape[1] != 2 or depths_a.shape != (n_nodes,):
+        raise ValueError(f"nodes must be (NP, 2) and depths (NP,), not {nodes_a.shape} "
+                         f"and {depths_a.shape}")
     if mesh.n_elements:
         if np.asarray(mesh.elements).dtype.kind not in "iu":
             raise ValueError("elements must be integers")
+        if np.asarray(mesh.elements).shape[1:] != (3,):
+            raise ValueError(f"elements must be (NE, 3), not {np.asarray(mesh.elements).shape}")
         _indices(mesh.elements, n_nodes, "elements", ndim=2)
     for b in mesh.open_boundaries:
         _indices(b, n_nodes, "an open boundary")
@@ -221,31 +228,52 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
     n_land_segs = len(mesh.land_boundaries)
     n_land_nodes = sum(len(ids) for _, ids in mesh.land_boundaries)
 
-    with path.open("w") as f:
-        f.write(f"{mesh.title}\n")
-        f.write(f"{n_elements} {n_nodes}\n")
+    # written beside the destination and moved over it: a failure part-way
+    # leaves an existing file as it was (round 11 F5)
+    import os
+    import tempfile
 
-        for i in range(n_nodes):
-            x, y = mesh.nodes[i]
-            # shortest round-trip-exact text, as the depths already were:
-            # .15f cut 0.12345678912345678 (review of the extend tools,
-            # round 3 F8)
-            f.write(f"{i + 1:>10d}  {float(x)!r}  {float(y)!r}  {mesh.depths[i]:.17g}\n")
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as f:
+            _write_fort14_body(f, mesh, n_nodes, n_elements, n_open_segs, n_open_nodes,
+                               n_land_segs, n_land_nodes)
+        # mkstemp makes the file 0600; give it the mode a plain open would
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
-        for i in range(n_elements):
-            n0, n1, n2 = mesh.elements[i]
-            f.write(f"{i + 1:>10d}  3  {n0 + 1:>10d}  {n1 + 1:>10d}  {n2 + 1:>10d}\n")
 
-        f.write(f"{n_open_segs} = Number of open boundaries\n")
-        f.write(f"{n_open_nodes} = Total number of open boundary nodes\n")
-        for k, ids in enumerate(mesh.open_boundaries, start=1):
-            f.write(f"{len(ids)} = Number of nodes for open boundary {k}\n")
-            for node in ids:
-                f.write(f"{int(node) + 1}\n")
+def _write_fort14_body(f, mesh, n_nodes, n_elements, n_open_segs, n_open_nodes,
+                       n_land_segs, n_land_nodes) -> None:
+    f.write(f"{mesh.title}\n")
+    f.write(f"{n_elements} {n_nodes}\n")
 
-        f.write(f"{n_land_segs} = Number of normal flow boundaries\n")
-        f.write(f"{n_land_nodes} = Total number of land boundary nodes\n")
-        for k, (ibtype, ids) in enumerate(mesh.land_boundaries, start=1):
-            f.write(f"{len(ids)} {ibtype} = Number of nodes for land boundary {k}\n")
-            for node in ids:
-                f.write(f"{int(node) + 1}\n")
+    for i in range(n_nodes):
+        x, y = mesh.nodes[i]
+        # shortest round-trip-exact text, as the depths already were:
+        # .15f cut 0.12345678912345678 (review of the extend tools,
+        # round 3 F8)
+        f.write(f"{i + 1:>10d}  {float(x)!r}  {float(y)!r}  {mesh.depths[i]:.17g}\n")
+
+    for i in range(n_elements):
+        n0, n1, n2 = mesh.elements[i]
+        f.write(f"{i + 1:>10d}  3  {n0 + 1:>10d}  {n1 + 1:>10d}  {n2 + 1:>10d}\n")
+
+    f.write(f"{n_open_segs} = Number of open boundaries\n")
+    f.write(f"{n_open_nodes} = Total number of open boundary nodes\n")
+    for k, ids in enumerate(mesh.open_boundaries, start=1):
+        f.write(f"{len(ids)} = Number of nodes for open boundary {k}\n")
+        for node in ids:
+            f.write(f"{int(node) + 1}\n")
+
+    f.write(f"{n_land_segs} = Number of normal flow boundaries\n")
+    f.write(f"{n_land_nodes} = Total number of land boundary nodes\n")
+    for k, (ibtype, ids) in enumerate(mesh.land_boundaries, start=1):
+        f.write(f"{len(ids)} {ibtype} = Number of nodes for land boundary {k}\n")
+        for node in ids:
+            f.write(f"{int(node) + 1}\n")

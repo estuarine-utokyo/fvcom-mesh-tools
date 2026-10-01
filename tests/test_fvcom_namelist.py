@@ -140,3 +140,24 @@ def test_set_value_ignores_comments():
     assert set_value(t, "INPUT_DIR", "'b/'").endswith(" INPUT_DIR = 'b/',\n")
     with pytest.raises(ValueError, match="found 0"):
         set_value(" ! INPUT_DIR='old/',\n", "INPUT_DIR", "'b/'")
+
+
+def test_relocate_into_a_new_place_interrupted_leaves_nothing(tmp_path, monkeypatch):
+    """Review round 11 F6."""
+    from pathlib import Path
+
+    monkeypatch.setattr(fvcom_namelist, "FVCOM_DIR_MAX", 4096)
+    case = _case(tmp_path)
+    dst = tmp_path / "smoke" / "refined"
+    real = Path.rename
+
+    def moved_then_interrupted(self, target):
+        r = real(self, target)
+        if Path(target) == dst:
+            raise KeyboardInterrupt
+        return r
+
+    monkeypatch.setattr(Path, "rename", moved_then_interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        relocate_case(case, dst)
+    assert not dst.exists()

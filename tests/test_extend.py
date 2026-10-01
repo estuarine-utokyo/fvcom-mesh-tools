@@ -359,3 +359,28 @@ def test_rounding_keeps_depths_inside_their_bounds():
     assert round_depths_inside([3.0000004], 3.0000004)[0] >= 3.0000004
     assert round_depths_inside([3.0000006], 3.0, 3.0000006)[0] <= 3.0000006
     assert list(round_depths_inside(np.array([3.1234567, 7.0]), 3.0)) == [3.123457, 7.0]
+
+
+def test_a_hole_in_the_new_sea_without_land_is_refused():
+    """Review round 11 F7: a missing 1 km square passed every check."""
+    import numpy as np
+    import pytest
+    import shapely
+
+    from fvcom_mesh_tools.extend import check_island_holes
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    n = 5                                     # 5 x 5 nodes, 1 km apart
+    xy = np.array([[i * 1000.0, j * 1000.0] for j in range(n) for i in range(n)])
+    tri = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            if (i, j) == (2, 2):              # the hole
+                continue
+            a, b, c, d = j * n + i, j * n + i + 1, (j + 1) * n + i + 1, (j + 1) * n + i
+            tri += [[a, b, c], [a, c, d]]
+    m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [np.array([0, 1, 2])], [])
+    with pytest.raises(ValueError, match="hold no land"):
+        check_island_holes(m, shapely.Polygon(), n_base_nodes=3)
+    islet = shapely.box(2400, 2400, 2600, 2600)
+    assert check_island_holes(m, islet, n_base_nodes=3) == {"n_new_islands": 1}

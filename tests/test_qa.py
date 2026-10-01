@@ -476,3 +476,16 @@ def test_malformed_boundaries_fail_the_index_gate_without_raising(obc):
     mesh.open_boundaries = [obc]
     report = run_qa(mesh, channel_check=False)
     assert not _check(report, "node_index_valid").passed
+
+
+@pytest.mark.parametrize("dtype", [np.int64, np.float64, np.uint64])
+def test_valid_obc_ids_of_any_numeric_dtype_count_the_same(dtype):
+    """Review of the extend tools, round 11 F3."""
+    mesh = _pristine()
+    base = _pristine()
+    base.open_boundaries = [np.asarray(s, np.int64) for s in base.open_boundaries]
+    mesh.open_boundaries = [np.asarray(s).astype(dtype) for s in mesh.open_boundaries]
+    a = run_qa(base, channel_check=False)
+    b = run_qa(mesh, channel_check=False)
+    assert b.n_obc_nodes == a.n_obc_nodes > 0
+    assert [c.passed for c in b.checks] == [c.passed for c in a.checks]

@@ -240,6 +240,8 @@ staged, kept, done = [], {}, []
 # restore, an interrupt during one -- keeps the .prev backups and the lock
 # (review rounds 5-7, 10 F5).
 state = "staging"
+UMASK = os.umask(0)
+os.umask(UMASK)
 try:
     if out_csv.with_name(out_csv.name + ".RECOVER").exists():
         raise SystemExit(f"{out_csv.name}.RECOVER: an earlier publication failed half-way; "
@@ -256,6 +258,7 @@ try:
         else:
             os.close(fd)
             payload.savefig(tmp, dpi=110, bbox_inches="tight", format="png")
+        os.chmod(tmp, 0o666 & ~UMASK)      # mkstemp makes 0600
     # an existing backup is an unresolved earlier failure: never overwrite
     # it (review round 7 F11)
     old_prev = [p.with_name(p.name + ".prev") for _, p in staged

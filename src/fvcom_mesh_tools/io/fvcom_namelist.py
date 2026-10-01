@@ -127,19 +127,23 @@ def relocate_case(src: Path, dst: Path, nml: str = "m2_run.nml",
         # publishing from before the first rename: an interrupt right after
         # it must not let cleanup delete the previous copy (round 10 F6)
         state = "publishing"
+        existed = dst.exists()
         try:
-            if dst.exists():
+            if existed:
                 dst.rename(prev)
             work.rename(dst)
         except BaseException:
+            # Back to the state before: the previous copy, or no copy at all
+            # when there was none (review round 11 F6).
             state = "restoring"
-            if prev.exists():
-                try:
-                    if dst.exists():             # the new copy got in: take it out
-                        shutil.rmtree(dst)
+            try:
+                if dst.exists() and (not existed or prev.exists()):
+                    shutil.rmtree(dst)           # the new copy got in: take it out
+                if existed and prev.exists():
                     prev.rename(dst)
-                except OSError:
-                    raise OSError(f"could not put {dst} back; it is in {prev}") from None
+            except OSError:
+                raise OSError(f"could not restore {dst}; a previous copy, if any, is in "
+                              f"{prev}") from None
             state = "restored"
             raise
         state = "done"

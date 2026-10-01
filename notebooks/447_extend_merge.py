@@ -29,6 +29,7 @@ from fvcom_mesh_tools.coast_fit import fit_boundary_to_coast  # noqa: E402
 from fvcom_mesh_tools.dem.m7001 import node_edges  # noqa: E402
 from fvcom_mesh_tools.dem.sources import non_tp_count, sample  # noqa: E402
 from fvcom_mesh_tools.extend import (  # noqa: E402
+    check_island_holes,
     check_no_overlap,
     land_segments,
     merge_outer,
@@ -193,6 +194,9 @@ if not np.array_equal(back.depths, merged.depths):
 # writer rounds coordinates (review F9)
 contract = verify_frozen_base(back, base, IB)
 overlap = check_no_overlap(back, base.n_elements)      # anywhere, not only the seam (r2 F9)
+# no hole in the new sea without land in it (review round 11 F7)
+islands = check_island_holes(back, land_utm, base.n_nodes)
+say("islands: " + json.dumps(islands))
 
 # the extension must not be what limits the time step (review F4): the
 # smallest edge / sqrt(g H) over the new elements against the base's
@@ -224,6 +228,7 @@ if dt_new < dt_base:
 (OUT / "merge.json").write_text(json.dumps({
     "finish": {k: v for k, v in info.items() if not isinstance(v, (list, dict))},
     "coast_fit": cf.to_dict(), "frozen_base": contract, "repair": repair,
+    "islands": islands,
     "depths": depth_report,
     "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
     "dt_allowance_s": {"base": dt_base, "new": dt_new}, "problems": problems,
