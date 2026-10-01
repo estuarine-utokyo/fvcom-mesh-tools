@@ -94,6 +94,9 @@ STATE["provenance"] = PROV = collect(
           "driver": __file__},
     files={**INPUTS,
            **{f"bathymetry_{k}": [str(q) for q in v] for k, v in source_files(names).items()}})
+# the recipe hashed is the one parsed above (review round 5 F3)
+if PROV["files"]["recipe"]["sha256"] != recipe["recipe_sha256"]:
+    raise SystemExit("the recipe changed between reading and recording it")
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
 mesh = read_fvcom_case(src_dir / f"{case}_grd.dat", src_dir / f"{case}_dep.dat",
                        src_dir / f"{case}_obc.dat")

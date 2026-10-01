@@ -227,6 +227,9 @@ except FileExistsError:
     raise SystemExit(f"{lock} exists: another design is being published") from None
 staged, kept, done = [], {}, []
 try:
+    if out_csv.with_name(out_csv.name + ".RECOVER").exists():
+        raise SystemExit(f"{out_csv.name}.RECOVER: an earlier publication failed half-way; "
+                         "restore from its .prev files and remove the marker first")
     for path, payload in ((out_csv.with_suffix(".json"),
                            json.dumps(report, indent=1, default=float)),
                           (out_csv.with_suffix(".png"), fig),
@@ -249,11 +252,26 @@ try:
             os.replace(tmp, path)          # atomic on one file system
             done.append(path)
     except BaseException:
-        for path in done:                  # put the previous set back
-            if path in kept:
-                os.replace(kept.pop(path), path)
-            else:
-                path.unlink(missing_ok=True)
+        # put the previous set back, each file on its own; a backup leaves
+        # tracking only once restored, and any that could not be is kept with
+        # a marker naming it (review round 5 F5)
+        stuck = []
+        for path in done:
+            try:
+                if path in kept:
+                    os.replace(kept[path], path)
+                    del kept[path]
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError as exc:
+                stuck.append(f"{path}: {exc}")
+        if stuck:
+            unrestored = {str(p): str(q) for p, q in kept.items() if p in done}
+            for p in [p for p in kept if p not in done]:
+                kept.pop(p).unlink(missing_ok=True)   # never replaced: no backup needed
+            kept.clear()                              # the rest stay on disk
+            out_csv.with_name(out_csv.name + ".RECOVER").write_text(json.dumps(
+                {"restore_from_prev": unrestored, "errors": stuck}, indent=1))
         raise
 finally:
     for prev in kept.values():             # copies of files now in place

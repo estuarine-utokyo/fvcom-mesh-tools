@@ -153,10 +153,18 @@ FVCOM_DIR_MAX = 80
 
 
 def check_fvcom_dirs(*dirs):
-    """Refuse any run directory FVCOM would truncate."""
-    long = [f"{Path(d).resolve()}/" for d in dirs if len(f"{Path(d).resolve()}/") > FVCOM_DIR_MAX]
+    """Refuse any run directory FVCOM would truncate or misread.
+
+    The limit is on bytes, and the namelist is plain ASCII to Fortran: a
+    non-ASCII path is refused outright (review round 5 F7).
+    """
+    paths = [f"{Path(d).resolve()}/" for d in dirs]
+    bad = [p for p in paths if not p.isascii()]
+    if bad:
+        raise SystemExit(f"FVCOM run directories must be ASCII: {bad}")
+    long = [p for p in paths if len(p.encode("ascii")) > FVCOM_DIR_MAX]
     if long:
-        raise SystemExit(f"FVCOM keeps {FVCOM_DIR_MAX} characters of a run directory; "
+        raise SystemExit(f"FVCOM keeps {FVCOM_DIR_MAX} bytes of a run directory; "
                          f"use a shorter root: {long}")
 
 

@@ -997,16 +997,21 @@ def run_qa(
 
     # -- Depth ---------------------------------------------------------------
 
-    shallow = np.where(mesh.depths < min_depth_m)[0]
+    # A depth that is not finite fails here too: a comparison with the
+    # minimum alone lets NaN and +inf through (review round 5 F10).
+    finite = np.isfinite(mesh.depths)
+    n_nonfinite = int((~finite).sum())
+    shallow = np.where(~finite | (mesh.depths < min_depth_m))[0]
+    dmin = float(mesh.depths[finite].min()) if finite.any() else float("nan")
     checks.append(QACheck(
         "min_depth_clip", "depth", True, shallow.size == 0,
-        f">= {min_depth_m:g} m",
-        f"min = {float(mesh.depths.min()):.2f} m, violations = {shallow.size}",
+        f"finite and >= {min_depth_m:g} m",
+        f"min = {dmin:.2f} m, violations = {shallow.size} ({n_nonfinite} not finite)",
         int(shallow.size),
         offenders=_node_offenders(
-            _sort_asc(shallow, mesh.depths), mesh, mesh.depths,
+            _sort_asc(shallow, np.where(finite, mesh.depths, -np.inf)), mesh, mesh.depths,
             limit=max_offenders, value_key="depth_m"),
-        data={"min_depth_m": float(mesh.depths.min())},
+        data={"min_depth_m": dmin, "n_nonfinite_depths": n_nonfinite},
     ))
 
     # -- Informational -------------------------------------------------------

@@ -241,8 +241,12 @@ class CaoNested:
     def depth(self, lon, lat, root: Path) -> np.ndarray:
         from pyproj import Transformer
 
-        lon = np.ravel(np.asarray(lon, float))
-        lat = np.ravel(np.asarray(lat, float))
+        lon = np.asarray(lon, float)
+        lat = np.asarray(lat, float)
+        if lon.shape != lat.shape:
+            raise ValueError(f"query shapes differ: {lon.shape} and {lat.shape}")
+        shape = lon.shape                  # given back (review round 5 F9)
+        lon, lat = np.ravel(lon), np.ravel(lat)
         out = np.full(lon.shape, np.nan)
         best = np.full(lon.shape, np.inf)
         for a in sorted(self.areas(root), key=lambda r: -r["h"]):   # coarse first
@@ -263,7 +267,7 @@ class CaoNested:
             idx = np.flatnonzero(ok)[np.isfinite(val)]
             out[idx] = val[np.isfinite(val)]
             best[idx] = a["h"]
-        return out
+        return out.reshape(shape)
 
 
 SOURCES: dict[str, Any] = {

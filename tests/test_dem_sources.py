@@ -256,3 +256,11 @@ def test_cao_keeps_valid_centres_beside_no_data_and_on_the_last_column():
         cao.grid = lambda *a, g=np.array(grid): g
         lon, lat = centre(i, j)
         assert cao.depth(np.array([lon]), np.array([lat]), Path("."))[0] == pytest.approx(want)
+
+
+def test_cao_keeps_the_query_shape():
+    """Review round 5 F9."""
+    cao = CaoNested(rel="cao", zones={"09": 2451})
+    cao.areas = lambda root: []
+    q = np.full((2, 2), 139.8)
+    assert cao.depth(q, q - 4.3, Path(".")).shape == (2, 2)

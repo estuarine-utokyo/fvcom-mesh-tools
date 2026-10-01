@@ -88,6 +88,8 @@ def _grid_counts(path: Path) -> dict[str, int] | None:
         np_, ne_ = (int(line.split("=")[1]) for line in head)
     except (OSError, StopIteration, IndexError, ValueError):
         return None
+    if np_ < 3 or ne_ < 1:
+        return None
     return {"node": np_, "nele": ne_}
 
 
@@ -166,8 +168,12 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
         grid = _nml_value(nml_text, "GRID_FILE")
         indir = _nml_value(nml_text, "INPUT_DIR")
         if grid and indir:
-            staged = _grid_counts(Path(indir) / grid if Path(indir).is_absolute()
-                                  else run / indir / grid)
+            gpath = Path(indir) / grid if Path(indir).is_absolute() else run / indir / grid
+            staged = _grid_counts(gpath)
+            # a grid named but unreadable is a failure, not a skipped check
+            # (review round 5 F6)
+            if staged is None:
+                reasons.append(f"the namelist's grid {gpath} cannot be read for its counts")
     if end is None:
         reasons.append(f"no END_DATE found in {nml}")
     else:

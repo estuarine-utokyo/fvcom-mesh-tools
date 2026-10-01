@@ -33,7 +33,7 @@ from fvcom_mesh_tools.algorithms.obc_finish import prune_one_wide_protected  # n
 from fvcom_mesh_tools.base_recipe import read_open_boundary  # noqa: E402
 from fvcom_mesh_tools.dem.sources import sample  # noqa: E402
 from fvcom_mesh_tools.extend import band_field, compose_sizing, land_segments  # noqa: E402
-from fvcom_mesh_tools.extend_recipe import load_extend_recipe  # noqa: E402
+from fvcom_mesh_tools.extend_recipe import check_expected, load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.obc_band import build_obc_band  # noqa: E402
@@ -48,6 +48,7 @@ def say(msg):
 
 
 recipe = load_extend_recipe(sys.argv[1])
+check_expected(recipe)          # the recipe the driver recorded (review round 5 F3)
 OUT = Path(sys.argv[2]).resolve()
 OUT.mkdir(parents=True, exist_ok=True)
 S = recipe["settings"]
@@ -144,6 +145,7 @@ np.savez_compressed(OUT / "sizing.npz", lon=lon_g, lat=lat_g, h=h, floor=floor, 
 # and a free node sitting on a fixed edge makes a zero-area sliver there --
 # the third build had 13 such on the new boundary's south side.
 land_test = prep(land_all)
+fixed_lines = prep(shapely.MultiLineString([iface_ll, OBC]))
 
 
 def ladder(arc_ll, h_m):
@@ -152,7 +154,10 @@ def ladder(arc_ll, h_m):
     A guide point is kept only inside the generation domain, a quarter of the
     local size from its edge, and away from land; a guide segment only when
     it stays inside the domain too. Probing beside the line does not show
-    that the guide itself, 1.25 sizes in, is inside (review round 4 F5).
+    that the guide itself, 1.25 sizes in, is inside (review round 4 F5). A
+    segment is tested whole against land and both constrained lines --
+    samples along it can step over a small island (round 5 F4) -- and by
+    samples against the domain.
     Returns the guide points, which to keep, and which consecutive kept
     pairs may be joined.
     """
@@ -166,6 +171,10 @@ def ladder(arc_ll, h_m):
     along = inner[:-1][None] + f * (inner[1:] - inner[:-1])[None]
     join = (sdf.eval(along.reshape(-1, 2)).reshape(len(f), -1) < 0).all(axis=0)
     join &= keep[:-1] & keep[1:]
+    for k in np.flatnonzero(join):
+        seg = shapely.LineString(inner[k:k + 2])
+        if land_test.intersects(seg) or fixed_lines.intersects(seg):
+            join[k] = False
     return inner, keep, join
 
 

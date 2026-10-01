@@ -128,3 +128,11 @@ def test_history_must_be_on_the_staged_mesh(tmp_path):
     assert check_run(_run(tmp_path / "a", grid=(3, 3)))["ok"]
     info = check_run(_run(tmp_path / "b", grid=(4, 3)))
     assert not info["ok"] and any("staged mesh" in r for r in info["reasons"])
+
+
+def test_a_named_grid_that_cannot_be_read_fails(tmp_path):
+    """Review round 5 F6."""
+    run = _run(tmp_path, grid=(3, 3))
+    (run / "input" / "m2_grd.dat").unlink()
+    info = check_run(run)
+    assert not info["ok"] and any("cannot be read" in r for r in info["reasons"])

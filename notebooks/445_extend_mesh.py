@@ -26,7 +26,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from fvcom_mesh_tools.dem.sources import source_files  # noqa: E402
-from fvcom_mesh_tools.extend_recipe import load_extend_recipe  # noqa: E402
+from fvcom_mesh_tools.extend_recipe import EXPECT_ENV, load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.outdir import reserve  # noqa: E402
 from fvcom_mesh_tools.provenance import (  # noqa: E402
     changed_files,
@@ -45,16 +45,15 @@ def say(msg):
 recipe = load_extend_recipe(sys.argv[1] if len(sys.argv) > 1 else os.environ["FMESH_RECIPE"])
 OUT = Path(sys.argv[2] if len(sys.argv) > 2 else REPO / "outputs" / f"extend_{recipe['name']}")
 OUT = OUT.resolve()
-# reserve the output atomically: checking that it is empty and then creating
-# it let two builds into the same directory (review F20)
-OUT = reserve(OUT)
-say(f"recipe {recipe['recipe_path']} -> {OUT}")
-
 # A report is written whatever happens, from the moment the output is
 # reserved (review round 3 F6, round 4 F7): an exit handler writes a failure
 # report unless the final one was written. A failure before the provenance
-# is taken says so ("provenance": null).
+# is taken says so ("provenance": null). The handler is registered before
+# anything else that can fail, a log line included (round 5 F8).
 STATE = {"done": False, "stage": "inputs", "provenance": None, "extra": {}}
+# reserve the output atomically: checking that it is empty and then creating
+# it let two builds into the same directory (review F20)
+OUT = reserve(OUT)
 
 
 def _on_exit():
@@ -66,6 +65,7 @@ def _on_exit():
 
 
 atexit.register(_on_exit)
+say(f"recipe {recipe['recipe_path']} -> {OUT}")
 if not os.environ.get("DATA_DIR"):
     raise SystemExit("DATA_DIR is not set")
 DATA = Path(os.environ["DATA_DIR"])
@@ -100,9 +100,15 @@ STATE["provenance"] = PROV = collect(
     code=code,
     files={**INPUTS, "osm_land": dataset_files(osm_land),
            **{f"bathymetry_{k}": [str(p) for p in v] for k, v in bathy.items()}})
+# the recipe and boundary hashed are the ones parsed above, and the stages
+# must read the same (review round 5 F3)
+for key, name in (("recipe_sha256", "recipe"), ("open_boundary_sha256", "open_boundary")):
+    if PROV["files"][name]["sha256"] != recipe[key]:
+        raise SystemExit(f"{name} changed between reading and recording it")
 
 gen = OUT / "generate"
-env = dict(os.environ, PYTHONPATH=str(REPO / "src"))
+env = dict(os.environ, PYTHONPATH=str(REPO / "src"),
+           **{var: recipe[key] for key, var in EXPECT_ENV.items()})
 # a failed stage still leaves a report with the provenance and the stage that
 # failed (review round 2 F18): the stages are run first, the report written
 # either way, and the exit code is the first failure's

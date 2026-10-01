@@ -447,3 +447,13 @@ def test_overlap_gate_is_local_not_diluted_by_a_large_mesh():
     c = next(c for c in rep.checks if c.check_id == "no_element_overlap")
     assert c.status == "fail"
     assert all(max(p["id"]) < 7 for p in c.offender_ids)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_a_depth_that_is_not_finite_fails_qa(bad):
+    """Review of the extend tools, round 5 F10."""
+    mesh = _grid_mesh()
+    mesh.depths[5] = bad
+    report = run_qa(mesh, channel_check=False)
+    c = _check(report, "min_depth_clip")
+    assert not c.passed and c.data["n_nonfinite_depths"] == 1

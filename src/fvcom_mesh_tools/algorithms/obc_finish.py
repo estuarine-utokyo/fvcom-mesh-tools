@@ -53,6 +53,23 @@ def _area(p0, p1, p2):
                   - (p1[1] - p0[1]) * (p2[0] - p0[0]))
 
 
+def _flip_pair(nodes, a: int, b: int, c: int, d: int):
+    """The two triangles after flipping the edge ``a-b`` shared by triangles
+    ``(a, b, c)`` and ``(a, b, d)`` to ``c-d``, both counter-clockwise; None
+    unless the quadrilateral is strictly convex, i.e. the two diagonals cross
+    inside both. Reorienting the new triangles is not enough: across a
+    concave quadrilateral it hides a flip that folds the mesh (review of the
+    extend tools, round 5 F2).
+    """
+    pa, pb, pc, pd = (nodes[v][:2] for v in (a, b, c, d))
+    if not (_area(pa, pb, pc) * _area(pa, pb, pd) < 0
+            and _area(pc, pd, pa) * _area(pc, pd, pb) < 0):
+        return None
+    t1 = [c, a, d] if _area(pc, pa, pd) > 0 else [c, d, a]
+    t2 = [c, d, b] if _area(pc, pd, pb) > 0 else [c, b, d]
+    return t1, t2
+
+
 def _boundary_mask(nodes: np.ndarray, els: np.ndarray) -> np.ndarray:
     ee = np.vstack([els[:, [0, 1]], els[:, [1, 2]], els[:, [2, 0]]])
     ee.sort(axis=1)
@@ -148,14 +165,11 @@ def flip_for_obc_perp(
             dev = _dev_to(m)
             if dev > dev_max - 1.0:
                 continue
-            t1, t2 = [v, a, m], [v, m, b]
-            if _area(*nodes[t1]) < 0:
-                t1 = [v, m, a]
-            if _area(*nodes[t2]) < 0:
-                t2 = [v, b, m]
-            A1, A2 = _area(*nodes[t1]), _area(*nodes[t2])
-            if A1 <= 0 or A2 <= 0:
+            pair = _flip_pair(nodes, a, b, v, m)
+            if pair is None:
                 continue
+            t1, t2 = pair
+            A1, A2 = _area(*nodes[t1]), _area(*nodes[t2])
             ang = _tri_angles(*nodes[t1]) + _tri_angles(*nodes[t2])
             if min(ang) < min_angle or max(ang) > max_angle:
                 continue
@@ -213,14 +227,10 @@ def fix_r4(
             m = int([x for x in els[ej] if int(x) not in (oo, w)][0])
             if bnd[m]:
                 continue
-            t1, t2 = [other, oo, m], [other, m, w]
-            if _area(*nodes[t1]) < 0:
-                t1 = [other, m, oo]
-            if _area(*nodes[t2]) < 0:
-                t2 = [other, w, m]
-            A1, A2 = _area(*nodes[t1]), _area(*nodes[t2])
-            if A1 <= 0 or A2 <= 0:
+            pair = _flip_pair(nodes, oo, w, other, m)
+            if pair is None:
                 continue
+            t1, t2 = pair
             ang = _tri_angles(*nodes[t1]) + _tri_angles(*nodes[t2])
             cur = _tri_angles(*nodes[tri]) + _tri_angles(
                 *nodes[[int(x) for x in els[ej]]])
@@ -255,22 +265,23 @@ def flip_c4_edges(
     for k in np.where(ct == 2)[0]:
         eids = np.where(inv == k)[0] % len(els)
         ei, ej = int(eids[0]), int(eids[1])
+        a, b = [int(v) for v in uq[k]]
+        # the edge table is built once; an earlier flip may have rewritten
+        # either element (round 5 F2)
+        if not ({a, b} <= set(els[ei].tolist()) and {a, b} <= set(els[ej].tolist())):
+            continue
         A1 = abs(_area(*nodes[[int(x) for x in els[ei]]]))
         A2 = abs(_area(*nodes[[int(x) for x in els[ej]]]))
         if abs(A1 - A2) / max(A1, A2) <= max_area_change:
             continue
-        a, b = [int(v) for v in uq[k]]
         m1 = int([x for x in els[ei] if int(x) not in (a, b)][0])
         m2 = int([x for x in els[ej] if int(x) not in (a, b)][0])
-        t1, t2 = [m1, a, m2], [m1, m2, b]
-        if _area(*nodes[t1]) < 0:
-            t1 = [m1, m2, a]
-        if _area(*nodes[t2]) < 0:
-            t2 = [m1, b, m2]
-        B1, B2 = _area(*nodes[t1]), _area(*nodes[t2])
-        if B1 <= 0 or B2 <= 0:
+        pair = _flip_pair(nodes, a, b, m1, m2)
+        if pair is None:
             unfixed.append((a, b))
             continue
+        t1, t2 = pair
+        B1, B2 = _area(*nodes[t1]), _area(*nodes[t2])
         ang = _tri_angles(*nodes[t1]) + _tri_angles(*nodes[t2])
         if (min(ang) < min_angle or max(ang) > max_angle
                 or abs(B1 - B2) / max(B1, B2) > max_area_change):

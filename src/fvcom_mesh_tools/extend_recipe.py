@@ -9,6 +9,7 @@ and checks the recipe.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from pathlib import Path
@@ -16,7 +17,8 @@ from typing import Any
 
 from fvcom_mesh_tools.base_recipe import read_open_boundary
 
-__all__ = ["REQUIRED_SETTINGS", "check_case_name", "load_extend_recipe"]
+__all__ = ["EXPECT_ENV", "REQUIRED_SETTINGS", "check_case_name", "check_expected",
+           "load_extend_recipe"]
 
 #: Every sizing and generation setting must be written out.
 REQUIRED_SETTINGS = ("coast_h_m", "max_edge_m", "gradation", "cfl_dt_s", "cfl_cr",
@@ -48,7 +50,10 @@ def load_extend_recipe(path) -> dict[str, Any]:
     from fvcom_mesh_tools.dem.sources import SOURCES
 
     path = Path(path).resolve()
-    raw = yaml.safe_load(path.read_text())
+    # the bytes parsed are the bytes hashed: a provenance hash taken later
+    # could describe another file (review of the extend tools, round 5 F3)
+    data = path.read_bytes()
+    raw = yaml.safe_load(data.decode())
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: an extension recipe is a mapping")
     missing = [k for k in _KEYS if k not in raw]
@@ -57,6 +62,7 @@ def load_extend_recipe(path) -> dict[str, Any]:
         raise ValueError(f"{path}: missing {missing}, unknown {unknown}")
     out = dict(raw)
     out["recipe_path"] = str(path)
+    out["recipe_sha256"] = hashlib.sha256(data).hexdigest()
     try:
         check_case_name(raw["case"])
         check_case_name(raw["base_case"])
@@ -75,13 +81,17 @@ def load_extend_recipe(path) -> dict[str, Any]:
     # a boundary published by 444 carries its report beside it, with the CSV's
     # hash: a CSV that is not the one the report describes is refused (review
     # round 3 F5)
+    marker = Path(out["open_boundary"] + ".RECOVER")
+    if marker.exists():
+        raise ValueError(f"{path}: a failed publication left {marker.name}; restore the "
+                         f"boundary from its .prev files first")
     side = Path(out["open_boundary"]).with_suffix(".json")
+    got = hashlib.sha256(Path(out["open_boundary"]).read_bytes()).hexdigest()
+    out["open_boundary_sha256"] = got
     if side.exists():
-        import hashlib
         import json
 
         want = json.loads(side.read_text()).get("csv_sha256")
-        got = hashlib.sha256(Path(out["open_boundary"]).read_bytes()).hexdigest()
         if want is not None and want != got:
             raise ValueError(f"{path}: {Path(out['open_boundary']).name} is not the boundary "
                              f"its report {side.name} describes (hash mismatch)")
@@ -139,3 +149,22 @@ def load_extend_recipe(path) -> dict[str, Any]:
     if not 0 < d["rfactor"] < 1:
         raise ValueError(f"{path}: depths.rfactor must be in (0, 1)")
     return out
+
+
+#: environment variables a driver sets for its stages: the digests of the
+#: recipe and open boundary it recorded (review round 5 F3)
+EXPECT_ENV = {"recipe_sha256": "FMESH_EXPECT_RECIPE_SHA256",
+              "open_boundary_sha256": "FMESH_EXPECT_OBC_SHA256"}
+
+
+def check_expected(recipe: dict[str, Any]) -> None:
+    """Refuse a recipe or open boundary that is not the one the driver
+    recorded, when the driver says which (``EXPECT_ENV``)."""
+    import os
+
+    for key, var in EXPECT_ENV.items():
+        want = os.environ.get(var)
+        if want and want != recipe[key]:
+            raise ValueError(f"{key.removesuffix('_sha256')} changed since the driver "
+                             f"recorded it ({recipe[key][:12]} != {want[:12]})")
+

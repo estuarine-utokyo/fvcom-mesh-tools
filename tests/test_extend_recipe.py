@@ -111,3 +111,28 @@ def test_a_boundary_whose_report_hash_differs_is_refused(tmp_path):
     obc.with_suffix(".json").write_text(json.dumps({"csv_sha256": "0" * 64}))
     with pytest.raises(ValueError, match="hash mismatch"):
         load_extend_recipe(p)
+
+
+def test_the_recipe_digest_is_of_the_bytes_parsed(tmp_path, monkeypatch):
+    """Review round 5 F3: the driver and its stages must read one recipe."""
+    import hashlib
+
+    from fvcom_mesh_tools.extend_recipe import EXPECT_ENV, check_expected
+
+    p = _write(tmp_path)
+    r = load_extend_recipe(p)
+    assert r["recipe_sha256"] == hashlib.sha256(p.read_bytes()).hexdigest()
+    monkeypatch.setenv(EXPECT_ENV["recipe_sha256"], r["recipe_sha256"])
+    monkeypatch.setenv(EXPECT_ENV["open_boundary_sha256"], r["open_boundary_sha256"])
+    check_expected(r)
+    p.write_text(p.read_text() + "# edited\n")
+    with pytest.raises(ValueError, match="recipe changed"):
+        check_expected(load_extend_recipe(p))
+
+
+def test_a_boundary_left_for_recovery_is_refused(tmp_path):
+    """Review round 5 F5: a failed rollback leaves a marker."""
+    p = _write(tmp_path)
+    (tmp_path / "obc.csv.RECOVER").write_text("{}")
+    with pytest.raises(ValueError, match="RECOVER"):
+        load_extend_recipe(p)

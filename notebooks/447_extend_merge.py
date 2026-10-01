@@ -36,7 +36,7 @@ from fvcom_mesh_tools.extend import (  # noqa: E402
     trim_lone_corners,
     verify_frozen_base,
 )
-from fvcom_mesh_tools.extend_recipe import load_extend_recipe  # noqa: E402
+from fvcom_mesh_tools.extend_recipe import check_expected, load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.io.fort14 import read_fort14, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.patch import improve_patch  # noqa: E402
@@ -51,6 +51,7 @@ def say(msg):
 
 
 recipe = load_extend_recipe(sys.argv[1])
+check_expected(recipe)          # the recipe the driver recorded (review round 5 F3)
 GEN = Path(sys.argv[2]).resolve()
 OUT = Path(sys.argv[3]).resolve()
 S, D = recipe["settings"], recipe["depths"]
