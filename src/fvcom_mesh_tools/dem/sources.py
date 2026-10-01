@@ -86,7 +86,8 @@ class Grid:
             out = np.full(np.shape(lon), np.nan)
             if i1 - i0 < 2 or j1 - j0 < 2:
                 return out
-            z = np.asarray(ds[self.var][j0:j1, i0:i1], float)
+            # masked cells (the file's _FillValue) are no data, not depths (review F1)
+            z = np.ma.filled(np.ma.asarray(ds[self.var][j0:j1, i0:i1], float), np.nan)
         g = RegularGridInterpolator((glat[j0:j1], glon[i0:i1]), z,
                                     bounds_error=False, fill_value=np.nan)
         return -g(np.column_stack([np.ravel(lat), np.ravel(lon)])).reshape(np.shape(lon))
@@ -117,7 +118,13 @@ class M7001Points:
         # coincident points (a sounding repeated on two contour lines) make the
         # triangulation degenerate; keep one value per location
         df = df.drop_duplicates(["lon", "lat"])
-        f = LinearNDInterpolator(df[["lon", "lat"]].to_numpy(), -df["z_tp"].to_numpy())
+        pts = df[["lon", "lat"]].to_numpy()
+        # fewer than three distinct points, or all on a line, cannot be
+        # triangulated: the window is uncovered, and the next source may cover
+        # it (review F15)
+        if len(pts) < 3 or np.linalg.matrix_rank(pts[1:] - pts[0], tol=1e-12) < 2:
+            return out
+        f = LinearNDInterpolator(pts, -df["z_tp"].to_numpy())
         return f(np.ravel(lon), np.ravel(lat)).reshape(np.shape(lon))
 
 
@@ -130,8 +137,11 @@ class CaoNested:
     _cache: dict = field(default_factory=dict, repr=False)
 
     def files(self, root: Path) -> list[Path]:
+        """The area tables and every depth file (review F16: the depths were missing)."""
         base = root / self.rel
-        return sorted(Path(p) for p in glob.glob(str(base / "計算範囲設定" / "*.xls")))
+        tables = glob.glob(str(base / "計算範囲設定" / "*.xls"))
+        depths = glob.glob(str(base / "地形データ" / "**" / "depth_*.dat"), recursive=True)
+        return sorted(Path(p) for p in tables + depths)
 
     def areas(self, root: Path):
         """Every nested area: zone, name, cell size, SW corner (m) and counts.
@@ -161,7 +171,9 @@ class CaoNested:
 
     def grid(self, root: Path, zone: str, area: str, nx: int, ny: int) -> np.ndarray:
         """One area's depths, row 0 = north; parsed once per run."""
-        key = (zone, area)
+        # the data root and the shape are part of the key: one process may read
+        # two roots (review F13)
+        key = (str(Path(root).resolve()), zone, area, nx, ny)
         if key not in self._cache:
             hits = glob.glob(str(root / self.rel / "地形データ" / f"地形データ_第{zone}系"
                                  / "**" / f"depth_{area}.dat"), recursive=True)
@@ -195,9 +207,13 @@ class CaoNested:
             i0 = np.floor(fi[ok]).astype(int)
             j0 = np.floor(fj[ok]).astype(int)
             ti, tj = fi[ok] - i0, fj[ok] - j0
-            out[ok] = (g[j0, i0] * (1 - ti) * (1 - tj) + g[j0, i0 + 1] * ti * (1 - tj)
-                       + g[j0 + 1, i0] * (1 - ti) * tj + g[j0 + 1, i0 + 1] * ti * tj)
-            best[ok] = a["h"]
+            val = (g[j0, i0] * (1 - ti) * (1 - tj) + g[j0, i0 + 1] * ti * (1 - tj)
+                   + g[j0 + 1, i0] * (1 - ti) * tj + g[j0 + 1, i0 + 1] * ti * tj)
+            # a finer grid replaces a coarser one only where it has a value
+            # (review F14)
+            idx = np.flatnonzero(ok)[np.isfinite(val)]
+            out[idx] = val[np.isfinite(val)]
+            best[idx] = a["h"]
         return out
 
 

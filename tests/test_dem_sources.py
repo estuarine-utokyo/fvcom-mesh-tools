@@ -130,3 +130,87 @@ def test_points_from_a_source_not_on_tp_are_named(fake_sources):
 def test_every_registered_source_has_a_datum():
     assert set(sources.DATUM) >= set(sources.SOURCES)
     assert sources.DATUM["m7001"] == "T.P." and sources.DATUM["srtm15plus"] == "MSL"
+
+
+def test_masked_cells_are_no_data_and_the_next_source_fills_them(tmp_path, monkeypatch):
+    """Review F1: a masked -9999 must not come back as a 9999 m depth."""
+    import netCDF4
+
+    lon = np.linspace(139.0, 141.0, 21)
+    lat = np.linspace(34.0, 36.0, 21)
+    with netCDF4.Dataset(tmp_path / "masked.nc", "w") as ds:
+        ds.createDimension("lon", 21)
+        ds.createDimension("lat", 21)
+        ds.createVariable("lon", "f8", ("lon",))[:] = lon
+        ds.createVariable("lat", "f8", ("lat",))[:] = lat
+        v = ds.createVariable("z", "f4", ("lat", "lon"), fill_value=-9999.0)
+        v[:] = np.ma.masked_all((21, 21))
+    _grid_nc(tmp_path / "coarse.nc", lon, lat, -100.0 * np.ones((21, 21)))
+    monkeypatch.setitem(sources.SOURCES, "masked", Grid("masked.nc", "z"))
+    monkeypatch.setitem(sources.SOURCES, "coarse", Grid("coarse.nc", "z"))
+    monkeypatch.setitem(sources.DATUM, "masked", "T.P.")
+    monkeypatch.setitem(sources.DATUM, "coarse", "T.P.")
+    d, w = sample(["masked", "coarse"], np.array([140.0]), np.array([35.0]), data_dir=tmp_path)
+    assert d[0] == pytest.approx(100.0) and w[0] == 1
+
+
+def test_m7001_degenerate_window_is_uncovered_not_an_error(tmp_path, monkeypatch):
+    """Review F15: two distinct points (or collinear ones) cannot be triangulated."""
+    import pandas as pd
+
+    pd.DataFrame({"mark": ["N", "N", "N"], "lon": [139.0, 139.0, 139.2],
+                  "lat": [35.0, 35.0, 35.2], "z_tp": [-10.0, -10.0, -20.0]}
+                 ).to_parquet(tmp_path / "two.parquet")
+    pd.DataFrame({"mark": ["N"] * 3, "lon": [139.0, 139.1, 139.2],
+                  "lat": [35.0, 35.1, 35.2], "z_tp": [-10.0, -15.0, -20.0]}
+                 ).to_parquet(tmp_path / "line.parquet")
+    for f in ("two.parquet", "line.parquet"):
+        out = M7001Points(f).depth(np.array([139.1]), np.array([35.1]), tmp_path)
+        assert np.isnan(out[0])
+
+
+def _cao_area(tmp_path, root_name, value):
+    from pyproj import Transformer
+
+    x, y = Transformer.from_crs(4326, 2451, always_xy=True).transform(139.8, 35.5)
+    d = tmp_path / root_name / "cao" / "地形データ" / "地形データ_第09系"
+    d.mkdir(parents=True)
+    vals = [f"{value:8.2f}"] * 100
+    (d / "depth_0030-01.dat").write_text(
+        "\n".join("".join(vals[i:i + 10]) for i in range(0, 100, 10)) + "\n")
+    return dict(zone="09", area="0030-01", h=30.0, x0=x - 150, y0=y - 150, nx=10, ny=10)
+
+
+def test_cao_cache_is_per_data_root(tmp_path):
+    """Review F13: a second data root must be read, not served from the first."""
+    cao = CaoNested(rel="cao", zones={"09": 2451})
+    a = _cao_area(tmp_path, "r1", 10.0)
+    _cao_area(tmp_path, "r2", 20.0)
+    cao.areas = lambda root: [a]
+    assert cao.depth(np.array([139.8]), np.array([35.5]), tmp_path / "r1")[0] == 10.0
+    assert cao.depth(np.array([139.8]), np.array([35.5]), tmp_path / "r2")[0] == 20.0
+
+
+def test_cao_finer_grid_without_data_keeps_the_coarser_value(tmp_path):
+    """Review F14: NaN in the finer grid must not erase the coarser depth."""
+    cao = CaoNested(rel="cao", zones={"09": 2451})
+    fine = _cao_area(tmp_path, "r", 0.0)
+    coarse = dict(fine, area="0090-01", h=90.0, x0=fine["x0"] - 600, y0=fine["y0"] - 600,
+                  nx=20, ny=20)
+    d = tmp_path / "r" / "cao" / "地形データ" / "地形データ_第09系"
+    vals = [f"{12.5:8.2f}"] * 400
+    (d / "depth_0090-01.dat").write_text(
+        "\n".join("".join(vals[i:i + 10]) for i in range(0, 400, 10)) + "\n")
+    cao.areas = lambda root: [coarse, fine]
+    cao._cache[(str((tmp_path / "r").resolve()), "09", "0030-01", 10, 10)] = \
+        np.full((10, 10), np.nan)
+    assert cao.depth(np.array([139.8]), np.array([35.5]), tmp_path / "r")[0] == 12.5
+
+
+def test_cao_provenance_lists_the_depth_files(tmp_path):
+    """Review F16: the depth files, not only the area tables, are provenance."""
+    _cao_area(tmp_path, "r", 5.0)
+    (tmp_path / "r" / "cao" / "計算範囲設定").mkdir()
+    (tmp_path / "r" / "cao" / "計算範囲設定" / "計算範囲設定_第09系.xls").write_bytes(b"x")
+    names = [p.name for p in CaoNested(rel="cao").files(tmp_path / "r")]
+    assert "depth_0030-01.dat" in names and "計算範囲設定_第09系.xls" in names
