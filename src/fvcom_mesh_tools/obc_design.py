@@ -54,8 +54,12 @@ def coast_normal(land, x: float, y: float, chord_m: float = 3000.0):
     if not np.any(c):
         raise ValueError(f"no coastline direction near ({x:.0f}, {y:.0f})")
     b = np.degrees(np.arctan2(c[0], c[1]))
+    # the whole departure must stay off land, not only a far test point: a
+    # thin strip of land can be crossed and left behind (review F7)
+    reach = np.linspace(chord_m / 50, 2 * chord_m / 3, 25)
     for nb in ((b + 90) % 360, (b - 90) % 360):
-        if not land.contains(shapely.Point(*(q + 2 * chord_m / 3 * bearing_vector(nb)))):
+        ray = shapely.points(q + reach[:, None] * bearing_vector(nb))
+        if not shapely.contains(land, ray).any():
             return float(nb), q
     raise ValueError(f"both normals at ({q[0]:.0f}, {q[1]:.0f}) point onto land")
 
@@ -118,6 +122,12 @@ def resample(line, spacing) -> np.ndarray:
     the wanted spacing at a point.  The first and last nodes are the line's
     ends; a last step shorter than half the local spacing is merged into the
     one before it.
+
+    ``spacing`` is a floor: every step is at least the spacing at both of
+    its ends (a step is lengthened until it is), and the remainder at the end
+    is spread over all steps, which only lengthens them (review F5); a line
+    shorter than its spacing is refused. Non-finite spacing is refused
+    (review F19).
     """
     xy = np.asarray(line, float)
     seg = np.linalg.norm(np.diff(xy, axis=0), axis=1)
@@ -129,18 +139,30 @@ def resample(line, spacing) -> np.ndarray:
     def at(t):
         return np.column_stack([np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])])
 
+    if not np.isfinite(xy).all():
+        raise ValueError("the line has non-finite coordinates")
     f = spacing if callable(spacing) else (lambda p, h=float(spacing): np.full(len(p), h))
+
+    def h_at(t):
+        h = float(f(at([min(t, total)]))[0])
+        if not np.isfinite(h) or h <= 0:
+            raise ValueError(f"spacing must be positive and finite (got {h} at {t:.1f} m)")
+        return h
+
     t = [0.0]
     while True:
-        h = float(f(at([t[-1]]))[0])
-        if h <= 0:
-            raise ValueError("spacing must be positive")
-        if t[-1] + h >= total:
+        h = h_at(t[-1])
+        for _ in range(8):                  # long enough for both ends
+            h2 = max(h, h_at(t[-1] + h))
+            if h2 <= h:
+                break
+            h = h2
+        if t[-1] + h > total:
             break
         t.append(t[-1] + h)
-    # a last step shorter than half the local spacing is merged into the one
-    # before it, so no boundary edge is a sliver
     t = np.asarray(t)
-    if len(t) > 1 and total - t[-1] < 0.5 * float(f(at([t[-1]]))[0]):
-        t = t[:-1]
-    return at(np.r_[t, total])
+    if len(t) < 2:
+        raise ValueError(f"the line ({total:.0f} m) is shorter than its spacing ({h:.0f} m)")
+    # the remainder is shared out: every step grows by the same factor
+    t = t * (total / t[-1])
+    return at(t)

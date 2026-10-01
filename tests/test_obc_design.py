@@ -56,15 +56,39 @@ def test_fillet_refuses_a_radius_that_does_not_fit():
         fillet(v, [])
 
 
-def test_resample_uniform_and_variable():
+def test_resample_never_goes_below_the_spacing():
+    """Review F5: the remainder is spread over all steps, which only grow."""
     line = np.array([[0, 0], [10_000, 0]], float)
     n = resample(line, 3_000)
+    d = np.diff(n[:, 0])
     assert np.allclose(n[0], [0, 0]) and np.allclose(n[-1], [10_000, 0])
-    assert np.allclose(np.diff(n[:, 0])[:-1], 3_000)
-    # a 1 km remainder (< half of 3 km) is merged into the last step
-    assert np.diff(n[:, 0])[-1] == pytest.approx(4_000)
-    v = resample(line, lambda p: np.where(p[:, 0] < 5_000, 1_000.0, 2_500.0))
+    assert d.min() >= 3_000 - 1e-6 and np.allclose(d, d[0])        # 3 x 3333 m
+    n = resample(np.array([[0, 0], [8_000, 0]], float), 3_000)      # was 3000, 3000, 2000
+    assert np.diff(n[:, 0]).min() >= 3_000 - 1e-6
+    # variable spacing: each step is at least the spacing at both of its ends
+    f = lambda p: np.where(p[:, 0] < 5_000, 1_000.0, 2_500.0)       # noqa: E731
+    v = resample(line, f)
     d = np.diff(v[:, 0])
-    assert d[0] == pytest.approx(1_000) and d.max() <= 2_500 + 1e-6
+    ends = np.maximum(f(v[:-1]), f(v[1:]))
+    assert np.all(d >= ends - 1e-6)
     with pytest.raises(ValueError, match="positive"):
         resample(line, 0)
+    with pytest.raises(ValueError, match="shorter than its spacing"):
+        resample(line, 20_000)
+
+
+def test_resample_refuses_non_finite_spacing_and_coordinates():
+    """Review F19: NaN spacing used to loop for ever."""
+    line = np.array([[0, 0], [10_000, 0]], float)
+    with pytest.raises(ValueError, match="finite"):
+        resample(line, np.nan)
+    with pytest.raises(ValueError, match="non-finite"):
+        resample(np.array([[0, 0], [np.nan, 0]], float), 1_000)
+
+
+def test_coast_normal_does_not_cross_a_thin_strip_of_land():
+    """Review F7: a far test point beyond a 1 km strip used to pass."""
+    strip = shapely.box(-50_000, 0, 50_000, 1_000)           # sea on both sides
+    for land in (strip, shapely.Polygon(list(strip.exterior.coords)[::-1])):
+        b, q = coast_normal(land, 0, -10)
+        assert b == pytest.approx(180.0)                     # away from the strip

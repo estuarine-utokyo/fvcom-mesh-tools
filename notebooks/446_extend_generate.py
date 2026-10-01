@@ -96,6 +96,12 @@ kx = 111e3 * np.cos(np.radians(lat0))
 x, y = (lon_g - lon0) * kx, (lat_g - lat0) * 111e3
 ambient = np.minimum(S["coast_h_m"] + S["gradation"] * d_coast, S["max_edge_m"])
 depth_g, _ = sample(recipe["bathymetry"]["sizing"], lon_g, lat_g)
+# sea that no sizing source covers would get depth 0 and no time-step floor;
+# refuse it (review F6). Land is depth <= 0 by itself.
+wet = sdf.eval(np.column_stack([lon_g.ravel(), lat_g.ravel()])).reshape(lon_g.shape) < 0
+if np.isnan(depth_g[wet]).any():
+    raise SystemExit(f"{int(np.isnan(depth_g[wet]).sum())} sea lattice point(s) outside every "
+                     f"sizing source {recipe['bathymetry']['sizing']}")
 depth_g = np.clip(np.nan_to_num(depth_g), 0, None)
 floor = S["cfl_dt_s"] * np.sqrt(9.81 * depth_g) / S["cfl_cr"]
 say(f"lattice {lon_g.shape}, depth {depth_g.max():.0f} m max, floor up to {floor.max():.0f} m")
@@ -113,7 +119,18 @@ def spacing(xy):
 iface_m = np.column_stack(base.nodes[IB, 0:2].T)          # UTM, the base's own lengths
 bands = [band_field(x, y, metric(iface_ll), spacing(iface_m), S["interface_band_m"]),
          band_field(x, y, metric(OBC), spacing(metric(OBC)), S["obc_band_m"])]
+for name, line in (("interface", iface_ll), ("open boundary", OBC)):
+    # each constrained line gets a ladder, which needs six nodes (review F12)
+    if len(line) < 6:
+        raise SystemExit(f"the {name} has {len(line)} nodes; its ladder needs 6 or more")
 h, srep = compose_sizing(ambient, x, y, grade=S["gradation"], floor=floor, bands=bands)
+# the new open boundary was designed at or above the floor (444): a band below
+# it there means the design and this sizing disagree (review F4). The base
+# interface keeps the base's own spacing, which may be below the floor: the
+# base, not the extension, then sets the time step.
+if srep.get("band_1_below_floor_cells", 0):
+    raise SystemExit(f"{srep['band_1_below_floor_cells']} open-boundary band cell(s) are set "
+                     "below the time-step floor; redesign the boundary spacing (444)")
 fd.values = h / S["dm_scale"] * DEG
 fd.build_interpolant()
 say("sizing " + json.dumps(srep))

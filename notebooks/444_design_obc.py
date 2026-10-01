@@ -97,7 +97,10 @@ names = sp["bathymetry"]
 def spacing(p):
     lo, la = to_ll.transform(p[:, 0], p[:, 1])
     d, _ = sample(names, np.asarray(lo), np.asarray(la))
-    floor = sp["cfl_dt_s"] * np.sqrt(9.81 * np.clip(np.nan_to_num(d), 0, None)) / sp["cfl_cr"]
+    if np.isnan(d).any():
+        # uncovered water would get no time-step floor (review F6)
+        raise SystemExit(f"{int(np.isnan(d).sum())} boundary point(s) outside every source {names}")
+    floor = sp["cfl_dt_s"] * np.sqrt(9.81 * np.clip(d, 0, None)) / sp["cfl_cr"]
     return np.maximum(sp["min_m"], floor)
 
 
@@ -118,8 +121,12 @@ def end_angle(first, second):
     return float(np.degrees(np.arccos(abs(c @ e) / np.linalg.norm(c) / np.linalg.norm(e))))
 
 
-inner = shapely.LineString(nodes[1:-1])
+# the whole line, end edges included: the ends only touch the coast (review F7)
+full = shapely.LineString(nodes)
 steps = np.linalg.norm(np.diff(nodes, axis=0), axis=1)
+# each edge (a chord) against the floor at both of its ends (review F5)
+floor_n = spacing(nodes)
+edge_floor = np.maximum(floor_n[:-1], floor_n[1:])
 report = {
     "design": str(design_path), "csv": str(out_csv),
     "start_normal_deg": bs, "end_normal_deg": be,
@@ -128,7 +135,8 @@ report = {
     "spacing_m": {"min": float(steps.min()), "median": float(np.median(steps)),
                   "max": float(steps.max())},
     "end_angle_to_coast_deg": [end_angle(nodes[0], nodes[1]), end_angle(nodes[-1], nodes[-2])],
-    "crosses_land_m": float(land.intersection(inner).length),
+    "crosses_land_m": float(land.intersection(full).length),
+    "min_edge_over_floor": float((steps / edge_floor).min()),
     "min_distance_to_land_km": float(min(land.distance(shapely.Point(p))
                                          for p in nodes[2:-2]) / 1e3),
     "depth_m": {"min": float(np.nanmin(depth)), "max": float(np.nanmax(depth))},
@@ -141,17 +149,29 @@ if any(abs(a - 90) > 1.0 for a in report["end_angle_to_coast_deg"]):
     bad.append(f"not orthogonal to the coast: {report['end_angle_to_coast_deg']}")
 if report["crosses_land_m"] > 0:
     bad.append(f"crosses land over {report['crosses_land_m']:.0f} m")
+if report["min_edge_over_floor"] < 0.995:      # a chord is a little shorter than its arc
+    bad.append(f"an edge is below the spacing floor: {report['min_edge_over_floor']:.4f}")
 report["problems"] = bad
 print("[obc] " + json.dumps({k: report[k] for k in (
     "n_nodes", "length_km", "spacing_m", "end_angle_to_coast_deg", "crosses_land_m",
     "min_distance_to_land_km", "depth_m", "bbox_lonlat")}), flush=True)
 
 out_csv.parent.mkdir(parents=True, exist_ok=True)
+if bad:
+    # a rejected design must not replace a usable boundary (review F8): its
+    # report goes beside it under another name, the CSV is left alone
+    rej = out_csv.with_suffix(".rejected.json")
+    rej.write_text(json.dumps(report, indent=1, default=float))
+    raise SystemExit(f"the design is rejected ({'; '.join(bad)}); report in {rej}, "
+                     f"{out_csv.name} left as it was")
 header = (f"# Open boundary nodes (lon,lat, EPSG:4326) designed by notebooks/444_design_obc.py\n"
           f"# from {design_path.name}; {len(nodes)} nodes, {report['length_km']:.1f} km.\n"
           "lon,lat\n")
-out_csv.write_text(header + "".join(f"{a:.6f},{b:.6f}\n" for a, b in zip(lon, lat)))
-out_csv.with_suffix(".json").write_text(json.dumps(report, indent=1, default=float))
+for path, text in ((out_csv, header + "".join(f"{a:.6f},{b:.6f}\n" for a, b in zip(lon, lat))),
+                   (out_csv.with_suffix(".json"), json.dumps(report, indent=1, default=float))):
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)                      # atomic on one file system
 
 import matplotlib  # noqa: E402
 
@@ -168,6 +188,4 @@ ax.set_aspect(1 / np.cos(np.radians(np.mean(lat))))
 ax.legend(loc="lower right")
 ax.set_title(f"{out_csv.name} (black = land, red = open boundary)")
 fig.savefig(out_csv.with_suffix(".png"), dpi=110, bbox_inches="tight")
-if bad:
-    raise SystemExit("the designed boundary breaks the rules: " + "; ".join(bad))
 print(f"[obc] wrote {out_csv}", flush=True)
