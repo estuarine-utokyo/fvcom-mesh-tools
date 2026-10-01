@@ -757,3 +757,12 @@ time step is settled in the depth stage (maximum depth, smoothing). The
 band-floor check (446) and the new-element time-step gate (447, 453)
 therefore report warnings and the values, and do not fail the build.
 Tests after the fixes: 1115 passed.
+
+## Round 4 (not completed)
+
+Started after 7007e7e and an integration build on real data (445 complete,
+QA 23/23, NP 14,740 / NE 27,135, time-step warnings as designed). The
+reviewer stopped before its answer: the Codex usage limit was reached
+("try again at Oct 8th, 2026 1:04 AM"). The prompt is
+`$WORK_DIR/scratch/reviews/extend-tools/r4_prompt.md`; resume with it.
+Open: F27 (oceanmesh imported in package code), owner decision pending.
