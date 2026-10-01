@@ -51,7 +51,8 @@ done
 # One working directory per invocation, taken atomically (review round 12
 # F3), short and directly under scratch: under the run root it pushed the
 # FVCOM paths past 80 bytes (round 13 F3). relocate_case checks them.
-BENCH=$(mktemp -d "${WORK_DIR:?set WORK_DIR}/scratch/b416_XXXX")
+mkdir -p "${WORK_DIR:?set WORK_DIR}/scratch"           # round 14 F6
+BENCH=$(mktemp -d "$WORK_DIR/scratch/b416_XXXX")
 echo "bench = $BENCH"
 # both cases are copied under the root's staging lock, so they are one
 # experiment (round 13 F2)

@@ -241,3 +241,14 @@ def test_an_initial_record_alone_is_not_a_run(tmp_path):
     run = _run(tmp_path, times=("2020-01-01T00:00:00.000000",), end="2020-01-01 00:10:00")
     info = check_run(run)
     assert not info["ok"] and any("no output after the start" in r for r in info["reasons"])
+
+
+def test_sub_second_records_are_distinct(tmp_path):
+    """Review round 14 F7."""
+    times = tuple(f"2020-01-01T00:00:00.{us:06d}" for us in (0, 250000, 500000, 750000)) + (
+        "2020-01-01T00:00:01.000000",)
+    run = _run(tmp_path, times=times, end="2020-01-01 00:00:01")
+    nml = run / "m2_run.nml"
+    nml.write_text(nml.read_text().replace("seconds = 86400.0", "seconds = 0.25"))
+    info = check_run(run)
+    assert not any("do not increase" in r for r in info["reasons"]), info["reasons"]

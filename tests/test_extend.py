@@ -396,3 +396,23 @@ def test_compose_sizing_refuses_controls_it_cannot_honour(kw):
     bands = [np.full((2, 2), kw["band"])] if "band" in kw else []
     with pytest.raises(ValueError):
         compose_sizing(amb, x, y, grade=kw.get("grade", 0.2), bands=bands)
+
+
+def test_sizing_helpers_take_numpy_scalars_and_check_the_lattice():
+    """Review round 14 F4 and F5."""
+    from fvcom_mesh_tools.extend import compose_sizing, graded_up
+
+    x, y = np.meshgrid([0.0, 100.0], [0.0, 100.0])
+    v = np.array([[1.0, 100.0], [1.0, 100.0]])
+    for g in (np.float32(0.2), np.int64(1), 0.2):
+        assert np.isfinite(graded_up(v, x, y, g)).all()
+        h, _ = compose_sizing(v, x.tolist(), y.tolist(), grade=g)
+        assert h.shape == (2, 2)
+    with pytest.raises(ValueError):
+        graded_up(v, np.where(x > 0, np.nan, x), y, 0.2)
+    with pytest.raises(ValueError):
+        graded_up(np.where(v > 50, np.nan, v), x, y, 0.2)
+    with pytest.raises(ValueError):
+        compose_sizing(v.ravel(), x.ravel(), y.ravel(), grade=0.2)
+    with pytest.raises(ValueError):
+        graded_up(v, x, y, True)

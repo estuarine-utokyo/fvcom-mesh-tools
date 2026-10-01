@@ -50,11 +50,37 @@ __all__ = [
 BAND_TOLERANCE = 0.05
 
 
-def graded_up(values, x, y, grade):
-    """The smallest gradation-feasible field that is >= ``values``."""
-    if not (isinstance(grade, (int, float)) and np.isfinite(grade) and grade >= 0):
+def _grade(grade) -> float:
+    """A finite, non-negative real gradation (NumPy scalars too, not a bool)
+    as a float (review rounds 13 F9, 14 F4)."""
+    if isinstance(grade, (bool, np.bool_)) or not isinstance(grade, (int, float, np.number)):
+        raise ValueError(f"the gradation must be a real number, not {grade!r}")
+    g = float(grade)
+    if not (np.isfinite(g) and g >= 0):
         raise ValueError(f"the gradation must be finite and non-negative, not {grade!r}")
-    return -_limit(-np.asarray(values, float), x, y, grade)
+    return g
+
+
+def _lattice(values, x, y):
+    """``values``, ``x`` and ``y`` as float arrays of one 2-D shape, with a
+    finite lattice (review round 14 F5)."""
+    v, x, y = (np.asarray(a, float) for a in (values, x, y))
+    if v.ndim != 2 or x.shape != v.shape or y.shape != v.shape:
+        raise ValueError(f"values, x and y must share one 2-D shape, not {v.shape}, "
+                         f"{x.shape}, {y.shape}")
+    if not (np.isfinite(x).all() and np.isfinite(y).all()):
+        raise ValueError("the lattice coordinates must be finite")
+    return v, x, y
+
+
+def graded_up(values, x, y, grade):
+    """The smallest gradation-feasible field that is >= ``values``.
+
+    ``values`` are finite, or -inf where nothing is imposed."""
+    v, x, y = _lattice(values, x, y)
+    if np.isnan(v).any() or np.isposinf(v).any():
+        raise ValueError("values must be finite, or -inf where nothing is imposed")
+    return -_limit(-v, x, y, _grade(grade))
 
 
 def band_field(x, y, line_xy, targets, half_width_m):
@@ -81,17 +107,12 @@ def band_field(x, y, line_xy, targets, half_width_m):
     return out.reshape(np.shape(x))
 
 
-def _check_sizing_inputs(ambient, x, y, grade, floor, bands) -> None:
-    """Controls the limiter can work with (review round 13 F9): a finite,
-    non-negative gradation (a negative one never settles), matching finite
-    lattice arrays, finite positive ambient sizes, a finite non-negative
-    floor, and bands that are positive where set (NaN marks off-band)."""
-    if not (isinstance(grade, (int, float)) and np.isfinite(grade) and grade >= 0):
-        raise ValueError(f"the gradation must be finite and non-negative, not {grade!r}")
+def _check_sizing_inputs(ambient, x, y, floor, bands) -> None:
+    """Sizes the limiter can work with (review round 13 F9): finite positive
+    ambient sizes, a finite non-negative floor, and bands that are positive
+    where set (NaN marks off-band). The lattice and the gradation are
+    checked by ``_lattice`` and ``_grade``."""
     shape = np.shape(ambient)
-    for name, a in (("x", x), ("y", y)):
-        if np.shape(a) != shape or not np.isfinite(a).all():
-            raise ValueError(f"{name} must be finite with the shape of ambient {shape}")
     if not (np.isfinite(ambient).all() and (np.asarray(ambient) > 0).all()):
         raise ValueError("ambient sizes must be finite and positive")
     if floor is not None and (np.shape(floor) != shape or not np.isfinite(floor).all()
@@ -107,9 +128,11 @@ def _check_sizing_inputs(ambient, x, y, grade, floor, bands) -> None:
 def compose_sizing(ambient, x, y, *, grade, floor=None, bands=()):
     """The final size field and a report; see the module docstring."""
     bands = [np.asarray(b, float) for b in bands]     # traversed twice (review r3 F3)
-    _check_sizing_inputs(np.asarray(ambient, float), np.asarray(x, float),
-                         np.asarray(y, float), grade, floor, bands)
-    h = _limit(np.asarray(ambient, float), x, y, grade)
+    # normalised once, and these arrays are the ones used (round 14 F5)
+    ambient, x, y = _lattice(ambient, x, y)
+    grade = _grade(grade)
+    _check_sizing_inputs(ambient, x, y, floor, bands)
+    h = _limit(ambient, x, y, grade)
     report = {}
     if floor is not None:
         up = graded_up(floor, x, y, grade)

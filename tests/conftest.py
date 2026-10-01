@@ -27,9 +27,12 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    if _importable("oceanmesh"):
+    # the optional backend is imported only when a selected test needs it:
+    # its import has side effects (a matplotlib cache) that a pure selection
+    # should not depend on (review of the extend tools, round 14 F8)
+    marked = [item for item in items if "needs_oceanmesh" in item.keywords]
+    if not marked or _importable("oceanmesh"):
         return
     skip = pytest.mark.skip(reason="needs the laboratory's oceanmesh fork, not installed")
-    for item in items:
-        if "needs_oceanmesh" in item.keywords:
-            item.add_marker(skip)
+    for item in marked:
+        item.add_marker(skip)

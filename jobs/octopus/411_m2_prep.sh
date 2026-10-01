@@ -22,6 +22,10 @@ REPO=$(pwd)
 RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
 B_MESH=${FMESH_B_MESH:-$REPO/outputs/verify_409.115302/fit/sample_repro_final.14}
 [ -f "$B_MESH" ] || { echo "mesh not found: $B_MESH"; exit 2; }
+# the root's staging lock, held through preparation; refused while a 412 run
+# holds a case (review round 14 F2)
+fmesh_stage_lock "$RUN_ROOT" || exit 2
+rm -f "$RUN_ROOT/STAGED" "$RUN_ROOT/SMOKE_OK" "$RUN_ROOT"/*/RUN_OK
 for case in A B_own B_m7001; do
     if compgen -G "$RUN_ROOT/$case/output/m2_*.nc" >/dev/null; then
         echo "Existing model output: $RUN_ROOT/$case/output; archive before rerunning"

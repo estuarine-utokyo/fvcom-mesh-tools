@@ -329,7 +329,9 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
     if stamps:
         # in file order, never re-sorted: a reversed or overlapping stack is
         # a defect to report, not to repair (T2)
-        steps = np.diff(np.array(stamps, dtype="datetime64[s]")).astype(float)
+        # microseconds, not seconds: sub-second records are distinct
+        # (review round 14 F7)
+        steps = np.diff(np.array(stamps, dtype="datetime64[us]")).astype(float) / 1e6
         # one record has no cadence to judge; its coverage still is (U2)
         if steps.size and (steps <= 0).any():
             reasons.append("the history times do not increase record by record")
