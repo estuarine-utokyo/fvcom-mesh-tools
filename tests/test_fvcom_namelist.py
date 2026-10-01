@@ -107,3 +107,36 @@ def test_set_value_keeps_other_assignments_on_the_line():
     assert out == " INPUT_DIR='/new/input/', NC_OUT_INTERVAL='seconds = 1800.',\n"
     t = " CASE_TITLE = 'INPUT_DIR = x',\n INPUT_DIR = 'a/',\n"
     assert set_value(t, "INPUT_DIR", "'b/'").endswith(" INPUT_DIR = 'b/',\n")
+
+
+def test_relocate_interrupted_after_moving_the_old_copy_keeps_it(tmp_path, monkeypatch):
+    """Review round 10 F6."""
+    from pathlib import Path
+
+    monkeypatch.setattr(fvcom_namelist, "FVCOM_DIR_MAX", 4096)
+    case = _case(tmp_path)
+    dst = tmp_path / "smoke" / "refined"
+    relocate_case(case, dst)
+    (dst / "marker").write_text("previous")
+    real = Path.rename
+
+    def moved_then_interrupted(self, target):
+        r = real(self, target)
+        if Path(target).name == "previous":
+            raise KeyboardInterrupt
+        return r
+
+    monkeypatch.setattr(Path, "rename", moved_then_interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        relocate_case(case, dst)
+    assert (dst / "marker").read_text() == "previous"
+
+
+def test_set_value_ignores_comments():
+    """Review round 10 F7."""
+    t = " ! INPUT_DIR='example/',\n INPUT_DIR = 'a/',\n"
+    assert set_value(t, "INPUT_DIR", "'b/'") == " ! INPUT_DIR='example/',\n INPUT_DIR = 'b/',\n"
+    t = " ! it's a comment\n INPUT_DIR = 'a/',\n"
+    assert set_value(t, "INPUT_DIR", "'b/'").endswith(" INPUT_DIR = 'b/',\n")
+    with pytest.raises(ValueError, match="found 0"):
+        set_value(" ! INPUT_DIR='old/',\n", "INPUT_DIR", "'b/'")

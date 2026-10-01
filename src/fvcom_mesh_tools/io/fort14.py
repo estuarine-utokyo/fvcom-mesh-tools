@@ -138,19 +138,39 @@ def read_fort14(path: str | Path) -> Fort14Mesh:
         if ne and (elements.min() < 0 or elements.max() >= np_):
             raise ValueError(f"element node references outside 1..{np_}")
 
+        # Boundary counts are not negative, their totals agree with NETA and
+        # NVEL, and every id is a node 1..NP (review of the extend tools,
+        # round 10 F9).
         nope = _read_first_int(f)
-        _ = f.readline()  # NETA: redundant total of open boundary nodes
+        neta = _read_first_int(f)
+        if nope < 0 or neta < 0:
+            raise ValueError(f"negative open-boundary counts: NOPE {nope}, NETA {neta}")
         open_boundaries: list[np.ndarray] = []
         for _ in range(nope):
             n = _read_first_int(f)
+            if n < 0:
+                raise ValueError(f"negative open-boundary length {n}")
             open_boundaries.append(_read_node_ids(f, n))
+        if sum(len(b) for b in open_boundaries) != neta:
+            raise ValueError(f"open boundaries hold {sum(len(b) for b in open_boundaries)} "
+                             f"nodes, NETA says {neta}")
 
         nbou = _read_first_int(f)
-        _ = f.readline()  # NVEL: redundant total of land boundary nodes
+        nvel = _read_first_int(f)
+        if nbou < 0 or nvel < 0:
+            raise ValueError(f"negative land-boundary counts: NBOU {nbou}, NVEL {nvel}")
         land_boundaries: list[tuple[int, np.ndarray]] = []
         for _ in range(nbou):
             n, ibtype = _read_two_ints(f)
+            if n < 0:
+                raise ValueError(f"negative land-boundary length {n}")
             land_boundaries.append((ibtype, _read_node_ids(f, n)))
+        if sum(len(b) for _t, b in land_boundaries) != nvel:
+            raise ValueError(f"land boundaries hold "
+                             f"{sum(len(b) for _t, b in land_boundaries)} nodes, NVEL says {nvel}")
+        for b in [*open_boundaries, *(b for _t, b in land_boundaries)]:
+            if b.size and (b.min() < 0 or b.max() >= np_):
+                raise ValueError(f"boundary node ids outside 1..{np_}")
 
     return Fort14Mesh(
         title=title,
@@ -168,10 +188,14 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
     The output is round-trip safe: ``read_fort14(write_fort14(m, p))`` recovers
     the same node coordinates, depths, element connectivity, and boundary
     structure as ``m``. The exact numeric formatting of the source file is not
-    preserved; coordinates are written with 15 decimal digits (which exceeds
-    float64's ~15-17 significant figures at coordinates ~140 deg) so that
-    every writable double round-trips exactly and triangles with very small
-    but positive signed area survive without being pancaked to zero.
+    preserved; coordinates are written as the shortest text that reads back
+    as the same double (``repr``), so every coordinate round-trips exactly
+    and triangles with very small but positive signed area survive without
+    being pancaked to zero.
+
+    Element and boundary indices are checked before the file is opened:
+    whole numbers in ``[0, NP)``, never truncated (review of the extend
+    tools, round 10 F9).
 
     Depths carry ``.17g``, not the ``.10e`` this used to write. Eleven
     significant figures is enough for a depth that was itself read from a
@@ -179,9 +203,19 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
     came back 2.3e-11 m different, which is physically nothing and is still a
     round trip this docstring promises and did not deliver.
     """
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
     path = Path(path).resolve()
     n_nodes = mesh.n_nodes
     n_elements = mesh.n_elements
+    if mesh.n_elements:
+        if np.asarray(mesh.elements).dtype.kind not in "iu":
+            raise ValueError("elements must be integers")
+        _indices(mesh.elements, n_nodes, "elements", ndim=2)
+    for b in mesh.open_boundaries:
+        _indices(b, n_nodes, "an open boundary")
+    for _t, b in mesh.land_boundaries:
+        _indices(b, n_nodes, "a land boundary")
     n_open_segs = len(mesh.open_boundaries)
     n_open_nodes = sum(len(b) for b in mesh.open_boundaries)
     n_land_segs = len(mesh.land_boundaries)

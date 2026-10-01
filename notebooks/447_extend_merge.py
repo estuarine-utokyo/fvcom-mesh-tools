@@ -33,6 +33,7 @@ from fvcom_mesh_tools.extend import (  # noqa: E402
     land_segments,
     merge_outer,
     rfactor_smooth_free,
+    round_depths_inside,
     trim_lone_corners,
     verify_frozen_base,
 )
@@ -154,7 +155,9 @@ ei, ej = node_edges(merged.elements)
 # the cap is applied inside the limiter, so the result meets both (review F3)
 h, iters, _ = rfactor_smooth_free(h, ei, ej, new, rmax=D["rfactor"], hmin=D["min_m"],
                                   hmax=D["max_m"])
-h[new] = np.round(h[new], 6)
+# six decimals, inside the recipe's bounds (review round 10 F12); the r
+# check below is on these written depths
+h[new] = round_depths_inside(h[new], D["min_m"], D["max_m"])
 # r over every edge with a new end, on the depths that are written
 touch = new[ei] | new[ej]
 r_after = float((np.abs(h[ei] - h[ej]) / (h[ei] + h[ej]))[touch].max()) if touch.any() else 0.0

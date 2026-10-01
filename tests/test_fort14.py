@@ -174,3 +174,25 @@ def test_record_ids_and_element_type_are_checked(tmp_path, kw, match):
     p.write_text(_fort14_text([(0, 0), (1, 0), (0, 1), (1, 1)], [(1, 2, 3), (2, 4, 3)], **kw))
     with pytest.raises(ValueError, match=match):
         read_fort14(p)
+
+
+def test_boundary_ids_are_checked_on_read_and_write(tmp_path):
+    """Review of the extend tools, round 10 F9."""
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14, write_fort14
+
+    text = _fort14_text([(0, 0), (1, 0), (0, 1)], [(1, 2, 3)]).replace(
+        "0\n0\n0\n0\n", "1\n2\n2\n0\n4\n0\n0\n")
+    p = tmp_path / "b.14"
+    p.write_text(text)
+    with pytest.raises(ValueError, match="outside 1..3"):
+        read_fort14(p)
+    p.write_text(text.replace("1\n2\n2\n0\n4\n", "1\n3\n2\n1\n2\n"))
+    with pytest.raises(ValueError, match="NETA"):
+        read_fort14(p)
+    m = Fort14Mesh("t", np.array([[0.0, 0], [1, 0], [0, 1]]), np.ones(3),
+                   np.array([[0, 1, 2]]), [np.array([1.9, 2.9])], [])
+    with pytest.raises(ValueError, match="whole number"):
+        write_fort14(m, tmp_path / "w.14")
+    assert not (tmp_path / "w.14").exists()

@@ -14,6 +14,17 @@
 #           FMESH_METHOD (equal = TB-FVCOM's smoother; limit = the refinement's).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
+# One mutating stage per run root (review round 10 F3): the root lock is
+# taken atomically before any marker is invalidated or case staged, and no
+# 412 run may hold a case lock meanwhile (412 checks for this lock in turn).
+STAGE_LOCK=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/.staging
+mkdir -p -- "$FMESH_RUN_ROOT"
+mkdir -- "$STAGE_LOCK" 2>/dev/null \
+    || { echo "another stage holds $STAGE_LOCK (remove it if that job is gone)"; exit 2; }
+trap 'rmdir -- "$STAGE_LOCK"' EXIT
+for c in "$FMESH_RUN_ROOT"/*/.running; do
+    [ -e "$c" ] && { echo "a run is active: $c"; exit 2; }
+done
 # INVALIDATE first -- this stage's marker and every later one -- before
 # anything that can fail, including the environment set-up: a marker left
 # from an earlier attempt in a reused run root would let the next stage

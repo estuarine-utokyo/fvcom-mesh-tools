@@ -37,6 +37,7 @@ __all__ = [
     "graded_up",
     "merge_outer",
     "rfactor_smooth_free",
+    "round_depths_inside",
     "trim_lone_corners",
     "verify_frozen_base",
 ]
@@ -136,16 +137,19 @@ def merge_outer(base: Fort14Mesh, outer_nodes, outer_elements, interface_outer,
     open boundary in outer indices; it becomes the only open boundary.
     Depths of the outer nodes are NaN until a depth stage fills them.
 
-    The base must hold float64 coordinates and depths (what the readers
-    give): the merged arrays are float64, and the base is carried bit for
-    bit (review round 9 F6). Every index is checked to be a whole number in
-    range before it is used (round 9 F4).
+    The base must hold float64 coordinates and depths and int64 elements
+    (what the readers give): the merged arrays have those types, and the
+    base is carried bit for bit (review rounds 9 F6, 10 F10). Every index
+    is checked to be a whole number in range before it is used (round 9 F4).
     """
     from fvcom_mesh_tools.io.fvcom_native import _indices
 
-    if np.asarray(base.nodes).dtype != np.float64 or np.asarray(base.depths).dtype != np.float64:
-        raise ValueError(f"the base must be float64 (nodes {np.asarray(base.nodes).dtype}, "
-                         f"depths {np.asarray(base.depths).dtype})")
+    if (np.asarray(base.nodes).dtype != np.float64 or np.asarray(base.depths).dtype != np.float64
+            or np.asarray(base.elements).dtype != np.int64):
+        raise ValueError(f"the base must be float64 nodes and depths and int64 elements "
+                         f"(nodes {np.asarray(base.nodes).dtype}, depths "
+                         f"{np.asarray(base.depths).dtype}, elements "
+                         f"{np.asarray(base.elements).dtype}; review round 10 F10)")
     outer_nodes = np.asarray(outer_nodes, float)
     if outer_nodes.ndim != 2 or outer_nodes.shape[1] < 2 or not np.isfinite(outer_nodes).all():
         raise ValueError("outer nodes must be finite (N, 2) coordinates")
@@ -196,8 +200,7 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
 
     if not same_bits(merged.nodes[:nb, :2], base.nodes[:, :2]):
         raise ValueError("base node coordinates changed")
-    me, be = np.asarray(merged.elements[:eb]), np.asarray(base.elements)
-    if not (me.dtype.kind in "iu" and be.dtype.kind in "iu" and np.array_equal(me, be)):
+    if not same_bits(merged.elements[:eb], base.elements):   # round 10 F10
         raise ValueError("base elements changed")
     if not same_bits(merged.depths[:nb], base.depths):
         raise ValueError("base depths changed")
@@ -292,6 +295,21 @@ def land_segments(elements, open_chains) -> list[tuple[int, np.ndarray]]:
     return out
 
 
+def round_depths_inside(h, hmin, hmax=None, decimals: int = 6) -> np.ndarray:
+    """``h`` rounded to ``decimals``, kept inside ``[hmin, hmax]``.
+
+    Rounding after the limiter could cross a bound that is not itself on the
+    grid of ``decimals`` (3.0000004 -> 3.0 below a 3.0000004 floor); the
+    bounds are moved inward to that grid first (review round 10 F12).
+    """
+    q = 10.0 ** decimals
+    lo = np.ceil(hmin * q) / q
+    hi = np.inf if hmax is None else np.floor(hmax * q) / q
+    if lo > hi:
+        raise ValueError(f"no {decimals}-decimal depth lies in [{hmin}, {hmax}]")
+    return np.clip(np.round(np.asarray(h, float), decimals), lo, hi)
+
+
 def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=5000):
     """r-factor limiter that moves only the ``free`` nodes.
 
@@ -377,7 +395,7 @@ def trim_lone_corners(elements, mutable, keep_nodes=(), max_rounds=20):
     t = np.asarray(elements, np.int64)
     mut = np.asarray(mutable, bool)
     keep = set(int(v) for v in keep_nodes)
-    dropped, left = 0, []
+    dropped, left, limited = 0, [], False
     for _ in range(max_rounds):
         if len(t) == 0:
             break
@@ -406,4 +424,14 @@ def trim_lone_corners(elements, mutable, keep_nodes=(), max_rounds=20):
             break
         t, mut = t[~drop], mut[~drop]
         dropped += int(drop.sum())
-    return t, mut, {"n_elements_dropped": dropped, "lone_nodes_left": left}
+    else:
+        limited = True
+    # the report is of the mesh returned, not of the last round's start
+    # (review round 10 F11)
+    if len(t):
+        count = np.bincount(t.ravel(), minlength=int(t.max()) + 1)
+        left = np.flatnonzero(count == 1).tolist()
+    else:
+        left = []
+    return t, mut, {"n_elements_dropped": dropped, "lone_nodes_left": left,
+                    "round_limit_reached": limited}

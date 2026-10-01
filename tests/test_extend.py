@@ -321,3 +321,41 @@ def test_merge_refuses_fractional_indices_and_a_float32_base():
                      base.elements, base.open_boundaries, [])
     with pytest.raises(ValueError, match="float64"):
         merge_outer(b32, outer, np.array([[0, 2, 1], [2, 3, 1]]), [0, 1], [1, 2], [2, 3])
+
+
+def test_frozen_base_elements_are_checked_by_dtype_and_bytes():
+    """Review round 10 F10."""
+    from dataclasses import replace
+
+    import numpy as np
+    import pytest
+
+    from fvcom_mesh_tools.extend import verify_frozen_base
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    base = Fort14Mesh("b", np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]), np.full(3, 5.0),
+                      np.array([[0, 1, 2]], np.int64), [], [])
+    with pytest.raises(ValueError, match="elements changed"):
+        verify_frozen_base(replace(base, elements=base.elements.astype(np.int32)), base, [])
+
+
+def test_trim_report_describes_the_returned_mesh():
+    """Review round 10 F11."""
+    import numpy as np
+
+    from fvcom_mesh_tools.extend import trim_lone_corners
+
+    out, _, rep = trim_lone_corners(np.array([[0, 1, 2], [0, 2, 3]]), [True, True], max_rounds=1)
+    assert out.tolist() == [[0, 2, 3]]
+    assert rep["lone_nodes_left"] == [0, 2, 3] and rep["round_limit_reached"]
+
+
+def test_rounding_keeps_depths_inside_their_bounds():
+    """Review round 10 F12."""
+    import numpy as np
+
+    from fvcom_mesh_tools.extend import round_depths_inside
+
+    assert round_depths_inside([3.0000004], 3.0000004)[0] >= 3.0000004
+    assert round_depths_inside([3.0000006], 3.0, 3.0000006)[0] <= 3.0000006
+    assert list(round_depths_inside(np.array([3.1234567, 7.0]), 3.0)) == [3.123457, 7.0]

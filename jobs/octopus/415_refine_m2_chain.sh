@@ -59,9 +59,9 @@ for case in base refined; do
 done
 
 ana=$(qsub --after "$(IFS=,; echo "${runs[*]}")" \
-    -v "FMESH_RUN_ROOT=$RUN_ROOT,FMESH_OUT=$REPO/outputs/m2r_$STAMP" \
+    -v "FMESH_RUN_ROOT=$RUN_ROOT,FMESH_OUT=$REPO/outputs/$(basename "$RUN_ROOT")" \
     jobs/octopus/413_m2_analysis.sh)
 ana=$(grep -oE '[0-9]+\.[a-z]+' <<<"$ana" | head -1)
 echo "analysis = $ana"
-echo "outputs  -> $REPO/outputs/m2r_$STAMP"
+echo "outputs  -> $REPO/outputs/$(basename "$RUN_ROOT")"
 echo "jobs     : $prep ${runs[*]} $ana"

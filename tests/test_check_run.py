@@ -174,3 +174,17 @@ def test_an_assignment_inside_another_value_is_not_read():
     assert _nml_value(" A = 'it''s OUTPUT_DIR = 1',\n OUTPUT_DIR = 'b/',\n", "OUTPUT_DIR") == "b/"
     with pytest.raises(ValueError, match="more than once"):
         _nml_value(" OUTPUT_DIR = 'a/',\n OUTPUT_DIR = 'b/',\n", "OUTPUT_DIR")
+
+
+def test_a_non_finite_three_dimensional_field_fails(tmp_path):
+    """Review round 10 F4: NaN u and infinite w passed beside finite zeta."""
+    run = _run(tmp_path)
+    with netCDF4.Dataset(run / "output" / "m2_0001.nc", "a") as ds:
+        ds.createDimension("siglay", 2)
+        ds.createVariable("u", "f4", ("time", "siglay", "node"))[:] = np.nan
+        ds.createVariable("w", "f4", ("time", "siglay", "node"))[:] = np.inf
+        ds.createVariable("iint", "i4", ("time",))[:] = [1, 2]
+    info = check_run(run)
+    assert not info["ok"]
+    assert any(" u is not finite" in r for r in info["reasons"])
+    assert any(" w is not finite" in r for r in info["reasons"])

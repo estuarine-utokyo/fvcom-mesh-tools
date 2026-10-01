@@ -467,3 +467,12 @@ def test_fractional_boundary_ids_fail_the_index_gate():
     mesh.open_boundaries = [np.array([4.9, 8.9])]
     report = run_qa(mesh, channel_check=False)
     assert not _check(report, "node_index_valid").passed
+
+
+@pytest.mark.parametrize("obc", [np.array(["bad", "1"]), np.array([[4, 8]])])
+def test_malformed_boundaries_fail_the_index_gate_without_raising(obc):
+    """Review of the extend tools, round 10 F8."""
+    mesh = _pristine()
+    mesh.open_boundaries = [obc]
+    report = run_qa(mesh, channel_check=False)
+    assert not _check(report, "node_index_valid").passed

@@ -235,7 +235,11 @@ try:
 except FileExistsError:
     raise SystemExit(f"{lock} exists: another design is being published") from None
 staged, kept, done = [], {}, []
-hold_lock = False
+# Cleanup (backups, lock) happens only after a known outcome: nothing
+# replaced yet, all published, or all put back. Any other exit -- a failed
+# restore, an interrupt during one -- keeps the .prev backups and the lock
+# (review rounds 5-7, 10 F5).
+state = "staging"
 try:
     if out_csv.with_name(out_csv.name + ".RECOVER").exists():
         raise SystemExit(f"{out_csv.name}.RECOVER: an earlier publication failed half-way; "
@@ -259,6 +263,7 @@ try:
     if old_prev:
         raise SystemExit(f"backups of an earlier failed publication remain: "
                          f"{[q.name for q in old_prev]}; resolve them first")
+    state = "publishing"
     for _, path in staged:
         if path.exists():
             prev = path.with_name(path.name + ".prev")
@@ -266,13 +271,13 @@ try:
             kept[path] = prev
     try:
         for tmp, path in staged:
-            os.replace(tmp, path)          # atomic on one file system
+            # recorded before the move: an interrupt right after it must
+            # still see it (round 10 F6); putting back a file that was not
+            # moved restores an identical copy
             done.append(path)
+            os.replace(tmp, path)          # atomic on one file system
     except BaseException:
-        # Put the previous set back, each file on its own. A backup leaves
-        # tracking only once restored; the recovery marker is written, and
-        # unrestored backups are taken out of cleanup, before anything else
-        # that can fail (review rounds 5 F5, 6 F7).
+        state = "restoring"
         stuck = {}
         for path in done:
             try:
@@ -284,28 +289,25 @@ try:
             except OSError as exc:
                 stuck[path] = exc
         if stuck:
-            unrestored = {str(p): str(kept.pop(p)) for p in list(kept) if p in stuck}
-            # until the marker is on disk the lock stays: it is then the
-            # record that publication is unsafe (round 7 F11)
-            hold_lock = True
             out_csv.with_name(out_csv.name + ".RECOVER").write_text(json.dumps(
-                {"restore_from_prev": unrestored,
+                {"restore_from_prev": {str(p): str(q) for p, q in kept.items() if p in stuck},
                  "errors": [f"{p}: {e}" for p, e in stuck.items()]}, indent=1))
-            hold_lock = False
+            raise
+        state = "restored"
         raise
+    state = "done"
 finally:
-    # copies of files now in place, or never replaced; each removal is on
-    # its own, and a failure only leaves a stray copy
-    for prev in kept.values():
-        try:
-            prev.unlink(missing_ok=True)
-        except OSError:
-            pass
-    for tmp, _ in staged:
+    for tmp, _ in staged:                  # never-published temporaries
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
-    if not hold_lock:
+    if state in ("staging", "done", "restored"):
+        # copies of files now in place, or never replaced
+        for prev in kept.values():
+            try:
+                prev.unlink(missing_ok=True)
+            except OSError:
+                pass
         lock.unlink()
 print(f"[obc] wrote {out_csv}", flush=True)

@@ -692,3 +692,26 @@ def test_an_interrupted_restore_keeps_the_previous_files(tmp_path, monkeypatch):
         export_fvcom_case(m, out, "t")
     kept = list(out.glob(".t.export.*/.previous/t_grd.dat"))
     assert len(kept) == 1 and kept[0].read_bytes() == old_grd
+
+
+def test_an_interrupt_right_after_a_move_is_rolled_back(tmp_path, monkeypatch):
+    """Review round 10 F6: the move happened but was not yet recorded."""
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
+
+    out = tmp_path / "case"
+    export_fvcom_case(_tri(), out, "t")
+    before = {p.name: p.read_bytes() for p in out.iterdir()}
+    m = _tri()
+    m.nodes[2, 0] = 10.0
+    real = Path.replace
+
+    def moved_then_interrupted(self, target):
+        r = real(self, target)
+        if ".export." in str(self) and ".previous" not in str(self) and target.name == "t_grd.dat":
+            raise KeyboardInterrupt
+        return r
+
+    monkeypatch.setattr(Path, "replace", moved_then_interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        export_fvcom_case(m, out, "t")
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == before

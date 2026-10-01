@@ -277,6 +277,22 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                                        f"{len(times)} times")
                     elif not np.isfinite(a).all():
                         reasons.append(f"{f.name}: {var} is not finite everywhere")
+                # every other floating field written per record -- 3-D
+                # velocities, scalars, turbulence -- must be finite too; a
+                # failed 3-D solution can sit under healthy barotropic fields
+                # (review round 10 F4). One record at a time, to bound memory.
+                for name, v in ds.variables.items():
+                    if (name in ("zeta", "ua", "va") or not v.dimensions
+                            or v.dimensions[0] != "time" or v.dtype.kind != "f"):
+                        continue
+                    if v.shape[0] != len(times):
+                        reasons.append(f"{f.name}: {name} has {v.shape[0]} records for "
+                                       f"{len(times)} times")
+                        continue
+                    for k in range(v.shape[0]):
+                        if not np.isfinite(np.ma.filled(v[k], np.nan)).all():
+                            reasons.append(f"{f.name}: {name} is not finite at record {k}")
+                            break
         except Exception as exc:        # unreadable, truncated, not NetCDF
             reasons.append(f"{f.name}: cannot be read ({exc.__class__.__name__}: {exc})")
     info["n_records"] = len(stamps)

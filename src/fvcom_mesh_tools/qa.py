@@ -533,11 +533,16 @@ def run_qa(
     """
     n_nodes = mesh.n_nodes
     ne = mesh.n_elements
-    obc_nodes_all = (
-        np.unique(np.concatenate([np.asarray(s, dtype=np.int64)
-                                  for s in mesh.open_boundaries]))
-        if mesh.open_boundaries else np.empty(0, dtype=np.int64)
-    )
+    # counted only from well-formed boundaries; a malformed one fails the
+    # index gate below instead of raising here (review round 10 F8)
+    try:
+        obc_nodes_all = (
+            np.unique(np.concatenate([np.asarray(s).astype(np.int64, casting="safe")
+                                      for s in mesh.open_boundaries]))
+            if mesh.open_boundaries else np.empty(0, dtype=np.int64)
+        )
+    except (TypeError, ValueError):
+        obc_nodes_all = np.empty(0, dtype=np.int64)
     params: dict[str, Any] = {
         "min_angle_deg": min_angle_deg,
         "max_angle_deg": max_angle_deg,
@@ -571,8 +576,14 @@ def run_qa(
     # non-finite id would otherwise be truncated to a valid one and pass
     # (review round 9 F5). Elements must be integers outright: the geometry
     # below indexes with them.
-    def _bad_ids(a, integer_only=False) -> int:
-        arr = np.asarray(a)
+    def _bad_ids(a, integer_only=False, ndim=1) -> int:
+        try:
+            arr = np.asarray(a)
+        except (TypeError, ValueError):          # ragged
+            return 1
+        # shape first: a boundary is one chain, the elements (NE, 3)
+        if arr.ndim != ndim or (ndim == 2 and arr.shape[1:] != (3,)):
+            return max(int(arr.size), 1)
         if arr.size == 0:
             return 0
         if arr.dtype.kind == "b" or arr.dtype.kind not in "iuf" or (
@@ -584,7 +595,7 @@ def run_qa(
                 bad |= ~np.isfinite(arr) | (arr != np.round(arr))
         return int(bad.sum())
 
-    bad_idx = _bad_ids(mesh.elements, integer_only=True) if ne else 0
+    bad_idx = _bad_ids(mesh.elements, integer_only=True, ndim=2) if ne else 0
     for s in [*mesh.open_boundaries, *(s for _ib, s in mesh.land_boundaries)]:
         bad_idx += _bad_ids(s)
     checks.append(QACheck(

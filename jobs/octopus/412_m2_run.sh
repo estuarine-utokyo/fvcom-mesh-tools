@@ -21,6 +21,8 @@ CASE_DIR=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/${FMESH_CASE:?set FMESH_CASE}
 mkdir -- "$CASE_DIR/.running" 2>/dev/null \
     || { echo "another job is running $CASE_DIR (or left $CASE_DIR/.running)"; exit 2; }
 trap 'rmdir -- "$CASE_DIR/.running"' EXIT
+# a staging or smoke stage (421, 423) holding the root rewrites this case
+[ -e "$FMESH_RUN_ROOT/.staging" ] && { echo "a stage holds $FMESH_RUN_ROOT/.staging"; exit 2; }
 # INVALIDATE next, before anything that can fail (review 2, R1)
 rm -f "$CASE_DIR/RUN_OK"
 . jobs/octopus/common.sh "412_m2_run" 1

@@ -26,6 +26,7 @@ from scipy.spatial import cKDTree
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from fvcom_mesh_tools.io.fvcom_native import read_obc  # noqa: E402
+from fvcom_mesh_tools.outdir import reserve  # noqa: E402
 from fvcom_mesh_tools.plotting import (  # noqa: E402
     add_atlas_grid,
     draw_mesh,
@@ -461,7 +462,9 @@ def plot(maps, rows, path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=DEFAULT_RUN_ROOT)
-    parser.add_argument("--output", type=Path, default=ROOT / "outputs/m2_383")
+    # default outputs/<run root's name>: the run roots are unique, and a
+    # fixed outputs/m2_383 mixed two experiments (review round 10 F2)
+    parser.add_argument("--output", type=Path, default=None)
     # The figure goes next to its own results by default. A fixed
     # outputs/figures/383_*.png meant a second experiment silently overwrote
     # the first one's figure while writing its tables somewhere else.
@@ -469,7 +472,8 @@ def main():
     args = parser.parse_args()
     if args.root is None:
         raise SystemExit("give --root, or set WORK_DIR (login profile)")
-    out = args.output.resolve()
+    # taken atomically: refused if another analysis has it or it holds files
+    out = reserve(args.output if args.output else ROOT / "outputs" / args.root.resolve().name)
     figure = args.figure.resolve() if args.figure else out / f"{out.name}.png"
     analyze(args.root.resolve(), out, figure)
 

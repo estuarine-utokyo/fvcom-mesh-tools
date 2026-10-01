@@ -467,8 +467,10 @@ def export_fvcom_case(
                 dst = outdir / p.name
                 if dst.exists():
                     shutil.copy2(dst, keep / p.name)
-                p.replace(dst)
+                # recorded before the move, so an interrupt right after it is
+                # still rolled back (review round 10 F6)
                 moved.append(dst)
+                p.replace(dst)
                 written[kind] = dst
         except BaseException:
             state = "restoring"
@@ -478,7 +480,7 @@ def export_fvcom_case(
                     if (keep / dst.name).exists():
                         (keep / dst.name).replace(dst)
                     else:
-                        dst.unlink()
+                        dst.unlink(missing_ok=True)
                 except OSError:
                     unrestored.append(dst.name)
             if unrestored:

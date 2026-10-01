@@ -45,11 +45,17 @@ _VALUE = re.compile(r"""'(?:[^']|'')*'|"(?:[^"]|"")*"|[^,\s/]+""")
 
 
 def _mask_quoted(text: str) -> str:
-    """``text`` with quoted contents blanked (same length), so a search for
-    ``KEY =`` cannot land inside a string."""
+    """``text`` with quoted contents and ``!`` comments blanked (same
+    length), so a search for ``KEY =`` lands only on an active assignment;
+    a quote inside a comment is not read (review round 10 F7)."""
     out, quote, i = list(text), None, 0
     while i < len(text):
         ch = text[i]
+        if quote is None and ch == "!":
+            while i < len(text) and text[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
         if quote:
             if ch == quote and i + 1 < len(text) and text[i + 1] == quote:
                 out[i] = out[i + 1] = " "
@@ -118,15 +124,19 @@ def relocate_case(src: Path, dst: Path, nml: str = "m2_run.nml",
         # the previous destination is moved aside, not deleted, until the new
         # one is in place, and moved back if that fails (review round 8 F3)
         prev = tmp / "previous"
-        if dst.exists():
-            dst.rename(prev)
+        # publishing from before the first rename: an interrupt right after
+        # it must not let cleanup delete the previous copy (round 10 F6)
         state = "publishing"
         try:
+            if dst.exists():
+                dst.rename(prev)
             work.rename(dst)
         except BaseException:
             state = "restoring"
             if prev.exists():
                 try:
+                    if dst.exists():             # the new copy got in: take it out
+                        shutil.rmtree(dst)
                     prev.rename(dst)
                 except OSError:
                     raise OSError(f"could not put {dst} back; it is in {prev}") from None

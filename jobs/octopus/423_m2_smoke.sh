@@ -18,6 +18,17 @@
 # Required: FMESH_RUN_ROOT.  Optional: FMESH_DAYS (2), FMESH_RANKS (64).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
+# One mutating stage per run root (review round 10 F3): the root lock is
+# taken atomically before any marker is invalidated or case staged, and no
+# 412 run may hold a case lock meanwhile (412 checks for this lock in turn).
+STAGE_LOCK=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/.staging
+mkdir -p -- "$FMESH_RUN_ROOT"
+mkdir -- "$STAGE_LOCK" 2>/dev/null \
+    || { echo "another stage holds $STAGE_LOCK (remove it if that job is gone)"; exit 2; }
+trap 'rmdir -- "$STAGE_LOCK"' EXIT
+for c in "$FMESH_RUN_ROOT"/*/.running; do
+    [ -e "$c" ] && { echo "a run is active: $c"; exit 2; }
+done
 # INVALIDATE first, before anything that can fail (review 2, R1)
 rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/SMOKE_OK" \
       "$FMESH_RUN_ROOT/base/RUN_OK" "$FMESH_RUN_ROOT/refined/RUN_OK"

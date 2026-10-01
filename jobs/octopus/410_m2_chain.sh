@@ -47,4 +47,4 @@ ana=$(qsub --after "$(IFS=,; echo "${runs[*]}")" \
     -v "FMESH_RUN_ROOT=$RUN_ROOT" jobs/octopus/413_m2_analysis.sh)
 ana=$(grep -oE '[0-9]+\.[a-z]+' <<<"$ana" | head -1)
 echo "analysis = $ana"
-echo "outputs  -> $REPO/outputs/m2_$STAMP"
+echo "outputs  -> $REPO/outputs/m2_$(basename "$RUN_ROOT")"
