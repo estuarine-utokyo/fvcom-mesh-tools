@@ -231,6 +231,8 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
     # a run must integrate over a positive interval: END_DATE after
     # START_DATE (output may start as late as END_DATE; review round 12 F5)
     start = _parse_time(vals["START_DATE"]) if vals.get("START_DATE") else None
+    if nml_path.exists() and start is None:
+        reasons.append(f"no START_DATE found in {nml}")
     if end is not None and start is not None and end <= start:
         reasons.append(f"END_DATE {end} is not after the start {start}")
     if end is None:
@@ -264,6 +266,12 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                     continue
                 stamps += times
                 for var, dim in (("zeta", "node"), ("ua", "nele"), ("va", "nele")):
+                    # the layout FVCOM writes; a square transposed array
+                    # has the right shape and the wrong meaning (round 13 F4)
+                    if ds[var].dimensions != ("time", dim):
+                        reasons.append(f"{f.name}: {var} has dimensions "
+                                       f"{ds[var].dimensions}, not ('time', '{dim}')")
+                        continue
                     a = np.ma.filled(ds[var][:], np.nan)
                     # time by space, with space not empty and the same in
                     # every stack and on the staged mesh (round 4 F14)
@@ -332,6 +340,10 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
             reasons.append(f"the output starts at {stamps[0]}, not at {first}")
         if end is not None and stamps[-1] < end - tol:
             reasons.append(f"the output stops at {stamps[-1]} before END_DATE {end}")
+        # some output after the start: an initial record alone is no
+        # integration, however short the run (review round 13 F5)
+        if start is not None and stamps[-1] <= start:
+            reasons.append(f"no output after the start {start}")
     info["ok"] = not reasons
     info["reasons"] = reasons
     return info

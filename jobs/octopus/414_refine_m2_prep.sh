@@ -20,6 +20,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
 BASE=${FMESH_BASE:?set FMESH_BASE}
 REFINED=${FMESH_REFINED:?set FMESH_REFINED}
+fmesh_stage_lock "$RUN_ROOT" || exit 2
 for case in base refined; do
     if compgen -G "$RUN_ROOT/$case/output/m2_*.nc" >/dev/null; then
         echo "Existing model output: $RUN_ROOT/$case/output; archive before rerunning"

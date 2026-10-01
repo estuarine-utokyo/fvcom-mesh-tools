@@ -52,6 +52,8 @@ BAND_TOLERANCE = 0.05
 
 def graded_up(values, x, y, grade):
     """The smallest gradation-feasible field that is >= ``values``."""
+    if not (isinstance(grade, (int, float)) and np.isfinite(grade) and grade >= 0):
+        raise ValueError(f"the gradation must be finite and non-negative, not {grade!r}")
     return -_limit(-np.asarray(values, float), x, y, grade)
 
 
@@ -79,11 +81,36 @@ def band_field(x, y, line_xy, targets, half_width_m):
     return out.reshape(np.shape(x))
 
 
+def _check_sizing_inputs(ambient, x, y, grade, floor, bands) -> None:
+    """Controls the limiter can work with (review round 13 F9): a finite,
+    non-negative gradation (a negative one never settles), matching finite
+    lattice arrays, finite positive ambient sizes, a finite non-negative
+    floor, and bands that are positive where set (NaN marks off-band)."""
+    if not (isinstance(grade, (int, float)) and np.isfinite(grade) and grade >= 0):
+        raise ValueError(f"the gradation must be finite and non-negative, not {grade!r}")
+    shape = np.shape(ambient)
+    for name, a in (("x", x), ("y", y)):
+        if np.shape(a) != shape or not np.isfinite(a).all():
+            raise ValueError(f"{name} must be finite with the shape of ambient {shape}")
+    if not (np.isfinite(ambient).all() and (np.asarray(ambient) > 0).all()):
+        raise ValueError("ambient sizes must be finite and positive")
+    if floor is not None and (np.shape(floor) != shape or not np.isfinite(floor).all()
+                              or (np.asarray(floor) < 0).any()):
+        raise ValueError("the floor must be finite, non-negative, with ambient's shape")
+    for k, b in enumerate(bands):
+        on = np.isfinite(b)
+        if np.shape(b) != shape or np.isinf(b).any() or (b[on] <= 0).any():
+            raise ValueError(f"band {k}: positive sizes where set, NaN elsewhere, "
+                             f"ambient's shape")
+
+
 def compose_sizing(ambient, x, y, *, grade, floor=None, bands=()):
     """The final size field and a report; see the module docstring."""
+    bands = [np.asarray(b, float) for b in bands]     # traversed twice (review r3 F3)
+    _check_sizing_inputs(np.asarray(ambient, float), np.asarray(x, float),
+                         np.asarray(y, float), grade, floor, bands)
     h = _limit(np.asarray(ambient, float), x, y, grade)
     report = {}
-    bands = [np.asarray(b, float) for b in bands]     # traversed twice (review r3 F3)
     if floor is not None:
         up = graded_up(floor, x, y, grade)
         report["raised_by_floor"] = int((up > h).sum())

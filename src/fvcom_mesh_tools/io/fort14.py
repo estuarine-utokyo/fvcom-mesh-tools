@@ -208,6 +208,10 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
     path = Path(path).resolve()
     n_nodes = mesh.n_nodes
     n_elements = mesh.n_elements
+    # one line of title: a line break would shift every record (round 13 F8)
+    if not isinstance(mesh.title, str) or len(mesh.title.splitlines()) > 1 \
+            or mesh.title.endswith(("\n", "\r")):
+        raise ValueError(f"the title must be one line of text, not {mesh.title!r}")
     # shapes too, before the destination is touched (review round 11 F5)
     nodes_a, depths_a = np.asarray(mesh.nodes), np.asarray(mesh.depths)
     if nodes_a.ndim != 2 or nodes_a.shape[1] != 2 or depths_a.shape != (n_nodes,):

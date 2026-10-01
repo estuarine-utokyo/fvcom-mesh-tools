@@ -48,11 +48,14 @@ for case in base refined; do
 done
 
 # A shortened copy of each case, so the staged twenty-day run is untouched.
-# one working directory per invocation, taken atomically: a shared bench/
-# let a second benchmark restage the cases under the first (review round
-# 12 F3)
-BENCH=$(mktemp -d "$RUN_ROOT/bench_XXXX")
+# One working directory per invocation, taken atomically (review round 12
+# F3), short and directly under scratch: under the run root it pushed the
+# FVCOM paths past 80 bytes (round 13 F3). relocate_case checks them.
+BENCH=$(mktemp -d "${WORK_DIR:?set WORK_DIR}/scratch/b416_XXXX")
 echo "bench = $BENCH"
+# both cases are copied under the root's staging lock, so they are one
+# experiment (round 13 F2)
+fmesh_stage_lock "$RUN_ROOT" || exit 2
 python - "$RUN_ROOT" "$BENCH" "$DAYS" <<'PY'
 import re, sys
 from pathlib import Path
@@ -67,6 +70,7 @@ for case in ("base", "refined"):
     relocate_case(root / case, bench / case, end_date=end)
     print(f"[416] {case}: end -> {end}")
 PY
+fmesh_stage_unlock
 
 # the conda Python, kept for fmesh-check-run while conda is off for MPI
 PYBIN=$(command -v python)

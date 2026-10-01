@@ -58,3 +58,24 @@ fmesh_fvcom() {
     [[ -f $exe && -x $exe ]] || { echo "not an executable file: $exe" >&2; return 1; }
     printf '%s\n' "$exe"
 }
+
+# The run-root staging lock (421 and 423 take it inline, before sourcing
+# this file): one stage at a time may write or read a whole run root, and
+# never while a 412 case run holds <case>/.running (review rounds 10 F3,
+# 13 F2). Released on exit, or earlier with fmesh_stage_unlock.
+fmesh_stage_lock() {
+    mkdir -p -- "$1"
+    FMESH_STAGE_LOCK=$1/.staging
+    mkdir -- "$FMESH_STAGE_LOCK" 2>/dev/null || {
+        echo "another stage holds $FMESH_STAGE_LOCK (remove it if that job is gone)"
+        FMESH_STAGE_LOCK=; return 1; }
+    trap '[ -n "${FMESH_STAGE_LOCK:-}" ] && rmdir -- "$FMESH_STAGE_LOCK"' EXIT
+    local c
+    for c in "$1"/*/.running; do
+        if [ -e "$c" ]; then echo "a run is active: $c"; return 1; fi
+    done
+}
+fmesh_stage_unlock() {
+    rmdir -- "$FMESH_STAGE_LOCK"
+    FMESH_STAGE_LOCK=
+}

@@ -15,7 +15,8 @@ def _run(tmp_path, *, tada=True, times=("2020-01-01T00:00:00.000000",
          zeta=0.1, end="2020-01-02 00:00:00", extra_log="", n=3, grid=None):
     run = tmp_path / "run"
     (run / "output").mkdir(parents=True)
-    (run / "m2_run.nml").write_text(f" END_DATE = '{end}',\n"
+    (run / "m2_run.nml").write_text(" START_DATE = '2020-01-01 00:00:00',\n"
+                                    f" END_DATE = '{end}',\n"
                                     " NC_OUT_INTERVAL = 'seconds = 86400.0',\n"
                                     + (f" INPUT_DIR = '{run}/input/',\n"
                                        " GRID_FILE = 'm2_grd.dat',\n" if grid else ""))
@@ -28,10 +29,11 @@ def _run(tmp_path, *, tada=True, times=("2020-01-01T00:00:00.000000",
         ds.createDimension("time", None)
         ds.createDimension("DateStrLen", 26)
         ds.createDimension("node", n)
+        ds.createDimension("nele", n)
         t = ds.createVariable("Times", "S1", ("time", "DateStrLen"))
         z = ds.createVariable("zeta", "f4", ("time", "node"))
-        u = ds.createVariable("ua", "f4", ("time", "node"))
-        v = ds.createVariable("va", "f4", ("time", "node"))
+        u = ds.createVariable("ua", "f4", ("time", "nele"))
+        v = ds.createVariable("va", "f4", ("time", "nele"))
         for k, s in enumerate(times):
             t[k] = np.array(list(s.ljust(26)), dtype="S1")
             z[k] = np.full(n, zeta)
@@ -209,7 +211,33 @@ def test_time_not_first_and_a_zero_length_run_fail(tmp_path):
     info = check_run(run)
     assert not info["ok"] and any("time at position" in r for r in info["reasons"])
     run = _run(tmp_path / "b", times=("2020-01-01T00:00:00.000000",), end="2020-01-01 00:00:00")
-    nml = run / "m2_run.nml"
-    nml.write_text(nml.read_text() + " START_DATE = '2020-01-01 00:00:00',\n")
     info = check_run(run)
     assert not info["ok"] and any("not after the start" in r for r in info["reasons"])
+
+
+def test_transposed_barotropic_fields_fail(tmp_path):
+    """Review round 13 F4: zeta(node, time) of a square shape passed."""
+    run = _run(tmp_path, n=2, times=("2020-01-01T00:00:00.000000",
+                                     "2020-01-02T00:00:00.000000"))
+    f = run / "output" / "m2_0001.nc"
+    f.unlink()
+    with netCDF4.Dataset(f, "w") as ds:
+        ds.createDimension("time", None)
+        ds.createDimension("DateStrLen", 26)
+        ds.createDimension("node", 2)
+        ds.createDimension("nele", 2)
+        t = ds.createVariable("Times", "S1", ("time", "DateStrLen"))
+        for k, s in enumerate(("2020-01-01T00:00:00.000000", "2020-01-02T00:00:00.000000")):
+            t[k] = np.array(list(s.ljust(26)), dtype="S1")
+        ds.createVariable("zeta", "f4", ("node", "time"))[:] = 0.1
+        ds.createVariable("ua", "f4", ("time", "nele"))[:] = 0.0
+        ds.createVariable("va", "f4", ("time", "nele"))[:] = 0.0
+    info = check_run(run)
+    assert not info["ok"] and any("zeta has dimensions" in r for r in info["reasons"])
+
+
+def test_an_initial_record_alone_is_not_a_run(tmp_path):
+    """Review round 13 F5: a 10-minute run with only the 00:00 record."""
+    run = _run(tmp_path, times=("2020-01-01T00:00:00.000000",), end="2020-01-01 00:10:00")
+    info = check_run(run)
+    assert not info["ok"] and any("no output after the start" in r for r in info["reasons"])

@@ -384,3 +384,15 @@ def test_a_hole_in_the_new_sea_without_land_is_refused():
         check_island_holes(m, shapely.Polygon(), n_base_nodes=3)
     islet = shapely.box(2400, 2400, 2600, 2600)
     assert check_island_holes(m, islet, n_base_nodes=3) == {"n_new_islands": 1}
+
+
+@pytest.mark.parametrize("kw", [{"grade": -0.2}, {"band": -10.0}, {"ambient": np.nan}])
+def test_compose_sizing_refuses_controls_it_cannot_honour(kw):
+    """Review round 13 F9."""
+    from fvcom_mesh_tools.extend import compose_sizing
+
+    x, y = np.meshgrid([0.0, 100.0], [0.0, 100.0])
+    amb = np.full((2, 2), kw.get("ambient", 500.0))
+    bands = [np.full((2, 2), kw["band"])] if "band" in kw else []
+    with pytest.raises(ValueError):
+        compose_sizing(amb, x, y, grade=kw.get("grade", 0.2), bands=bands)

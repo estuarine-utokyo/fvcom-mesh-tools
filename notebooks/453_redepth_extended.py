@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -101,13 +102,17 @@ b = Path(recipe["base"]) / recipe["base_case"]
 built_report = src_dir / "report.json"
 if not built_report.exists():
     raise SystemExit(f"{built_report} is missing: re-depth takes an accepted build only")
-_built = json.loads(built_report.read_text())
+# one read of the report: what is parsed is what is hashed (round 13 F6)
+_built_bytes = built_report.read_bytes()
+_built = json.loads(_built_bytes)
 if _built.get("status") != "ok":
     raise SystemExit(f"the build in {src_dir} was not accepted (status "
                      f"{_built.get('status')!r})")
+ACCEPTED = {}
 for k in ("grd", "dep", "obc"):
     f = src_dir / f"{case}_{k}.dat"
-    if _built.get("products_sha256", {}).get(f.name) != file_sha256(f):
+    ACCEPTED[k] = _built.get("products_sha256", {}).get(f.name)
+    if ACCEPTED[k] is None or ACCEPTED[k] != file_sha256(f):
         raise SystemExit(f"{f.name} is not the file the accepted build wrote")
 LAND = src_dir / "generate" / "land_with_base.shp"
 INPUTS = {"recipe": recipe["recipe_path"],
@@ -121,9 +126,15 @@ STATE["provenance"] = PROV = collect(
     code=CODE,
     files={**INPUTS,
            **{f"bathymetry_{k}": [str(q) for q in v] for k, v in source_files(names).items()}})
-# the recipe hashed is the one parsed above (review round 5 F3)
+# the recipe hashed is the one parsed above (review round 5 F3), and the
+# report and case files recorded are the ones accepted above (round 13 F6)
 if PROV["files"]["recipe"]["sha256"] != recipe["recipe_sha256"]:
     raise SystemExit("the recipe changed between reading and recording it")
+if PROV["files"]["built_report"]["sha256"] != hashlib.sha256(_built_bytes).hexdigest():
+    raise SystemExit("the build report changed between accepting and recording it")
+_acc = hashlib.sha256("".join(ACCEPTED[k] for k in ("grd", "dep", "obc")).encode()).hexdigest()
+if PROV["files"]["built_case"]["sha256"] != _acc:
+    raise SystemExit("the built case changed between accepting and recording it")
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
 mesh = read_fvcom_case(src_dir / f"{case}_grd.dat", src_dir / f"{case}_dep.dat",
                        src_dir / f"{case}_obc.dat")
@@ -202,7 +213,8 @@ if dt_new < dt_base:
 # every input the provenance names, the bathymetry included (review round 6
 # F8), and the datasets listed again (round 7 F9)
 changed = sorted(set(changed_files(PROV, list(PROV["files"]))) | set(changed_inventory(
-    PROV, {f"bathymetry_{k}": v for k, v in source_files(names).items()})))
+    PROV, {"land": dataset_files(LAND),                 # its sidecars too (round 13 F7)
+           **{f"bathymetry_{k}": v for k, v in source_files(names).items()}})))
 # the code that ran must still be the code recorded (round 7 F10)
 _now = collect(code=CODE, libraries=())["code"]
 if any(code_identity(_now[k]) != code_identity(PROV["code"][k]) for k in PROV["code"]):

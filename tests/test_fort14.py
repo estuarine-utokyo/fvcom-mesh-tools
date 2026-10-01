@@ -238,3 +238,15 @@ def test_write_fort14_refuses_what_it_cannot_read_back(tmp_path, change):
     with pytest.raises(ValueError):
         write_fort14(m, p)
     assert p.read_text() == "OLD\n"
+
+
+def test_a_title_must_be_one_line(tmp_path):
+    """Review of the extend tools, round 13 F8."""
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh, write_fort14
+
+    m = Fort14Mesh("title\nextra line", np.array([[0.0, 0], [1, 0], [0, 1]]), np.ones(3),
+                   np.array([[0, 1, 2]]), [], [])
+    with pytest.raises(ValueError, match="one line"):
+        write_fort14(m, tmp_path / "x.14")

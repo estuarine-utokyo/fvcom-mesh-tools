@@ -22,18 +22,22 @@ ROOT = Path(__file__).resolve().parents[1]
 def _run(tmp_path, fields=("zeta", "ua", "va")):
     run = tmp_path / "base"
     (run / "output").mkdir(parents=True)
-    (run / "m2_run.nml").write_text("END_DATE = '2020-01-02 00:00:00',\n")
+    (run / "m2_run.nml").write_text("START_DATE = '2020-01-01 00:00:00',\n"
+                                    "END_DATE = '2020-01-02 00:00:00',\n")
     (run / "fvcom.log").write_text("TADA!\n")
     with netCDF4.Dataset(run / "output/m2_0001.nc", "w") as ds:
         ds.createDimension("time", 2)
         ds.createDimension("DateStrLen", 26)
         ds.createDimension("node", 3)
+        ds.createDimension("nele", 3)
         times = ds.createVariable("Times", "S1", ("time", "DateStrLen"))
         for k, stamp in enumerate(("2020-01-01T00:00:00.000000",
                                    "2020-01-02T00:00:00.000000")):
             times[k] = np.asarray(list(stamp), dtype="S1")
         for field in fields:
-            ds.createVariable(field, "f4", ("time", "node"))[:] = 0.1
+            # FVCOM's layout: zeta on nodes, ua and va on elements
+            dim = "node" if field == "zeta" else "nele"
+            ds.createVariable(field, "f4", ("time", dim))[:] = 0.1
     return run
 
 
