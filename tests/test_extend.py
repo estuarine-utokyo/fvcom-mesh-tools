@@ -162,3 +162,48 @@ def test_trim_lone_corners_leaves_a_lone_corner_that_is_not_a_spike():
     t = np.array([[0, 1, 2]])
     out, mut, rep = trim_lone_corners(t, np.ones(1, bool))
     assert len(out) == 1 and sorted(rep["lone_nodes_left"]) == [0, 1, 2]
+
+
+def test_rfactor_smooth_free_meets_the_cap_and_refuses_the_infeasible():
+    """Review F3: a cap after smoothing broke r; an infeasible limit returned silently."""
+    from fvcom_mesh_tools.extend import rfactor_smooth_free
+
+    ei, ej = np.array([0]), np.array([1])
+    h, it, r = rfactor_smooth_free(np.array([100.0, 10.0]), ei, ej, np.array([False, True]),
+                                   rmax=0.2, hmin=3.0, hmax=80.0)
+    assert h[1] <= 80.0 and r <= 0.2 + 1e-6
+    with pytest.raises(ValueError, match="not reached"):
+        # 100 m fixed beside a free node capped at 10 m: r = 0.82 at best
+        rfactor_smooth_free(np.array([100.0, 10.0]), ei, ej, np.array([False, True]),
+                            rmax=0.2, hmin=3.0, hmax=10.0, max_iter=50)
+    with pytest.raises(ValueError, match="not reached"):
+        rfactor_smooth_free(np.array([1.0, 3.0]), ei, ej, np.array([False, True]),
+                            rmax=0.2, hmin=3.0, max_iter=50)
+
+
+def test_compose_reports_a_band_set_below_the_floor():
+    """Review F4: a band below the time-step floor must be visible to the caller."""
+    x, y = _lattice()
+    floor = np.full(x.shape, 4000.0)
+    band = band_field(x, y, [[0, 20_000], [40_000, 20_000]], [1500.0, 1500.0], 800.0)
+    h, rep = compose_sizing(np.full(x.shape, 5000.0), x, y, grade=0.2, floor=floor,
+                            bands=[band])
+    assert rep["band_0_below_floor_cells"] == int(np.isfinite(band).sum())
+
+
+def test_verify_refuses_an_outer_element_overlapping_the_base():
+    """Review F10: two owners on the same side of an interface edge is an overlap."""
+    base = _base()
+    on = np.array([[1000, 0], [1000, 1000], [500, 500]], float)   # third vertex inside the base
+    oe = np.array([[0, 1, 2]])
+    m = merge_outer(base, on, oe, [0, 1], [1, 2], [0, 1])
+    with pytest.raises(ValueError, match="same side"):
+        verify_frozen_base(m, base, [1, 2])
+
+
+def test_land_segments_keeps_a_single_land_edge():
+    """Review F11: a land run of one edge was dropped."""
+    from fvcom_mesh_tools.extend import land_segments
+
+    runs = land_segments(np.array([[0, 1, 2]]), [np.array([0, 1, 2])])
+    assert len(runs) == 1 and sorted(runs[0][1].tolist()) == [0, 2]

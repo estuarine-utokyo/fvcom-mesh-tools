@@ -149,10 +149,15 @@ h[new] = np.maximum(raw, D["min_m"])
 if D["max_m"] is not None:
     h[new] = np.minimum(h[new], D["max_m"])
 ei, ej = node_edges(merged.elements)
-h, iters, r_after = rfactor_smooth_free(h, ei, ej, new, rmax=D["rfactor"], hmin=D["min_m"])
-if D["max_m"] is not None:
-    h[new] = np.minimum(h[new], D["max_m"])
+# the cap is applied inside the limiter, so the result meets both (review F3)
+h, iters, _ = rfactor_smooth_free(h, ei, ej, new, rmax=D["rfactor"], hmin=D["min_m"],
+                                  hmax=D["max_m"])
 h[new] = np.round(h[new], 6)
+# r over every edge with a new end, on the depths that are written
+touch = new[ei] | new[ej]
+r_after = float((np.abs(h[ei] - h[ej]) / (h[ei] + h[ej]))[touch].max()) if touch.any() else 0.0
+if r_after > D["rfactor"] + 1e-6:
+    raise SystemExit(f"final r-factor {r_after:.4f} exceeds {D['rfactor']}")
 merged.depths = h
 verify_frozen_base(merged, base, IB)
 names = recipe["bathymetry"]["depths"]

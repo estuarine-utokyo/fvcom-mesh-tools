@@ -83,6 +83,11 @@ def compose_sizing(ambient, x, y, *, grade, floor=None, bands=()):
         on = np.isfinite(band)
         if not on.any():
             raise ValueError(f"band {k} covers no lattice point")
+        if floor is not None:
+            # a band set below the time-step floor wins over it: say where
+            # (review F4) -- the caller decides whether that band may
+            under = on & (band < np.asarray(floor) - 1e-6)
+            report[f"band_{k}_below_floor_cells"] = int(under.sum())
         lo = _limit(np.where(on, band, np.inf), x, y, grade)
         hi = graded_up(np.where(on, band, -np.inf), x, y, grade)
         h = np.minimum(np.maximum(h, hi), lo)
@@ -155,12 +160,23 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
                            merged.elements[:, [2, 0]]]), axis=1)
     owner = np.tile(np.arange(merged.n_elements), 3)
     keys = e[:, 0] * merged.n_nodes + e[:, 1]
+    xy = merged.nodes[:, :2]
     for a, b in zip(ib[:-1], ib[1:]):
         k = min(a, b) * merged.n_nodes + max(a, b)
         who = owner[keys == k]
         if len(who) != 2 or (who < eb).sum() != 1:
             raise ValueError(f"interface edge {a}-{b} is not shared by one base and one "
                              f"outer element (elements {who.tolist()})")
+        # the two elements must lie on opposite sides of the edge, or the outer
+        # one overlaps the base (review F10)
+        side = []
+        for e_ in who:
+            c = [v for v in merged.elements[e_] if v not in (a, b)][0]
+            side.append(np.sign((xy[b, 0] - xy[a, 0]) * (xy[c, 1] - xy[a, 1])
+                                - (xy[b, 1] - xy[a, 1]) * (xy[c, 0] - xy[a, 0])))
+        if side[0] * side[1] >= 0:
+            raise ValueError(f"interface edge {a}-{b}: the base and the outer element are "
+                             "on the same side (they overlap)")
     return {"n_base_nodes": nb, "n_base_elements": eb,
             "n_interface_edges": int(len(ib) - 1),
             "n_nodes": merged.n_nodes, "n_elements": merged.n_elements}
@@ -193,24 +209,28 @@ def land_segments(elements, open_chains) -> list[tuple[int, np.ndarray]]:
         for k in range(1, n + 1):
             i = (start + k) % n
             if is_open[i]:
-                if len(run) > 1:
+                if run:      # one land edge is a run too (review F11)
                     out.append((0, np.array(run + [loop[i]], np.int64)))
                 run = []
             else:
                 run.append(loop[i])
-        if len(run) > 1:
+        if run:
             out.append((0, np.array(run + [loop[(start + n) % n]], np.int64)))
     return out
 
 
-def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, max_iter=5000):
+def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=5000):
     """r-factor limiter that moves only the ``free`` nodes.
 
     As ``dem.m7001.rfactor_smooth`` (Beckmann-Haidvogel), but a node that is
     not free keeps its depth: on an edge with one fixed end the free end
     takes the whole correction, and an edge with two fixed ends is left as
-    it is (its r is the base's own).  Returns ``(depth, iterations, max r
-    over edges with a free end)``.
+    it is (its r is the base's own).  ``hmin`` and ``hmax`` bound the free
+    depths *during* the smoothing, so the result satisfies both (a cap
+    applied afterwards could break the r-factor; review F3). Returns
+    ``(depth, iterations, max r over edges with a free end)``; raises when the
+    limit is not reached -- infeasible (e.g. a fixed 1 m node beside a free
+    node held at 3 m) or not converged within ``max_iter``.
     """
     h = np.asarray(h0, float).copy()
     free = np.asarray(free, bool)
@@ -220,6 +240,9 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, max_iter=5000):
     fi, fj = free[ei], free[ej]
     if not len(ei):
         return h, 0, 0.0
+    if hmax is not None:
+        h = np.where(free, np.minimum(h, hmax), h)
+    h = np.where(free, np.maximum(h, hmin), h)
     for it in range(int(max_iter)):
         hi, hj = h[ei], h[ej]
         r = np.abs(hi - hj) / (hi + hj)
@@ -240,9 +263,14 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, max_iter=5000):
         np.add.at(add, ej[fj & bad], (sgn * dj)[fj & bad])
         np.add.at(cnt, ej[fj & bad], 1.0)
         step = add / np.where(cnt > 0, cnt, 1.0)
-        h = np.where(free, np.maximum(h + step, hmin), h)
+        h = np.where(free, np.clip(h + step, hmin, np.inf if hmax is None else hmax), h)
     hi, hj = h[ei], h[ej]
-    return h, int(max_iter), float((np.abs(hi - hj) / (hi + hj)).max())
+    r = np.abs(hi - hj) / (hi + hj)
+    k = int(np.argmax(r))
+    raise ValueError(f"r-factor limit {rmax} not reached in {max_iter} iterations: "
+                     f"r = {r[k]:.4f} on edge {int(ei[k])}-{int(ej[k])} "
+                     f"(depths {hi[k]:.3f}, {hj[k]:.3f} m); the depth bounds may make "
+                     "it infeasible")
 
 
 def trim_lone_corners(elements, mutable, keep_nodes=(), max_rounds=20):
