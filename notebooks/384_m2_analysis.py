@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -31,7 +32,8 @@ from fvcom_mesh_tools.plotting import (  # noqa: E402
     use_readable_style,
 )
 
-DEFAULT_RUN_ROOT = Path("/octfs/work/G16445/v61021/scratch/m2_383").resolve()
+DEFAULT_RUN_ROOT = (Path(os.environ["WORK_DIR"]) / "scratch/m2_383").resolve() \
+    if os.environ.get("WORK_DIR") else None
 # Set from the manifest at run time. The cases are a property of the
 # experiment, not of this script: 383 stages A / B_own / B_m7001, and 414
 # stages base / refined on one base. The first label is the reference every
@@ -463,6 +465,8 @@ def main():
     # the first one's figure while writing its tables somewhere else.
     parser.add_argument("--figure", type=Path, default=None)
     args = parser.parse_args()
+    if args.root is None:
+        raise SystemExit("give --root, or set WORK_DIR (login profile)")
     out = args.output.resolve()
     figure = args.figure.resolve() if args.figure else out / f"{out.name}.png"
     analyze(args.root.resolve(), out, figure)

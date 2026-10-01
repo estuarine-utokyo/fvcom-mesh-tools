@@ -24,7 +24,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 398_obc_sweep 16
 
 REPO=$(pwd)
-WORK=/octfs/work/G16445/v61021/scratch/target_398.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/target_398.${JOBID}
 COLLECT="$REPO/outputs/target_398"
 mkdir -p "$WORK" "$COLLECT"
 

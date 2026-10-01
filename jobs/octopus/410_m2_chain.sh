@@ -15,7 +15,7 @@ REPO=$(pwd)
 B_MESH=${1:-$REPO/outputs/verify_409.115302/fit/sample_repro_final.14}
 [ -f "$B_MESH" ] || { echo "mesh not found: $B_MESH"; exit 2; }
 STAMP=$(date +%Y%m%d_%H%M%S)
-RUN_ROOT=/octfs/work/G16445/v61021/scratch/m2_$STAMP
+RUN_ROOT=${WORK_DIR:?set WORK_DIR}/scratch/m2_$STAMP
 mkdir -p "$RUN_ROOT"
 echo "run root: $RUN_ROOT"
 echo "B mesh  : $B_MESH"

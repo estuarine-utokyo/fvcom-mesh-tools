@@ -24,7 +24,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 401_verify_best 16
 
 REPO=$(pwd)
-WORK=/octfs/work/G16445/v61021/scratch/target_401.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/target_401.${JOBID}
 COLLECT="$REPO/outputs/target_401"
 mkdir -p "$WORK" "$COLLECT"
 

@@ -16,7 +16,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 CASE=${FMESH_CASE:?}; OUT=${FMESH_OUT:?}
 python notebooks/427_wall_port_test.py prep "$CASE" "$OUT"
-FVCOM=/octfs/work/G16445/v61021/Github/FVCOM/src/fvcom
+FVCOM=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
 (
 set +u; conda deactivate; set -u
 if ! type module >/dev/null 2>&1; then
@@ -27,7 +27,7 @@ fi
 module purge
 module load BaseCPU/2026
 module load hdf5/1.14.6 netcdf-c/4.9.3 netcdf-fortran/4.6.2
-INSTALLDIR=/octfs/work/G16445/share/local/fvcom/libs/install-oneapi-2025.3.1
+INSTALLDIR=$FVCOM_LIBS
 export INSTALLDIR OMP_NUM_THREADS=1 PROJ_DATA=/usr/share/proj
 export LD_LIBRARY_PATH="$INSTALLDIR/lib:$INSTALLDIR/lib64:${LD_LIBRARY_PATH:-}"
 ulimit -s unlimited

@@ -20,7 +20,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 409_verify 16
 
 REPO=$(pwd)
-WORK=/octfs/work/G16445/v61021/scratch/verify_409.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/verify_409.${JOBID}
 COLLECT="$REPO/outputs/verify_409.${JOBID}"
 mkdir -p "$WORK" "$COLLECT"
 

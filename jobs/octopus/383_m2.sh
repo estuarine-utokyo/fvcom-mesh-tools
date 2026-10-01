@@ -16,8 +16,8 @@ trap 'echo "ERROR line $LINENO: $BASH_COMMAND" >&2' ERR
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 REPO=$(pwd)
 PYTHON=$(command -v python)
-RUN_ROOT=/octfs/work/G16445/v61021/scratch/m2_383
-FVCOM=/octfs/work/G16445/v61021/Github/FVCOM/src/fvcom
+RUN_ROOT=${WORK_DIR:?set WORK_DIR}/scratch/m2_383
+FVCOM=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
 export PYTHONDONTWRITEBYTECODE=1
 # Avoid stale output being interpreted as a successful rerun. Move previous
 # scratch run directories aside manually before resubmitting a completed case.
@@ -43,7 +43,7 @@ module purge
 module load BaseCPU/2026
 module load hdf5/1.14.6 netcdf-c/4.9.3 netcdf-fortran/4.6.2
 module list
-INSTALLDIR=/octfs/work/G16445/share/local/fvcom/libs/install-oneapi-2025.3.1
+INSTALLDIR=$FVCOM_LIBS
 export INSTALLDIR OMP_NUM_THREADS=1 PROJ_DATA=/usr/share/proj
 export LD_LIBRARY_PATH="$INSTALLDIR/lib:$INSTALLDIR/lib64:${LD_LIBRARY_PATH:-}"
 ulimit -s unlimited

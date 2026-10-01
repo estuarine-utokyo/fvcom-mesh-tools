@@ -21,7 +21,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 408_natural 16
 
 REPO=$(pwd)
-WORK=/octfs/work/G16445/v61021/scratch/natural_408.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/natural_408.${JOBID}
 COLLECT="$REPO/outputs/natural_408.${JOBID}"
 mkdir -p "$WORK" "$COLLECT"
 

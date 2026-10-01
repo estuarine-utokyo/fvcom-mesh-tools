@@ -28,10 +28,18 @@ from fvcom_mesh_tools.dem.m7001 import production_depths  # noqa: E402
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, read_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import apply_obc_depth_control, write_dep  # noqa: E402
 
-BASE = Path("/octfs/work/G16445/v61021").resolve()
+
+def _env(name):
+    import os
+    if not os.environ.get(name):
+        raise SystemExit(f"{name} is not set (login profile)")
+    return Path(os.environ[name]).resolve()
+
+
+BASE = _env("WORK_DIR")
 TB = BASE / "Github/TB-FVCOM/input/goto2023"
 FV = BASE / "Github/FVCOM"
-TIDES = Path("/octfs/work/G16445/share/Data/tides").resolve()
+TIDES = _env("DATA_DIR") / "tides"
 DEFAULT_RUN_ROOT = BASE / "scratch/m2_383"
 DEP = TB / "grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat"
 DEFAULT_B_MESH = ROOT / "outputs/sample_repro/sample_repro_final.14"

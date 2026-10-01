@@ -16,7 +16,7 @@ Everything else -- tide, sponge, sigma, namelist -- is 383's, imported
 rather than copied so the two experiments cannot drift apart.
 
     python notebooks/414_refine_m2_prep.py \\
-        --root /octfs/work/.../scratch/m2r_<stamp> \\
+        --root $WORK_DIR/scratch/m2r_<stamp> \\
         --base outputs/base_tool/TokyoBayTool \\
         --refined outputs/refine_futtsu_nori_tool/fvcom/futtsu_nori_tool
 """

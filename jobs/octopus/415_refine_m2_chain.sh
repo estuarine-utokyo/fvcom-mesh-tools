@@ -26,7 +26,7 @@ for p in "${BASE}_grd.dat" "${BASE}_dep.dat" "${BASE}_obc.dat" \
     [ -f "$p" ] || { echo "not found: $p"; exit 2; }
 done
 STAMP=$(date +%Y%m%d_%H%M%S)
-RUN_ROOT=/octfs/work/G16445/v61021/scratch/m2r_$STAMP
+RUN_ROOT=${WORK_DIR:?set WORK_DIR}/scratch/m2r_$STAMP
 mkdir -p "$RUN_ROOT"
 echo "run root: $RUN_ROOT"
 echo "base    : $BASE"

@@ -17,7 +17,7 @@ case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
 [ -e "$ROOT" ] && { echo "exists: $ROOT"; exit 2; }
 python notebooks/426_wall_fvcom_test.py prep "$ROOT"
-FVCOM=/octfs/work/G16445/v61021/Github/FVCOM/src/fvcom
+FVCOM=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
 (
 set +u; conda deactivate; set -u
 if ! type module >/dev/null 2>&1; then
@@ -28,7 +28,7 @@ fi
 module purge
 module load BaseCPU/2026
 module load hdf5/1.14.6 netcdf-c/4.9.3 netcdf-fortran/4.6.2
-INSTALLDIR=/octfs/work/G16445/share/local/fvcom/libs/install-oneapi-2025.3.1
+INSTALLDIR=$FVCOM_LIBS
 export INSTALLDIR OMP_NUM_THREADS=1 PROJ_DATA=/usr/share/proj
 export LD_LIBRARY_PATH="$INSTALLDIR/lib:$INSTALLDIR/lib64:${LD_LIBRARY_PATH:-}"
 ulimit -s unlimited

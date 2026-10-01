@@ -28,11 +28,18 @@ echo "job=${JOBID} host=$(hostname) start=$(date -Is)"
 export OMP_NUM_THREADS="${_threads}" OPENBLAS_NUM_THREADS="${_threads}"
 export MKL_NUM_THREADS="${_threads}" NUMBA_NUM_THREADS="${_threads}"
 export PYTHONUNBUFFERED=1 MPLBACKEND=Agg
-export DATA_DIR="${DATA_DIR:-/octfs/work/G16445/share/Data}"
+# Paths come from the login profile only (owner rule, 2026-09-29): stop when
+# they are missing rather than fall back to a path right on one machine.
+: "${DATA_DIR:?DATA_DIR is not set (login profile)}"
+: "${WORK_DIR:?WORK_DIR is not set (login profile)}"
+export DATA_DIR WORK_DIR
+# OCTOPUS site layer: the shared FVCOM library install, beside $DATA_DIR in
+# the group area (override with FVCOM_LIBS).
+export FVCOM_LIBS="${FVCOM_LIBS:-$(dirname "$DATA_DIR")/local/fvcom/libs/install-oneapi-2025.3.1}"
 
 # conda's activate scripts are not `set -u` clean.
 set +u
-. /octfs/work/G16445/v61021/miniforge3/etc/profile.d/conda.sh
+. "$WORK_DIR/miniforge3/etc/profile.d/conda.sh"
 conda activate "${FMESH_ENV:-fvcom-mesh-tools}"
 set -u
-echo "python=$(command -v python) DATA_DIR=${DATA_DIR}"
+echo "python=$(command -v python) DATA_DIR=${DATA_DIR} WORK_DIR=${WORK_DIR}"

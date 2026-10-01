@@ -18,7 +18,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 403_profile_inputs 16
 
 REPO=$(pwd)
-WORK=/octfs/work/G16445/v61021/scratch/profile_403.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/profile_403.${JOBID}
 mkdir -p "$WORK"
 for d in notebooks recipes; do rsync -a --delete "$REPO/$d/" "$WORK/$d/"; done
 mkdir -p "$WORK/outputs/figures"

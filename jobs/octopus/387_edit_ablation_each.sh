@@ -27,7 +27,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 387_edit_ablation_each 16
 
 REPO=$(pwd)
-WORK=/octfs/work/G16445/v61021/scratch/abl_387.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/abl_387.${JOBID}
 COLLECT="$REPO/outputs/ablation_387"
 VARIANTS="edit_001_haneda_d_runway edit_003_west_edge_crack edit_004_ow05_harbor edit_005_ow05_urayasu"
 mkdir -p "$WORK" "$COLLECT"

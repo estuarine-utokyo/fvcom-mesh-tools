@@ -16,7 +16,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 402_one_wide_continuity 16
 
 REPO=$(pwd)
-WORK=/octfs/work/G16445/v61021/scratch/one_wide_402.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/one_wide_402.${JOBID}
 COLLECT="$REPO/outputs/one_wide_402.${JOBID}"
 mkdir -p "$WORK" "$COLLECT"
 

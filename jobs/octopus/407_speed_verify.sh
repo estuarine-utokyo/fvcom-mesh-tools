@@ -21,7 +21,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 
 REPO=$(pwd)
 REF=${FMESH_REF:?Set FMESH_REF to the reference sample_repro_final.14}
-WORK=/octfs/work/G16445/v61021/scratch/speed_407.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/speed_407.${JOBID}
 mkdir -p "$WORK"
 for d in notebooks recipes; do rsync -a --delete "$REPO/$d/" "$WORK/$d/"; done
 mkdir -p "$WORK/outputs/figures"

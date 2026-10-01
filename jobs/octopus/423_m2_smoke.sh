@@ -26,7 +26,7 @@ case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
 DAYS=${FMESH_DAYS:-2}
 RANKS=${FMESH_RANKS:-64}
-FVCOM=/octfs/work/G16445/v61021/Github/FVCOM/src/fvcom
+FVCOM=${FMESH_FVCOM:-$WORK_DIR/Github/FVCOM/src/fvcom}
 SMOKE=$RUN_ROOT/smoke
 [ -f "$RUN_ROOT/STAGED" ] || { echo "not staged: $RUN_ROOT (no STAGED marker)"; exit 2; }
 python - "$RUN_ROOT" "$SMOKE" "$DAYS" <<'PY'
@@ -57,7 +57,7 @@ fi
 module purge
 module load BaseCPU/2026
 module load hdf5/1.14.6 netcdf-c/4.9.3 netcdf-fortran/4.6.2
-INSTALLDIR=/octfs/work/G16445/share/local/fvcom/libs/install-oneapi-2025.3.1
+INSTALLDIR=$FVCOM_LIBS
 export INSTALLDIR OMP_NUM_THREADS=1 PROJ_DATA=/usr/share/proj
 export LD_LIBRARY_PATH="$INSTALLDIR/lib:$INSTALLDIR/lib64:${LD_LIBRARY_PATH:-}"
 ulimit -s unlimited

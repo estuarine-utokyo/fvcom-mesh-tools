@@ -30,7 +30,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 392_sizing_sweep 16
 
 REPO=$(pwd)
-WORK=/octfs/work/G16445/v61021/scratch/sizing_392.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/sizing_392.${JOBID}
 COLLECT="$REPO/outputs/sizing_392"
 mkdir -p "$WORK" "$COLLECT"
 

@@ -41,10 +41,10 @@ elif [ -d "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then
     exit 2
 fi
 STAMP=$(date +%Y%m%d_%H%M%S)
-RUN_ROOT=/octfs/work/G16445/v61021/scratch/m2_${NAME}_$STAMP
+RUN_ROOT=${WORK_DIR:?set WORK_DIR}/scratch/m2_${NAME}_$STAMP
 # FVCOM truncates INPUT_DIR at 80 characters (seen on this machine)
 if [ $(( ${#RUN_ROOT} + 23 )) -gt 80 ]; then   # + "/smoke/refined/output/"
-    RUN_ROOT=/octfs/work/G16445/v61021/scratch/m2_$STAMP
+    RUN_ROOT=${WORK_DIR:?set WORK_DIR}/scratch/m2_$STAMP
 fi
 # qsub -v separates variables with commas, so a comma inside a value would
 # silently become another variable (review F14)

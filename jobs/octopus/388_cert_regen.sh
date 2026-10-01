@@ -27,7 +27,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 388_cert_regen 32
 
 REPO=$(pwd)
-WORK=/octfs/work/G16445/v61021/scratch/cert_regen.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/cert_regen.${JOBID}
 COLLECT="$REPO/outputs/cert_regen"
 mkdir -p "$WORK" "$COLLECT"
 

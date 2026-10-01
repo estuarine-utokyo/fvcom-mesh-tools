@@ -94,8 +94,12 @@ def main(argv: list[str] | None = None) -> int:
     if out.exists() and any(out.iterdir()):
         print(f"fmesh-refine: {out} is not empty; move it first", file=sys.stderr)
         return 2
+    if not (args.land or os.environ.get("FMESH_LAND") or os.environ.get("DATA_DIR")):
+        print("fmesh-refine: DATA_DIR is not set (login profile); or give --land",
+              file=sys.stderr)
+        return 2
     land = args.land or os.environ.get("FMESH_LAND") or DEFAULT_LAND.format(
-        DATA_DIR=os.environ.get("DATA_DIR", "/octfs/work/G16445/share/Data"))
+        DATA_DIR=os.environ["DATA_DIR"])
     land = Path(land).expanduser().resolve()
     if not land.exists():
         print(f"fmesh-refine: no land polygons at {land} (--land)", file=sys.stderr)

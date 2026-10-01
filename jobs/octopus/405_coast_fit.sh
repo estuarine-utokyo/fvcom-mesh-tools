@@ -18,7 +18,7 @@ cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 405_coast_fit 16
 
 REPO=$(pwd)
-WORK=/octfs/work/G16445/v61021/scratch/coast_fit_405.${JOBID}
+WORK=${WORK_DIR:?set WORK_DIR}/scratch/coast_fit_405.${JOBID}
 COLLECT="$REPO/outputs/coast_fit_405.${JOBID}"
 mkdir -p "$WORK" "$COLLECT"
 
