@@ -17,7 +17,7 @@
 # Optional: FMESH_DAYS (2), FMESH_RANKS (64), FMESH_GAUGE (MERA), FMESH_FVCOM.
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
-rm -f "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}/SMOKE_OK"
+: "${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}"   # 448 refuses a used root; SMOKE_OK is never removed (review r2 F21)
 . jobs/octopus/common.sh 448_extend_smoke 1
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 RUN_ROOT=$FMESH_RUN_ROOT

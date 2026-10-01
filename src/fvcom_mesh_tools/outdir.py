@@ -1,0 +1,37 @@
+"""Reserve an output directory for one run, atomically.
+
+Checking that a directory is empty and then creating it lets two runs in
+(review of the extend tools, rounds 1 and 2). ``reserve`` creates the
+directory if needed, refuses one that holds anything but its own marker,
+and takes ownership by creating ``.reserved`` with ``O_EXCL``: of two runs
+racing for the same directory exactly one gets it.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+__all__ = ["MARKER", "reserve"]
+
+MARKER = ".reserved"
+
+
+def reserve(path) -> Path:
+    """Create or take the empty directory ``path`` for this run; return it resolved."""
+    path = Path(path).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir()
+    except FileExistsError:
+        if not path.is_dir():
+            raise SystemExit(f"{path} exists and is not a directory") from None
+        if any(p.name != MARKER for p in path.iterdir()):
+            raise SystemExit(f"{path} is not empty; give a fresh directory") from None
+    try:
+        fd = os.open(path / MARKER, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise SystemExit(f"{path} is reserved by another run") from None
+    os.write(fd, f"pid {os.getpid()}\n".encode())
+    os.close(fd)
+    return path

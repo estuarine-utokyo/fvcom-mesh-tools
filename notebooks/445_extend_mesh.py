@@ -26,6 +26,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from fvcom_mesh_tools.dem.sources import source_files  # noqa: E402
 from fvcom_mesh_tools.extend_recipe import load_extend_recipe  # noqa: E402
+from fvcom_mesh_tools.outdir import reserve  # noqa: E402
 from fvcom_mesh_tools.provenance import collect, dataset_files, file_sha256  # noqa: E402
 
 T0 = time.time()
@@ -40,17 +41,7 @@ OUT = Path(sys.argv[2] if len(sys.argv) > 2 else REPO / "outputs" / f"extend_{re
 OUT = OUT.resolve()
 # reserve the output atomically: checking that it is empty and then creating
 # it let two builds into the same directory (review F20)
-OUT.parent.mkdir(parents=True, exist_ok=True)
-try:
-    OUT.mkdir()
-except FileExistsError:
-    if any(p.name != ".reserved" for p in OUT.iterdir()):
-        raise SystemExit(f"{OUT} is not empty; move it first -- a build never mixes "
-                         "with another") from None
-try:
-    os.close(os.open(OUT / ".reserved", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-except FileExistsError:
-    raise SystemExit(f"{OUT} is reserved by another build") from None
+OUT = reserve(OUT)
 say(f"recipe {recipe['recipe_path']} -> {OUT}")
 DATA = Path(os.environ.get("DATA_DIR") or sys.exit("DATA_DIR is not set"))
 osm_land = DATA / "geodata/OSM/land-polygons-split-4326/land_polygons.shp"
@@ -62,11 +53,18 @@ if missing:
 
 gen = OUT / "generate"
 env = dict(os.environ, PYTHONPATH=str(REPO / "src"))
+# a failed stage still leaves a report with the provenance and the stage that
+# failed (review round 2 F18): the stages are run first, the report written
+# either way, and the exit code is the first failure's
+failed = None
 for script, args in (("446_extend_generate.py", [recipe["recipe_path"], str(gen)]),
                      ("447_extend_merge.py", [recipe["recipe_path"], str(gen), str(OUT)])):
     say(f"run {script}")
-    subprocess.run([sys.executable, str(REPO / "notebooks" / script), *args], cwd=REPO,
-                   env=env, check=True)
+    rc = subprocess.run([sys.executable, str(REPO / "notebooks" / script), *args], cwd=REPO,
+                        env=env).returncode
+    if rc != 0:
+        failed = {"stage": script, "returncode": rc}
+        break
 
 
 def spec_path(name):
@@ -82,8 +80,11 @@ report = {
     "base_sha256": {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")},
     "settings": recipe["settings"], "depths": recipe["depths"],
     "bathymetry": recipe["bathymetry"],
-    "generate": json.loads((gen / "generate.json").read_text()),
-    "merge": json.loads((OUT / "merge.json").read_text()),
+    "status": "failed" if failed else "ok", "failure": failed,
+    "generate": (json.loads((gen / "generate.json").read_text())
+                 if (gen / "generate.json").exists() else None),
+    "merge": (json.loads((OUT / "merge.json").read_text())
+              if (OUT / "merge.json").exists() else None),
     "threads": {k: os.environ.get(k) for k in ("OMP_NUM_THREADS", "NUMBA_NUM_THREADS",
                                                "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")},
     "provenance": collect(
@@ -95,6 +96,9 @@ report = {
     ),
 }
 (OUT / "report.json").write_text(json.dumps(report, indent=1, default=str))
+if failed:
+    raise SystemExit(f"{failed['stage']} failed (exit {failed['returncode']}); "
+                     f"report in {OUT / 'report.json'}")
 qa = report["merge"]["qa"]
 say(f"QA {qa['n_gate_total'] - qa['n_gate_failed']}/{qa['n_gate_total']}; "
     f"NP={report['merge']['n_nodes']:,} NE={report['merge']['n_elements']:,}")

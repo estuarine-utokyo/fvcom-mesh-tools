@@ -62,7 +62,7 @@ def test_resample_never_goes_below_the_spacing():
     n = resample(line, 3_000)
     d = np.diff(n[:, 0])
     assert np.allclose(n[0], [0, 0]) and np.allclose(n[-1], [10_000, 0])
-    assert d.min() >= 3_000 - 1e-6 and np.allclose(d, d[0])        # 3 x 3333 m
+    assert d.min() >= 3_000 - 1e-6 and d.tolist() == pytest.approx([3_000, 3_000, 4_000])
     n = resample(np.array([[0, 0], [8_000, 0]], float), 3_000)      # was 3000, 3000, 2000
     assert np.diff(n[:, 0]).min() >= 3_000 - 1e-6
     # variable spacing: each step is at least the spacing at both of its ends
@@ -92,3 +92,32 @@ def test_coast_normal_does_not_cross_a_thin_strip_of_land():
     for land in (strip, shapely.Polygon(list(strip.exterior.coords)[::-1])):
         b, q = coast_normal(land, 0, -10)
         assert b == pytest.approx(180.0)                     # away from the strip
+
+
+def test_resample_floor_holds_on_chords_and_both_ends():
+    """Round 2 F4: variable spacing and bends; F12: a step must advance."""
+    line = np.array([[0, 0], [10_900, 0]], float)
+    f = lambda p: np.where(p[:, 0] < 5_200, 1_000.0, 2_500.0)       # noqa: E731
+    v = resample(line, f)
+    d = np.linalg.norm(np.diff(v, axis=0), axis=1)
+    assert np.all(d >= np.maximum(f(v[:-1]), f(v[1:])) - 1e-6)
+    th = np.linspace(0, np.pi / 2, 200)
+    arc = np.column_stack([20_000 * np.cos(th), 20_000 * np.sin(th)])
+    v = resample(arc, 3_000)
+    assert np.linalg.norm(np.diff(v, axis=0), axis=1).min() >= 3_000 * (1 - 1e-9)
+
+
+def test_fillet_refuses_bad_radii():
+    """Round 2 F20: a negative radius made a path outside the corner."""
+    v = np.array([[0, 0], [10_000, 0], [10_000, 10_000]], float)
+    for r in (-1_000, 0, float("nan")):
+        with pytest.raises(ValueError, match="finite and positive"):
+            fillet(v, [r])
+
+
+def test_coast_normal_does_not_jump_a_50_m_strip():
+    """Round 2 F5: probes 60 m apart jumped a 50 m strip."""
+    strip = shapely.box(-50_000, 0, 50_000, 50)
+    for land in (strip, shapely.Polygon(list(strip.exterior.coords)[::-1])):
+        b, _ = coast_normal(land, 0, -10)
+        assert b == pytest.approx(180.0)

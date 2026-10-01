@@ -92,3 +92,11 @@ def test_case_names_are_one_file_name_component(tmp_path, case):
     """Review F28: a path in the case name could leave the output directory."""
     with pytest.raises(ValueError, match="file-name component"):
         load_extend_recipe(_write(tmp_path, case=case))
+
+
+@pytest.mark.parametrize("bbox", [[float("nan"), 33, 141, 36], [141, 36, 137, 33],
+                                  [137, -95, 141, 36]])
+def test_land_bbox_must_be_finite_and_ordered(tmp_path, bbox):
+    """Review round 2 F11."""
+    with pytest.raises(ValueError, match="land.bbox"):
+        load_extend_recipe(_write(tmp_path, land={"bbox": bbox}))

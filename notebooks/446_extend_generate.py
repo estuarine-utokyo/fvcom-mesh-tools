@@ -161,12 +161,35 @@ for arc in pts:
     segs.append(off + np.column_stack([np.arange(len(arc) - 1), np.arange(1, len(arc))]))
     off += len(arc)
 ladders = {}
-for name, arc, h_arc, flip in (("interface", iface_ll, spacing(iface_m), True),
-                               ("open boundary", OBC, spacing(metric(OBC)), False)):
+def extension_on_left(arc_ll, h_m):
+    """Is the extension (the generation domain) on the left of ``arc_ll``?
+
+    The ladder is built on the left; which way an input line runs is not
+    guaranteed (review round 2 F16), so each line is tested: points a
+    quarter of the local size to the left of the middle edges must lie in
+    the domain (sdf < 0), or to the right if not.
+    """
+    xy = metric(arc_ll)
+    mid = 0.5 * (xy[1:] + xy[:-1])
+    t = np.diff(xy, axis=0)
+    t /= np.linalg.norm(t, axis=1)[:, None]
+    left = np.column_stack([-t[:, 1], t[:, 0]])
+    d = 0.25 * 0.5 * (h_m[1:] + h_m[:-1])
+    probe_m = mid + left * d[:, None]
+    probe = np.column_stack([probe_m[:, 0] / kx + lon0, probe_m[:, 1] / 111e3 + lat0])
+    inside = sdf.eval(probe) < 0
+    if inside.mean() not in (0.0, 1.0) and abs(inside.mean() - 0.5) < 0.25:
+        raise SystemExit("cannot tell which side of a constrained line the extension is on")
+    return bool(inside.mean() > 0.5)
+
+
+for name, arc, h_arc in (("interface", iface_ll, spacing(iface_m)),
+                         ("open boundary", OBC, spacing(metric(OBC)))):
+    flip = not extension_on_left(arc, h_arc)
     a = arc[::-1] if flip else arc
     hh = h_arc[::-1] if flip else h_arc
     inner, keep = ladder(a, hh)
-    ladders[name] = {"n_inner": int(len(inner)), "n_kept": int(keep.sum())}
+    ladders[name] = {"n_inner": int(len(inner)), "n_kept": int(keep.sum()), "reversed": flip}
     idx = np.flatnonzero(keep)
     pts.append(inner[idx])
     run = [(i, j) for i, j in zip(range(len(idx) - 1), range(1, len(idx)))
@@ -282,7 +305,12 @@ xu, yu = to_m.transform(p[:, 0], p[:, 1])
 nodes = np.column_stack([xu, yu])
 nodes[chain_i] = base.nodes[IB, :2]                         # the base's exact coordinates
 dn, _ = sample(recipe["bathymetry"]["sizing"], p[:, 0], p[:, 1])
-dn = np.clip(np.nan_to_num(dn, nan=2.0), 2.0, None)
+# every generated node is sea: one no source covers must not get an invented
+# depth (review round 2 F19)
+if np.isnan(dn).any():
+    raise SystemExit(f"{int(np.isnan(dn).sum())} generated node(s) outside every sizing "
+                     f"source {recipe['bathymetry']['sizing']}")
+dn = np.clip(dn, 2.0, None)
 mesh = Fort14Mesh("outer", nodes, dn, t.astype(np.int64),
                   [chain_o.astype(np.int64), chain_i.astype(np.int64)],
                   land_segments(t, [chain_o, chain_i]))

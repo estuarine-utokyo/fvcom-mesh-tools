@@ -75,6 +75,13 @@ def load_extend_recipe(path) -> dict[str, Any]:
     land = raw["land"]
     if not (isinstance(land, dict) and set(land) == {"bbox"} and len(land["bbox"]) == 4):
         raise ValueError(f"{path}: land is {{bbox: [lon_min, lat_min, lon_max, lat_max]}}")
+    bb = land["bbox"]
+    # finite, on the globe, and ordered (review round 2 F11)
+    if not (all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                for v in bb)
+            and -180 <= bb[0] < bb[2] <= 360 and -90 <= bb[1] < bb[3] <= 90):
+        raise ValueError(f"{path}: land.bbox {bb} must be finite lon_min < lon_max, "
+                         "lat_min < lat_max on the globe")
     bathy = raw["bathymetry"]
     if not (isinstance(bathy, dict) and set(bathy) == {"sizing", "depths"}):
         raise ValueError(f"{path}: bathymetry has exactly 'sizing' and 'depths'")

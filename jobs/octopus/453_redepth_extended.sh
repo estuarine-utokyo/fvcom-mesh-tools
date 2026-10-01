@@ -14,7 +14,8 @@
 # Required: FMESH_RECIPE, FMESH_BUILT (the built case dir), FMESH_OUT,
 #           FMESH_SOURCES (joined by "+": qsub -v cannot pass commas),
 #           DATA_DIR (qsub -v).
-# Optional: FMESH_CASE_NAME.
+# Optional: FMESH_CASE_NAME, FMESH_ALLOW_FAILING=1 (keep a variant that fails the
+#           acceptance gates, as a sensitivity case).
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 453_redepth_extended 8
@@ -22,6 +23,7 @@ case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
 : "${FMESH_SOURCES:?set FMESH_SOURCES}"
 name=()
 [ -n "${FMESH_CASE_NAME:-}" ] && name=(--case-name "$FMESH_CASE_NAME")
+[ "${FMESH_ALLOW_FAILING:-0}" = 1 ] && name+=(--allow-failing-gates)
 python notebooks/453_redepth_extended.py "${FMESH_RECIPE:?set FMESH_RECIPE}" \
     "${FMESH_BUILT:?set FMESH_BUILT}" "${FMESH_OUT:?set FMESH_OUT}" \
     --sources "${FMESH_SOURCES//+/,}" "${name[@]}"

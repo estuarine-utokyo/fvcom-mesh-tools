@@ -8,9 +8,11 @@
 # and checked: orthogonal to the coast at both ends, straight sides, rounded
 # corners, and a node spacing no finer than the time-step floor. A report
 # (<csv>.json) and a figure (<csv>.png) are written beside the CSV.
+import hashlib
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -105,7 +107,11 @@ def spacing(p):
 
 
 nodes = resample(line, spacing)
-lon, lat = to_ll.transform(nodes[:, 0], nodes[:, 1])
+# what is checked is what is published: the CSV holds lon/lat to 1e-9 deg
+# (about 0.1 mm), and the nodes are taken back from those rounded values
+# (review round 2 F7)
+lon, lat = (np.round(np.asarray(v), 9) for v in to_ll.transform(nodes[:, 0], nodes[:, 1]))
+nodes = np.column_stack(to_m.transform(lon, lat))
 depth, which = sample(names, np.asarray(lon), np.asarray(lat))
 
 # ----------------------------------------------------------------- checks
@@ -141,13 +147,16 @@ report = {
                                          for p in nodes[2:-2]) / 1e3),
     "depth_m": {"min": float(np.nanmin(depth)), "max": float(np.nanmax(depth))},
     "bbox_lonlat": [float(min(lon)), float(min(lat)), float(max(lon)), float(max(lat))],
+    "csv_decimals": 9,
     "bathymetry": names,
     "bathymetry_files": {k: [str(p) for p in v] for k, v in source_files(names).items()},
 }
 bad = []
 if any(abs(a - 90) > 1.0 for a in report["end_angle_to_coast_deg"]):
     bad.append(f"not orthogonal to the coast: {report['end_angle_to_coast_deg']}")
-if report["crosses_land_m"] > 0:
+# a crossing, not the round-off of an end point lying on the coast
+# (review round 2 F6): 1 mm
+if report["crosses_land_m"] > 1e-3:
     bad.append(f"crosses land over {report['crosses_land_m']:.0f} m")
 if report["min_edge_over_floor"] < 0.995:      # a chord is a little shorter than its arc
     bad.append(f"an edge is below the spacing floor: {report['min_edge_over_floor']:.4f}")
@@ -167,11 +176,25 @@ if bad:
 header = (f"# Open boundary nodes (lon,lat, EPSG:4326) designed by notebooks/444_design_obc.py\n"
           f"# from {design_path.name}; {len(nodes)} nodes, {report['length_km']:.1f} km.\n"
           "lon,lat\n")
-for path, text in ((out_csv, header + "".join(f"{a:.6f},{b:.6f}\n" for a, b in zip(lon, lat))),
-                   (out_csv.with_suffix(".json"), json.dumps(report, indent=1, default=float))):
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
-    tmp.replace(path)                      # atomic on one file system
+csv_text = header + "".join(f"{a:.9f},{b:.9f}\n" for a, b in zip(lon, lat))
+# the report names the CSV it belongs to (review round 2 F2)
+report["csv_sha256"] = hashlib.sha256(csv_text.encode()).hexdigest()
+# one publisher at a time, each with its own temporary files: a shared
+# "<name>.tmp" let one writer rename another's payload (review round 2 F2)
+lock = out_csv.with_name(out_csv.name + ".lock")
+try:
+    os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+except FileExistsError:
+    raise SystemExit(f"{lock} exists: another design is being published") from None
+try:
+    for path, text in ((out_csv, csv_text),
+                       (out_csv.with_suffix(".json"), json.dumps(report, indent=1, default=float))):
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)              # atomic on one file system
+finally:
+    lock.unlink()
 
 import matplotlib  # noqa: E402
 

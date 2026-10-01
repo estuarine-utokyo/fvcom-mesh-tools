@@ -97,9 +97,8 @@ def git_state(path) -> dict[str, Any] | None:
         # commit alone cannot give back (review, round 1).  Untracked files
         # are asked for explicitly: status.showUntrackedFiles=no hid them
         # (review, round 16).
-        changed = [ln[3:] for ln in run("status", "--porcelain",
-                                        "--untracked-files=all").stdout.splitlines()
-                   if ln.strip()]
+        changed = parse_porcelain_z(run("status", "--porcelain", "-z",
+                                        "--untracked-files=all").stdout)
         tracked = None
         if target.is_file():
             tracked = run("ls-files", "--error-unmatch", str(target),
@@ -107,6 +106,30 @@ def git_state(path) -> dict[str, Any] | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return {"root": top, "commit": commit, "dirty": changed, "path_tracked": tracked}
+
+
+def parse_porcelain_z(out: str) -> list[str]:
+    """Every path ``git status --porcelain -z`` names, both sides of a rename.
+
+    NUL-separated records ``XY path``; a rename or copy (X or Y in ``R``/``C``)
+    is followed by one more record, the source path. Line-based parsing kept
+    ``old -> new`` as one path, so a file renamed INTO a tree did not mark it
+    dirty, and names with spaces or quotes were mangled (review of the extend
+    tools, round 2 F10).
+    """
+    recs = out.split("\0")
+    paths, i = [], 0
+    while i < len(recs):
+        rec = recs[i]
+        i += 1
+        if len(rec) < 4:
+            continue
+        paths.append(rec[3:])
+        if "R" in rec[:2] or "C" in rec[:2]:
+            if i < len(recs) and recs[i]:
+                paths.append(recs[i])
+            i += 1
+    return paths
 
 
 def code_state(name: str, path) -> dict[str, Any]:
@@ -130,8 +153,7 @@ def code_state(name: str, path) -> dict[str, Any]:
         top = Path(out["git"]["root"])
         here = p.parent if p.is_file() else p
         dirty_here = [d for d in out["git"].get("dirty") or []
-                      if (top / d.strip('"')).resolve() == here
-                      or here in (top / d.strip('"')).resolve().parents]
+                      if (top / d).resolve() == here or here in (top / d).resolve().parents]
         if dirty_here:
             out["commit_identifies_code"] = False
             out["dirty_under_path"] = dirty_here

@@ -29,6 +29,7 @@ from fvcom_mesh_tools.coast_fit import fit_boundary_to_coast  # noqa: E402
 from fvcom_mesh_tools.dem.m7001 import node_edges  # noqa: E402
 from fvcom_mesh_tools.dem.sources import non_tp_count, sample  # noqa: E402
 from fvcom_mesh_tools.extend import (  # noqa: E402
+    check_no_overlap,
     land_segments,
     merge_outer,
     rfactor_smooth_free,
@@ -181,6 +182,7 @@ if not np.array_equal(back.depths, merged.depths):
 # the frozen contract on what was written, not only on what was built: the
 # writer rounds coordinates (review F9)
 contract = verify_frozen_base(back, base, IB)
+overlap = check_no_overlap(back, base.n_elements)      # anywhere, not only the seam (r2 F9)
 
 # the extension must not be what limits the time step (review F4): the
 # smallest edge / sqrt(g H) over the new elements against the base's
@@ -210,6 +212,7 @@ if dt_new < dt_base:
     "depths": depth_report,
     "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
     "dt_allowance_s": {"base": dt_base, "new": dt_new}, "problems": problems,
+    "overlap": overlap,
     "n_nodes": merged.n_nodes, "n_elements": merged.n_elements,
     "n_open_boundary_nodes": int(len(merged.open_boundaries[0])),
 }, indent=1, default=str))

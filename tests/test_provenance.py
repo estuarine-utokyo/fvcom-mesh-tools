@@ -135,3 +135,13 @@ def test_code_state_does_not_trust_the_commit_with_local_changes(tmp_path, monke
     assert dirty["commit_identifies_code"] is False and dirty["dirty_under_path"] == ["pkg/mod.py"]
     state["dirty"] = ["elsewhere/other.py"]
     assert provenance.code_state("nothing-installed", pkg / "mod.py")["commit_identifies_code"]
+
+
+def test_porcelain_z_gives_both_sides_of_a_rename():
+    """Review of the extend tools, round 2 F10: a rename into the tree was missed."""
+    from fvcom_mesh_tools.provenance import parse_porcelain_z
+
+    out = "R  src/pkg/new.py\0other/old.py\0 M a b.py\0?? un tracked.py\0"
+    assert parse_porcelain_z(out) == ["src/pkg/new.py", "other/old.py", "a b.py",
+                                      "un tracked.py"]
+    assert parse_porcelain_z("") == []

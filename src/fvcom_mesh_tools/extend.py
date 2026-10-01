@@ -31,6 +31,7 @@ from fvcom_mesh_tools.sizing import _limit
 
 __all__ = [
     "band_field",
+    "check_no_overlap",
     "land_segments",
     "compose_sizing",
     "graded_up",
@@ -92,6 +93,17 @@ def compose_sizing(ambient, x, y, *, grade, floor=None, bands=()):
         hi = graded_up(np.where(on, band, -np.inf), x, y, grade)
         h = np.minimum(np.maximum(h, hi), lo)
         report[f"band_{k}_cells"] = int(on.sum())
+    # every band must come out at its own target: two bands closer than their
+    # sizes allow under the gradation cannot both hold, and the later one
+    # would silently win (review round 2 F17)
+    for k, band in enumerate(bands):
+        band = np.asarray(band, float)
+        on = np.isfinite(band)
+        dev = float(np.max(np.abs(h[on] - band[on]) / band[on]))
+        report[f"band_{k}_max_rel_deviation"] = dev
+        if dev > 1e-6:
+            raise ValueError(f"band {k} cannot hold its sizes (off by up to {dev:.1%}): "
+                             "another band is too close for the gradation")
     if floor is not None:
         report["below_floor_fraction"] = float(np.mean(h < np.asarray(floor) - 1e-6))
     return h, report
@@ -182,6 +194,33 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
             "n_nodes": merged.n_nodes, "n_elements": merged.n_elements}
 
 
+def check_no_overlap(merged: Fort14Mesh, n_base_elements: int, rel_tol: float = 1e-9) -> dict:
+    """No new element may cover any part of the base (review round 2 F9).
+
+    The shared interface is a line, so an outer element may touch the base
+    footprint only along it: an intersection with positive area (beyond
+    ``rel_tol`` of the element's area, for round-off) is an overlap, wherever
+    it is -- not only at the interface edges ``verify_frozen_base`` checks.
+    Raises on the first overlap; returns counts.
+    """
+    import shapely
+
+    xy = merged.nodes[:, :2]
+    base = shapely.union_all(shapely.polygons(xy[merged.elements[:n_base_elements]]))
+    outer = shapely.polygons(xy[merged.elements[n_base_elements:]])
+    tree = shapely.STRtree(outer)
+    cand = np.unique(tree.query(base, predicate="intersects"))
+    if len(cand):
+        area = shapely.area(shapely.intersection(outer[cand], base))
+        own = shapely.area(outer[cand])
+        bad = cand[area > rel_tol * own]
+        if len(bad):
+            k = int(bad[0])
+            raise ValueError(f"{len(bad)} new element(s) overlap the base, e.g. element "
+                             f"{n_base_elements + k} ({float(area[cand == k][0]):.3g} m2)")
+    return {"n_outer_touching_base": int(len(cand))}
+
+
 def land_segments(elements, open_chains) -> list[tuple[int, np.ndarray]]:
     """The land boundary runs: every boundary loop minus its open-boundary edges.
 
@@ -235,11 +274,21 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=500
     h = np.asarray(h0, float).copy()
     free = np.asarray(free, bool)
     ei, ej = np.asarray(ei), np.asarray(ej)
+    # finite positive depths and sane controls, or NaN slips through the
+    # r > limit test (review round 2 F15)
+    if not (0 < rmax < 1 and np.isfinite(hmin) and hmin > 0
+            and (hmax is None or (np.isfinite(hmax) and hmax >= hmin))
+            and int(max_iter) >= 1):
+        raise ValueError(f"bad controls: rmax {rmax}, hmin {hmin}, hmax {hmax}, "
+                         f"max_iter {max_iter}")
     live = free[ei] | free[ej]
     ei, ej = ei[live], ej[live]
     fi, fj = free[ei], free[ej]
     if not len(ei):
         return h, 0, 0.0
+    used = np.unique(np.r_[ei, ej])
+    if not (np.isfinite(h[used]).all() and (h[used] > 0).all()):
+        raise ValueError("depths on the limited edges must be finite and positive")
     if hmax is not None:
         h = np.where(free, np.minimum(h, hmax), h)
     h = np.where(free, np.maximum(h, hmin), h)
@@ -266,6 +315,8 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=500
         h = np.where(free, np.clip(h + step, hmin, np.inf if hmax is None else hmax), h)
     hi, hj = h[ei], h[ej]
     r = np.abs(hi - hj) / (hi + hj)
+    if np.isfinite(r).all() and r.max() <= rmax + 1e-9:
+        return h, int(max_iter), float(r.max())     # met on the last pass (round 2 F14)
     k = int(np.argmax(r))
     raise ValueError(f"r-factor limit {rmax} not reached in {max_iter} iterations: "
                      f"r = {r[k]:.4f} on edge {int(ei[k])}-{int(ej[k])} "

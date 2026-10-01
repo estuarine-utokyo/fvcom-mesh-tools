@@ -35,6 +35,7 @@ from fvcom_mesh_tools.io.fvcom_native import (  # noqa: E402
     export_fvcom_case,
     read_fvcom_case,
 )
+from fvcom_mesh_tools.outdir import reserve  # noqa: E402
 
 
 def _load(name, file):
@@ -56,9 +57,9 @@ p.add_argument("--gauge", default="MERA")
 a = p.parse_args()
 # absolute paths: the namelist is read from inside the case directory (review F24)
 a.case, a.root = a.case.resolve(), a.root.resolve()
-if a.root.exists() and any(a.root.iterdir()):
-    # a reused root could leave an old history beside new inputs (review F22)
-    raise SystemExit(f"{a.root} is not empty; give a fresh --root")
+# a reused root could leave an old history beside new inputs (review F22);
+# reserved atomically, before any work (review r2 F1)
+a.root = reserve(a.root)
 
 grd, dep, obc = (Path(f"{a.case}_{k}.dat") for k in ("grd", "dep", "obc"))
 mesh = read_fvcom_case(grd, dep, obc, title="smoke")

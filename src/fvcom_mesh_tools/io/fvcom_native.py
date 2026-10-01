@@ -42,8 +42,15 @@ import numpy as np
 
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh
 
-_COORD_FMT = "{:.8f}"
-_DEPTH_FMT = "{:.6f}"
+
+def _num(v) -> str:
+    """The shortest text that reads back as the same double.
+
+    Fixed 8/6 decimals cut 1000.123456789 to 1000.12345679, so a base mesh
+    did not survive export bit for bit (review of the extend tools, round 2
+    F8); a value read from such a file prints back unchanged.
+    """
+    return repr(float(v))
 
 
 def _signed_areas(mesh: Fort14Mesh) -> np.ndarray:
@@ -86,8 +93,8 @@ def write_grd(mesh: Fort14Mesh, path: str | Path) -> Path:
             n0, n1, n2 = mesh.elements[i]
             f.write(f"{i + 1} {int(n0) + 1} {int(n1) + 1} {int(n2) + 1}\n")
         for i in range(mesh.n_nodes):
-            x = _COORD_FMT.format(mesh.nodes[i, 0])
-            y = _COORD_FMT.format(mesh.nodes[i, 1])
+            x = _num(mesh.nodes[i, 0])
+            y = _num(mesh.nodes[i, 1])
             f.write(f"{i + 1} {x} {y}\n")
     return path
 
@@ -98,9 +105,9 @@ def write_dep(mesh: Fort14Mesh, path: str | Path) -> Path:
     with path.open("w") as f:
         f.write(f"Node Number = {mesh.n_nodes}\n")
         for i in range(mesh.n_nodes):
-            x = _COORD_FMT.format(mesh.nodes[i, 0])
-            y = _COORD_FMT.format(mesh.nodes[i, 1])
-            f.write(f"{x} {y} {_DEPTH_FMT.format(mesh.depths[i])}\n")
+            x = _num(mesh.nodes[i, 0])
+            y = _num(mesh.nodes[i, 1])
+            f.write(f"{x} {y} {_num(mesh.depths[i])}\n")
     return path
 
 
@@ -157,8 +164,8 @@ def write_cor(
     with path.open("w") as f:
         f.write(f"Node Number = {mesh.n_nodes}\n")
         for i in range(mesh.n_nodes):
-            x = _COORD_FMT.format(mesh.nodes[i, 0])
-            y = _COORD_FMT.format(mesh.nodes[i, 1])
+            x = _num(mesh.nodes[i, 0])
+            y = _num(mesh.nodes[i, 1])
             f.write(f"{x} {y} {cor[i]:.6f}\n")
     return path
 
@@ -209,9 +216,9 @@ def write_2dm(
             n0, n1, n2 = (int(v) + 1 for v in mesh.elements[i])
             f.write(f"E3T {i + 1} {n0} {n1} {n2} 1\n")
         for i in range(mesh.n_nodes):
-            x = _COORD_FMT.format(mesh.nodes[i, 0])
-            y = _COORD_FMT.format(mesh.nodes[i, 1])
-            f.write(f"ND {i + 1} {x} {y} {_DEPTH_FMT.format(z[i])}\n")
+            x = _num(mesh.nodes[i, 0])
+            y = _num(mesh.nodes[i, 1])
+            f.write(f"ND {i + 1} {x} {y} {_num(z[i])}\n")
         for seg in mesh.open_boundaries:
             ids = [int(v) + 1 for v in np.asarray(seg, dtype=np.int64)]
             if not ids:
@@ -561,7 +568,9 @@ def read_fvcom_case(
         if not arc.issubset(set(outer.tolist())):
             raise ValueError("the open boundary is not on the outer loop")
         ring = np.roll(outer, -int(np.where(outer == open_boundaries[0][0])[0][0]))
-        if ring[1] not in arc:
+        # the direction is the one the list takes from its first node, not a
+        # guess from membership (both neighbours may be open: review round 2 F13)
+        if len(open_boundaries[0]) > 1 and ring[1] != open_boundaries[0][1]:
             ring = np.roll(ring[::-1], 1)
         stop = int(np.where(ring == open_boundaries[0][-1])[0][0])
         # the list must BE the walk along the loop, in order and without

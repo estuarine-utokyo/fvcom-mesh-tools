@@ -25,10 +25,18 @@ sys.path.insert(0, str(ROOT / "src"))
 from pyproj import Transformer  # noqa: E402
 
 from fvcom_mesh_tools.dem.m7001 import node_edges  # noqa: E402
-from fvcom_mesh_tools.dem.sources import SOURCES, non_tp_count, sample  # noqa: E402
-from fvcom_mesh_tools.extend import land_segments, rfactor_smooth_free  # noqa: E402
+from fvcom_mesh_tools.dem.sources import SOURCES, non_tp_count, sample, source_files  # noqa: E402
+from fvcom_mesh_tools.extend import (  # noqa: E402
+    check_no_overlap,
+    land_segments,
+    rfactor_smooth_free,
+    verify_frozen_base,
+)
 from fvcom_mesh_tools.extend_recipe import check_case_name, load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
+from fvcom_mesh_tools.outdir import reserve  # noqa: E402
+from fvcom_mesh_tools.provenance import collect  # noqa: E402
+from fvcom_mesh_tools.qa import run_qa  # noqa: E402
 
 MESH_EPSG = 32654
 
@@ -38,6 +46,9 @@ p.add_argument("built_dir", type=Path)
 p.add_argument("outdir", type=Path)
 p.add_argument("--sources", required=True, help="comma-separated, first covering source wins")
 p.add_argument("--case-name", default=None)
+p.add_argument("--allow-failing-gates", action="store_true",
+               help="write a variant that fails QA or the time-step gate (a deliberate "
+                    "sensitivity case; the report says so)")
 a = p.parse_args()
 
 recipe = load_extend_recipe(a.recipe)
@@ -51,8 +62,7 @@ a.outdir = a.outdir.resolve()
 # never write over the source case or another experiment (review F21)
 if a.outdir == src_dir or src_dir in a.outdir.parents or a.outdir in src_dir.parents:
     raise SystemExit(f"OUTDIR {a.outdir} overlaps the built case {src_dir}")
-if a.outdir.exists() and any(a.outdir.iterdir()):
-    raise SystemExit(f"{a.outdir} is not empty; give a fresh OUTDIR")
+a.outdir = reserve(a.outdir)          # atomically, before any work (review r2 F1)
 if a.case_name is not None:
     check_case_name(a.case_name)                      # review F28
 case = recipe["case"]
@@ -61,9 +71,9 @@ base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
 mesh = read_fvcom_case(src_dir / f"{case}_grd.dat", src_dir / f"{case}_dep.dat",
                        src_dir / f"{case}_obc.dat")
 NB = base.n_nodes
-if not (np.array_equal(mesh.nodes[:NB, :2], base.nodes[:, :2])
-        and np.array_equal(mesh.depths[:NB], base.depths)):
-    raise SystemExit("the case does not start with the base nodes and depths")
+IB = np.asarray(base.open_boundaries[0], np.int64)
+# the full frozen contract on the input, connectivity included (review r2 F3)
+verify_frozen_base(mesh, base, IB)
 
 to_ll = Transformer.from_crs(MESH_EPSG, 4326, always_xy=True)
 lon, lat = (np.asarray(v) for v in to_ll.transform(mesh.nodes[:, 0], mesh.nodes[:, 1]))
@@ -96,6 +106,26 @@ written = export_fvcom_case(mesh, a.outdir, name, cor=lat, obc_depth_control=Fal
 back = read_fvcom_case(written["grd"], written["dep"], written["obc"])
 if not np.array_equal(back.depths, h):
     raise SystemExit("the written case does not carry the depths that were built")
+# the acceptance of a build, repeated on the variant (review round 2 F3):
+# the frozen base on what was written, no overlap, QA, the time-step gate
+verify_frozen_base(back, base, IB)
+check_no_overlap(back, base.n_elements)
+qa = run_qa(back, name=name, path=written["grd"], max_offenders=10_000)
+
+
+def _dt_allow(m_, elems):
+    xy = m_.nodes[elems, :2]
+    edge = np.linalg.norm(xy - np.roll(xy, 1, axis=1), axis=2).min(axis=1)
+    return edge / np.sqrt(9.81 * np.maximum(m_.depths[elems].max(axis=1), 1e-9))
+
+
+dt_base = float(_dt_allow(back, back.elements[:base.n_elements]).min())
+dt_new = float(_dt_allow(back, back.elements[base.n_elements:]).min())
+problems = []
+if qa.n_gate_failed:
+    problems.append(f"QA {qa.n_gate_failed} gate(s) failed")
+if dt_new < dt_base:
+    problems.append(f"new elements limit the time step ({dt_new:.2f} s < base {dt_base:.2f} s)")
 
 d = h - old
 rel = d[new] / np.maximum(old[new], 1.0)
@@ -109,9 +139,26 @@ report = {
     "relative_change": {"mean": float(rel.mean()), "abs_mean": float(np.abs(rel).mean()),
                         "p05": float(np.percentile(rel, 5)), "p95": float(np.percentile(rel, 95))},
     "case": name, "n_nodes": mesh.n_nodes,
+    "depth_controls": D, "allow_failing_gates": bool(a.allow_failing_gates),
+    "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
+    "dt_allowance_s": {"base": dt_base, "new": dt_new}, "problems": problems,
+    "status": "ok" if not problems else ("accepted sensitivity variant"
+                                         if a.allow_failing_gates else "failed"),
+    # what made it (review round 2 F18)
+    "provenance": collect(
+        code={"fvcom_mesh_tools": str(ROOT / "src" / "fvcom_mesh_tools" / "__init__.py"),
+              "driver": __file__},
+        files={"recipe": recipe["recipe_path"],
+               "built_case": [str(src_dir / f"{case}_{k}.dat") for k in ("grd", "dep", "obc")],
+               **{f"bathymetry_{k}": [str(q) for q in v]
+                  for k, v in source_files(names).items()}}),
 }
-(a.outdir / "redepth.json").write_text(json.dumps(report, indent=1) + "\n")
-print("[453] " + json.dumps(report), flush=True)
+(a.outdir / "redepth.json").write_text(json.dumps(report, indent=1, default=str) + "\n")
+print("[453] " + json.dumps({k: v for k, v in report.items() if k != "provenance"},
+                            default=str), flush=True)
+if problems and not a.allow_failing_gates:
+    raise SystemExit("the variant fails: " + "; ".join(problems)
+                     + " (--allow-failing-gates writes it as a sensitivity case)")
 
 import matplotlib  # noqa: E402
 

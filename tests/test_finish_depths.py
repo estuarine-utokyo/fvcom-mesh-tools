@@ -64,7 +64,11 @@ def test_rfactor_zero_is_floor_and_cap_only(tmp_path):
 def test_a_starting_depth_file_can_be_named(tmp_path):
     grd, _ = _case(tmp_path, [5.0] * 8)
     alt = tmp_path / "case_dep_raw.dat"
-    alt.write_text((tmp_path / "case_dep.dat").read_text().replace(" 5.000000", " 1.000000"))
+    import re
+
+    # the depth is the last field of each line, whatever its number format
+    alt.write_text(re.sub(r" 5(\.0*)?$", " 1.0", (tmp_path / "case_dep.dat").read_text(),
+                          flags=re.M))
     assert main([str(grd), "--dep", "case_dep_raw.dat", "--hmin", "2",
                  "--rfactor", "0", "--tag", "mine"]) == 0
     _, d = read_dep(tmp_path / "case_dep_mine.dat")

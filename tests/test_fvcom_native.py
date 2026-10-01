@@ -534,3 +534,33 @@ def test_reader_refuses_an_open_boundary_that_is_not_a_walk(tmp_path):
         else:
             with pytest.raises(ValueError, match="consecutive walk"):
                 read_fvcom_case(w["grd"], w["dep"], w["obc"])
+
+
+def test_export_round_trips_coordinates_and_depths_exactly(tmp_path):
+    """Review of the extend tools, round 2 F8: 1000.123456789 came back cut."""
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case
+
+    nodes = np.array([[0.0, 0.0], [1000.123456789, 0.1], [0.3, 1000.000000001]])
+    m = Fort14Mesh("t", nodes, np.array([1.23456789012, 2.0, 3.0]), np.array([[0, 1, 2]]),
+                   [np.array([0, 1])], [])
+    w = export_fvcom_case(m, tmp_path, "t", twodm=False, obc_depth_control=False)
+    back = read_fvcom_case(w["grd"], w["dep"], w["obc"])
+    assert np.array_equal(back.nodes[:, :2], nodes) and np.array_equal(back.depths, m.depths)
+
+
+def test_reader_accepts_either_direction_when_every_boundary_node_is_open(tmp_path):
+    """Round 2 F13: [0, 3, 2, 1] was refused when all four nodes were open."""
+    import numpy as np
+
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case
+
+    nodes = np.array([[0, 0], [1000, 0], [1000, 1000], [0, 1000], [500, 500]], float)
+    tri = np.array([[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]])
+    for k, obc in enumerate(([0, 1, 2, 3], [0, 3, 2, 1])):
+        m = Fort14Mesh("t", nodes, np.full(5, 10.0), tri, [np.array(obc)], [])
+        w = export_fvcom_case(m, tmp_path / str(k), "t", twodm=False, obc_depth_control=False)
+        assert read_fvcom_case(w["grd"], w["dep"], w["obc"]).open_boundaries[0].tolist() == obc

@@ -207,3 +207,42 @@ def test_land_segments_keeps_a_single_land_edge():
 
     runs = land_segments(np.array([[0, 1, 2]]), [np.array([0, 1, 2])])
     assert len(runs) == 1 and sorted(runs[0][1].tolist()) == [0, 2]
+
+
+def test_rfactor_limiter_round2_edges():
+    """Round 2 F14: convergence on the last pass; F15: NaN depths and bad controls."""
+    from fvcom_mesh_tools.extend import rfactor_smooth_free
+
+    h, it, r = rfactor_smooth_free(np.array([10.0, 100.0]), np.array([0]), np.array([1]),
+                                   np.array([True, True]), rmax=0.2, hmin=3.0, max_iter=1)
+    assert r == pytest.approx(0.2) and h.tolist() == pytest.approx([44.0, 66.0])
+    with pytest.raises(ValueError, match="finite and positive"):
+        rfactor_smooth_free(np.array([10.0, np.nan]), np.array([0]), np.array([1]),
+                            np.array([False, True]), rmax=0.2, hmin=3.0)
+    with pytest.raises(ValueError, match="bad controls"):
+        rfactor_smooth_free(np.array([10.0, 20.0]), np.array([0]), np.array([1]),
+                            np.array([False, True]), rmax=1.5, hmin=3.0)
+
+
+def test_compose_refuses_bands_that_cannot_both_hold():
+    """Round 2 F17: a later band silently overrode an earlier one."""
+    x, y = np.meshgrid(np.arange(5) * 1000.0, np.arange(5) * 1000.0)
+    b1 = np.where(y == 0, 1000.0, np.nan)
+    b2 = np.where(y == 1000, 5000.0, np.nan)
+    with pytest.raises(ValueError, match="cannot hold"):
+        compose_sizing(np.full(x.shape, 3000.0), x, y, grade=0.2, bands=[b1, b2])
+
+
+def test_check_no_overlap_finds_overlap_away_from_the_interface():
+    """Round 2 F9: an outer element overlapping the base elsewhere passed."""
+    from fvcom_mesh_tools.extend import check_no_overlap
+
+    base = _base()
+    on, oe = _outer()
+    m = merge_outer(base, on, oe, [0, 3], [1, 2], [1, 2])
+    assert check_no_overlap(m, base.n_elements)["n_outer_touching_base"] >= 1
+    nodes = np.vstack([m.nodes, [[500.0, 500.0]]])              # a node inside the base
+    bad = Fort14Mesh("m", nodes, np.r_[m.depths, 1.0],
+                     np.vstack([m.elements, [[4, 5, 6]]]), m.open_boundaries, [])
+    with pytest.raises(ValueError, match="overlap the base"):
+        check_no_overlap(bad, base.n_elements)
