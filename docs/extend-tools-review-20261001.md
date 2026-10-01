@@ -1824,3 +1824,395 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 
 The reviewer withdrew the generation-nondeterminism question on the
 repeated-run evidence.
+
+## Round 7
+
+### Answer (verbatim)
+
+Read-only review completed: **12 findings remain—2 major and 10 minor.** Finding 1 is the previously reported F27, still awaiting the owner’s decision.
+
+No files were modified, shared datasets were read, or batch jobs were submitted. The existing untracked `recipes/extend/tokyo_bay_enshu_obc.png` was left untouched.
+
+Verification:
+
+- Capture-disabled pytest with `--noconftest -p no:cacheprovider`: **30 geometry tests passed**, plus **10 selected flip, DEM, recipe and namelist tests passed**.
+- Scoped `ruff check --no-cache`: **passed**.
+- `bash -n` for every OCTOPUS shell script: **56 scripts, no failures**.
+- Additional reproductions used small synthetic inputs, diskless NetCDF, mocked filesystem operations and shell commands.
+- Ordinary pytest startup failed because capture requires writable temporary storage; its capture-disabled retry encountered Matplotlib’s writable-cache requirement through `conftest.py`. Bypassing that hook enabled the tests above.
+- The full suite, production mesh generation and FVCOM integration were **not run**. No production QA counts or timestep measurements were independently obtained.
+
+## Previous findings
+
+Statuses assess the original defect and any remaining gap in its stated guarantee. References below point to this review’s numbered findings.
+
+### Round 1
+
+| ID | Status | Reason |
+|---|---|---|
+| F1 | RESOLVED | Masked grid cells become NaN and permit fallback. |
+| F2 | RESOLVED | Required QA failures produce a nonzero build exit. |
+| F3 | RESOLVED | Limiting checks bounds, convergence and the final rounded r-factor. |
+| F4 | RESOLVED | Floor and timestep warnings follow the explicit owner policy. |
+| F5 | RESOLVED | Actual chords, endpoint floors and serialized geometry are checked. |
+| F6 | RESOLVED | Missing boundary, lattice and generated-node sizing coverage is rejected. |
+| F7 | RESOLVED | Continuous departures and the complete boundary are checked against land. |
+| F8 | RESOLVED | Rejected designs preserve the existing CSV. Rollback gaps are tracked separately. |
+| F9 | RESOLVED | Values round-trip and exported frozen-base verification runs. |
+| F10 | RESOLVED | Opposite-side seam incidence and overlap beyond the seam are checked. |
+| F11 | RESOLVED | Single-edge land runs are retained. |
+| F12 | RESOLVED | Unsupported constrained lines shorter than six nodes are rejected explicitly. |
+| F13 | RESOLVED | Cao cache keys include the resolved data root and dimensions. |
+| F14 | RESOLVED | Invalid fine samples retain valid coarse coverage. |
+| F15 | RESOLVED | Degenerate M7001 point sets return uncovered samples. Finding 2 is separate. |
+| F16 | RESOLVED | Cao provenance includes existing depth files. Inventory changes remain separate. |
+| F17 | RESOLVED | Relevant dirty sources and both rename paths are recorded. Finding 10 concerns later changes. |
+| F18 | RESOLVED | Numeric settings, integer controls, seeds and bounds are validated. |
+| F19 | RESOLVED | Resampling rejects nonfinite spacing and failure to progress. |
+| F20 | RESOLVED | Extension outputs receive exclusive reservations. |
+| F21 | RESOLVED | Re-depth rejects overlapping destinations and reserves its output. |
+| F22 | RESOLVED | Smoke staging reserves a fresh root. |
+| F23 | RESOLVED | Depth control precedes timestep selection. |
+| F24 | RESOLVED | Smoke paths are resolved before use. |
+| F25 | RESOLVED | Executable overrides are respected and resolved before directory changes. |
+| F26 | RESOLVED | Case names match preparation and directory changes are guarded. |
+| F27 | NOT RESOLVED | GPL imports still conflict with repository policy; owner decision pending. Finding 1. |
+| F28 | RESOLVED | Extension case prefixes are restricted to filename components. |
+| F29 | RESOLVED | Native reading validates unique, consecutive boundary traversal. |
+
+### Round 2
+
+| ID | Status | Reason |
+|---|---|---|
+| R2-1 | RESOLVED | Re-depth and smoke reserve outputs exclusively. |
+| R2-2 | RESOLVED | Unique temporaries and a publication lock prevent competing-writer swaps. |
+| R2-3 | RESOLVED | Re-depth repeats frozen-base, overlap and QA checks; overrides are labelled. |
+| R2-4 | RESOLVED | Chords, endpoint floors and publication precision are checked. |
+| R2-5 | RESOLVED | Continuous departure checks catch thin land strips. |
+| R2-6 | RESOLVED | Land-crossing tolerance is limited to numerical endpoint residue. |
+| R2-7 | RESOLVED | Checks use reconstructed published coordinates. |
+| R2-8 | RESOLVED | Native coordinates and depths round-trip. |
+| R2-9 | RESOLVED | Outer-versus-base overlap is checked beyond the seam. |
+| R2-10 | RESOLVED | Porcelain parsing includes both rename paths. |
+| R2-11 | RESOLVED | Geographic bounds receive finite, range and order validation. |
+| R2-12 | RESOLVED | Resampling requires finite forward progress. |
+| R2-13 | RESOLVED | Traversal direction follows the supplied second node. |
+| R2-14 | RESOLVED | Convergence on the final permitted iteration is accepted. |
+| R2-15 | RESOLVED | Limited-edge depths and limiter controls are validated. |
+| R2-16 | RESOLVED | Both sides, guide points and complete guide segments are checked. |
+| R2-17 | RESOLVED | Bands are materialized and follow the accepted deviation policy. |
+| R2-18 | PARTIAL | Early failures retain provenance; consumption and late-reporting gaps remain. Findings 8–10, 12. |
+| R2-19 | RESOLVED | Uncovered generated nodes are rejected. |
+| R2-20 | RESOLVED | Invalid radii, zero sides and reversals are rejected. |
+| R2-21 | RESOLVED | Refusing smoke-root reuse preserves previous success markers. |
+| R2-22 | NOT RESOLVED | Same pending F27; counted once. |
+
+### Round 3
+
+| ID | Status | Reason |
+|---|---|---|
+| R3-1 | RESOLVED | Violations are counted on the composed field under the owner’s warning policy. |
+| R3-2 | RESOLVED | Publication permits numerical spacing tolerance only. |
+| R3-3 | RESOLVED | Materializing bands prevents iterator exhaustion. |
+| R3-4 | RESOLVED | Both-side probing and complete guide-segment checks address the reported failures. |
+| R3-5 | PARTIAL | Rollback preserves backups, but failed recovery-marker publication permits their later destruction. Finding 11. |
+| R3-6 | PARTIAL | Early failure handling works; consumed-input identity and late failure status remain incomplete. Findings 8–10, 12. |
+| R3-7 | RESOLVED | Zero-weight masked neighbours preserve valid samples. |
+| R3-8 | RESOLVED | fort.14 values round-trip and supplementary export is verified. |
+| R3-9 | RESOLVED | Pairwise overlap checks remove global-area dilution. |
+| R3-10 | RESOLVED | Notebook 414 selects its timestep after depth control. |
+| R3-11 | RESOLVED | Boundary spacing controls must be finite and positive. |
+| R3-12 | RESOLVED | Short designs receive explicit rejection. |
+| R3-13 | RESOLVED | Filleting rejects reversals. |
+| R3-14 | NOT RESOLVED | Same pending F27. |
+
+### Round 4
+
+| ID | Status | Reason |
+|---|---|---|
+| R4-F1 | NOT RESOLVED | Same pending F27. |
+| R4-F2 | RESOLVED | Half-window amplitudes/phases derive from interpolated harmonic coefficients. |
+| R4-F3 | RESOLVED | Bilinear interpolation preserves query shape. |
+| R4-F4 | RESOLVED | Overlap tolerance uses the smaller meeting element. |
+| R4-F5 | RESOLVED | Complete guide segments are tested against land and constrained lines. |
+| R4-F6 | PARTIAL | Ordinary restoration and the previous cleanup fault are handled; finding 11 remains. |
+| R4-F7 | RESOLVED | State initialization and handler registration precede fallible logging. |
+| R4-F8 | PARTIAL | Recipe identities are enforced, but actual OBC consumption remains unbound. Finding 8. |
+| R4-F9 | RESOLVED | Cao retains valid centres beside missing cells and includes final rows/columns. |
+| R4-F10 | RESOLVED | Boundary simplicity and repeated adjacent nodes are checked. |
+| R4-F11 | RESOLVED | Manual timestep overrides must be finite and positive. |
+| R4-F12 | RESOLVED | Run jobs resolve/check the executable before directory changes. |
+| R4-F13 | RESOLVED | The guard requires printable ASCII and checks the 80-byte limit, including relocated cases. |
+| R4-F14 | RESOLVED | Spatial dimensions are checked and unreadable named grids fail validation. |
+
+### Round 5
+
+| ID | Status | Reason |
+|---|---|---|
+| R5-F1 | NOT RESOLVED | Same pending F27. |
+| R5-F2 | RESOLVED | All flip sites use the convexity guard and skip stale ownership rows. |
+| R5-F3 | PARTIAL | YAML hashes identify parsed bytes; the boundary is still read separately after verification. Finding 8. |
+| R5-F4 | RESOLVED | Complete ladder segments receive land/constrained-line checks. |
+| R5-F5 | PARTIAL | Restoration and cleanup are independent, but marker-write failure remains unsafe. Finding 11. |
+| R5-F6 | RESOLVED | An unreadable named grid fails run validation. |
+| R5-F7 | RESOLVED | Non-ASCII paths and paths over 80 bytes are refused. |
+| R5-F8 | RESOLVED | Handler registration precedes the first post-reservation log call. |
+| R5-F9 | RESOLVED | Cao preserves query shape; its selected regression test passed. |
+| R5-F10 | RESOLVED | Nonfinite depths fail the minimum-depth QA gate. |
+
+### Round 6
+
+| ID | Status | Reason |
+|---|---|---|
+| R6-F1 | NOT RESOLVED | Same pending F27. |
+| R6-F2 | RESOLVED | 444 checks the buffered design inside the window; 446 checks sea inside its inset. |
+| R6-F3 | PARTIAL | Ordinary relative/absolute `OUTPUT_DIR` works; valid escaped quotes select the wrong directory. Finding 3. |
+| R6-F4 | RESOLVED | Each benchmark run is validated before timing acceptance, using saved conda Python without `LD_LIBRARY_PATH`. |
+| R6-F5 | RESOLVED | QA failure and identity mismatch now produce failure exits. |
+| R6-F6 | PARTIAL | Relative references resolve correctly, but self-reference rejection follows destructive staging. Finding 7. |
+| R6-F7 | PARTIAL | The previous cleanup fault preserves backups; recovery-marker failure leaves another destructive path. Finding 11. |
+| R6-F8 | PARTIAL | Existing provenance files are rehashed, but dynamically discovered inventories are not recollected. Finding 9. |
+| R6-F9 | PARTIAL | Wrapper connectivity/finiteness checks work; boundary dtype and public-writer validation remain incomplete. Finding 4. |
+| R6-F10 | RESOLVED | The writer doubles apostrophes and preserves literal backslashes. Reader incompatibility is finding 3. |
+| R6-F11 | RESOLVED | Relocated directory lengths are checked. The new helper’s source deletion is finding 6. |
+
+The generation-nondeterminism hypothesis remains **WITHDRAWN**, based on the supplied repeated-run evidence. Owner-authorized band-floor and new-element timestep warnings are **not defects**.
+
+## Findings
+
+1. **Major — Previously reported F27 remains open: package code imports oceanmesh.**  
+   [mesh_engine/oceanmesh.py:332](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/mesh_engine/oceanmesh.py:332).
+
+   **Evidence:** Direct imports remain here and at line 165, in `mesh_engine/multiscale.py:52`, `mesh_clean.py:1672`, and `autofinish/directives.py:20`. They conflict with the explicit `CLAUDE.md` policy prohibiting GPL imports inside `fvcom_mesh_tools`. `THIRD_PARTY_NOTICES.md` still describes the conflicting arrangement.
+
+   **Fix:** Implement the owner-selected subprocess or separately licensed plugin boundary and reconcile the notices. **Previously reported; owner decision pending; counted once.**
+
+2. **Major — M7001 depth and source attribution depend on the other query points.**  
+   [dem/sources.py:162](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/dem/sources.py:162).
+
+   **Reproduction:** Mock the parquet reader with four `N` soundings at `(139.7,34.7)`, `(140.3,34.7)`, `(139.7,35.3)`, `(140.3,35.3)`, all `z_tp=-10`, and add a constant 100-m fallback source. Actual `sample()` results:
+
+   ```text
+   query [(140,35)]:
+       depth=[100], which=[fallback]
+
+   query [(140,35), (139.7,34.7), (140.3,35.3)]:
+       depth=[10,10,10], which=[m7001,m7001,m7001]
+   ```
+
+   The unchanged centre lies inside the soundings’ hull. The query-derived 0.25° window excludes all soundings for the first call, while the second call includes them. The priority stack’s uncovered subset also changes this window, so earlier-source coverage can alter M7001 results at other points. Scalar design queries and batch sizing/depth queries can therefore disagree.
+
+   **Fix:** Define interpolation and coverage from a stable dataset triangulation, or a deterministic per-location neighbourhood independent of query batching. Add batch-invariance tests. Pre-existing, newly identified.
+
+3. **Minor — The new `OUTPUT_DIR` handling misreads valid Fortran escaped quotes.**  
+   [cli/check_run.py:75](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/cli/check_run.py:75), [cli/check_run.py:168](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/cli/check_run.py:168).
+
+   **Reproduction:** The new writer correctly emits:
+
+   ```fortran
+   OUTPUT_DIR = '/virtual/current''case/',
+   ```
+
+   `_nml_value()` returns `/virtual/current`. With no history in the actual apostrophe-containing directory, a valid two-record diskless NetCDF in the truncated directory, matching grid counts and a `TADA` log, the checker returned **`ok=True`, `output_dir='/virtual/current'`, `reasons=[]`**. Quoted `INPUT_DIR` values are likewise truncated.
+
+   **Fix:** Use a namelist reader that handles doubled quote delimiters and unescapes them. Test writer/reader round trips for both quote styles. This is an interaction between the R6-F3 and R6-F10 fixes.
+
+4. **Minor — Export validation still silently changes fractional boundary IDs, and standalone writers bypass it.**  
+   [io/fvcom_native.py:323](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:323), [io/fvcom_native.py:87](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:87).
+
+   **Reproduction:** For a valid three-node CCW mesh, an open boundary `[0.9,1.9]` passes `_check_exportable()`. Actual `export_fvcom_case(..., obc_depth_control=False)` succeeds and writes node IDs **1 and 2**, silently truncating the supplied indices.
+
+   Separately, actual public `write_grd()` accepts connectivity `[[-1,0,1]]` on the same mesh: NumPy treats `-1` as the final node during validation, and the writer emits **`1 0 1 2`**, including invalid FVCOM node zero. The new wrapper guard is never called by this public writer.
+
+   **Fix:** Centralize validation across public writers. Require boundary arrays to be one-dimensional with integral, finite, in-range indices before any cast; apply connectivity and finiteness checks to standalone exports too. R6-F9 is incomplete.
+
+5. **Minor — Optional export controls accept nonfinite values and are validated after other files are overwritten.**  
+   [io/fvcom_native.py:158](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:158), [io/fvcom_native.py:183](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:183), [io/fvcom_native.py:369](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:369).
+
+   **Reproduction:** Actual export with `cor=[nan,35,35]` and `sponge=[(0.9,nan,inf)]` succeeds, emitting a `nan` Coriolis value and sponge row **`1 nan inf`**.
+
+   A separate call with wrong-length `cor=[35]` raises only after `_grd.dat`, `_dep.dat` and `_obc.dat` have been written. Against an existing destination, invalid optional input therefore leaves a partially replaced case.
+
+   **Fix:** Prevalidate all optional controls before opening outputs: shape, finiteness, integral node IDs and valid radius/damping ranges. Stage the complete output set before replacing an existing case. Pre-existing, newly identified.
+
+6. **Minor — The new `relocate_case()` helper can delete its source.**  
+   [io/fvcom_namelist.py:62](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_namelist.py:62).
+
+   **Reproduction:** With filesystem operations mocked, calling `relocate_case('/tmp/staged', '/tmp/staged')` records **`shutil.rmtree('/tmp/staged')`**, then `copytree()` fails because the source was deleted. A destination symlink resolving to the source has the same result. A destination that is an ancestor of the source also deletes it.
+
+   **Fix:** Reject equal or overlapping resolved source/destination paths before mutation. Render and validate the rewritten namelist before replacing the destination, and publish a staged copy safely. **Introduced by the new R6-F11 helper.**
+
+7. **Minor — Speed verification rejects a self-reference after deleting it.**  
+   [407_speed_verify.sh:34](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/jobs/octopus/407_speed_verify.sh:34), [407_speed_verify.sh:52](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/jobs/octopus/407_speed_verify.sh:52).
+
+   **Reproduction:** Run the actual staging and guard statements with shell commands mocked and `FMESH_REF` equal to the existing `$WORK/outputs/sample_repro/sample_repro_final.14`. They first execute **`rm -f` on the reference**, and only later reject it with exit 2. Preceding `rsync` can also replace its contents.
+
+   **Fix:** Calculate the produced path and compare resolved references before any staging, copying, removal or generation. This is an incomplete R6-F6 fix.
+
+8. **Minor — The boundary bytes actually used by generation are not bound to the verified digest.**  
+   [extend_recipe.py:80](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend_recipe.py:80), [446_extend_generate.py:71](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/446_extend_generate.py:71).
+
+   **Reproduction:** Execute the actual recipe-loading, expected-identity check and OBC assignment with mocked reads. The loader validates CSV A and hashes A; `check_expected()` accepts A. The later `read_open_boundary()` returns CSV B, with latitudes changed from **34.0 to 34.1**. Generation’s OBC then contains B while `open_boundary_sha256` still identifies A. Restoring A before completion also defeats the final file check.
+
+   The loader itself validates and hashes the CSV in separate reads, unlike its YAML handling.
+
+   **Fix:** Read the boundary once, hash those exact bytes, parse them and return the verified coordinates for stage consumption. Alternatively use immutable input snapshots. R4-F8/R5-F3 remain partial.
+
+9. **Minor — Completion checks miss newly discovered scientific input files.**  
+   [provenance.py:263](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/provenance.py:263), [dem/sources.py:193](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/dem/sources.py:193).
+
+   **Reproduction:** Collect Cao provenance when the mocked inventory contains an unchanged area table. Add a depth file for an area already described by that table before sampling. `CaoNested.files()` now includes the new depth file, but actual `changed_files(PROV, list(PROV["files"]))` returns **`[]`**: it rehashes only the originally captured paths.
+
+   Sampling discovers depth files dynamically, so a stage can consume the new file without recording it or failing the completion check. The same inventory problem applies to newly appearing dataset sidecars.
+
+   **Fix:** Recollect scientific inventories at completion and compare path membership as well as content. Prefer recording exact consumed files or using snapshots. The expanded R6-F8 check remains incomplete.
+
+10. **Minor — A build can accept changed execution code while reporting the initial code identity.**  
+    [445_extend_mesh.py:120](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/445_extend_mesh.py:120), [445_extend_mesh.py:128](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/445_extend_mesh.py:128).
+
+    **Evidence/reproduction:** The driver captures code identity before launching subprocesses, but both stages execute scripts and import packages from the live repositories. Completion checks only `PROV["files"]`; no code identity is rechecked.
+
+    Mocked execution of the actual driver tail with successful stages, unchanged data and simulated live code changing from A to B produced **`status="ok"`, `inputs_changed=[]`, provenance code=A**. A real edit between stages can make the second stage execute B. Re-depth has the same omission.
+
+    **Fix:** Execute an immutable code snapshot, or verify relevant package, driver, stage and oceanmesh identities at stage boundaries and completion. This concerns changes after capture, independently of the resolved initial dirty-code recording. Pre-existing, newly identified.
+
+11. **Minor — Failure to write the recovery marker releases the lock and lets the next publication destroy the retained backup.**  
+    [444_design_obc.py:280](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:280), [444_design_obc.py:297](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:297).
+
+    **Reproduction:** Execute the actual publication/rollback block against a virtual filesystem. Inject CSV replacement failure, JSON restoration failure, then `.RECOVER` write failure. The revised cleanup preserves the old JSON backup, but **both the lock and recovery marker are absent** afterward. The published JSON remains new.
+
+    Execute the next publication’s backup loop: `shutil.copy2()` overwrites that retained `.json.prev` with the current new JSON, destroying the old report. Observed backup contents changed from **old JSON to new JSON**.
+
+    **Fix:** Retain the exclusive lock when recovery cannot be recorded, or persist recovery intent before publication begins. Refuse to overwrite unresolved backups. The previously reported cleanup fault is fixed, but the recovery guarantee remains partial.
+
+12. **Minor — Re-depth leaves an overall success report when figure publication fails.**  
+    [453_redepth_extended.py:193](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/453_redepth_extended.py:193), [453_redepth_extended.py:229](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/453_redepth_extended.py:229).
+
+    **Reproduction:** Execute the actual report-write, completion-state assignment and figure-save statements with `fig.savefig()` raising `OSError`. The command fails without its PNG, but **`redepth.json` retains `status="ok"` and `STATE["done"]` is true**, disabling the failure handler. Matplotlib import or plotting errors take the same path.
+
+    **Fix:** Finalize overall success only after required products are published. If plotting is optional, record its failure separately and define the command’s exit/status consistently. Pre-existing, newly identified.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 2 major, 10 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 7: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (subprocess; GPL code must never
+  be imported by `fvcom_mesh_tools`), with fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-6 and their triage are in docs/extend-tools-review-20261001.md.
+Round 6 (your previous answer; 11 findings) was fixed in 3455b8e; read
+`git show 3455b8e`. Per finding:
+- F1 (= F27): owner decision pending; report it as still open, not as new.
+- F2 444: the boundary buffered by (chord_m + 5 km) must lie within the
+  land window (metric transform of the segmentized bbox); 446: the sea to
+  mesh (domain polygon minus land) must stay 0.02 deg inside land.bbox.
+- F3 check_run looks in the namelist's OUTPUT_DIR (relative to the run or
+  absolute), else <run>/output; `info["output_dir"]` reports it.
+- F4 416: each run is validated with `fvcom_mesh_tools.cli.check_run`
+  (conda python kept as PYBIN, LD_LIBRARY_PATH unset) before its time.
+- F5/F6 407: REF resolved with `realpath -e` before cd and must not equal
+  the produced file; QA failure or identity mismatch exits 1.
+- F7 444: marker written and unrestored backups popped from cleanup before
+  any other fallible step; each cleanup unlink independent.
+- F8 445/453: completion check over every provenance file.
+- F9 `export_fvcom_case` validates indices, dtype and finiteness first.
+- F10/F11 new `io/fvcom_namelist.py` (fortran_string, set_value with a
+  callable, check_fvcom_dirs, relocate_case), used by 383/414/448 and the
+  416/423 jobs.
+Verification after 3455b8e: full test suite 1138 passed (batch
+job 122760); on real data 444 published the Enshu boundary with no
+problems (window check passed), the full 445 build passed QA 23/23 (window
+check passed), its grd file bit-identical to rounds 4-5, and 453 completed.
+Owner decision (2026-10-01), unchanged: meshes are made from the real
+depths; the band-floor check (446) and the new-element time-step gate (447,
+453) REPORT warnings and do not fail the build. Not a defect.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 (F27) | major | as round 1 | yes, pre-existing | owner decision pending |
+| F2 | major | test: centre of four soundings alone vs in a batch | yes | fixed (whole-dataset triangulation), 227536f; test |
+| F3 | minor | round-trip test of fortran_string | yes | fixed, 227536f; test |
+| F4 | minor | code read (cast before check; write_grd bypass) | yes | fixed, 227536f; test |
+| F5 | minor | code read (cor checked after writes) | yes | fixed (prevalidate, staged export), 227536f; test |
+| F6 | minor | code read (rmtree before copy) | yes | fixed, 227536f; test |
+| F7 | minor | code read (rm -f before guard) | yes | fixed; mock of the job head, 227536f |
+| F8 | minor | code read (two reads of the CSV) | yes | fixed (open_boundary_lonlat), 227536f |
+| F9 | minor | code read (paths fixed at collect) | yes | fixed (changed_inventory), 227536f; test |
+| F10 | minor | code read (no code recheck) | yes | fixed, 227536f |
+| F11 | minor | fault injection (marker write fails, then republish) | yes | fixed, 227536f |
+| F12 | minor | code read (report before figure) | yes | fixed, 227536f |
