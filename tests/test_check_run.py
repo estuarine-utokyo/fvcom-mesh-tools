@@ -150,3 +150,13 @@ def test_the_history_is_looked_for_in_the_namelists_output_dir(tmp_path):
     for f in (run / "output").iterdir():
         f.rename(run / "current_output" / f.name)
     assert check_run(run)["ok"]
+
+
+def test_quoted_values_round_trip_with_the_namelist_writer():
+    """Review round 7 F3: OUTPUT_DIR 'a''b/' was read as 'a'."""
+    from fvcom_mesh_tools.cli.check_run import _nml_value
+    from fvcom_mesh_tools.io.fvcom_namelist import fortran_string
+
+    for d in ("/x/current'case/", "/x/plain/"):
+        assert _nml_value(f" OUTPUT_DIR = {fortran_string(d)},\n", "OUTPUT_DIR") == d
+    assert _nml_value(' OUTPUT_DIR = "/x/a""b/",\n', "OUTPUT_DIR") == '/x/a"b/'

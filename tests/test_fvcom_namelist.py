@@ -64,3 +64,15 @@ def test_relocate_refuses_a_moved_path_fvcom_would_cut(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="bytes of a run directory"):
         relocate_case(case, tmp_path / "smoke" / "refined")
     assert not (tmp_path / "smoke").exists()
+
+
+def test_relocate_refuses_to_overlap_its_source(tmp_path, monkeypatch):
+    """Review round 7 F6: relocating a case onto itself deleted it."""
+    monkeypatch.setattr(fvcom_namelist, "FVCOM_DIR_MAX", 4096)
+    case = _case(tmp_path)
+    link = tmp_path / "link"
+    link.symlink_to(case)
+    for dst in (case, link, tmp_path, case / "smoke"):
+        with pytest.raises(ValueError, match="overlaps"):
+            relocate_case(case, dst)
+    assert (case / "m2_run.nml").exists()

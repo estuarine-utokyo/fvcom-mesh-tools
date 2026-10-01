@@ -30,7 +30,6 @@ from scipy.spatial import cKDTree  # noqa: E402
 from shapely.prepared import prep  # noqa: E402
 
 from fvcom_mesh_tools.algorithms.obc_finish import prune_one_wide_protected  # noqa: E402
-from fvcom_mesh_tools.base_recipe import read_open_boundary  # noqa: E402
 from fvcom_mesh_tools.dem.sources import sample  # noqa: E402
 from fvcom_mesh_tools.extend import band_field, compose_sizing, land_segments  # noqa: E402
 from fvcom_mesh_tools.extend_recipe import check_expected, load_extend_recipe  # noqa: E402
@@ -68,7 +67,8 @@ say(f"base {recipe['base_case']}: NP={base.n_nodes:,} NE={base.n_elements:,}, "
     f"interface {len(IB)} nodes")
 
 # ----------------------------------------------------------------- inputs
-OBC = np.asarray(read_open_boundary(recipe["open_boundary"]), float)
+# the coordinates parsed from the bytes whose digest was checked (round 7 F8)
+OBC = np.asarray(recipe["open_boundary_lonlat"], float)
 bb = tuple(recipe["land"]["bbox"])
 DATA = Path(__import__("os").environ["DATA_DIR"])
 land = gpd.read_file(DATA / "geodata/OSM/land-polygons-split-4326/land_polygons.shp",

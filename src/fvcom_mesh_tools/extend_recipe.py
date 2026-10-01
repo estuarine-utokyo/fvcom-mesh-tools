@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from fvcom_mesh_tools.base_recipe import read_open_boundary
+from fvcom_mesh_tools.base_recipe import parse_open_boundary
 
 __all__ = ["EXPECT_ENV", "REQUIRED_SETTINGS", "check_case_name", "check_expected",
            "load_extend_recipe"]
@@ -77,7 +77,11 @@ def load_extend_recipe(path) -> dict[str, Any]:
         f = Path(out["base"]) / f"{raw['base_case']}_{kind}.dat"
         if not f.exists():
             raise ValueError(f"{path}: the base case has no {f.name}")
-    read_open_boundary(out["open_boundary"])
+    # the boundary is read once: the bytes hashed are the bytes parsed, and
+    # the stages use these coordinates rather than reading the file again
+    # (review round 7 F8)
+    obc_bytes = Path(out["open_boundary"]).read_bytes()
+    out["open_boundary_lonlat"] = parse_open_boundary(obc_bytes.decode(), out["open_boundary"])
     # a boundary published by 444 carries its report beside it, with the CSV's
     # hash: a CSV that is not the one the report describes is refused (review
     # round 3 F5)
@@ -86,7 +90,7 @@ def load_extend_recipe(path) -> dict[str, Any]:
         raise ValueError(f"{path}: a failed publication left {marker.name}; restore the "
                          f"boundary from its .prev files first")
     side = Path(out["open_boundary"]).with_suffix(".json")
-    got = hashlib.sha256(Path(out["open_boundary"]).read_bytes()).hexdigest()
+    got = hashlib.sha256(obc_bytes).hexdigest()
     out["open_boundary_sha256"] = got
     if side.exists():
         import json

@@ -235,6 +235,7 @@ try:
 except FileExistsError:
     raise SystemExit(f"{lock} exists: another design is being published") from None
 staged, kept, done = [], {}, []
+hold_lock = False
 try:
     if out_csv.with_name(out_csv.name + ".RECOVER").exists():
         raise SystemExit(f"{out_csv.name}.RECOVER: an earlier publication failed half-way; "
@@ -251,6 +252,13 @@ try:
         else:
             os.close(fd)
             payload.savefig(tmp, dpi=110, bbox_inches="tight", format="png")
+    # an existing backup is an unresolved earlier failure: never overwrite
+    # it (review round 7 F11)
+    old_prev = [p.with_name(p.name + ".prev") for _, p in staged
+                if p.with_name(p.name + ".prev").exists()]
+    if old_prev:
+        raise SystemExit(f"backups of an earlier failed publication remain: "
+                         f"{[q.name for q in old_prev]}; resolve them first")
     for _, path in staged:
         if path.exists():
             prev = path.with_name(path.name + ".prev")
@@ -277,9 +285,13 @@ try:
                 stuck[path] = exc
         if stuck:
             unrestored = {str(p): str(kept.pop(p)) for p in list(kept) if p in stuck}
+            # until the marker is on disk the lock stays: it is then the
+            # record that publication is unsafe (round 7 F11)
+            hold_lock = True
             out_csv.with_name(out_csv.name + ".RECOVER").write_text(json.dumps(
                 {"restore_from_prev": unrestored,
                  "errors": [f"{p}: {e}" for p, e in stuck.items()]}, indent=1))
+            hold_lock = False
         raise
 finally:
     # copies of files now in place, or never replaced; each removal is on
@@ -294,5 +306,6 @@ finally:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
-    lock.unlink()
+    if not hold_lock:
+        lock.unlink()
 print(f"[obc] wrote {out_csv}", flush=True)

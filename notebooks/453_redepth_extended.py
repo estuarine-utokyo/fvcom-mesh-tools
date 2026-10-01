@@ -36,7 +36,11 @@ from fvcom_mesh_tools.extend import (  # noqa: E402
 from fvcom_mesh_tools.extend_recipe import check_case_name, load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.outdir import reserve  # noqa: E402
-from fvcom_mesh_tools.provenance import changed_files, collect  # noqa: E402
+from fvcom_mesh_tools.provenance import (  # noqa: E402
+    changed_files,
+    changed_inventory,
+    collect,
+)
 from fvcom_mesh_tools.qa import run_qa  # noqa: E402
 
 MESH_EPSG = 32654
@@ -89,9 +93,10 @@ b = Path(recipe["base"]) / recipe["base_case"]
 INPUTS = {"recipe": recipe["recipe_path"],
           "built_case": [str(src_dir / f"{case}_{k}.dat") for k in ("grd", "dep", "obc")],
           "base": [f"{b}_{k}.dat" for k in ("grd", "dep", "obc")]}
+CODE = {"fvcom_mesh_tools": str(ROOT / "src" / "fvcom_mesh_tools" / "__init__.py"),
+        "driver": __file__}
 STATE["provenance"] = PROV = collect(
-    code={"fvcom_mesh_tools": str(ROOT / "src" / "fvcom_mesh_tools" / "__init__.py"),
-          "driver": __file__},
+    code=CODE,
     files={**INPUTS,
            **{f"bathymetry_{k}": [str(q) for q in v] for k, v in source_files(names).items()}})
 # the recipe hashed is the one parsed above (review round 5 F3)
@@ -164,9 +169,13 @@ if dt_new < dt_base:
 
 # the inputs this run read must still be the ones its provenance names
 # (round 4 F8); no override accepts a variant built from moving inputs
-# every input the provenance names, the bathymetry and land data included
-# (review round 6 F8)
-changed = changed_files(PROV, list(PROV["files"]))
+# every input the provenance names, the bathymetry included (review round 6
+# F8), and the datasets listed again (round 7 F9)
+changed = sorted(set(changed_files(PROV, list(PROV["files"]))) | set(changed_inventory(
+    PROV, {f"bathymetry_{k}": v for k, v in source_files(names).items()})))
+# the code that ran must still be the code recorded (round 7 F10)
+if collect(code=CODE, libraries=())["code"] != PROV["code"]:
+    changed.append("code")
 
 d = h - old
 rel = d[new] / np.maximum(old[new], 1.0)
@@ -189,15 +198,23 @@ report = {
     # what made it, captured before the work (review rounds 2 F18, 3 F6)
     "provenance": PROV,
 }
-(a.outdir / "redepth.json").write_text(json.dumps(report, indent=1, default=str) + "\n")
-STATE["done"] = True
-print("[453] " + json.dumps({k: v for k, v in report.items() if k != "provenance"},
-                            default=str), flush=True)
-if changed:
-    raise SystemExit(f"input(s) changed during the run: {changed}")
-if problems and not a.allow_failing_gates:
+
+
+def _write_report():
+    (a.outdir / "redepth.json").write_text(json.dumps(report, indent=1, default=str) + "\n")
+    STATE["done"] = True
+    print("[453] " + json.dumps({k: v for k, v in report.items() if k != "provenance"},
+                                default=str), flush=True)
+
+
+if changed or (problems and not a.allow_failing_gates):
+    _write_report()
+    if changed:
+        raise SystemExit(f"input(s) changed during the run: {changed}")
     raise SystemExit("the variant fails: " + "; ".join(problems)
                      + " (--allow-failing-gates writes it as a sensitivity case)")
+# The report says the run succeeded only once the figure is written too; a
+# failure in between leaves the exit handler's failure report (round 7 F12).
 
 import matplotlib  # noqa: E402
 
@@ -227,4 +244,5 @@ for axi, val, cmap, lim, title in (
     axi.set_title(title, fontsize=10)
     fig.colorbar(pc, ax=axi, shrink=0.8)
 fig.savefig(a.outdir / "redepth.png", dpi=120)
+_write_report()
 print(f"[453] wrote {a.outdir}", flush=True)

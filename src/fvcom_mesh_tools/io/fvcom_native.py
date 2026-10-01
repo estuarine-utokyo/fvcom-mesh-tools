@@ -66,6 +66,7 @@ def _signed_areas(mesh: Fort14Mesh) -> np.ndarray:
 def _validate_for_export(mesh: Fort14Mesh) -> None:
     if mesh.n_elements == 0 or mesh.n_nodes == 0:
         raise ValueError("cannot export an empty mesh")
+    _check_exportable(mesh)
     sa = _signed_areas(mesh)
     n_bad = int((sa <= 0).sum())
     if n_bad:
@@ -101,6 +102,7 @@ def write_grd(mesh: Fort14Mesh, path: str | Path) -> Path:
 
 def write_dep(mesh: Fort14Mesh, path: str | Path) -> Path:
     """Write ``casename_dep.dat`` (rows ``X Y H``, node order)."""
+    _check_exportable(mesh)
     path = Path(path).resolve()
     with path.open("w") as f:
         f.write(f"Node Number = {mesh.n_nodes}\n")
@@ -137,6 +139,7 @@ def write_obc(
         if not 1 <= t <= 10:
             raise ValueError(f"OBC type {t} outside FVCOM's valid range 1-10")
 
+    _check_exportable(mesh)
     path = Path(path).resolve()
     rows: list[tuple[int, int]] = []
     for seg, t in zip(mesh.open_boundaries, seg_types):
@@ -155,11 +158,8 @@ def write_cor(
     """Write ``casename_cor.dat``; ``cor`` is the per-node Coriolis
     column (latitude in degrees for CARTESIAN builds).
     """
-    cor = np.asarray(cor, dtype=np.float64)
-    if cor.shape != (mesh.n_nodes,):
-        raise ValueError(
-            f"cor shape {cor.shape} does not match n_nodes = {mesh.n_nodes}"
-        )
+    _check_exportable(mesh)
+    cor = _check_cor(mesh, cor)
     path = Path(path).resolve()
     with path.open("w") as f:
         f.write(f"Node Number = {mesh.n_nodes}\n")
@@ -179,10 +179,7 @@ def write_spg(
     ``(node_id, radius_m, damping)``; ``None`` writes the valid
     "no sponge" file (count 0).
     """
-    rows = list(sponge) if sponge else []
-    for node, _r, _c in rows:
-        if not 0 <= int(node) < mesh.n_nodes:
-            raise ValueError(f"sponge node id {node} out of range")
+    rows = _check_sponge(mesh, sponge)
     path = Path(path).resolve()
     with path.open("w") as f:
         f.write(f"Sponge Node Number = {len(rows)}\n")
@@ -303,32 +300,75 @@ def apply_obc_depth_control(mesh: Fort14Mesh) -> tuple[Fort14Mesh, np.ndarray]:
     return replace(mesh, depths=depths), change
 
 
+def _indices(a, n: int, what: str, ndim: int = 1) -> np.ndarray:
+    """``a`` as int64 node indices: finite whole numbers in ``[0, n)``.
+
+    Checked before any cast, so neither -1 (NumPy's last node) nor 0.9
+    (truncated to 0) reaches a file (review of the extend tools, rounds 6 F9
+    and 7 F4).
+    """
+    arr = np.asarray(a)
+    if arr.ndim != ndim:
+        raise ValueError(f"{what} must be {ndim}-dimensional, not shape {arr.shape}")
+    if arr.size == 0:
+        return arr.astype(np.int64)
+    if arr.dtype.kind not in "iuf" or arr.dtype.kind == "b":
+        raise ValueError(f"{what} must be numeric node indices, not {arr.dtype}")
+    if arr.dtype.kind == "f" and not (np.isfinite(arr).all() and (arr == np.round(arr)).all()):
+        raise ValueError(f"{what} holds an index that is not a whole number")
+    out = arr.astype(np.int64)
+    if out.min() < 0 or out.max() >= n:
+        raise ValueError(f"{what}: node index outside [0, {n}): {int(out.min())}..{int(out.max())}")
+    return out
+
+
 def _check_exportable(mesh: Fort14Mesh) -> None:
     """Refuse, before any file is written, a mesh FVCOM cannot read: element
-    indices that are not integers in ``[0, NP)`` (NumPy would take -1 as the
-    last node), boundary indices out of range, or coordinates and depths
-    that are not finite (review of the extend tools, round 6 F9)."""
+    or boundary indices that are not whole numbers in ``[0, NP)``, or
+    coordinates and depths that are not finite (review of the extend tools,
+    rounds 6 F9 and 7 F4)."""
     nodes = np.asarray(mesh.nodes)
-    els = np.asarray(mesh.elements)
     depths = np.asarray(mesh.depths)
     n = len(nodes)
     if nodes.ndim != 2 or nodes.shape[1] < 2 or depths.shape != (n,):
         raise ValueError(f"nodes {nodes.shape} and depths {depths.shape} do not match")
-    if els.ndim != 2 or els.shape[1] != 3 or not np.issubdtype(els.dtype, np.integer):
-        raise ValueError(f"elements must be an integer (NE, 3) array, not {els.dtype} "
-                         f"{els.shape}")
-    if els.size and (els.min() < 0 or els.max() >= n):
-        raise ValueError(f"element node index outside [0, {n}): "
-                         f"{int(els.min())}..{int(els.max())}")
-    for seg in [*mesh.open_boundaries, *(s for _t, s in mesh.land_boundaries)]:
-        seg = np.asarray(seg)
-        if seg.size and (seg.min() < 0 or seg.max() >= n):
-            raise ValueError(f"boundary node index outside [0, {n})")
+    els = _indices(mesh.elements, n, "elements", ndim=2)
+    if els.size and els.shape[1] != 3:
+        raise ValueError(f"elements must be (NE, 3), not {els.shape}")
+    for seg in mesh.open_boundaries:
+        _indices(seg, n, "an open boundary")
+    for _t, seg in mesh.land_boundaries:
+        _indices(seg, n, "a land boundary")
     if not np.isfinite(nodes[:, :2]).all():
         raise ValueError(f"{int((~np.isfinite(nodes[:, :2])).any(axis=1).sum())} node(s) "
                          "with a coordinate that is not finite")
     if not np.isfinite(depths).all():
         raise ValueError(f"{int((~np.isfinite(depths)).sum())} depth(s) not finite")
+
+
+def _check_cor(mesh: Fort14Mesh, cor) -> np.ndarray:
+    cor = np.asarray(cor, dtype=np.float64)
+    if cor.shape != (mesh.n_nodes,):
+        raise ValueError(f"cor shape {cor.shape} does not match n_nodes = {mesh.n_nodes}")
+    if not np.isfinite(cor).all():
+        raise ValueError(f"{int((~np.isfinite(cor)).sum())} Coriolis value(s) not finite")
+    return cor
+
+
+def _check_sponge(mesh: Fort14Mesh, sponge) -> list[tuple[int, float, float]]:
+    rows = list(sponge) if sponge else []
+    if not rows:
+        return []
+    arr = np.asarray(rows, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] != 3:
+        raise ValueError(f"sponge rows are (node, radius, damping), not shape {arr.shape}")
+    nodes = _indices(arr[:, 0], mesh.n_nodes, "sponge nodes")
+    radius, damping = arr[:, 1], arr[:, 2]
+    if not (np.isfinite(radius).all() and (radius > 0).all()):
+        raise ValueError("sponge radii must be finite and positive")
+    if not (np.isfinite(damping).all() and (damping >= 0).all()):
+        raise ValueError("sponge damping must be finite and not negative")
+    return [(int(k), float(r), float(c)) for k, r, c in zip(nodes, radius, damping)]
 
 
 def export_fvcom_case(
@@ -361,24 +401,42 @@ def export_fvcom_case(
     # said (fourth review).
     if obc_type is None:
         obc_type = getattr(mesh, "obc_type", 1)
-    _check_exportable(mesh)
+    # every input is checked before any file is opened, and the set is
+    # written to a temporary directory and moved into place only when all of
+    # it is written: a bad optional input no longer leaves a half-replaced
+    # case (review of the extend tools, round 7 F5)
+    _validate_for_export(mesh)
+    if cor is not None:
+        _check_cor(mesh, cor)
+    _check_sponge(mesh, sponge)
     if obc_depth_control and mesh.open_boundaries:
         mesh, _ = apply_obc_depth_control(mesh)
     outdir = Path(outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
-    written: dict[str, Path] = {
-        "grd": write_grd(mesh, outdir / f"{casename}_grd.dat"),
-        "dep": write_dep(mesh, outdir / f"{casename}_dep.dat"),
-        "obc": write_obc(mesh, outdir / f"{casename}_obc.dat", obc_type=obc_type),
-    }
-    if cor is not None:
-        written["cor"] = write_cor(mesh, outdir / f"{casename}_cor.dat", cor)
-    if sponge is not None or write_empty_spg:
-        written["spg"] = write_spg(mesh, outdir / f"{casename}_spg.dat", sponge)
-    if twodm:
-        written["2dm"] = write_2dm(
-            mesh, outdir / f"{casename}.2dm", z_convention=z_convention,
-        )
+    import shutil
+    import tempfile
+
+    stage = Path(tempfile.mkdtemp(dir=outdir, prefix=f".{casename}.export."))
+    try:
+        staged: dict[str, Path] = {
+            "grd": write_grd(mesh, stage / f"{casename}_grd.dat"),
+            "dep": write_dep(mesh, stage / f"{casename}_dep.dat"),
+            "obc": write_obc(mesh, stage / f"{casename}_obc.dat", obc_type=obc_type),
+        }
+        if cor is not None:
+            staged["cor"] = write_cor(mesh, stage / f"{casename}_cor.dat", cor)
+        if sponge is not None or write_empty_spg:
+            staged["spg"] = write_spg(mesh, stage / f"{casename}_spg.dat", sponge)
+        if twodm:
+            staged["2dm"] = write_2dm(
+                mesh, stage / f"{casename}.2dm", z_convention=z_convention,
+            )
+        written: dict[str, Path] = {}
+        for kind, p in staged.items():
+            written[kind] = outdir / p.name
+            p.replace(written[kind])
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
     return written
 
 

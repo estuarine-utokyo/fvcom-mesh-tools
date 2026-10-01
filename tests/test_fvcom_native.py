@@ -152,7 +152,7 @@ def test_write_spg(tmp_path):
     p = write_spg(mesh, tmp_path / "case_spg2.dat", [(0, 5000.0, 0.001)])
     rows = _data_rows(p)
     assert rows[0][0] == "1"  # 1-indexed on disk
-    with pytest.raises(ValueError, match="out of range"):
+    with pytest.raises(ValueError, match="outside"):
         write_spg(mesh, tmp_path / "bad_spg.dat", [(99, 1.0, 1.0)])
 
 
@@ -585,3 +585,36 @@ def test_export_refuses_a_mesh_fvcom_cannot_read(tmp_path, change):
     with pytest.raises(ValueError):
         export_fvcom_case(m, tmp_path / "out", "t")
     assert not (tmp_path / "out").exists()
+
+
+def test_fractional_boundary_ids_and_writer_bypass_are_refused(tmp_path):
+    """Review round 7 F4."""
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
+
+    nodes = np.array([[0.0, 0.0], [1000.0, 0.0], [0.0, 1000.0]])
+    ok = Fort14Mesh("t", nodes, np.full(3, 5.0), np.array([[0, 1, 2]]), [np.array([0.9, 1.9])], [])
+    with pytest.raises(ValueError, match="whole number"):
+        export_fvcom_case(ok, tmp_path / "a", "t", obc_depth_control=False)
+    bad = Fort14Mesh("t", nodes, np.full(3, 5.0), np.array([[-1, 0, 1]]), [], [])
+    with pytest.raises(ValueError, match="outside"):
+        write_grd(bad, tmp_path / "t_grd.dat")
+    assert not (tmp_path / "t_grd.dat").exists()
+
+
+def test_bad_optional_inputs_leave_an_existing_case_untouched(tmp_path):
+    """Review round 7 F5."""
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
+
+    nodes = np.array([[0.0, 0.0], [1000.0, 0.0], [0.0, 1000.0]])
+    m = Fort14Mesh("t", nodes, np.full(3, 5.0), np.array([[0, 1, 2]]), [np.array([0, 1])], [])
+    out = tmp_path / "case"
+    export_fvcom_case(m, out, "t", cor=[35.0] * 3)
+    before = {p.name: p.read_bytes() for p in out.iterdir()}
+    m.depths[:] = 9.0
+    for kw in ({"cor": [35.0]}, {"cor": [np.nan, 35, 35]},
+               {"sponge": [(0.9, 1.0, 0.1)]}, {"sponge": [(0, np.nan, np.inf)]}):
+        with pytest.raises(ValueError):
+            export_fvcom_case(m, out, "t", **kw)
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == before

@@ -162,3 +162,17 @@ def test_changed_files_names_inputs_that_moved_after_collect(tmp_path):
     a.write_text("fin_seed: 99\n")
     c.unlink()
     assert changed_files(prov, ["recipe", "base", "side"]) == ["recipe", "base"]
+
+
+def test_changed_inventory_sees_a_file_that_appeared(tmp_path):
+    """Review of the extend tools, round 7 F9."""
+    from fvcom_mesh_tools.provenance import changed_inventory, collect
+
+    a = tmp_path / "depth_1.dat"
+    a.write_text("1")
+    prov = collect(files={"cao": [str(a)]}, libraries=())
+    assert changed_inventory(prov, {"cao": [a]}) == []
+    b = tmp_path / "depth_2.dat"
+    b.write_text("2")
+    assert changed_inventory(prov, {"cao": [a, b]}) == ["cao"]
+    assert changed_inventory(prov, {"new": [a]}) == ["new"]

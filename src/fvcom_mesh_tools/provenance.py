@@ -17,7 +17,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-__all__ = ["changed_files", "code_state", "collect", "dataset_files", "file_sha256", "git_state"]
+__all__ = ["changed_files", "changed_inventory", "code_state", "collect", "dataset_files",
+           "file_sha256", "git_state"]
 
 # the libraries whose arithmetic or geometry decides the mesh
 LIBRARIES = ("numpy", "scipy", "shapely", "geopandas", "pyproj", "rasterio",
@@ -263,4 +264,20 @@ def changed_files(prov: dict[str, Any], names) -> list[str]:
         spec[k] = v["paths"] if "paths" in v else v["path"]
     now = collect(files=spec, libraries=())["files"]
     return [k for k in spec if now[k]["sha256"] != prov["files"][k]["sha256"]]
+
+
+def changed_inventory(prov: dict[str, Any], files: dict[str, Any]) -> list[str]:
+    """The entries of ``files`` (name -> path or list of paths, listed again
+    now) whose membership differs from what ``prov["files"]`` recorded, or
+    that it did not record. A dataset whose files are found by a search can
+    gain a file the first hash never saw (review of the extend tools, round 7
+    F9); :func:`changed_files` then checks the contents."""
+    out = []
+    for k, p in files.items():
+        rec = prov["files"].get(k)
+        now = [str(q) for q in p] if isinstance(p, (list, tuple)) else str(p)
+        was = None if rec is None else rec.get("paths", rec.get("path"))
+        if now != was:
+            out.append(k)
+    return out
 

@@ -26,6 +26,12 @@ REF=$(realpath -e -- "${FMESH_REF:?Set FMESH_REF to the reference sample_repro_f
     || { echo "reference not found: $FMESH_REF"; exit 2; }
 [[ -f $REF ]] || { echo "reference is not a file: $REF"; exit 2; }
 WORK=${WORK_DIR:?set WORK_DIR}/scratch/speed_407.${JOBID}
+OUT14=$WORK/outputs/sample_repro/sample_repro_final.14
+# before anything is staged, copied or removed (review round 7 F7): the
+# reference may be neither the file this run writes nor inside its work area
+case "$REF" in
+    "$(realpath -m -- "$WORK")"/*) echo "the reference lies in this run's work area: $REF"; exit 2 ;;
+esac
 mkdir -p "$WORK"
 for d in notebooks recipes; do rsync -a --delete "$REPO/$d/" "$WORK/$d/"; done
 mkdir -p "$WORK/outputs/figures"
@@ -48,10 +54,6 @@ echo "325 wall = $((t1 - t0)) s   331 wall = $((t2 - t1)) s"
 # QA and the identity check decide the job's exit (review round 6 F5); the
 # diagnostics are printed either way
 fail=0
-OUT14=$WORK/outputs/sample_repro/sample_repro_final.14
-if [[ $(realpath -m -- "$OUT14") == "$REF" ]]; then
-    echo "the reference is the file this run wrote: $REF"; exit 2
-fi
 qa_rc=0
 fmesh-mesh-qa "$OUT14" > "$WORK/qa.txt" 2>&1 || qa_rc=$?
 tail -4 "$WORK/qa.txt"

@@ -71,12 +71,21 @@ def _strip_comments(text: str) -> str:
 
 
 def _nml_value(text: str, key: str) -> str | None:
-    """A namelist value, single- or double-quoted or bare; None when absent."""
-    m = re.search(rf"\b{key}\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|([^,\s/]+))", text,
-                  re.IGNORECASE)
+    """A namelist value, single- or double-quoted or bare; None when absent.
+
+    Inside a quoted value a doubled delimiter is one character, as Fortran
+    writes it (``'run''s'`` is ``run's``; review round 7 F3).
+    """
+    m = re.search(rf"\b{key}\s*=\s*(?:'((?:[^']|'')*)'|\"((?:[^\"]|\"\")*)\"|([^,\s/]+))",
+                  text, re.IGNORECASE)
     if not m:
         return None
-    return next(g for g in m.groups() if g is not None).strip()
+    single, double, bare = m.groups()
+    if single is not None:
+        return single.replace("''", "'").strip()
+    if double is not None:
+        return double.replace('""', '"').strip()
+    return bare.strip()
 
 
 def _grid_counts(path: Path) -> dict[str, int] | None:

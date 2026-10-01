@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 __all__ = ["DEPTH_PRODUCTS", "REFERENCE_KEYS", "REQUIRED_SETTINGS", "compare_to_reference",
-           "load_base_recipe", "read_open_boundary"]
+           "load_base_recipe", "parse_open_boundary", "read_open_boundary"]
 
 #: Depth products the build knows.
 DEPTH_PRODUCTS = ("m7001_production",)
@@ -46,10 +46,16 @@ def read_open_boundary(path) -> list[tuple[float, float]]:
     One ``lon,lat`` pair per line; ``#`` lines and a ``lon,lat`` header are
     skipped.  At least two nodes, all finite.
     """
+    return parse_open_boundary(Path(path).read_text(), path)
+
+
+def parse_open_boundary(text: str, path="<text>") -> list[tuple[float, float]]:
+    """:func:`read_open_boundary` on text already read (``path`` names it in
+    messages), so a caller can hash and parse the same bytes."""
     import math
 
     pts = []
-    for n, line in enumerate(Path(path).read_text().splitlines(), 1):
+    for n, line in enumerate(text.splitlines(), 1):
         s = line.strip()
         if not s or s.startswith("#") or s.lower().startswith("lon"):
             continue

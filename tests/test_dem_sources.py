@@ -264,3 +264,18 @@ def test_cao_keeps_the_query_shape():
     cao.areas = lambda root: []
     q = np.full((2, 2), 139.8)
     assert cao.depth(q, q - 4.3, Path(".")).shape == (2, 2)
+
+
+def test_m7001_depth_does_not_depend_on_the_other_query_points(tmp_path, monkeypatch):
+    """Review round 7 F2: a centre inside four soundings 0.3 deg away was
+    uncovered when asked alone and covered when asked with its neighbours."""
+    import pandas as pd
+
+    pd.DataFrame({"mark": ["N"] * 4, "lon": [139.7, 140.3, 139.7, 140.3],
+                  "lat": [34.7, 34.7, 35.3, 35.3], "z_tp": [-10.0] * 4}
+                 ).to_parquet(tmp_path / "m.parquet")
+    monkeypatch.setitem(sources.SOURCES, "pts", M7001Points("m.parquet"))
+    alone, _ = sample(["pts"], np.array([140.0]), np.array([35.0]), data_dir=tmp_path)
+    batch, _ = sample(["pts"], np.array([140.0, 139.7, 140.3]), np.array([35.0, 34.7, 35.3]),
+                      data_dir=tmp_path)
+    assert alone[0] == pytest.approx(10.0) and batch[0] == alone[0]

@@ -58,17 +58,34 @@ def relocate_case(src: Path, dst: Path, nml: str = "m2_run.nml",
                   end_date: str | None = None) -> Path:
     """Copy a staged case to ``dst`` (its output left behind), point its
     namelist at ``dst/input`` and ``dst/output``, and optionally set
-    END_DATE. The directories are checked before anything is written."""
+    END_DATE.
+
+    Everything is checked and the namelist rendered before anything is
+    written; ``dst`` may not overlap ``src`` (after resolving links), and the
+    copy is built beside ``dst`` and moved into place (review of the extend
+    tools, round 7 F6).
+    """
     src, dst = Path(src).resolve(), Path(dst).resolve()
+    if dst == src or src in dst.parents or dst in src.parents:
+        raise ValueError(f"the copy {dst} overlaps the case {src}")
     check_fvcom_dirs(dst / "input", dst / "output")
     text = (src / nml).read_text()
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("output"))
-    (dst / "output").mkdir(exist_ok=True)
     text = set_value(text, "INPUT_DIR", fortran_string(f"{dst / 'input'}/"))
     text = set_value(text, "OUTPUT_DIR", fortran_string(f"{dst / 'output'}/"))
     if end_date is not None:
         text = set_value(text, "END_DATE", fortran_string(end_date))
-    (dst / nml).write_text(text)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(dir=dst.parent, prefix=f".{dst.name}."))
+    try:
+        work = tmp / "case"
+        shutil.copytree(src, work, ignore=shutil.ignore_patterns("output"))
+        (work / "output").mkdir(exist_ok=True)
+        (work / nml).write_text(text)
+        if dst.exists():
+            shutil.rmtree(dst)
+        work.rename(dst)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     return dst / nml

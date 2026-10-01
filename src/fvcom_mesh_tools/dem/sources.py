@@ -149,34 +149,51 @@ class M7001Points:
     """M7001 soundings (N) and low-tide line (M) on T.P., linear between points."""
 
     rel: str = "geodata/bathymetry/M7001/TP/M7001_TP.parquet"
+    _cache: dict = field(default_factory=dict, repr=False)
 
     def files(self, root: Path) -> list[Path]:
         return [root / self.rel]
 
-    def depth(self, lon, lat, root: Path) -> np.ndarray:
+    def interpolator(self, root: Path):
+        """One triangulation of the whole dataset, built once per file.
+
+        A triangulation of the soundings near the query points made a depth,
+        and whether a point was covered at all, depend on which other points
+        were asked in the same call (review of the extend tools, round 7 F2).
+        None when the data cannot be triangulated.
+        """
         import pandas as pd
         from scipy.interpolate import LinearNDInterpolator
 
-        # the window must reach past the query points to the soundings that
-        # surround them, or the triangulation stops short of its own hull
-        x0, x1, y0, y1 = _window(lon, lat, 0.25)
-        df = pd.read_parquet(root / self.rel, columns=["mark", "lon", "lat", "z_tp"])
-        df = df[df["mark"].isin(["N", "M"]) & df["lon"].between(x0, x1)
-                & df["lat"].between(y0, y1) & np.isfinite(df["z_tp"])]
-        out = np.full(np.shape(lon), np.nan)
-        if len(df) < 3:
-            return out
-        # coincident points (a sounding repeated on two contour lines) make the
-        # triangulation degenerate; keep one value per location
-        df = df.drop_duplicates(["lon", "lat"])
-        pts = df[["lon", "lat"]].to_numpy()
-        # fewer than three distinct points, or all on a line, cannot be
-        # triangulated: the window is uncovered, and the next source may cover
-        # it (review F15)
-        if len(pts) < 3 or np.linalg.matrix_rank(pts[1:] - pts[0], tol=1e-12) < 2:
-            return out
-        f = LinearNDInterpolator(pts, -df["z_tp"].to_numpy())
-        return f(np.ravel(lon), np.ravel(lat)).reshape(np.shape(lon))
+        path = (root / self.rel).resolve()
+        st = path.stat()
+        key = (str(path), st.st_size, st.st_mtime_ns)
+        if key not in self._cache:
+            df = pd.read_parquet(path, columns=["mark", "lon", "lat", "z_tp"])
+            df = df[df["mark"].isin(["N", "M"]) & np.isfinite(df["z_tp"])
+                    & np.isfinite(df["lon"]) & np.isfinite(df["lat"])]
+            # coincident points (a sounding repeated on two contour lines) make
+            # the triangulation degenerate; keep one value per location
+            df = df.drop_duplicates(["lon", "lat"])
+            pts = df[["lon", "lat"]].to_numpy()
+            # fewer than three distinct points, or all on a line, cannot be
+            # triangulated: nothing is covered, and the next source may cover
+            # it (review F15)
+            if len(pts) < 3 or np.linalg.matrix_rank(pts[1:] - pts[0], tol=1e-12) < 2:
+                f = None
+            else:
+                f = LinearNDInterpolator(pts, -df["z_tp"].to_numpy())
+            self._cache.clear()
+            self._cache[key] = f
+        return self._cache[key]
+
+    def depth(self, lon, lat, root: Path) -> np.ndarray:
+        lon = np.asarray(lon, float)
+        lat = np.asarray(lat, float)
+        f = self.interpolator(root)
+        if f is None or lon.size == 0:
+            return np.full(lon.shape, np.nan)
+        return f(np.ravel(lon), np.ravel(lat)).reshape(lon.shape)
 
 
 @dataclass
