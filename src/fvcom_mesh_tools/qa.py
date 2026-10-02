@@ -645,7 +645,8 @@ def run_qa(
 
     # Isolated elements (tge.F PSTOP: element with no neighbours).
     deg = np.asarray(adj.sum(axis=1)).ravel()
-    isolated = np.where(deg == 0)[0] if ne > 1 else np.empty(0, dtype=np.int64)
+    # a lone element is isolated too (review of the extend tools, round 15 F6)
+    isolated = np.where(deg == 0)[0]
     checks.append(QACheck(
         "no_isolated_elements", "fvcom", True, isolated.size == 0,
         "isolated = 0", f"isolated = {isolated.size}", int(isolated.size),

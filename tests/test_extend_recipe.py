@@ -136,3 +136,9 @@ def test_a_boundary_left_for_recovery_is_refused(tmp_path):
     (tmp_path / "obc.csv.RECOVER").write_text("{}")
     with pytest.raises(ValueError, match="RECOVER"):
         load_extend_recipe(p)
+
+
+def test_the_recipe_name_is_one_path_component(tmp_path):
+    """Review round 15 F7."""
+    with pytest.raises(ValueError):
+        load_extend_recipe(_write(tmp_path, name="x/../../escaped"))

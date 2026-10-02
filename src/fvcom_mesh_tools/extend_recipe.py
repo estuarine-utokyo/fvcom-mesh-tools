@@ -64,6 +64,9 @@ def load_extend_recipe(path) -> dict[str, Any]:
     out["recipe_path"] = str(path)
     out["recipe_sha256"] = hashlib.sha256(data).hexdigest()
     try:
+        # the name makes the default output directory: one path component
+        # (review round 15 F7)
+        check_case_name(raw["name"])
         check_case_name(raw["case"])
         check_case_name(raw["base_case"])
     except ValueError as err:

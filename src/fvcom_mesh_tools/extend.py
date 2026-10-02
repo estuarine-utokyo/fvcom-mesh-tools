@@ -34,6 +34,7 @@ from fvcom_mesh_tools.sizing import _limit
 __all__ = [
     "band_field",
     "check_island_holes",
+    "check_land_cover",
     "check_no_overlap",
     "land_segments",
     "compose_sizing",
@@ -53,7 +54,10 @@ BAND_TOLERANCE = 0.05
 def _grade(grade) -> float:
     """A finite, non-negative real gradation (NumPy scalars too, not a bool)
     as a float (review rounds 13 F9, 14 F4)."""
-    if isinstance(grade, (bool, np.bool_)) or not isinstance(grade, (int, float, np.number)):
+    # real numbers only: a complex one would lose its imaginary part to
+    # float() (review round 15 F4)
+    if isinstance(grade, (bool, np.bool_)) or not isinstance(
+            grade, (int, float, np.integer, np.floating)):
         raise ValueError(f"the gradation must be a real number, not {grade!r}")
     g = float(grade)
     if not (np.isfinite(g) and g >= 0):
@@ -343,6 +347,57 @@ def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int) -> dict:
         raise ValueError(f"{len(bad)} hole(s) in the new mesh hold no land, e.g. at node {v} "
                          f"({a:.0f} m2): sea is missing there")
     return {"n_new_islands": n_islands}
+
+
+#: A land piece the new mesh covers is a defect when it is larger than this
+#: many times the median area of the new elements over it: the mesh could have
+#: resolved it. Smaller ones are dropped by the resolution principle (what the
+#: element size cannot carry goes). Tokyo Bay - Enshu, 2026-10-02: 2,445
+#: covered pieces, all rocks and islets, at most 1.37 times.
+LAND_COVER_RATIO = 2.0
+
+
+def check_land_cover(mesh: Fort14Mesh, land, n_base_elements: int,
+                     ratio: float = LAND_COVER_RATIO) -> dict:
+    """No land the mesh could have resolved may lie under the new elements.
+
+    ``land`` is the true land in the mesh's coordinates, without the base's
+    footprint. For every land piece the new elements touch, the share of it
+    they cover is measured; a piece more than half covered and larger than
+    ``ratio`` times the median area of the new elements over it is a defect
+    (review round 15 F2: a mesh over a whole island passed every gate).
+    Coastal elements reaching onto land by the coast's approximation are not
+    pieces covered by half. Raises on the first such piece; returns counts.
+    """
+    import shapely
+
+    xy = np.asarray(mesh.nodes)[:, :2]
+    tri = shapely.polygons(xy[np.asarray(mesh.elements)[n_base_elements:]])
+    area = shapely.area(tri)
+    cover = shapely.union_all(tri)
+    tree = shapely.STRtree(tri)
+    n_covered, worst, bad = 0, 0.0, []
+    for piece in getattr(land, "geoms", [land]):
+        if piece.is_empty or piece.area <= 0:
+            continue
+        under = tree.query(piece, predicate="intersects")
+        if not len(under):
+            continue
+        if piece.intersection(cover).area <= 0.5 * piece.area:
+            continue
+        n_covered += 1
+        r = piece.area / float(np.median(area[under]))
+        worst = max(worst, r)
+        if r > ratio:
+            c = piece.representative_point()
+            bad.append((c.x, c.y, piece.area, r))
+    if bad:
+        x, y, a, r = bad[0]
+        raise ValueError(f"{len(bad)} land piece(s) the mesh could resolve lie under new "
+                         f"elements, e.g. {a:.0f} m2 at ({x:.0f}, {y:.0f}), {r:.1f} times "
+                         f"the elements over it")
+    return {"n_land_pieces_covered": n_covered, "max_covered_area_ratio": worst,
+            "ratio_limit": ratio}
 
 
 def land_segments(elements, open_chains) -> list[tuple[int, np.ndarray]]:

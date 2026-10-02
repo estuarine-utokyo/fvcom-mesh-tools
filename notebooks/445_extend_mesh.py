@@ -47,6 +47,8 @@ def say(msg):
 recipe = load_extend_recipe(sys.argv[1] if len(sys.argv) > 1 else os.environ["FMESH_RECIPE"])
 OUT = Path(sys.argv[2] if len(sys.argv) > 2 else REPO / "outputs" / f"extend_{recipe['name']}")
 OUT = OUT.resolve()
+if len(sys.argv) <= 2 and (REPO / "outputs").resolve() not in OUT.parents:
+    raise SystemExit(f"the default output {OUT} is not under {REPO / 'outputs'}")
 # A report is written whatever happens, from the moment the output is
 # reserved (review round 3 F6, round 4 F7): an exit handler writes a failure
 # report unless the final one was written. A failure before the provenance

@@ -489,3 +489,13 @@ def test_valid_obc_ids_of_any_numeric_dtype_count_the_same(dtype):
     b = run_qa(mesh, channel_check=False)
     assert b.n_obc_nodes == a.n_obc_nodes > 0
     assert [c.passed for c in b.checks] == [c.passed for c in a.checks]
+
+
+def test_a_lone_element_is_isolated():
+    """Review of the extend tools, round 15 F6."""
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    m = Fort14Mesh("one", np.array([[1000.0, 1000.0], [2000.0, 1000.0], [2000.0, 2000.0]]),
+                   np.full(3, 10.0), np.array([[0, 1, 2]]), [], [])
+    report = run_qa(m, coords="metric", channel_check=False)
+    assert not _check(report, "no_isolated_elements").passed

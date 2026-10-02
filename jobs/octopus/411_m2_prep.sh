@@ -25,13 +25,16 @@ B_MESH=${FMESH_B_MESH:-$REPO/outputs/verify_409.115302/fit/sample_repro_final.14
 # the root's staging lock, held through preparation; refused while a 412 run
 # holds a case (review round 14 F2)
 fmesh_stage_lock "$RUN_ROOT" || exit 2
-rm -f "$RUN_ROOT/STAGED" "$RUN_ROOT/SMOKE_OK" "$RUN_ROOT"/*/RUN_OK
 for case in A B_own B_m7001; do
     if compgen -G "$RUN_ROOT/$case/output/m2_*.nc" >/dev/null; then
         echo "Existing model output: $RUN_ROOT/$case/output; archive before rerunning"
         exit 2
     fi
 done
+# the cases are about to be replaced: every acceptance of the old ones goes,
+# after the reuse checks and before anything is written (review rounds 14
+# F3, 15 F3)
+rm -f "$RUN_ROOT/STAGED" "$RUN_ROOT/SMOKE_OK" "$RUN_ROOT"/*/RUN_OK
 echo "B mesh = $B_MESH"
 head -2 "$B_MESH"
 python notebooks/383_m2_case_prep.py --root "$RUN_ROOT" --mesh "$B_MESH"

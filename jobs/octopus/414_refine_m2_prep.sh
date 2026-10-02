@@ -21,15 +21,16 @@ RUN_ROOT=${FMESH_RUN_ROOT:?set FMESH_RUN_ROOT}
 BASE=${FMESH_BASE:?set FMESH_BASE}
 REFINED=${FMESH_REFINED:?set FMESH_REFINED}
 fmesh_stage_lock "$RUN_ROOT" || exit 2
-# the cases are about to be replaced: every acceptance of the old ones goes
-# first, before anything is written (review round 14 F3)
-rm -f "$RUN_ROOT/STAGED" "$RUN_ROOT/SMOKE_OK" "$RUN_ROOT"/*/RUN_OK
 for case in base refined; do
     if compgen -G "$RUN_ROOT/$case/output/m2_*.nc" >/dev/null; then
         echo "Existing model output: $RUN_ROOT/$case/output; archive before rerunning"
         exit 2
     fi
 done
+# the cases are about to be replaced: every acceptance of the old ones goes,
+# after the reuse checks and before anything is written (review rounds 14
+# F3, 15 F3)
+rm -f "$RUN_ROOT/STAGED" "$RUN_ROOT/SMOKE_OK" "$RUN_ROOT"/*/RUN_OK
 echo "base    = $BASE"
 echo "refined = $REFINED"
 python notebooks/414_refine_m2_prep.py --root "$RUN_ROOT" \

@@ -30,6 +30,7 @@ from fvcom_mesh_tools.dem.m7001 import node_edges  # noqa: E402
 from fvcom_mesh_tools.dem.sources import SOURCES, non_tp_count, sample, source_files  # noqa: E402
 from fvcom_mesh_tools.extend import (  # noqa: E402
     check_island_holes,
+    check_land_cover,
     check_no_overlap,
     land_segments,
     rfactor_smooth_free,
@@ -145,8 +146,10 @@ verify_frozen_base(mesh, base, IB)
 import geopandas as gpd  # noqa: E402
 import shapely  # noqa: E402
 
-islands = check_island_holes(mesh, shapely.union_all(list(
-    gpd.read_file(LAND).to_crs(MESH_EPSG).geometry)), NB)
+_land = shapely.union_all(list(gpd.read_file(LAND).to_crs(MESH_EPSG).geometry))
+islands = check_island_holes(mesh, _land, NB)
+_foot = shapely.union_all(shapely.polygons(base.nodes[base.elements][:, :, :2]))
+land_cover = check_land_cover(mesh, _land.difference(_foot.buffer(1.0)), base.n_elements)
 
 to_ll = Transformer.from_crs(MESH_EPSG, 4326, always_xy=True)
 lon, lat = (np.asarray(v) for v in to_ll.transform(mesh.nodes[:, 0], mesh.nodes[:, 1]))
@@ -233,7 +236,7 @@ report = {
                         "p05": float(np.percentile(rel, 5)), "p95": float(np.percentile(rel, 95))},
     "case": name, "n_nodes": mesh.n_nodes,
     "depth_controls": D, "allow_failing_gates": bool(a.allow_failing_gates),
-    "islands": islands,
+    "islands": islands, "land_cover": land_cover,
     "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
     "dt_allowance_s": {"base": dt_base, "new": dt_new}, "problems": problems,
     "warnings": warnings_, "inputs_changed_during_run": changed,

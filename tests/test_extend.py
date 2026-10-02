@@ -416,3 +416,37 @@ def test_sizing_helpers_take_numpy_scalars_and_check_the_lattice():
         compose_sizing(v.ravel(), x.ravel(), y.ravel(), grade=0.2)
     with pytest.raises(ValueError):
         graded_up(v, x, y, True)
+
+
+def test_land_the_mesh_could_resolve_must_not_lie_under_it():
+    """Review round 15 F2; an islet smaller than the elements is dropped by
+    the resolution principle and passes."""
+    import shapely
+
+    from fvcom_mesh_tools.extend import check_land_cover
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    n = 6                                     # 6 x 6 nodes, 1 km apart
+    xy = np.array([[i * 1000.0, j * 1000.0] for j in range(n) for i in range(n)])
+    tri = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            a, b, c, d = j * n + i, j * n + i + 1, (j + 1) * n + i + 1, (j + 1) * n + i
+            tri += [[a, b, c], [a, c, d]]
+    m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [], [])
+    with pytest.raises(ValueError, match="could resolve"):
+        check_land_cover(m, shapely.box(1000, 1000, 4000, 4000), n_base_elements=0)
+    rep = check_land_cover(m, shapely.box(2400, 2400, 2600, 2600), n_base_elements=0)
+    assert rep["n_land_pieces_covered"] == 1 and rep["max_covered_area_ratio"] < 1
+
+
+def test_a_complex_gradation_is_refused():
+    """Review round 15 F4."""
+    from fvcom_mesh_tools.extend import compose_sizing, graded_up
+
+    x, y = np.meshgrid([0.0, 100.0], [0.0, 100.0])
+    v = np.array([[1.0, 100.0], [1.0, 100.0]])
+    with pytest.raises(ValueError):
+        graded_up(v, x, y, np.complex128(0.2 + 7j))
+    with pytest.raises(ValueError):
+        compose_sizing(v, x, y, grade=np.complex128(0.2))

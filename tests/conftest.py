@@ -26,10 +26,14 @@ def pytest_configure(config):
         "markers", "needs_oceanmesh: needs the laboratory's oceanmesh fork installed")
 
 
+@pytest.hookimpl(hookwrapper=True, trylast=True)
 def pytest_collection_modifyitems(config, items):
-    # the optional backend is imported only when a selected test needs it:
-    # its import has side effects (a matplotlib cache) that a pure selection
-    # should not depend on (review of the extend tools, round 14 F8)
+    # The optional backend is imported only when a test that survived
+    # selection (-k, -m) needs it: its import has side effects (a matplotlib
+    # cache) that a pure selection should not depend on (review of the
+    # extend tools, rounds 14 F8, 15 F5). As a wrapper, this runs after the
+    # selection hooks have removed the deselected items.
+    yield
     marked = [item for item in items if "needs_oceanmesh" in item.keywords]
     if not marked or _importable("oceanmesh"):
         return

@@ -30,6 +30,7 @@ from fvcom_mesh_tools.dem.m7001 import node_edges  # noqa: E402
 from fvcom_mesh_tools.dem.sources import non_tp_count, sample  # noqa: E402
 from fvcom_mesh_tools.extend import (  # noqa: E402
     check_island_holes,
+    check_land_cover,
     check_no_overlap,
     land_segments,
     merge_outer,
@@ -182,6 +183,12 @@ say("depths: " + json.dumps(depth_report))
 # before anything is written (round 12 F2)
 islands = check_island_holes(merged, land_utm, base.n_nodes)
 say("islands: " + json.dumps(islands))
+# and no land the mesh could resolve under the new elements (round 15 F2):
+# land_with_base holds the base footprint, which is taken out
+_foot = shapely.union_all(shapely.polygons(base.nodes[base.elements][:, :, :2]))
+land_cover = check_land_cover(merged, land_utm.difference(_foot.buffer(1.0)),
+                              base.n_elements)
+say("land cover: " + json.dumps(land_cover))
 merged.land_boundaries = land_segments(merged.elements, merged.open_boundaries)
 written = export_fvcom_case(merged, OUT, CASE, cor=lat, obc_depth_control=False)
 write_fort14(merged, OUT / f"{CASE}.14")
@@ -230,7 +237,7 @@ if dt_new < dt_base:
 (OUT / "merge.json").write_text(json.dumps({
     "finish": {k: v for k, v in info.items() if not isinstance(v, (list, dict))},
     "coast_fit": cf.to_dict(), "frozen_base": contract, "repair": repair,
-    "islands": islands,
+    "islands": islands, "land_cover": land_cover,
     "depths": depth_report,
     "qa": {"n_gate_total": qa.n_gate_total, "n_gate_failed": qa.n_gate_failed},
     "dt_allowance_s": {"base": dt_base, "new": dt_new}, "problems": problems,
