@@ -341,23 +341,33 @@ def check_no_overlap(merged: Fort14Mesh, n_base_elements: int, rel_tol: float = 
 
 
 def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int) -> dict:
-    """Every hole in the new part of the mesh must hold some real land.
+    """Every hole in the new part of the mesh must be land, give or take the
+    coast's approximation.
 
     A closed boundary loop without an open-boundary node, touching a node
-    beyond the base's ``n_base_nodes``, is an island; the polygon it bounds
-    must intersect ``land`` (the supplied land, in the mesh's coordinates)
-    over a positive area. A hole in open water -- elements lost in finishing
-    or repair -- passed every other check (review round 11 F7). Raises on
-    the first such hole; returns counts.
+    beyond the base's ``n_base_nodes``, is an island. Inside the polygon it
+    bounds, the water farther than half the local edge length from the
+    supplied ``land`` (in the mesh's coordinates) must be less than one
+    local element's area: a hole in open water -- elements lost in finishing
+    or repair -- passed every other check (review round 11 F7), and so did a
+    large hole around a tiny islet (round 22 F6). On Tokyo Bay - Enshu
+    (2026-10-03) the nine island holes leave at most 43,000 m2 against
+    elements of about 170,000 m2. Raises on the first such hole; returns
+    counts.
     """
     import shapely
 
     from fvcom_mesh_tools.io.fvcom_native import boundary_loops
 
     xy = np.asarray(mesh.nodes)[:, :2]
+    els = np.asarray(mesh.elements)
+    corners = xy[els]
+    edges = np.linalg.norm(corners - np.roll(corners, 1, axis=1), axis=2)
+    d1, d2 = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
+    areas = 0.5 * np.abs(d1[:, 0] * d2[:, 1] - d2[:, 0] * d1[:, 1])
     obc = set(int(v) for c in mesh.open_boundaries for v in np.asarray(c).tolist())
-    n_islands, bad = 0, []
-    for loop in boundary_loops(np.asarray(mesh.elements)):
+    n_islands, worst, bad = 0, 0.0, []
+    for loop in boundary_loops(els):
         loop = [int(v) for v in loop]
         if obc & set(loop) or max(loop) < n_base_nodes:
             continue
@@ -365,13 +375,20 @@ def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int) -> dict:
         hole = shapely.Polygon(xy[loop])
         if not hole.is_valid:
             hole = hole.buffer(0)
-        if land.intersection(hole).area <= 0:
-            bad.append((loop[0], float(hole.area)))
+        ring = np.flatnonzero(np.isin(els, loop).any(axis=1))
+        edge = float(np.median(edges[ring]))
+        local = land.intersection(hole.buffer(edge))
+        water = hole.difference(local.buffer(0.5 * edge)).area
+        limit = float(np.median(areas[ring]))
+        worst = max(worst, water / limit)
+        if water > limit:
+            bad.append((loop[0], float(hole.area), water))
     if bad:
-        v, a = bad[0]
-        raise ValueError(f"{len(bad)} hole(s) in the new mesh hold no land, e.g. at node {v} "
-                         f"({a:.0f} m2): sea is missing there")
-    return {"n_new_islands": n_islands}
+        v, a, w = bad[0]
+        raise ValueError(f"{len(bad)} hole(s) in the new mesh are open water, e.g. at node {v}: "
+                         f"{w:.0f} m2 of its {a:.0f} m2 lie away from land: sea is missing "
+                         f"there")
+    return {"n_new_islands": n_islands, "max_water_in_hole_per_element": worst}
 
 
 #: Covered land is a defect where it is wider than one element: each patch of

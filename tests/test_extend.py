@@ -380,10 +380,31 @@ def test_a_hole_in_the_new_sea_without_land_is_refused():
             a, b, c, d = j * n + i, j * n + i + 1, (j + 1) * n + i + 1, (j + 1) * n + i
             tri += [[a, b, c], [a, c, d]]
     m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [np.array([0, 1, 2])], [])
-    with pytest.raises(ValueError, match="hold no land"):
+    with pytest.raises(ValueError, match="open water"):
         check_island_holes(m, shapely.Polygon(), n_base_nodes=3)
     islet = shapely.box(2400, 2400, 2600, 2600)
-    assert check_island_holes(m, islet, n_base_nodes=3) == {"n_new_islands": 1}
+    assert check_island_holes(m, islet, n_base_nodes=3)["n_new_islands"] == 1
+
+
+def test_a_large_hole_around_a_tiny_islet_is_refused():
+    """Review round 22 F6: 2 km x 2 km of missing sea around a 100 m islet."""
+    import shapely
+
+    from fvcom_mesh_tools.extend import check_island_holes
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    n = 8
+    xy = np.array([[i * 1000.0, j * 1000.0] for j in range(n) for i in range(n)])
+    tri = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            if i in (3, 4) and j in (3, 4):          # the 2 km x 2 km hole
+                continue
+            a, b, c, d = j * n + i, j * n + i + 1, (j + 1) * n + i + 1, (j + 1) * n + i
+            tri += [[a, b, c], [a, c, d]]
+    m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [np.array([0, 1, 2])], [])
+    with pytest.raises(ValueError, match="open water"):
+        check_island_holes(m, shapely.box(3950, 3950, 4050, 4050), n_base_nodes=3)
 
 
 @pytest.mark.parametrize("kw", [{"grade": -0.2}, {"band": -10.0}, {"ambient": np.nan}])

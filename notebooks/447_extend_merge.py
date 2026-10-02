@@ -271,6 +271,12 @@ if dt_new < dt_base:
                      f"{dt_base:.2f} s, raw depths)")
 if {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")} != BASE_SHA:
     raise SystemExit("the base changed while it was being used")
+# and the generation's own products, land included, are still the ones
+# checked at the start (review round 22 F3)
+if ({q.name: file_sha256(q) for q in dataset_files(GEN / "land_with_base.shp")}
+        != _want["land_sha256"]
+        or file_sha256(GEN / "outer_utm.14") != _want["outer_utm14_sha256"]):
+    raise SystemExit(f"{GEN} changed while it was being used")
 (OUT / "merge.json").write_text(json.dumps({
     "finish": {k: v for k, v in info.items() if not isinstance(v, (list, dict))},
     "coast_fit": cf.to_dict(), "frozen_base": contract, "repair": repair,

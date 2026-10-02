@@ -743,3 +743,14 @@ def test_read_grd_requires_exact_well_formed_records(tmp_path, change):
     w["grd"].write_text("\n".join(lines) + "\n")
     with pytest.raises(ValueError):
         read_grd(w["grd"])
+
+
+def test_read_obc_needs_an_integer_counter(tmp_path):
+    """Review round 22 F8."""
+    from fvcom_mesh_tools.io.fvcom_native import read_obc
+
+    p = tmp_path / "x_obc.dat"
+    for first in ("garbage", "1.5"):
+        p.write_text(f"OBC Node Number = 2\n{first} 5 1\n2 9 1\n")
+        with pytest.raises(ValueError, match="counter"):
+            read_obc(p)

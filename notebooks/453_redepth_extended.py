@@ -116,6 +116,21 @@ for k in ("grd", "dep", "obc"):
     if ACCEPTED[k] is None or ACCEPTED[k] != file_sha256(f):
         raise SystemExit(f"{f.name} is not the file the accepted build wrote")
 LAND = src_dir / "generate" / "land_with_base.shp"
+# The build must be of this recipe's boundary and base, and its land the land
+# it was generated with (review round 22 F1, F9). A build without a
+# generation record is refused.
+_gin = ((_built.get("generate") or {}).get("inputs")) or {}
+if not _gin:
+    raise SystemExit(f"{built_report} records no generation inputs; rebuild it")
+_b = Path(recipe["base"]) / recipe["base_case"]
+for what, ok in (
+        ("open boundary", _gin.get("open_boundary_sha256") == recipe["open_boundary_sha256"]),
+        ("base", _gin.get("base_sha256") == {k: file_sha256(Path(f"{_b}_{k}.dat"))
+                                             for k in ("grd", "dep", "obc")}),
+        ("land", _gin.get("land_sha256") == {q.name: file_sha256(q)
+                                             for q in dataset_files(LAND)})):
+    if not ok:
+        raise SystemExit(f"the {what} is not the one the build in {src_dir} was made with")
 INPUTS = {"recipe": recipe["recipe_path"],
           "built_case": [str(src_dir / f"{case}_{k}.dat") for k in ("grd", "dep", "obc")],
           "built_report": str(built_report),
@@ -143,6 +158,13 @@ NB = base.n_nodes
 IB = np.asarray(base.open_boundaries[0], np.int64)
 # the full frozen contract on the input, connectivity included (review r2 F3)
 verify_frozen_base(mesh, base, IB)
+# and the build's open boundary is the recipe's, node for node (round 22 F1)
+_obc_m = np.column_stack(Transformer.from_crs(4326, MESH_EPSG, always_xy=True).transform(
+    *np.asarray(recipe["open_boundary_lonlat"], float).T))
+_got = mesh.nodes[np.asarray(mesh.open_boundaries[0]), :2]
+if not (len(_got) == len(_obc_m) and (np.allclose(_got, _obc_m, rtol=0, atol=1e-3)
+                                      or np.allclose(_got[::-1], _obc_m, rtol=0, atol=1e-3))):
+    raise SystemExit("the build's open boundary is not the recipe's")
 import geopandas as gpd  # noqa: E402
 import shapely  # noqa: E402
 

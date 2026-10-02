@@ -17,15 +17,21 @@ class _UniqueLoader(yaml.SafeLoader):
 
 
 def _mapping(loader, node):
-    out = {}
-    for key_node, value_node in node.value:
+    # Duplicates are looked for among the keys written in this mapping; merge
+    # keys (<<) are then expanded as SafeLoader does, an explicit key
+    # overriding a merged one (review round 22 F5).
+    seen = set()
+    for key_node, _value in node.value:
+        if key_node.tag == "tag:yaml.org,2002:merge":
+            continue
         key = loader.construct_object(key_node, deep=True)
-        if key in out:
+        if key in seen:
             mark = key_node.start_mark
             raise ValueError(f"duplicate key {key!r} at line {mark.line + 1}, "
                              f"column {mark.column + 1}")
-        out[key] = loader.construct_object(value_node, deep=True)
-    return out
+        seen.add(key)
+    loader.flatten_mapping(node)
+    return loader.construct_mapping(node, deep=True)
 
 
 _UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)

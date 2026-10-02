@@ -649,7 +649,13 @@ def run_qa(
                 bad |= ~np.isfinite(arr) | (arr != np.round(arr))
         return int(bad.sum())
 
+    # a masked value is unknown, not the data under the mask (review round 22
+    # F7): any masked coordinate, depth or index fails integrity
+    n_masked = sum(int(np.ma.count_masked(a)) for a in
+                   (mesh.nodes, mesh.depths, mesh.elements, *mesh.open_boundaries,
+                    *(s for _t, s in mesh.land_boundaries)) if np.ma.isMaskedArray(a))
     bad_idx = _bad_ids(mesh.elements, integer_only=True, ndim=2) if ne else 0
+    bad_idx += n_masked
     # non-finite coordinates fail here and end the run before any geometry
     # is built from them (round 17 F7)
     # numeric (NP, >=2) coordinates, checked without a conversion that could

@@ -221,7 +221,14 @@ def _interval(value: str, text: str) -> timedelta:
         dte, isplit = _nml_value(text, "EXTSTEP_SECONDS"), _nml_value(text, "ISPLIT")
         if dte is None or isplit is None:
             raise ValueError("NC_OUT_INTERVAL in cycles needs EXTSTEP_SECONDS and ISPLIT")
-        seconds = n * _fortran_float(dte) * int(_fortran_float(isplit))
+        # a finite positive step and a positive whole ISPLIT, checked before
+        # any arithmetic (review round 22 F4)
+        step, split = _fortran_float(dte), _fortran_float(isplit)
+        if not (math.isfinite(step) and step > 0):
+            raise ValueError(f"EXTSTEP_SECONDS = {dte!r} is not a finite positive step")
+        if not (math.isfinite(split) and split >= 1 and split == int(split)):
+            raise ValueError(f"ISPLIT = {isplit!r} is not a positive whole number")
+        seconds = n * step * int(split)
     else:
         seconds = n * {"seconds": 1, "minutes": 60, "hours": 3600, "days": 86400}[unit]
     # finite and positive, or the gap and coverage checks mean nothing
@@ -229,9 +236,12 @@ def _interval(value: str, text: str) -> timedelta:
     if not (math.isfinite(seconds) and seconds > 0):
         raise ValueError(f"NC_OUT_INTERVAL = {value!r} is not a finite positive interval")
     try:
-        return timedelta(seconds=seconds)
+        out = timedelta(seconds=seconds)
     except OverflowError:
         raise ValueError(f"NC_OUT_INTERVAL = {value!r} is too long") from None
+    if out <= timedelta(0):                 # below a microsecond
+        raise ValueError(f"NC_OUT_INTERVAL = {value!r} rounds to zero")
+    return out
 
 
 def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> dict:
@@ -263,6 +273,7 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
     end = first = interval = None
     nml_path = run / nml
     nml_text = ""
+    start_parsed = None
     vals: dict[str, str | None] = {}
     if not nml_path.exists():
         reasons.append(f"no namelist {nml}")
@@ -285,7 +296,10 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                 return None
 
         end = _date("END_DATE")
-        first = _date("NC_FIRST_OUT") or _date("START_DATE")
+        # START_DATE on its own, always: a valid NC_FIRST_OUT used to hide a
+        # bad one (review round 22 F2)
+        start_parsed = _date("START_DATE")
+        first = _date("NC_FIRST_OUT") or start_parsed
         v = vals["NC_OUT_INTERVAL"]
         if v is not None:
             # present but unreadable fails closed: it used to switch the gap
@@ -325,10 +339,7 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
             reasons.append(f"the namelist's grid {gpath} cannot be read for its counts")
     # a run must integrate over a positive interval: END_DATE after
     # START_DATE (output may start as late as END_DATE; review round 12 F5)
-    try:
-        start = _parse_time(vals["START_DATE"]) if vals.get("START_DATE") else None
-    except (ValueError, OverflowError):
-        start = None                       # reported above
+    start = start_parsed if nml_path.exists() else None   # parsed once, above
     if nml_path.exists() and start is None and not vals.get("START_DATE"):
         reasons.append(f"no START_DATE found in {nml}")
     if end is not None and start is not None and end <= start:

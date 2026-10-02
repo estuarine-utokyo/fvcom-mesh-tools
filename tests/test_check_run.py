@@ -340,3 +340,21 @@ def test_history_past_end_date_and_bad_timing_controls_fail(tmp_path):
     for v in ("seconds = 0", "seconds = 1e999"):
         with pytest.raises(ValueError):
             _interval(v, "")
+
+
+def test_start_date_is_checked_on_its_own_and_cycle_controls_too(tmp_path):
+    """Review round 22 F2 and F4."""
+    from fvcom_mesh_tools.cli.check_run import _interval
+
+    run = _run(tmp_path)
+    nml = run / "m2_run.nml"
+    nml.write_text(nml.read_text().replace("2020-01-01 00:00:00", "garbage")
+                   + " NC_FIRST_OUT = '2020-01-01 00:00:00',\n")
+    info = check_run(run)
+    assert not info["ok"] and any("START_DATE" in r for r in info["reasons"])
+    for text in (" EXTSTEP_SECONDS = 1, ISPLIT = 1e999,", " EXTSTEP_SECONDS = -1, ISPLIT = -10,",
+                 " EXTSTEP_SECONDS = 1, ISPLIT = 1.9,"):
+        with pytest.raises(ValueError):
+            _interval("cycles = 1", text)
+    with pytest.raises(ValueError):
+        _interval("seconds = 1e-9", "")

@@ -551,3 +551,19 @@ def test_an_extra_coordinate_column_does_not_change_planar_qa():
     tall = run_qa(mesh, coords="metric", channel_check=False)
     assert [c.passed for c in flat.checks] == [c.passed for c in tall.checks]
     assert not flat.passed
+
+
+@pytest.mark.parametrize("what", ["nodes", "depths", "elements", "obc"])
+def test_masked_mesh_values_fail_integrity(what):
+    """Review of the extend tools, round 22 F7."""
+    mesh = _pristine()
+    if what == "obc":
+        c = np.asarray(mesh.open_boundaries[0])
+        mesh.open_boundaries = [np.ma.masked_array(c, mask=[True] + [False] * (len(c) - 1))]
+    else:
+        a = np.asarray(getattr(mesh, what))
+        mask = np.zeros(a.shape, bool)
+        mask.flat[0] = True
+        setattr(mesh, what, np.ma.masked_array(a, mask=mask))
+    report = run_qa(mesh, coords="metric", channel_check=False)
+    assert not _check(report, "node_index_valid").passed

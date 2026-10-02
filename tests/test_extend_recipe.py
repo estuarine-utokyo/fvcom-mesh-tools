@@ -150,3 +150,10 @@ def test_a_repeated_key_is_refused(tmp_path):
     p.write_text(p.read_text() + "case: TokyoBayEnshu\n")
     with pytest.raises(ValueError, match="duplicate key 'case'"):
         load_extend_recipe(p)
+
+
+def test_merge_keys_still_work():
+    """Review round 22 F5."""
+    from fvcom_mesh_tools.yaml_strict import load_unique
+
+    assert load_unique("d:\n  <<: {a: 1, b: 2}\n  b: 3\n") == {"d": {"a": 1, "b": 3}}

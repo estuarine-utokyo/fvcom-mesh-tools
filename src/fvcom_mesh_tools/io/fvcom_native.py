@@ -340,6 +340,13 @@ def _check_exportable(mesh: Fort14Mesh) -> None:
     or boundary indices that are not whole numbers in ``[0, NP)``, or
     coordinates and depths that are not finite (review of the extend tools,
     rounds 6 F9 and 7 F4)."""
+    # masked values are unknown, not the data under the mask (round 22 F7)
+    for what, a in (("nodes", mesh.nodes), ("depths", mesh.depths),
+                    ("elements", mesh.elements), *(("an open boundary", c)
+                                                   for c in mesh.open_boundaries),
+                    *(("a land boundary", c) for _t, c in mesh.land_boundaries)):
+        if np.ma.is_masked(a):
+            raise ValueError(f"{what} has masked values")
     nodes = np.asarray(mesh.nodes)
     depths = np.asarray(mesh.depths)
     n = len(nodes)
@@ -626,6 +633,12 @@ def read_obc(path: str | Path, with_types: bool = False):
         raise ValueError(f"{path.name}: expected exactly {n} OBC rows, found {len(rows)}")
     if any(len(r) < 3 for r in rows):
         raise ValueError(f"{path.name}: every OBC row needs 'I NODE TYPE'")
+    # all three fields are integers, the counter too (FVCOM reads it as one;
+    # review round 22 F8)
+    try:
+        [int(r[0]) for r in rows]
+    except ValueError:
+        raise ValueError(f"{path.name}: an OBC row counter is not an integer") from None
     ids = np.array([int(r[1]) for r in rows], dtype=np.int64) - 1
     types = np.array([int(r[2]) for r in rows], dtype=np.int64)
     if not ((types >= 1) & (types <= 10)).all():
