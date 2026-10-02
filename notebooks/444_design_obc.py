@@ -36,6 +36,11 @@ from fvcom_mesh_tools.obc_design import (  # noqa: E402
 MESH_EPSG = 32654          # the base mesh's plane (UTM 54N)
 design_path = Path(sys.argv[1]).resolve()
 out_csv = Path(sys.argv[2]).resolve()
+# no product may be the design itself, by name or by a hard link (review
+# round 17 F3): publication would replace the recipe
+for prod in (out_csv, out_csv.with_suffix(".json"), out_csv.with_suffix(".png")):
+    if prod == design_path or (prod.exists() and prod.samefile(design_path)):
+        raise SystemExit(f"{prod} would overwrite the design {design_path}")
 cfg = yaml.safe_load(design_path.read_text())
 DATA = Path(os.environ["DATA_DIR"])
 

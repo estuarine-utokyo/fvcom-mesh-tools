@@ -12,7 +12,7 @@ set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
 . jobs/octopus/common.sh 422_base_rfactor 4
 case $(hostname -s) in oct-cpu*) ;; *) echo 'Compute nodes only'; exit 1 ;; esac
-G=$HOME/Github/TB-FVCOM/input/goto2023/grid
+G=${WORK_DIR:?set WORK_DIR}/Github/TB-FVCOM/input/goto2023/grid   # not $HOME (round 17 F2)
 python notebooks/424_base_rfactor.py "$G/TokyoBay_grd.dat" \
     "$G/TokyoBay_dep.dat" "$G/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat"
 echo "--- the finished patch itself"

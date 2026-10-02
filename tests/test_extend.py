@@ -487,3 +487,19 @@ def test_frozen_base_needs_the_whole_interface():
     for ib in ([], [1], [1.9, 2.9]):
         with pytest.raises(ValueError):
             verify_frozen_base(base, base, ib)
+
+
+def test_merge_tolerance_must_be_finite_and_closed_base_counts_zero_edges():
+    """Review round 17 F4 and F8."""
+    from fvcom_mesh_tools.extend import merge_outer, verify_frozen_base
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    base = Fort14Mesh("b", np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
+                      np.full(4, 5.0), np.array([[0, 1, 2], [0, 2, 3]]), [np.array([1, 2])], [])
+    outer = np.array([[1.0, 0.0], [1.0, 1.0], [2.0, 0.0], [2.0, 1.0]]) + 5000.0
+    for tol in (np.nan, np.inf, -1.0):
+        with pytest.raises(ValueError, match="tol_m"):
+            merge_outer(base, outer, np.array([[0, 2, 1], [2, 3, 1]]), [0, 1], [1, 2], [2, 3],
+                        tol_m=tol)
+    closed = Fort14Mesh("c", base.nodes, base.depths, base.elements, [], [])
+    assert verify_frozen_base(closed, closed, [])["n_interface_edges"] == 0

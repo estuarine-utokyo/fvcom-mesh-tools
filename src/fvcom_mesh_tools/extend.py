@@ -201,6 +201,10 @@ def merge_outer(base: Fort14Mesh, outer_nodes, outer_elements, interface_outer,
     """
     from fvcom_mesh_tools.io.fvcom_native import _indices
 
+    # a NaN or infinite tolerance would accept any interface (round 17 F4)
+    if not (isinstance(tol_m, (int, float, np.integer, np.floating)) and np.isfinite(tol_m)
+            and tol_m >= 0):
+        raise ValueError(f"tol_m must be finite and non-negative, not {tol_m!r}")
     if (np.asarray(base.nodes).dtype != np.float64 or np.asarray(base.depths).dtype != np.float64
             or np.asarray(base.elements).dtype != np.int64):
         raise ValueError(f"the base must be float64 nodes and depths and int64 elements "
@@ -299,7 +303,7 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
             raise ValueError(f"interface edge {a}-{b}: the base and the outer element are "
                              "on the same side (they overlap)")
     return {"n_base_nodes": nb, "n_base_elements": eb,
-            "n_interface_edges": int(len(ib) - 1),
+            "n_interface_edges": len(want),        # edges verified (round 17 F8)
             "n_nodes": merged.n_nodes, "n_elements": merged.n_elements}
 
 

@@ -122,10 +122,13 @@ M7001 is licensed survey data and is not public. The depth ladder
   and submit there.
 - **Compute nodes** run everything else, through `qsub`. The job scripts are
   in `jobs/octopus/`.
-- **Paths in the job scripts are this account's.** The accounting group is
-  `G16445`; the FVCOM binary is
-  `/octfs/work/G16445/v61021/Github/FVCOM/src/fvcom`; the scratch directory is
-  under `/octfs/work/G16445/v61021/scratch`. Another user edits them.
+- **Paths come from the environment, set once in the login profile:**
+  `$DATA_DIR` (input data) and `$WORK_DIR` (repositories, conda, scratch,
+  runs); a job stops if either is unset. The FVCOM executable is
+  `$WORK_DIR/Github/FVCOM/src/fvcom` unless `FMESH_FVCOM` names another,
+  and its libraries are `FVCOM_LIBS` (default in `jobs/octopus/common.sh`).
+  The only account-specific setting left in the scripts is the accounting
+  group, `#PBS --group=G16445`, which another group changes.
 - **Monitoring:** start a monitor after every `qsub`, and read the log when
   the job ends.
 

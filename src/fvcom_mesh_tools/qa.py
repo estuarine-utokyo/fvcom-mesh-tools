@@ -501,6 +501,35 @@ def _sort_asc(idx: np.ndarray, values: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
+def _check_qa_controls(**c) -> None:
+    def real(v):
+        return (isinstance(v, (int, float, np.integer, np.floating))
+                and not isinstance(v, (bool, np.bool_)) and np.isfinite(v))
+
+    def whole(v):
+        return isinstance(v, (int, np.integer)) and not isinstance(v, (bool, np.bool_))
+
+    bad = []
+    if not (real(c["min_angle_deg"]) and real(c["max_angle_deg"])
+            and 0 <= c["min_angle_deg"] < c["max_angle_deg"] <= 180):
+        bad.append("angles: 0 <= min_angle_deg < max_angle_deg <= 180")
+    for k in ("max_area_change", "max_obc_perp_dev_deg", "tiny_area_m2", "duplicate_tol_m",
+              "land_interior_m"):
+        if not (real(c[k]) and c[k] >= 0):
+            bad.append(f"{k}: finite and >= 0")
+    if not real(c["min_depth_m"]):
+        bad.append("min_depth_m: finite")
+    if not (whole(c["max_valence"]) and c["max_valence"] >= 3):
+        bad.append("max_valence: a whole number >= 3")
+    if not (whole(c["max_offenders"]) and c["max_offenders"] >= 0):
+        bad.append("max_offenders: a whole number >= 0")
+    for k in ("min_channel_wh_gate", "min_dt_s"):
+        if c[k] is not None and not (real(c[k]) and c[k] > 0):
+            bad.append(f"{k}: None or finite and > 0")
+    if bad:
+        raise ValueError("QA controls out of range: " + "; ".join(bad))
+
+
 def run_qa(
     mesh: Fort14Mesh,
     *,
@@ -530,7 +559,19 @@ def run_qa(
     ``min_channel_wh_gate`` and ``min_dt_s`` turn the corresponding
     informational checks into gates when supplied. ``coords`` may be
     ``"auto"`` (default), ``"lonlat"``, or ``"metric"``.
+
+    Thresholds must be finite and in range, and a named land dataset must
+    exist: a NaN threshold made its gate pass, and a missing dataset dropped
+    its gate (review of the extend tools, round 17 F5, F6).
     """
+    _check_qa_controls(min_angle_deg=min_angle_deg, max_angle_deg=max_angle_deg,
+                       max_area_change=max_area_change, max_valence=max_valence,
+                       min_depth_m=min_depth_m, max_obc_perp_dev_deg=max_obc_perp_dev_deg,
+                       min_channel_wh_gate=min_channel_wh_gate, min_dt_s=min_dt_s,
+                       tiny_area_m2=tiny_area_m2, duplicate_tol_m=duplicate_tol_m,
+                       max_offenders=max_offenders, land_interior_m=land_interior_m)
+    if land_solid_shp is not None and not Path(land_solid_shp).exists():
+        raise FileNotFoundError(f"land_solid_shp {land_solid_shp} does not exist")
     n_nodes = mesh.n_nodes
     ne = mesh.n_elements
     # Validated, then normalised: whole floats and unsigned ids in range are
@@ -606,13 +647,19 @@ def run_qa(
         return int(bad.sum())
 
     bad_idx = _bad_ids(mesh.elements, integer_only=True, ndim=2) if ne else 0
+    # non-finite coordinates fail here and end the run before any geometry
+    # is built from them (round 17 F7)
+    _xy = np.asarray(mesh.nodes, dtype=float)
+    n_bad_xy = (int((~np.isfinite(_xy[:, :2])).any(axis=1).sum())
+                if _xy.ndim == 2 and _xy.shape[1] >= 2 else max(int(n_nodes), 1))
     for s in [*mesh.open_boundaries, *(s for _ib, s in mesh.land_boundaries)]:
         bad_idx += _bad_ids(s)
     checks.append(QACheck(
-        "node_index_valid", "fvcom", True, bad_idx == 0,
-        f"0 <= id < {n_nodes}", f"out-of-range refs = {bad_idx}", bad_idx,
+        "node_index_valid", "fvcom", True, bad_idx + n_bad_xy == 0,
+        f"0 <= id < {n_nodes}, coordinates finite",
+        f"out-of-range refs = {bad_idx}, non-finite nodes = {n_bad_xy}", bad_idx + n_bad_xy,
     ))
-    if bad_idx > 0 or ne == 0 or n_nodes == 0:
+    if bad_idx > 0 or n_bad_xy > 0 or ne == 0 or n_nodes == 0:
         if ne == 0 or n_nodes == 0:
             checks.append(QACheck(
                 "no_isolated_elements", "fvcom", True, False,
@@ -1131,7 +1178,7 @@ def run_qa(
         data={"dt_min_s": dt_min, "worst_element": int(dt_elem.argmin())},
     ))
 
-    if land_solid_shp is not None and Path(land_solid_shp).exists():
+    if land_solid_shp is not None:
         # mesh-over-land tripwire (I11/J11 wetland incident): no
         # element centroid may lie in the DEEP interior (more than
         # land_interior_m inside) of the solid pre-prep land;

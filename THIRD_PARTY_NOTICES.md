@@ -10,8 +10,10 @@ backend, and how each combines with the GPL.
 
 Any backend whose license is compatible with GPL-3.0 may be imported. The
 compatible licenses in use are permissive ones (CC0, MIT), GPL-3.0 itself
-and GPL-2.0-or-later. A component whose terms add restrictions the GPL does
-not allow (JIGSAW's core) is never imported or bundled.
+and GPL-2.0-or-later. Components whose terms add restrictions the GPL does
+not allow (Triangle, JIGSAW) are reached only by the optional OCSMesh paths
+below, for private use, and are never bundled or redistributed with this
+package.
 
 ## Backends imported as Python modules (GPL-compatible)
 
@@ -59,5 +61,5 @@ pip install --no-deps -e .             # this package, editable
 
 | You ship | Required to comply with |
 |----------|------------------------|
-| `fvcom-mesh-tools`, alone or with `oceanmesh`, OCSMesh, gmsh, MeshKernelPy, stompy, PyFVCOM | GPL-3.0-or-later (with the permissive components' attribution notices) |
-| anything that also bundles the JIGSAW core | not permitted under the GPL; ship JIGSAW separately, if at all |
+| `fvcom-mesh-tools`, alone or with `oceanmesh`, gmsh, MeshKernelPy, stompy, PyFVCOM | GPL-3.0-or-later (with the permissive components' attribution notices) |
+| anything that also bundles OCSMesh, Triangle or JIGSAW | not permitted: those are private-use backends (above); a user installs them separately |

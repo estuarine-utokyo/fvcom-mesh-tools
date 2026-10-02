@@ -499,3 +499,23 @@ def test_a_lone_element_is_isolated():
                    np.full(3, 10.0), np.array([[0, 1, 2]]), [], [])
     report = run_qa(m, coords="metric", channel_check=False)
     assert not _check(report, "no_isolated_elements").passed
+
+
+def test_qa_refuses_nan_thresholds_and_a_missing_land_file(tmp_path):
+    """Review of the extend tools, round 17 F5 and F6."""
+    mesh = _pristine()
+    for kw in ({"min_depth_m": float("nan")}, {"max_valence": float("nan")},
+               {"min_angle_deg": 40.0, "max_angle_deg": 30.0}):
+        with pytest.raises(ValueError, match="QA controls"):
+            run_qa(mesh, channel_check=False, **kw)
+    with pytest.raises(FileNotFoundError):
+        run_qa(mesh, channel_check=False, land_solid_shp=tmp_path / "none.shp")
+
+
+def test_non_finite_coordinates_fail_without_a_crash():
+    """Review of the extend tools, round 17 F7."""
+    mesh = _pristine()
+    mesh.nodes = mesh.nodes.astype(float)
+    mesh.nodes[5] = np.nan
+    report = run_qa(mesh, channel_check=False)
+    assert not _check(report, "node_index_valid").passed
