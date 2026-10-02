@@ -7348,3 +7348,325 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F5 | minor | tests (NC_FIRST_OUT before and after the run) | yes | fixed, 9e3cd06; test |
 | F6 | minor | tests (masked cor, sponge) | yes | fixed, 9e3cd06; test |
 | F7 | minor | tests ("1_0", full-width digit) | yes | fixed, 9e3cd06; test |
+
+## Round 24
+
+### Answer (verbatim)
+
+Six substantiated **minor** findings remain. One is a regression introduced by `9e3cd06`. No files were modified.
+
+## Previous-finding status
+
+Ranges are inclusive; the status applies to every finding in each range. **RESOLVED** refers to the reported case, with newly discovered gaps listed separately below. These assessments use current code, recorded triage and the read-only checks described below; production verification was not repeated.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1-F27; R2-F22; R3-F14; F1 in R4–R15 | RESOLVED | Approved GPL relicensing resolves the original import-policy conflict. |
+| R1-F1–F26, F28–F29 | RESOLVED | Source handling, limiting, spacing, geometry, serialization, provenance and reservations address the original cases. F4 follows the approved warning policy. |
+| R2-F1–F21 | RESOLVED | Reservations, publication recovery, re-depth validation, interpolation and geometry checks address the reported cases. |
+| R3-F1–F13 | RESOLVED | Final-field reporting, spacing, ladders, serialization and timestep ordering are corrected. F1 follows the approved warning policy. |
+| R4-F2–F14 | RESOLVED | Interpolation, overlap, guide containment, recovery, identity and runtime fixes remain present. |
+| R5-F2–F10 | RESOLVED | Flip guards, parsed-byte identity, continuous intersections, recovery and finite-depth checks remain present. |
+| R6-F2–F11 | RESOLVED | Window, completion, failure-exit, inventory, native-value, quoting and path checks address the original cases. |
+| R7-F2–F12 | RESOLVED | Whole-source interpolation, normalization, protected relocation, CSV consumption and provenance checks remain present. |
+| R8-F2–F13 | RESOLVED | Rollback, types, sponge precision, parsing, caches, axis order and manifest selection remain corrected. |
+| R9-F2–F14 | RESOLVED | Concurrency, recovery, indices, dtypes, trimming, parsing and absolute library paths address the original cases. |
+| R10-F2–F14 | RESOLVED | Isolation, field validation, recovery tracking, parsing, QA normalization and serialization remain corrected. |
+| R11-F2–F6, F8 | RESOLVED | Finishing isolation, malformed-array handling, relocation and path checks remain corrected. |
+| R11-F7 | PARTIAL | Ordinary unsupported holes are rejected, but holes bounded entirely by base nodes escape checking: finding 3. |
+| R12-F2–F7 | RESOLVED | Accepted-product hashes, benchmark isolation, dimensions, duration, advancement and serialization address the original cases. |
+| R13-F2–F9 | RESOLVED | Locks, paths, history validation, accepted-product binding, inventories, titles and sizing controls remain corrected. |
+| R14-F2–F9 | RESOLVED | Locks, marker ordering, scalar/lattice validation, scratch creation, fractional cadence and backend selection remain corrected. |
+| R15-F2–F7 | RESOLVED | Land coverage follows the accepted resolution principle and uses actual edges; the remaining fixes remain present. |
+| R16-F1–F6 | RESOLVED | Notices/environment follow the approved optional-backend policy; ownership, controls and complete-interface checks remain corrected. |
+| R17-F1–F9 | RESOLVED | Environment paths, product protection, QA controls, land handling, coordinates and interface counts remain corrected. |
+| R18-F1–F6 | RESOLVED | Boundary types, protected products, QA array checks and reservation ownership address the original cases. |
+| R19-F1–F7 | RESOLVED | Actual-edge erosion, reservation tokens, boundary types, coordinate slicing, atomic rejection, ordered IDs and every-stack identity checks remain present. |
+| R20-F1–F9 | RESOLVED | Generation/history identities, GRD records, erosion, explicit dates/format/timezone and job headers address the original cases. |
+| R21-F1–F6, F8–F11 | RESOLVED | Original history, base/land identity, native-record, date, DEM-mask, timing-control, wrapper and dead-code cases are addressed. |
+| R21-F7 | PARTIAL | Ordinary and merged-map duplicates are rejected, but repeated written merge keys silently override: finding 2. |
+| R22-F1 | RESOLVED | Generation boundary/base identities and ordered boundary coordinates are checked. |
+| R22-F2 | RESOLVED | `START_DATE` is parsed independently. |
+| R22-F3 | RESOLVED | 447 rechecks land inventory and generated mesh identity before acceptance. |
+| R22-F4 | RESOLVED | Invalid cycle controls and intervals rounding to zero are rejected. |
+| R22-F5 | PARTIAL | Simple legal merges work; reusing an overriding merged alias is now rejected: finding 1. |
+| R22-F6 | RESOLVED | The reported large-hole/tiny-islet case is rejected. |
+| R22-F7 | RESOLVED | QA and native writers reject masked required mesh arrays. Finding 4 concerns masks discarded before those checks. |
+| R22-F8 | RESOLVED | All three OBC row fields receive ASCII integer validation. Finding 5 concerns other numeric fields. |
+| R22-F9 | RESOLVED | Current and collected land identities are bound to the accepted build. |
+| R23-F1 | RESOLVED | Original inline, aliased and sequence-merge duplicate cases are rejected. The fix introduces finding 1. |
+| R23-F2 | RESOLVED | The reported missing-element hole now fails the positive-land and strict water-area requirements. Finding 3 bypasses those requirements entirely. |
+| R23-F3 | RESOLVED | 453 compares collected land and base digests with accepted generation identities before consumption; confirmed by code inspection. |
+| R23-F4 | RESOLVED | Masked `Times` characters are rejected; reproduced in memory. |
+| R23-F5 | RESOLVED | First output outside `[START_DATE, END_DATE]` is rejected; reproduced in memory. |
+| R23-F6 | RESOLVED | Masked Coriolis and sponge fields are rejected; reproduced in memory. |
+| R23-F7 | RESOLVED | Underscore and Unicode spellings in OBC row fields are rejected; reproduced in memory. |
+| Generation-nondeterminism hypothesis; R15 small-island objection | WITHDRAWN | Supplied production measurements contradict the hypothesis; the owner permits dropping land below mesh resolution. |
+
+## Findings
+
+1. **Minor — Reusing a legal overriding YAML merge alias raises a false duplicate error. Introduced by `9e3cd06`.**
+
+   **Location:** [yaml_strict.py:50](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/yaml_strict.py:50).
+
+   **Reproduction:**
+
+   ```python
+   load_unique(
+       "x: &x {a: 1}\n"
+       "y: &y {<<: *x, a: 2}\n"
+       "z: {<<: *y}\n"
+   )
+   ```
+
+   `yaml.safe_load()` correctly gives `a: 2` in both `y` and `z`. The current loader instead raises:
+
+   ```text
+   ValueError: duplicate key 'a' at line 2, column 16
+   ```
+
+   `flatten_mapping()` mutates the aliased mapping to contain inherited and explicit entries. A later `_check_keys()` call uses a fresh visited set and checks that already-flattened mapping, mistaking a legitimate override for a written duplicate.
+
+   **Fix:** Validate the original composed mapping graph before any flattening, using loader-wide visitation or cached original-key validation. Preserve explicit overrides of merged values.
+
+2. **Minor — Repeated written YAML merge keys bypass duplicate rejection. Pre-existing residual gap.**
+
+   **Location:** [yaml_strict.py:31](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/yaml_strict.py:31).
+
+   **Reproduction:**
+
+   ```python
+   load_unique(
+       "depths:\n"
+       "  <<: {rfactor: 0.2}\n"
+       "  <<: {rfactor: 0.8}\n"
+   )
+   ```
+
+   This returns `{"depths": {"rfactor": 0.8}}` without an error. Merge keys take the branch that bypasses `seen`, allowing conflicting scientific settings to be silently overwritten.
+
+   **Fix:** Reject a second written `<<` key in the same mapping. Continue allowing one merge key containing a sequence of mappings and legitimate explicit overrides.
+
+3. **Minor — New water holes bounded entirely by base nodes are exempt from island validation. Pre-existing.**
+
+   **Location:** [extend.py:373](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:373).
+
+   The condition `max(loop) < n_base_nodes` assumes that any such loop existed in the base. A new hole between nonconsecutive nodes of a concave interface can also satisfy it.
+
+   **In-memory reproduction:** Used a 9×9 node grid at 1 km spacing, with standard two-triangle cells and the two lone outer corners retriangulated. The base contains cells with `i >= 6`, plus:
+
+   ```text
+   (3,2), (4,2), (5,2), (3,3), (5,3), (5,5)
+   ```
+
+   After placing base nodes first, removed the outer triangle originally indexed `[40, 41, 50]`, now `[19, 20, 24]`. All three nodes are below the base-node count of 38. Its removal preserves every constrained interface edge. The final OBC contains only new nodes.
+
+   Actual results:
+
+   ```text
+   base:   38 nodes, 44 elements
+   merged: 81 nodes, 127 elements
+   frozen-base verification: passed, 18 interface edges
+   overlap check: passed
+   island check: n_new_islands=0, max_water_in_hole_per_element=0
+   land-cover check: passed
+   QA: 26/26
+   ```
+
+   With empty land geometry, the omitted triangle is **500,000 m² of missing open water**, yet the island check never examines it.
+
+   **Fix:** Identify preserved base holes from the base’s actual boundary topology or geometry. Exempt only those unchanged holes; validate every newly created hole regardless of its node IDs.
+
+4. **Minor — Merge and frozen-base verification discard masked depths, promoting unknown values to accepted depths. Pre-existing.**
+
+   **Location:** [extend.py:239](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:239), [extend.py:259](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:259), [extend.py:526](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:526).
+
+   **Reproduction:** Merged two adjacent square meshes, each containing four nodes and two triangles. The base depths were:
+
+   ```python
+   np.ma.array([5., 6., 7., 8.], mask=[True, False, False, False])
+   ```
+
+   After filling new depths, the merged depths were an ordinary array:
+
+   ```text
+   [5., 6., 7., 8., 8., 8.]
+   ```
+
+   `verify_frozen_base()` passed, and native export validation accepted the result. The unknown first depth had become a known 5 m value. The verifier also discards the original mask through `np.ascontiguousarray()`.
+
+   Separately, `rfactor_smooth_free()` accepted a masked fixed depth of 10 m and used it to smooth its free neighbour. Thus downstream mask guards cannot protect values whose masks have already disappeared.
+
+   **Fix:** Reject masked required inputs before conversion in merge, frozen-base verification and limiting. Apply the policy consistently to required coordinates, depths, connectivity and limiter inputs.
+
+5. **Minor — Native headers, GRD fields and DEP fields still accept Python-only numeric spellings. Pre-existing.**
+
+   **Location:** [fvcom_native.py:543](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:543), [fvcom_native.py:572](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:572), [fvcom_native.py:607](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:607).
+
+   **Actual reader reproductions using mocked in-memory files:**
+
+   | Input alteration | Accepted result |
+   |---|---|
+   | OBC header `OBC Node Number = ２` | Two OBC records accepted |
+   | GRD cell counter `１` | Cell accepted |
+   | GRD connectivity token `0_1` | Interpreted as node 1 |
+   | DEP depth token `1_0` | Interpreted as 10 m |
+
+   Python `int()` and `float()` accept these spellings. FVCOM consumes the corresponding fields through list-directed Fortran reads, as shown in [mod_input.F:4470](/octfs/work/G16445/v61021/Github/FVCOM/src/mod_input.F:4470), [mod_input.F:4606](/octfs/work/G16445/v61021/Github/FVCOM/src/mod_input.F:4606) and [mod_input.F:4913](/octfs/work/G16445/v61021/Github/FVCOM/src/mod_input.F:4913). These spellings cannot establish valid native records.
+
+   **Fix:** Share ASCII integer and supported Fortran-real lexical validation across all consumed numeric fields and headers before conversion. The OBC row-field fix alone is insufficient.
+
+6. **Minor — `check_run` accepts timestamps on an unrelated dimension. Pre-existing.**
+
+   **Location:** [check_run.py:376](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/cli/check_run.py:376).
+
+   **Reproduction:** Created a diskless NetCDF history with:
+
+   ```text
+   time=2, stamp=2, DateStrLen=26
+   Times(stamp, DateStrLen)
+   zeta(time, node)
+   ua(time, nele)
+   va(time, nele)
+   ```
+
+   `Times` held valid January 1–2, 2020 strings. The fields were finite, the mocked namelist specified matching dates and cadence, and the log contained `TADA!`.
+
+   The actual checker returned:
+
+   ```text
+   ok=True
+   reasons=[]
+   n_records=2
+   ```
+
+   Equal lengths conceal the fact that timestamps are not indexed by the fields’ record dimension. The checker validates field dimension names but never validates `Times` dimensions.
+
+   **Fix:** Require the supported two-dimensional character layout with `time` first, and verify its record count against the `time` dimension before decoding.
+
+## Verification
+
+- Read-only pytest selection: **108 passed, 116 deselected, 6.73 s**. Used `pytest.main()` with `-q -s -p no:cacheprovider`, disabled bytecode/plugin autoload, and an in-memory collection plugin excluding filesystem-writing fixtures and optional-backend tests.
+- Scoped `ruff check --no-cache`: **passed**.
+- `bash -n` on all **56 OCTOPUS scripts**: **passed**.
+- Executed the synthetic reproductions above. The initial hole fixture failed two unrelated QA checks; correcting its outer-corner triangulation and OBC endpoints produced the reported **26/26** result.
+- Portability changes and datum reporting were inspected; no additional defect was substantiated there.
+- Full-suite, production mesh, production re-depth and FVCOM integration runs were **not performed**. No shared-data files were read and no batch jobs were submitted.
+- Git status remained unchanged; the pre-existing untracked OBC PNG was untouched.
+
+## Verdict
+VERDICT: FAIL (0 blocker, 0 major, 6 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 24: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-23 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 23 (your previous answer; 7 minor findings, no major) was fixed in
+9e3cd06; read it. Per finding:
+- F1 `yaml_strict._check_keys` recurses into merged mappings (inline,
+  aliased, sequences) before flattening; visited nodes tracked.
+- F2 `check_island_holes` requires positive land in the hole AND water
+  strictly below one local element.
+- F3 453 compares the provenance's combined land and base digests with the
+  accepted generation record.
+- F4 masked Times refused.
+- F5 NC_FIRST_OUT in [START_DATE, END_DATE].
+- F6 masked cor and sponge refused.
+- F7 OBC fields must match [+-]?[0-9]+.
+Verification after 9e3cd06: full test suite 1232 passed (batch
+job 124625); on real data 444, 445 (QA 23/23, status ok, nine islands all
+holding land, grd bit-identical to rounds 4-22) and 453 (status ok, land
+and base bound to the accepted build) passed; check_run accepts the two
+real FVCOM smoke histories.
+Owner decision (2026-10-01), unchanged: meshes are made from the real
+depths; the band-floor check (446) and the new-element time-step comparison
+(447, 453) REPORT warnings and do not fail the build. Not a defect.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | test (overriding alias reused) | yes, introduced in round 23 | fixed (graph check before construction), 0e6658a |
+| F2 | minor | test (two << keys) | yes | fixed, 0e6658a |
+| F3 | minor | test (hole among base-id nodes) | yes | fixed (base holes from the base's own loops), 0e6658a; test |
+| F4 | minor | test (masked depths) | yes | fixed, 0e6658a; test |
+| F5 | minor | tests (full-width digits, 1_0); every grid in use still reads | yes | fixed, 0e6658a; tests |
+| F6 | minor | test (Times on another dimension) | yes | fixed, 0e6658a; test |
