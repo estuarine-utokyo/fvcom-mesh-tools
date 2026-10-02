@@ -5109,3 +5109,289 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F5 | minor | code read (hook ran before deselection) | yes | fixed (hookwrapper), 5c394d8; -k and -m runs checked |
 | F6 | minor | test (one triangle) | yes | fixed, 5c394d8; test |
 | F7 | minor | test (name with ..) | yes | fixed, 5c394d8; test |
+
+## Round 16
+
+### Answer (verbatim)
+
+Six findings remain: **2 major, 3 minor, 1 nit**. The repository was not modified.
+
+Status refers to each original finding and reproduction. Ranges below include every finding from rounds 1–15.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1-F27; R2-F22; R3-F14; R4–R15-F1 | RESOLVED | `LICENSE`, `NOTICE`, project metadata and current policy permit oceanmesh imports under GPL-3.0-or-later. The licensing findings below concern different dependencies. |
+| Generation-nondeterminism hypothesis | WITHDRAWN | Supplied repeated production measurements contradict it; no new supporting evidence found. |
+| R1-F1–F26, F28–F29 | RESOLVED | Source handling, numeric validation, serialization, seam checks, reservations, provenance and smoke preparation address the original cases. F4 is resolved under the owner’s warning policy; mandatory timestep rejection is no longer required. |
+| R2-F1–F21 | RESOLVED | Atomic reservation/publication, re-depth checks, interpolation, geometry checks and failure reporting address the original reproductions. |
+| R3-F1–F13 | RESOLVED | Final-field diagnostics, resampling, reusable bands, ladder selection, publication recovery and serialization are corrected. F1 follows the approved warning policy. |
+| R4-F2–F14 | RESOLVED | M2 interpolation, local overlap tolerance, guide placement, recovery, input identity, boundary simplicity and runtime validation are corrected. |
+| R5-F2–F10 | RESOLVED | Flip guards, parsed-byte identity, continuous intersections, recovery protection, early handlers and finite-depth checks address the reported cases. |
+| R6-F2–F11 | RESOLVED | Land-window checks, output-directory handling, completion checks, failure exits, provenance inventories and path guards address the original cases. |
+| R7-F2–F12 | RESOLVED | Whole-source triangulation, index/control validation, protected relocation, verified CSV consumption, identity rechecks and publication ordering are corrected. |
+| R8-F2–F13 | RESOLVED | Rollback, connectivity/types, sponge handling, code identity, namelist parsing, caches, dimension order and manifest selection are corrected. |
+| R9-F2–F14 | RESOLVED | Original concurrency, recovery, index/dtype, parsing, trimming, depth-bound, reader and library-path defects are corrected. |
+| R10-F2–F14 | RESOLVED | Unique destinations, field checks, recovery tracking, parsing, QA normalization, serialization and documentation address the original cases. |
+| R11-F2–F8 | RESOLVED | Finishing products are isolated; malformed arrays fail; relocation restores absence; water-hole checks and spaced paths are handled. |
+| R12-F2–F7 | RESOLVED | Re-depth requires hash-bound acceptance; benchmarks are isolated; record dimensions, duration and advancement are checked; serialization and documentation are corrected. |
+| R13-F2–F9 | RESOLVED | Locks, shorter paths, required dimensions/start time, output advancement, acceptance identity, inventories, titles and sizing validation address the original cases. |
+| R14-F2–F9 | RESOLVED | Staging locks, marker invalidation, real NumPy scalars, lattice normalization, scratch creation, fractional cadence, post-selection backend probing and job documentation are corrected. |
+| R15-F2 | PARTIAL | The small-island reproduction is withdrawn under the owner’s resolution principle. The new gate rejects the ordinary resolvable-land example, but its median calculation has finding 3 below. |
+| R15-F3 | RESOLVED | Both preparation scripts check for existing histories before removing acceptance markers. |
+| R15-F4 | RESOLVED | Complex NumPy gradation is rejected before conversion. |
+| R15-F5 | RESOLVED | Both `-k` and `-m` fault probes pass without probing the deselected backend. |
+| R15-F6 | RESOLVED | QA counts a single element as isolated. |
+| R15-F7 | RESOLVED | Recipe `name` is validated; the default destination is checked beneath `outputs/`. |
+
+1. **Major — permitted OCSMesh imports load GPL-incompatible Triangle.**
+
+   **Location:** [mesh_compose/convert.py:28](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/mesh_compose/convert.py:28), [environment.yml:29](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/environment.yml:29), [THIRD_PARTY_NOTICES.md:50](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/THIRD_PARTY_NOTICES.md:50). The generation adapter also imports OCSMesh at `mesh_engine/ocsmesh.py:86`.
+
+   **Evidence:** In the prescribed environment, converting a three-node mesh reaches this import chain:
+
+   ```text
+   fort14_to_meshdata
+     → ocsmesh.internal
+     → ocsmesh package initialization
+     → ocsmesh.engines.factory
+     → ocsmesh.engines.triangle
+     → import triangle
+   ```
+
+   An in-memory import sentinel raised `FORBIDDEN_TRIANGLE_IMPORT` at that final import. No Triangle engine selection was necessary.
+
+   The [Python wrapper](https://raw.githubusercontent.com/drufat/triangle/master/README.rst) wraps Shewchuk’s native Triangle library. That library restricts sale and inclusion in commercial products, contrary to the repository’s new GPL-compatible-import policy. Its wrapper’s LGPL metadata does not remove the native library’s restrictions. [Triangle author’s licensing statement](https://www.cs.cmu.edu/~quake/triangle.html).
+
+   **Fix:** Remove Triangle from the default environment and require an OCSMesh installation whose permitted paths do not import it. Verify the transitive imports and correct the unconditional redistribution statement. Any retained Triangle functionality needs a separately handled external interface.
+
+2. **Major — the environment-build job imports the explicitly excluded JIGSAW core.**
+
+   **Location:** [build_env.sh:51](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/jobs/octopus/build_env.sh:51), [environment.yml:34](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/environment.yml:34), [THIRD_PARTY_NOTICES.md:31](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/THIRD_PARTY_NOTICES.md:31).
+
+   **Evidence:** The job explicitly imports `jigsawpy`. Importing the installed module reaches:
+
+   ```text
+   jigsawpy/__init__.py:58 → import libsaw
+   jigsawpy/libsaw.py:76   → ctypes.cdll.LoadLibrary("libjigsaw.so")
+   ```
+
+   A mocked native-library loader reproduced that call without loading the core. Thus this smoke import contradicts the stated “never imported” policy.
+
+   The notice also incorrectly identifies the wrappers as LGPL-3.0. Both the installed Python header and the [upstream jigsaw-python license](https://raw.githubusercontent.com/dengwirda/jigsaw-python/master/LICENSE.md) carry restrictive JIGSAW terms.
+
+   **Fix:** Remove `jigsawpy` from this import smoke test and the default environment, retaining it only as a separately handled optional installation if needed. Correct the wrapper-license description and document its actual handling.
+
+3. **Minor — boundary-only contacts can make the land-cover gate accept resolvable covered land. Introduced by `5c394d8`.**
+
+   **Location:** [extend.py:383](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:383), particularly line 389.
+
+   **Evidence:** `predicate="intersects"` includes elements that touch a land piece only along an edge or at a vertex. Their full areas participate in the median despite covering none of the land.
+
+   A conforming, nonoverlapping synthetic mesh with **10 nodes and 12 elements** produced:
+
+   | Measurement | Result |
+   |---|---:|
+   | Triangular land area | 1,732,050.81 m² |
+   | Land covered | 100% |
+   | Elements covering positive land area | 3 |
+   | Area of each covering element | 577,350.27 m² |
+   | Land/local-element ratio | **3.00** |
+   | Additional boundary-only contacts | 9 |
+   | Reported ratio | **1.64948 — accepted** |
+
+   The nine surrounding elements have areas of 952,627.94 or 1,147,483.66 m² and inflate the median. This violates the configured ratio of 2 even under the approved resolution principle.
+
+   This is a gate-level reproduction: ordinary metric QA passed **16/17** gates; its remaining failure was numerical roundoff at an exact 30° angle. It does not establish a production-build acceptance bypass.
+
+   **Fix:** Compute the median from elements with positive-area land overlap, excluding boundary-only contacts with an explicit numerical tolerance.
+
+4. **Minor — invalid acceptance-check controls silently disable checks.**
+
+   **Location:** [extend.py:375](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:375), line 391; also [extend.py:310](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:310).
+
+   **Reproduction:** On the existing 6×6-node synthetic grid, a 9,000,000 m² land square normally fails with ratio **18.0**. However:
+
+   ```python
+   check_land_cover(mesh, land, 0, ratio=np.nan)
+   # accepted; max_covered_area_ratio=18.0, ratio_limit=nan
+
+   check_land_cover(mesh, land, mesh.n_elements + 1)
+   # accepted; n_land_pieces_covered=0
+
+   check_land_cover(mesh, land, -1)
+   # accepted; n_land_pieces_covered=0
+   ```
+
+   Separately, an entirely duplicated outer triangle normally fails `check_no_overlap`, but `rel_tol=np.nan` accepts it.
+
+   **Fix:** Before slicing or comparing, validate the base-element count as an integer in `[0, NE]`, the land ratio as finite and positive, and the overlap tolerance as finite and nonnegative. Invalid controls should raise. The land-check cases are introduced by `5c394d8`; the overlap case is pre-existing.
+
+5. **Minor — frozen-base verification can certify an unmerged base by accepting an incomplete interface. Pre-existing.**
+
+   **Location:** [extend.py:264](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:264).
+
+   **Reproduction:** For the two-triangle square base with open boundary `[1, 2]`:
+
+   ```python
+   verify_frozen_base(base, base, [])
+   # succeeds; n_interface_edges=-1
+
+   verify_frozen_base(base, base, [1])
+   # succeeds; n_interface_edges=0
+   ```
+
+   Its open-boundary edge remains exterior, contrary to the function’s stated contract. On a correctly merged example, passing `[1.9, 2.9]` also succeeds because the indices are silently truncated.
+
+   **Fix:** Validate indices before casting and require the supplied interface to describe the base’s actual open-boundary edges, or derive those edges directly from `base.open_boundaries`. Preserve the legitimate empty-interface case only for bases without an open boundary.
+
+6. **Nit — a current comment still states the superseded oceanmesh import prohibition.**
+
+   **Location:** [446_extend_generate.py:12](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/446_extend_generate.py:12).
+
+   **Evidence:** The comment says oceanmesh is imported in a subprocess and “never from the fvcom_mesh_tools package.” Current package code imports it, and the approved relicensing permits that.
+
+   **Fix:** Describe this script’s retained subprocess organization and, if useful, its historical origin, following the updated comment in notebook 420.
+
+Verification used the prescribed conda environment:
+
+- Read-only pytest selection: **82 passed**, with bytecode, plugin autoload and cache writing disabled.
+- Backend-selection fault probes: **1 passed/2 deselected** with `-k`; **2 passed/1 deselected** with `-m`.
+- Scoped `ruff check --no-cache`: **passed**.
+- `bash -n`: **56 scripts passed**.
+- Synthetic geometry, invalid-control and import/native-load probes reproduced the findings above. Initial pytest capture failed because writable temporary files were unavailable; rerunning with `-s` passed. Dependency probes required cache/JIT mocks before reaching the intended sentinels.
+- No production mesh generation, FVCOM execution, large shared-data reads or batch submissions occurred. Tracked files remained unchanged; the pre-existing untracked boundary PNG remained untouched.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 2 major, 3 minor, 1 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 16: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-15 and their triage are in docs/extend-tools-review-20261001.md.
+
+F27 (GPL imports) is RESOLVED by the owner's decision of 2026-10-02: the
+package is relicensed from Apache-2.0 to GPL-3.0-or-later by its sole
+copyright holder (commit e37a433: LICENSE is the GNU GPL v3 text; NOTICE,
+pyproject `license`, THIRD_PARTY_NOTICES.md, CLAUDE.md's licence policy and
+the docs updated). Importing oceanmesh (GPL-3.0-or-later) is therefore
+allowed; the review contract's "subprocess-only" rule no longer applies.
+Please check the relicensing for consistency (any place still claiming
+Apache-2.0 or forbidding the import, any GPL-incompatible import).
+
+Round 15 (your previous answer; 7 findings) was fixed in 5c394d8; read
+`git show 5c394d8`. Per finding:
+- F1: resolved as above.
+- F2 new `extend.check_land_cover`, run in 447 before writing and in 453:
+  a land piece (true land, base footprint removed) more than half under the
+  new elements and larger than LAND_COVER_RATIO = 2 times the median area
+  of those elements fails. REBUTTAL for the rest: land smaller than the
+  elements over it is dropped on purpose (the owner's resolution principle:
+  what the element size cannot carry goes); your 1.5 km2 island under 5 km
+  elements is such a case. On the real build 2,445 covered pieces, all rocks
+  and islets, have a ratio of at most 1.37. Coastal elements reaching onto
+  land through the coast's approximation are not pieces covered by half.
+- F3 411/414 remove the markers after the reuse checks, before writing.
+- F4 `_grade`: int, float, np.integer, np.floating only.
+- F5 conftest: hookwrapper(trylast); probes after deselection.
+- F6 `no_isolated_elements` for any NE.
+- F7 recipe `name` checked as one component; 445 default output must be
+  under outputs/.
+Verification after 5c394d8: full test suite 1198 passed (batch
+job 123753); on real data 444, the full 445 build (QA 23/23, status ok, 9
+islands on land, land cover: 2,445 covered pieces, maximum ratio 1.37,
+grd bit-identical to rounds 4-14) and 453 (status ok, same land-cover
+result) passed; check_run accepts the two real FVCOM smoke histories.
+Owner decision (2026-10-01), unchanged: meshes are made from the real
+depths; the band-floor check (446) and the new-element time-step comparison
+(447, 453) REPORT warnings and do not fail the build. Not a defect.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | major | code read (ocsmesh imports triangle at load) | yes | owner decision (2026-10-02): optional, private use; out of the default environment, documented, c76c0c6 |
+| F2 | major | code read (build_env imports jigsawpy; wrapper licence misstated) | yes | same decision, c76c0c6 |
+| F3 | minor | code read (edge contacts in the median) | yes, introduced in round 15 | fixed, 19f94e1; test |
+| F4 | minor | tests (NaN ratio, out-of-range counts, NaN tolerance) | yes | fixed, 19f94e1; test |
+| F5 | minor | test (empty and partial interfaces) | yes | fixed, 19f94e1; test |
+| F6 | nit | doc read | yes | fixed, 19f94e1 |
+
+We also checked a suspicion of our own: the autofinish directives call
+`oceanmesh.remesh_patch(..., target_h=...)`; the function oceanmesh exports
+is the DistMesh one in `mesh_merge.py`, which takes `target_h` and uses
+neither JIGSAW nor Triangle, so the call is right.
