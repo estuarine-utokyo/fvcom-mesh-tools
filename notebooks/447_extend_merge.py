@@ -44,6 +44,7 @@ from fvcom_mesh_tools.io.fort14 import read_fort14, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.outdir import claim  # noqa: E402
 from fvcom_mesh_tools.patch import improve_patch  # noqa: E402
+from fvcom_mesh_tools.provenance import file_sha256  # noqa: E402
 from fvcom_mesh_tools.qa import run_qa  # noqa: E402
 
 T0 = time.time()
@@ -73,6 +74,18 @@ if (OUT / "report.json").exists() or (OUT / "merge.json").exists():
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
 IB = np.asarray(base.open_boundaries[0], np.int64)
 
+# The generation must be of this recipe, boundary and base, and its mesh the
+# one it wrote: a generation directory from another design was accepted
+# (review round 20 F1).
+_gen = json.loads((GEN / "generate.json").read_text())
+_want = {"recipe_sha256": recipe["recipe_sha256"],
+         "open_boundary_sha256": recipe["open_boundary_sha256"],
+         "base_sha256": {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")},
+         "outer_utm14_sha256": file_sha256(GEN / "outer_utm.14")}
+if _gen.get("inputs") != _want:
+    raise SystemExit(f"{GEN} was not generated from this recipe, boundary and base "
+                     f"(generate.json inputs differ)")
+
 # --------------------------------------------------------------- finishing
 outer = read_fort14(GEN / "outer_utm.14")
 land_utm = shapely.union_all(list(gpd.read_file(GEN / "land_with_base.shp")
@@ -100,6 +113,14 @@ open_new = [np.asarray(c, int) for c in outer.open_boundaries
             if not set(np.asarray(c, int).tolist()) <= set(io_.tolist())]
 if len(open_new) != 1:
     raise SystemExit(f"expected one new open boundary after finishing, found {len(open_new)}")
+# and the new boundary is the recipe's, node for node (either direction)
+_obc_m = np.column_stack(Transformer.from_crs(4326, MESH_EPSG, always_xy=True).transform(
+    *np.asarray(recipe["open_boundary_lonlat"], float).T))
+_got = outer.nodes[open_new[0], :2]
+if not (len(_got) == len(_obc_m) and (np.allclose(_got, _obc_m, rtol=0, atol=1e-3)
+                                      or np.allclose(_got[::-1], _obc_m, rtol=0, atol=1e-3))):
+    raise SystemExit(f"the new open boundary ({len(_got)} nodes) is not the recipe's "
+                     f"({len(_obc_m)} nodes)")
 
 # ------------------------------------------------------------------ merge
 merged = merge_outer(base, outer.nodes[:, :2], outer.elements, io_, IB, open_new[0])

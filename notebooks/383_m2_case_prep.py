@@ -164,6 +164,9 @@ def namelist(input_dir, output_dir):
     text = text[text.index("&NML_CASE") :]
     changes = dict(
         CASE_TITLE=fortran_string("383 M2 mesh comparison"),
+        # the experiment's own dates, not the template's (review round 20 F8)
+        START_DATE=fortran_string(START),
+        NC_FIRST_OUT=fortran_string(START),
         END_DATE=fortran_string(END),
         # quoted for Fortran (an apostrophe is doubled; review round 6 F10)
         INPUT_DIR=fortran_string(f"{input_dir}/"),

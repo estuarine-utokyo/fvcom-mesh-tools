@@ -389,8 +389,8 @@ def check_land_cover(mesh: Fort14Mesh, land, n_base_elements: int,
 
     ``land`` is the true land in the mesh's coordinates, without the base's
     footprint. Each connected patch of it under the new elements is shrunk
-    inward by ``erode`` times the median edge length of the elements holding
-    it; a patch with anything left is wider than an element there, and
+    inward by ``erode`` times the median edge length (of every edge) of the
+    elements holding it; a patch with anything left is wider than an element there, and
     fails. Patches are judged on their own: land outside the mesh, such as a
     mainland a covered peninsula belongs to, does not change the verdict
     (review rounds 15 F2, 16 F3, 19 F1). Raises on the first such patch;
@@ -406,8 +406,11 @@ def check_land_cover(mesh: Fort14Mesh, land, n_base_elements: int,
             and erode > 0):
         raise ValueError(f"erode must be finite and positive, not {erode!r}")
     xy = np.asarray(mesh.nodes)[:, :2]
-    tri = shapely.polygons(xy[np.asarray(mesh.elements)[n_base_elements:]])
+    corners = xy[np.asarray(mesh.elements)[n_base_elements:]]
+    tri = shapely.polygons(corners)
     area = shapely.area(tri)
+    # the elements' own edge lengths, not an equilateral stand-in (round 20 F6)
+    edges = np.linalg.norm(corners - np.roll(corners, 1, axis=1), axis=2)
     tree = shapely.STRtree(tri)
     covered = land.intersection(shapely.union_all(tri))
     patches = [g for g in getattr(covered, "geoms", [covered])
@@ -419,7 +422,7 @@ def check_land_cover(mesh: Fort14Mesh, land, n_base_elements: int,
         under = under[held > 1e-9 * area[under]]   # not those touching an edge
         if not len(under):
             continue
-        edge = float(np.median(np.sqrt(4.0 * area[under] / np.sqrt(3.0))))
+        edge = float(np.median(edges[under]))
         left = patch.buffer(-erode * edge).area
         worst = max(worst, left)
         if left > 0:

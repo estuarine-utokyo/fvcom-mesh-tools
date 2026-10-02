@@ -513,3 +513,22 @@ def test_merge_tolerance_must_be_finite_and_closed_base_counts_zero_edges():
                         tol_m=tol)
     closed = Fort14Mesh("c", base.nodes, base.depths, base.elements, [], [])
     assert verify_frozen_base(closed, closed, [])["n_interface_edges"] == 0
+
+
+def test_land_cover_erodes_by_the_real_median_edge():
+    """Review round 20 F6: a 1,050 m strip under 1,000 m right triangles."""
+    import shapely
+
+    from fvcom_mesh_tools.extend import check_land_cover
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    n = 6
+    xy = np.array([[i * 1000.0, j * 1000.0] for j in range(n) for i in range(n)])
+    tri = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            a, b, c, d = j * n + i, j * n + i + 1, (j + 1) * n + i + 1, (j + 1) * n + i
+            tri += [[a, b, c], [a, c, d]]
+    m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [], [])
+    with pytest.raises(ValueError, match="could resolve"):
+        check_land_cover(m, shapely.box(0, 2000, 5000, 3050), n_base_elements=0)

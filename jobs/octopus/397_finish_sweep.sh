@@ -9,15 +9,15 @@
 #PBS -o logs/397_finish_sweep.pbs.log
 #PBS -r n
 #============================================================================
-# The size targets as ACHIEVED edge lengths (owner 2026-09-20, default from
-# now on) versus as SIZING-FIELD values (the certified chain), and with
-# one-element-wide channels allowed.
+# Finishing and generation controls, all with achieved size targets
+# (SR_H_TARGET=achieved):
 #
-#   field     SR_H_TARGET=field                     = certified behaviour
-#   achieved  SR_H_TARGET=achieved                  new default
-#   ach1w     SR_H_TARGET=achieved SR_ONE_WIDE=allow
+#   obc0      SR_OBC_H0=814               size at the first boundary node
+#   seed7     SR_FIN_SEED=7               finishing seed
+#   scale115  SR_DM_SCALE=1.15            DistMesh size scale
+#   obc0seed  SR_OBC_H0=814 SR_FIN_SEED=7 both
 #
-# Usage (from the repository root): qsub jobs/octopus/395_target_mode.sh
+# Usage (from the repository root): qsub jobs/octopus/397_finish_sweep.sh
 #============================================================================
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"

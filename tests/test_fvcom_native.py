@@ -727,3 +727,19 @@ def test_read_grd_checks_record_ids(tmp_path):
     w["grd"].write_text("\n".join(lines) + "\n")
     with pytest.raises(ValueError, match="node ids"):
         read_fvcom_case(w["grd"], w["dep"], w["obc"])
+
+
+@pytest.mark.parametrize("change", ["surplus", "short"])
+def test_read_grd_requires_exact_well_formed_records(tmp_path, change):
+    """Review round 20 F7."""
+    from fvcom_mesh_tools.io.fvcom_native import read_grd
+
+    w = export_fvcom_case(_tri(), tmp_path / "c", "t")
+    lines = w["grd"].read_text().splitlines()
+    if change == "surplus":
+        lines.append("4 5.0 5.0")
+    else:
+        lines[-1] = " ".join(lines[-1].split()[:2])
+    w["grd"].write_text("\n".join(lines) + "\n")
+    with pytest.raises(ValueError):
+        read_grd(w["grd"])

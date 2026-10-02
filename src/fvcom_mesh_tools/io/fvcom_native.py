@@ -545,10 +545,17 @@ def read_grd(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
         lines = [ln for ln in (x.strip() for x in f) if ln]
     n_nodes = _header_count(lines[0], "Node Number")
     n_cells = _header_count(lines[1], "Cell Number")
-    if len(lines) < 2 + n_cells + n_nodes:
+    # exactly the declared records, each with its fields: FVCOM reads to the
+    # end and refuses surplus nodes, and a short row is no coordinate pair
+    # (review of the extend tools, round 20 F7)
+    if len(lines) != 2 + n_cells + n_nodes:
         raise ValueError(
             f"{path.name}: {len(lines) - 2} rows for {n_cells} cells + "
             f"{n_nodes} nodes")
+    if any(len(ln.split()) < 4 for ln in lines[2:2 + n_cells]):
+        raise ValueError(f"{path.name}: a cell row has fewer than 4 fields")
+    if any(len(ln.split()) < 3 for ln in lines[2 + n_cells:]):
+        raise ValueError(f"{path.name}: a node row has fewer than 3 fields")
     # record ids 1..NE and 1..NP in order, as FVCOM reads them: it finds the
     # node block by its first id (review of the extend tools, round 19 F6)
     cell_ids = [int(ln.split()[0]) for ln in lines[2:2 + n_cells]]

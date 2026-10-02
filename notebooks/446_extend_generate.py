@@ -39,6 +39,7 @@ from fvcom_mesh_tools.io.fort14 import Fort14Mesh, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.obc_band import build_obc_band  # noqa: E402
 from fvcom_mesh_tools.outdir import TOKEN_ENV, claim  # noqa: E402
+from fvcom_mesh_tools.provenance import file_sha256  # noqa: E402
 
 T0 = time.time()
 MESH_EPSG = 32654
@@ -365,7 +366,14 @@ mesh = Fort14Mesh("outer", nodes, dn, t.astype(np.int64),
                   [chain_o.astype(np.int64), chain_i.astype(np.int64)],
                   land_segments(t, [chain_o, chain_i]))
 write_fort14(mesh, OUT / "outer_utm.14")
+# what this generation was made from, for 447 to check before it uses it
+# (review round 20 F1)
+inputs = {"recipe_sha256": recipe["recipe_sha256"],
+          "open_boundary_sha256": recipe["open_boundary_sha256"],
+          "base_sha256": {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")},
+          "outer_utm14_sha256": file_sha256(OUT / "outer_utm.14")}
 (OUT / "generate.json").write_text(json.dumps({
+    "inputs": inputs,
     "n_nodes": int(len(p)), "n_elements": int(len(t)), "pruned": int(ne0 - len(t)),
     "ladders": ladders,
     "interface_base_nodes": IB.tolist(), "interface_outer_nodes": chain_i.tolist(),

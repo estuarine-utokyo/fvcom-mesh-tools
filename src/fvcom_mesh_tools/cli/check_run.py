@@ -132,29 +132,71 @@ def _grid_counts(path: Path) -> dict[str, int] | None:
     return {"node": np_, "nele": ne_}
 
 
-def _grid_identity(ds, grid_path: Path, name: str) -> list[str]:
-    """Reasons the history ``ds`` is not on the mesh in ``grid_path``."""
+def _staged_mesh(grid_path: Path, dep_path: Path | None):
+    """(nodes, elements, depths or None) of the staged case, or a reason."""
     from fvcom_mesh_tools.io.fvcom_native import read_grd
 
     try:
         nodes, elements = read_grd(grid_path)
     except (OSError, ValueError) as exc:
-        return [f"the staged grid {grid_path} cannot be read: {exc}"]
+        return f"the staged grid {grid_path} cannot be read: {exc}"
+    depths = None
+    if dep_path is not None:
+        try:
+            rows = [ln.split() for ln in dep_path.read_text().splitlines()[1:] if ln.strip()]
+            dep = np.array([[float(v) for v in r[:3]] for r in rows])
+        except (OSError, ValueError, IndexError) as exc:
+            return f"the staged depths {dep_path} cannot be read: {exc}"
+        if dep.shape != (len(nodes), 3) or not np.allclose(dep[:, :2], nodes[:, :2],
+                                                           rtol=0, atol=1e-6):
+            return f"the staged depths {dep_path} do not match the staged grid"
+        depths = dep[:, 2]
+    return nodes, elements, depths
+
+
+def _close(var, got, want) -> bool:
+    """``got`` (a history variable) equals ``want`` (staged doubles) to the
+    precision it is stored in: float32 output keeps ~7 digits (round 20 F5)."""
+    if var.dtype == np.float32:
+        tol = np.maximum(1e-3, 2 * np.spacing(np.abs(want).astype(np.float32)).astype(float))
+    else:
+        tol = 1e-3
+    return got.shape == want.shape and bool(np.all(np.abs(got - want) <= tol))
+
+
+def _grid_identity(ds, staged, name: str) -> list[str]:
+    """Reasons the history ``ds`` is not on the staged mesh: node
+    coordinates, each element's nodes (in any order) and, when the namelist
+    names the depth file, the bathymetry h (review rounds 19 F7, 20 F2-F5).
+    Masked values are refused, not unmasked."""
+    nodes, elements, depths = staged
     out = []
-    if "x" in ds.variables and "y" in ds.variables:
-        xy = np.column_stack([np.asarray(ds["x"][:], float), np.asarray(ds["y"][:], float)])
-        if xy.shape != nodes[:, :2].shape or not np.allclose(xy, nodes[:, :2], rtol=0,
-                                                             atol=1e-3):
-            out.append(f"{name}: node coordinates are not the staged mesh's")
-    else:
-        out.append(f"{name}: no x, y to tie the history to the staged mesh")
-    if "nv" in ds.variables:
-        nv = np.asarray(ds["nv"][:]).T - 1
-        if nv.shape != elements.shape or not np.array_equal(np.sort(nv, axis=1),
-                                                            np.sort(elements, axis=1)):
-            out.append(f"{name}: connectivity is not the staged mesh's")
-    else:
+    for v, want in (("x", nodes[:, 0]), ("y", nodes[:, 1]),
+                    *((("h", depths),) if depths is not None else ())):
+        if v not in ds.variables:
+            out.append(f"{name}: no {v} to tie the history to the staged case")
+            continue
+        raw = ds[v][:]
+        if np.ma.is_masked(raw):
+            out.append(f"{name}: {v} has masked values")
+            continue
+        got = np.asarray(np.ma.getdata(raw), float)
+        if not (np.isfinite(got).all() and _close(ds[v], got, want)):
+            out.append(f"{name}: {v} is not the staged case's"
+                       + (" (another bathymetry)" if v == "h" else ""))
+    if "nv" not in ds.variables:
         out.append(f"{name}: no nv to tie the history to the staged mesh")
+    else:
+        raw = ds["nv"][:]
+        if np.ma.is_masked(raw):
+            out.append(f"{name}: nv has masked values")
+        else:
+            nv = np.asarray(np.ma.getdata(raw))
+            if nv.dtype.kind not in "iu" or nv.ndim != 2 or nv.shape[0] != 3:
+                out.append(f"{name}: nv is not an integer (3, nele) array")
+            elif nv.T.shape != elements.shape or not np.array_equal(
+                    np.sort(nv.T - 1, axis=1), np.sort(elements, axis=1)):
+                out.append(f"{name}: connectivity is not the staged mesh's")
     return out
 
 
@@ -217,7 +259,7 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
         nml_text = _strip_comments(nml_path.read_text())
         # a key set twice, differently, is a failure (review round 8 F8)
         for key in ("END_DATE", "NC_FIRST_OUT", "START_DATE", "NC_OUT_INTERVAL",
-                    "OUTPUT_DIR", "GRID_FILE", "INPUT_DIR"):
+                    "OUTPUT_DIR", "GRID_FILE", "INPUT_DIR", "DEPTH_FILE"):
             try:
                 vals[key] = _nml_value(nml_text, key)
             except ValueError as exc:
@@ -251,7 +293,15 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
     if grid and indir:
         gpath = Path(indir) / grid if Path(indir).is_absolute() else run / indir / grid
         staged = _grid_counts(gpath)
-        staged_grid = gpath if staged is not None else None
+        if staged is not None:
+            dfile = vals.get("DEPTH_FILE")
+            dpath = None
+            if dfile:
+                dpath = Path(indir) / dfile if Path(indir).is_absolute() else run / indir / dfile
+            staged_grid = _staged_mesh(gpath, dpath)
+            if isinstance(staged_grid, str):
+                reasons.append(staged_grid)
+                staged_grid = None
         # a grid named but unreadable is a failure, not a skipped check
         # (review round 5 F6)
         if staged is None:
@@ -296,7 +346,7 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                 # the history must be on the staged mesh itself, not one of
                 # the same size (review round 19 F7): node coordinates, and
                 # each element's nodes in any order (FVCOM may reverse them)
-                if staged_grid is not None and not stamps[:-len(times)]:
+                if staged_grid is not None:              # every stack (round 20 F2)
                     reasons += _grid_identity(ds, staged_grid, f.name)
                 for var, dim in (("zeta", "node"), ("ua", "nele"), ("va", "nele")):
                     # the layout FVCOM writes; a square transposed array

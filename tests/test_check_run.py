@@ -268,4 +268,60 @@ def test_history_from_another_mesh_of_the_same_size_fails(tmp_path):
     with netCDF4.Dataset(run / "output" / "m2_0001.nc", "a") as ds:
         ds["x"][:] = ds["x"][:] + 100000.0
     info = check_run(run)
-    assert not info["ok"] and any("coordinates" in r for r in info["reasons"])
+    assert not info["ok"] and any("x is not the staged" in r for r in info["reasons"])
+
+
+def _stage_depths(run, n, h=5.0):
+    nml = run / "m2_run.nml"
+    nml.write_text(nml.read_text() + " DEPTH_FILE = 'm2_dep.dat',\n")
+    (run / "input" / "m2_dep.dat").write_text(
+        f"Node Number = {n}\n" + "".join(f"{1000.0 * k} {500.0 * (k % 2)} {h}\n"
+                                         for k in range(1, n + 1)))
+
+
+def test_identity_is_checked_on_every_stack_with_depths_masks_and_float32(tmp_path):
+    """Review round 20 F2-F5."""
+    import shutil
+
+    # F3: h from another bathymetry
+    run = _run(tmp_path / "a", grid=(3, 3))
+    _stage_depths(run, 3)
+    with netCDF4.Dataset(run / "output" / "m2_0001.nc", "a") as ds:
+        ds.createVariable("h", "f8", ("node",))[:] = 500.0
+    info = check_run(run)
+    assert not info["ok"] and any("another bathymetry" in r for r in info["reasons"])
+    with netCDF4.Dataset(run / "output" / "m2_0001.nc", "a") as ds:
+        ds["h"][:] = 5.0
+    assert check_run(run)["ok"]
+    # F2: a second stack on another mesh
+    second = run / "output" / "m2_0002.nc"
+    shutil.copy(run / "output" / "m2_0001.nc", second)
+    with netCDF4.Dataset(second, "a") as ds:
+        ds["x"][:] = ds["x"][:] + 100000.0
+    info = check_run(run)
+    assert not info["ok"] and any(r.startswith("m2_0002.nc: x") for r in info["reasons"])
+    second.unlink()
+    # F4: a masked coordinate
+    with netCDF4.Dataset(run / "output" / "m2_0001.nc", "a") as ds:
+        x = ds["x"][:]
+        ds["x"][:] = np.ma.masked_array(x, mask=[True, False, False])
+    info = check_run(run)
+    assert not info["ok"] and any("masked" in r for r in info["reasons"])
+
+
+def test_float32_history_coordinates_are_accepted(tmp_path):
+    """Review round 20 F5: UTM coordinates stored as float32."""
+    run = _run(tmp_path, grid=(3, 3))
+    g = run / "input" / "m2_grd.dat"
+    xs = [380000.123456789 + 1000 * k for k in range(1, 4)]
+    ys = [3900000.123456789 + 500 * (k % 2) for k in range(1, 4)]
+    lines = g.read_text().splitlines()
+    lines[-3:] = [f"{k} {x!r} {y!r}" for k, (x, y) in enumerate(zip(xs, ys), 1)]
+    g.write_text("\n".join(lines) + "\n")
+    f = run / "output" / "m2_0001.nc"
+    with netCDF4.Dataset(f, "a") as ds:
+        ds.renameVariable("x", "x64")
+        ds.renameVariable("y", "y64")
+        ds.createVariable("x", "f4", ("node",))[:] = np.float32(xs)
+        ds.createVariable("y", "f4", ("node",))[:] = np.float32(ys)
+    assert check_run(run)["ok"], check_run(run)["reasons"]

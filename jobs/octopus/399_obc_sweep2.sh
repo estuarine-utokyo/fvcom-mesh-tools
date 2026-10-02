@@ -9,15 +9,15 @@
 #PBS -o logs/399_obc_sweep2.pbs.log
 #PBS -r n
 #============================================================================
-# The size targets as ACHIEVED edge lengths (owner 2026-09-20, default from
-# now on) versus as SIZING-FIELD values (the certified chain), and with
-# one-element-wide channels allowed.
+# Open-boundary ladder skip and offset controls, all with achieved size
+# targets (SR_H_TARGET=achieved):
 #
-#   field     SR_H_TARGET=field                     = certified behaviour
-#   achieved  SR_H_TARGET=achieved                  new default
-#   ach1w     SR_H_TARGET=achieved SR_ONE_WIDE=allow
+#   skip2      SR_OBC_SKIP=2               end nodes left without a ladder
+#   k115       SR_OBC_K=1.15               ladder offset, in local sizes
+#   k135       SR_OBC_K=1.35
+#   skip2k115  SR_OBC_SKIP=2 SR_OBC_K=1.15 both
 #
-# Usage (from the repository root): qsub jobs/octopus/395_target_mode.sh
+# Usage (from the repository root): qsub jobs/octopus/399_obc_sweep2.sh
 #============================================================================
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"
