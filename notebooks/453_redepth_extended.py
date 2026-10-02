@@ -180,7 +180,7 @@ import geopandas as gpd  # noqa: E402
 import shapely  # noqa: E402
 
 _land = shapely.union_all(list(gpd.read_file(LAND).to_crs(MESH_EPSG).geometry))
-islands = check_island_holes(mesh, _land, NB, base.n_elements)
+islands = check_island_holes(mesh, _land, base.n_elements)
 _foot = shapely.union_all(shapely.polygons(base.nodes[base.elements][:, :, :2]))
 land_cover = check_land_cover(mesh, _land.difference(_foot.buffer(1.0)), base.n_elements)
 
@@ -222,7 +222,10 @@ if not np.array_equal(back.depths, h):
 # comparison (a warning)
 verify_frozen_base(back, base, IB)
 check_no_overlap(back, base.n_elements)
-qa = run_qa(back, name=name, path=written["grd"], max_offenders=10_000)
+qa = run_qa(back, name=name, path=written["grd"], max_offenders=10_000,
+             # the recipe's depth floor, not QA's 2 m default; the frozen base
+             # keeps its own depths (review round 25 F7)
+             min_depth_m=float(min(D["min_m"], np.min(base.depths))))
 
 
 def _dt_allow(m_, elems):

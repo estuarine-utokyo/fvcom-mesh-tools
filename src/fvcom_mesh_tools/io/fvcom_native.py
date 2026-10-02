@@ -321,6 +321,8 @@ def _indices(a, n: int, what: str, ndim: int = 1) -> np.ndarray:
     (truncated to 0) reaches a file (review of the extend tools, rounds 6 F9
     and 7 F4).
     """
+    if np.ma.is_masked(a):                   # unknown indices (round 25 F2)
+        raise ValueError(f"{what} has masked values")
     arr = np.asarray(a)
     if arr.ndim != ndim:
         raise ValueError(f"{what} must be {ndim}-dimensional, not shape {arr.shape}")

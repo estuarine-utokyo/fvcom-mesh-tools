@@ -50,7 +50,12 @@ def _check_graph(loader, root) -> None:
                         raise ValueError(f"a second merge key '<<' at {where}")
                     continue
                 stack.append(key_node)
-                key = loader.construct_object(key_node, deep=True)
+                # the plain key '=' carries the value tag, which SafeLoader
+                # reads as the string '=' (round 25 F6)
+                if key_node.tag == "tag:yaml.org,2002:value":
+                    key = "="
+                else:
+                    key = loader.construct_object(key_node, deep=True)
                 if key in seen:
                     raise ValueError(f"duplicate key {key!r} at {where}")
                 seen.add(key)

@@ -216,7 +216,7 @@ say("depths: " + json.dumps(depth_report))
 # ----------------------------------------------------------------- export
 # no hole in the new sea without land in it (review round 11 F7), checked
 # before anything is written (round 12 F2)
-islands = check_island_holes(merged, land_utm, base.n_nodes, base.n_elements)
+islands = check_island_holes(merged, land_utm, base.n_elements)
 say("islands: " + json.dumps(islands))
 # and no land the mesh could resolve under the new elements (round 15 F2):
 # land_with_base holds the base footprint, which is taken out
@@ -253,7 +253,10 @@ def _dt_allow(mesh, elems):
 dt_base = float(_dt_allow(back, back.elements[:base.n_elements]).min())
 dt_new = float(_dt_allow(back, back.elements[base.n_elements:]).min())
 say(f"time-step allowance: base {dt_base:.2f} s, new elements {dt_new:.2f} s")
-qa = run_qa(back, name=CASE, path=written["grd"], max_offenders=10_000)
+qa = run_qa(back, name=CASE, path=written["grd"], max_offenders=10_000,
+             # the recipe's depth floor, not QA's 2 m default; the frozen base
+             # keeps its own depths (review round 25 F7)
+             min_depth_m=float(min(D["min_m"], np.min(base.depths))))
 (OUT / f"{CASE}_qa.json").write_text(json.dumps(qa.to_dict(), indent=1, default=float))
 say(f"QA {qa.n_gate_total - qa.n_gate_failed}/{qa.n_gate_total}")
 for c in qa.checks:

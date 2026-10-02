@@ -84,6 +84,8 @@ def fillet(vertices, radii, n_arc: int = 60) -> np.ndarray:
     tangent to both sides, so the straight parts keep their direction; a
     radius too large for its sides is refused rather than overlapped.
     """
+    if np.ma.is_masked(vertices) or np.ma.is_masked(radii):     # review round 25 F4
+        raise ValueError("vertices or radii have masked values")
     x = np.asarray(vertices, float)
     radii = list(radii)
     if len(radii) != len(x) - 2:
@@ -140,6 +142,8 @@ def resample(line, spacing) -> np.ndarray:
     non-finite spacing or coordinates, and a step that does not advance are
     refused (review F19, round 2 F12).
     """
+    if np.ma.is_masked(line):                   # unknown, not its fill (round 25 F4)
+        raise ValueError("the line has masked coordinates")
     xy = np.asarray(line, float)
     if not np.isfinite(xy).all():
         raise ValueError("the line has non-finite coordinates")

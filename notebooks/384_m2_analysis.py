@@ -291,6 +291,9 @@ def analyze(run_root, output, figure):
                         phase_difference(s_phase[k], obs["phase_deg"])),
                     half_window_amplitude_change_m=float(h2c[k] - h1c[k]),
                     half_window_phase_change_deg=float(phase_difference(hp2[k], hp1[k])),
+                    # the coefficients' change, amplitude and phase together
+                    # (review of the extend tools, round 25 F1)
+                    half_window_coefficient_change_m=float(abs(h2[k] - h1[k])),
                     mean_m=float(s_mean[k]),
                 )
         except (ValueError, OSError, KeyError) as exc:
@@ -303,16 +306,19 @@ def analyze(run_root, output, figure):
     TOL_M = 0.002
     convergence = {}
     for label in maps:
-        changes = [abs(rows[s2][label]["half_window_amplitude_change_m"])
+        # |h2 - h1| of the complex coefficients: a drifting phase changes it as
+        # much as a growing amplitude; the amplitude alone let a 30 degree
+        # drift pass (review of the extend tools, round 25 F1)
+        changes = [abs(rows[s2][label]["half_window_coefficient_change_m"])
                    for s2 in rows if label in rows[s2]]
         worst = max(changes) if changes else float("nan")
         converged = bool(changes) and worst < TOL_M
         convergence[label] = {
-            "max_half_window_amplitude_change_m": worst,
+            "max_half_window_coefficient_change_m": worst,
             "tolerance_m": TOL_M,
             "converged": converged,
         }
-        print(f"[384] {label}: half-window amplitude change {worst * 1000:.2f} mm "
+        print(f"[384] {label}: half-window coefficient change {worst * 1000:.2f} mm "
               f"({'converged' if converged else 'NOT CONVERGED -- integrate longer'})",
               flush=True)
 

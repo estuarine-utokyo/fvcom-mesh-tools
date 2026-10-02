@@ -68,6 +68,7 @@ def _grade(grade) -> float:
 def _lattice(values, x, y):
     """``values``, ``x`` and ``y`` as float arrays of one 2-D shape, with a
     finite lattice (review round 14 F5)."""
+    _no_masks(values=values, x=x, y=y)        # round 25 F4
     v, x, y = (np.asarray(a, float) for a in (values, x, y))
     if v.ndim != 2 or x.shape != v.shape or y.shape != v.shape:
         raise ValueError(f"values, x and y must share one 2-D shape, not {v.shape}, "
@@ -96,6 +97,7 @@ def band_field(x, y, line_xy, targets, half_width_m):
     """
     import shapely
 
+    _no_masks(line_xy=line_xy, targets=targets)       # round 25 F4
     line_xy = np.asarray(line_xy, float)
     targets = np.asarray(targets, float)
     if len(line_xy) < 2 or len(targets) != len(line_xy):
@@ -131,7 +133,10 @@ def _check_sizing_inputs(ambient, x, y, floor, bands) -> None:
 
 def compose_sizing(ambient, x, y, *, grade, floor=None, bands=()):
     """The final size field and a report; see the module docstring."""
-    bands = [np.asarray(b, float) for b in bands]     # traversed twice (review r3 F3)
+    bands = list(bands)                                 # traversed twice (review r3 F3)
+    # NaN, not a mask, marks off-band (round 25 F4)
+    _no_masks(floor=floor, **{f"band_{k}": b for k, b in enumerate(bands)})
+    bands = [np.asarray(b, float) for b in bands]
     # normalised once, and these arrays are the ones used (round 14 F5)
     ambient, x, y = _lattice(ambient, x, y)
     grade = _grade(grade)
@@ -264,7 +269,8 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
     nb, eb = base.n_nodes, base.n_elements
     _no_masks(merged_nodes=merged.nodes, merged_depths=merged.depths,
               merged_elements=merged.elements, base_nodes=base.nodes, base_depths=base.depths,
-              base_elements=base.elements)
+              base_elements=base.elements,
+              **{f"base_open_boundary_{k}": c for k, c in enumerate(base.open_boundaries)})
 
     def same_bits(a, b):
         # dtype and bit pattern: numerical equality lets -0.0 pass for +0.0
@@ -353,13 +359,13 @@ def check_no_overlap(merged: Fort14Mesh, n_base_elements: int, rel_tol: float = 
     return {"n_outer_touching_base": int(len(cand))}
 
 
-def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int,
-                       n_base_elements: int | None = None) -> dict:
+def check_island_holes(mesh: Fort14Mesh, land, n_base_elements: int) -> dict:
     """Every hole in the new part of the mesh must be land, give or take the
     coast's approximation.
 
-    A closed boundary loop without an open-boundary node, touching a node
-    beyond the base's ``n_base_nodes``, is an island. Inside the polygon it
+    A closed boundary loop without an open-boundary node that is not one of
+    the base's own holes (the closed boundary loops of its first
+    ``n_base_elements`` elements) is an island. Inside the polygon it
     bounds, the water farther than half the local edge length from the
     supplied ``land`` (in the mesh's coordinates) must be less than one
     local element's area, and the hole must hold some land: a hole in open
@@ -382,18 +388,18 @@ def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int,
     areas = 0.5 * np.abs(d1[:, 0] * d2[:, 1] - d2[:, 0] * d1[:, 1])
     obc = set(int(v) for c in mesh.open_boundaries for v in np.asarray(c).tolist())
     # Only a hole the base itself has is left alone: a new hole between base
-    # nodes is checked like any other (review round 24 F3). With
-    # n_base_elements, the base's holes are its own closed boundary loops;
-    # without it, the old rule (a loop of base nodes only) is kept.
-    if n_base_elements is not None:
-        base_holes = {frozenset(int(v) for v in lp)
-                      for lp in boundary_loops(els[:n_base_elements])}
+    # nodes is checked like any other (review rounds 24 F3, 25 F3). The base
+    # element count is required and checked; no rule by node ids remains.
+    if not (isinstance(n_base_elements, (int, np.integer))
+            and not isinstance(n_base_elements, bool) and 0 <= n_base_elements <= len(els)):
+        raise ValueError(f"n_base_elements must be an integer in [0, {len(els)}], not "
+                         f"{n_base_elements!r}")
+    base_holes = ({frozenset(int(v) for v in lp)
+                   for lp in boundary_loops(els[:n_base_elements])}
+                  if n_base_elements else set())
 
-        def is_base_hole(lp):
-            return frozenset(lp) in base_holes
-    else:
-        def is_base_hole(lp):
-            return max(lp) < n_base_nodes
+    def is_base_hole(lp):
+        return frozenset(lp) in base_holes
     n_islands, worst, bad = 0, 0.0, []
     for loop in boundary_loops(els):
         loop = [int(v) for v in loop]
@@ -550,10 +556,20 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=500
     limit is not reached -- infeasible (e.g. a fixed 1 m node beside a free
     node held at 3 m) or not converged within ``max_iter``.
     """
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
     _no_masks(h0=h0, ei=ei, ej=ej, free=free)
     h = np.asarray(h0, float).copy()
-    free = np.asarray(free, bool)
-    ei, ej = np.asarray(ei), np.asarray(ej)
+    free = np.asarray(free)
+    # one depth and one free flag per node, and edge ends that are nodes: a
+    # -1 would smooth the last node (review round 25 F5)
+    if h.ndim != 1 or free.shape != h.shape or free.dtype != bool:
+        raise ValueError(f"h0 must be (N,) and free a boolean (N,), not {h.shape} and "
+                         f"{free.dtype} {free.shape}")
+    ei = _indices(ei, len(h), "ei")
+    ej = _indices(ej, len(h), "ej")
+    if ei.shape != ej.shape:
+        raise ValueError(f"ei and ej differ in shape: {ei.shape} and {ej.shape}")
     # finite positive depths and sane controls, or NaN slips through the
     # r > limit test (review round 2 F15)
     if not (0 < rmax < 1 and np.isfinite(hmin) and hmin > 0

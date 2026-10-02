@@ -381,9 +381,9 @@ def test_a_hole_in_the_new_sea_without_land_is_refused():
             tri += [[a, b, c], [a, c, d]]
     m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [np.array([0, 1, 2])], [])
     with pytest.raises(ValueError, match="open water"):
-        check_island_holes(m, shapely.Polygon(), n_base_nodes=3)
+        check_island_holes(m, shapely.Polygon(), n_base_elements=0)
     islet = shapely.box(2400, 2400, 2600, 2600)
-    assert check_island_holes(m, islet, n_base_nodes=3)["n_new_islands"] == 1
+    assert check_island_holes(m, islet, n_base_elements=0)["n_new_islands"] == 1
 
 
 def test_a_large_hole_around_a_tiny_islet_is_refused():
@@ -404,7 +404,7 @@ def test_a_large_hole_around_a_tiny_islet_is_refused():
             tri += [[a, b, c], [a, c, d]]
     m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [np.array([0, 1, 2])], [])
     with pytest.raises(ValueError, match="open water"):
-        check_island_holes(m, shapely.box(3950, 3950, 4050, 4050), n_base_nodes=3)
+        check_island_holes(m, shapely.box(3950, 3950, 4050, 4050), n_base_elements=0)
 
 
 @pytest.mark.parametrize("kw", [{"grade": -0.2}, {"band": -10.0}, {"ambient": np.nan}])
@@ -572,7 +572,7 @@ def test_a_lost_element_is_not_an_island():
     del tri[2 * (4 * (n - 1) + 4)]                    # one interior triangle
     m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [np.array([0, 1, 2])], [])
     with pytest.raises(ValueError, match="open water"):
-        check_island_holes(m, shapely.Polygon(), n_base_nodes=27)
+        check_island_holes(m, shapely.Polygon(), n_base_elements=0)
 
 
 def test_a_new_hole_among_base_nodes_is_checked():
@@ -593,10 +593,12 @@ def test_a_new_hole_among_base_nodes_is_checked():
     removed = tri.pop(n_base_el + 2 * 2)     # an outer cell of the second row
     assert max(removed) < 3 * n               # all its nodes have "base" ids
     m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [np.array([0, 1, 2])], [])
-    # the old rule (node ids only) let it through
-    assert check_island_holes(m, shapely.Polygon(), n_base_nodes=3 * n)["n_new_islands"] == 0
     with pytest.raises(ValueError, match="open water"):
-        check_island_holes(m, shapely.Polygon(), n_base_nodes=3 * n, n_base_elements=n_base_el)
+        check_island_holes(m, shapely.Polygon(), n_base_elements=n_base_el)
+    # round 25 F3: a bad count is refused, not used as a slice
+    for bad in (-1, len(tri) + 1, 2.0):
+        with pytest.raises(ValueError, match="n_base_elements"):
+            check_island_holes(m, shapely.Polygon(), n_base_elements=bad)
 
 
 def test_masked_depths_are_refused_by_merge_verify_and_limiter():
@@ -618,3 +620,23 @@ def test_masked_depths_are_refused_by_merge_verify_and_limiter():
     with pytest.raises(ValueError, match="masked"):
         rfactor_smooth_free(np.ma.array([10.0, 5.0], mask=[True, False]), np.array([0]),
                             np.array([1]), [False, True], rmax=0.2, hmin=3)
+
+
+def test_masked_indices_bands_and_limiter_edges_are_refused():
+    """Review round 25 F2, F4 and F5."""
+    from fvcom_mesh_tools.extend import compose_sizing, merge_outer, rfactor_smooth_free
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    base = Fort14Mesh("b", np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
+                      np.full(4, 5.0), np.array([[0, 1, 2], [0, 2, 3]]), [np.array([1, 2])], [])
+    outer = np.array([[1.0, 0.0], [1.0, 1.0], [2.0, 0.0], [2.0, 1.0]])
+    with pytest.raises(ValueError, match="masked"):
+        merge_outer(base, outer, np.array([[0, 2, 1], [2, 3, 1]]),
+                    np.ma.array([0, 1], mask=[True, False]), [1, 2], [2, 3])
+    x, y = np.meshgrid([0.0, 1000.0], [0.0, 1000.0])
+    band = np.ma.array(np.full((2, 2), 1500.0), mask=True)
+    with pytest.raises(ValueError, match="masked"):
+        compose_sizing(np.full((2, 2), 4000.0), x, y, grade=0.1, bands=[band])
+    with pytest.raises(ValueError, match="outside"):
+        rfactor_smooth_free(np.array([100.0, 10.0]), np.array([-1]), np.array([0]),
+                            np.array([False, True]), rmax=0.2, hmin=1)

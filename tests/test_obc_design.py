@@ -129,3 +129,15 @@ def test_fillet_refuses_a_reversal_and_passes_a_straight_continuation():
         fillet(np.array([[0, 0], [10_000, 0], [0, 0]], float), [1_000])
     line = fillet(np.array([[0, 0], [10_000, 0], [20_000, 0]], float), [1_000])
     assert np.allclose(line[:, 1], 0)
+
+
+def test_a_masked_line_is_refused():
+    """Review of the extend tools, round 25 F4."""
+    import numpy as np
+    import pytest
+
+    from fvcom_mesh_tools.obc_design import resample
+
+    line = np.ma.array([[0.0, 0.0], [10000.0, 0.0]], mask=[[False, False], [True, False]])
+    with pytest.raises(ValueError, match="masked"):
+        resample(line, 1000.0)
