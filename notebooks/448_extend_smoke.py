@@ -90,7 +90,14 @@ inp.mkdir(parents=True, exist_ok=True)
 out.mkdir(exist_ok=True)
 _, lat = Transformer.from_crs(MESH_EPSG, 4326, always_xy=True).transform(
     mesh.nodes[:, 0], mesh.nodes[:, 1])
-export_fvcom_case(mesh, inp, "m2", cor=lat, twodm=False, obc_depth_control=False)
+# the smoke test forces M2 on the open boundary: the boundary must be type 1
+# (elevation), whatever the case declared; type 3 is a zero-elevation clamp
+# that ignores the forcing (review round 18 F1). Read back to make sure.
+written = export_fvcom_case(mesh, inp, "m2", cor=lat, twodm=False, obc_depth_control=False,
+                            obc_type=1)
+_types = {line.split()[2] for line in written["obc"].read_text().splitlines()[1:] if line.strip()}
+if _types != {"1"}:
+    raise SystemExit(f"the staged open boundary has types {_types}, not 1")
 (inp / "sigma.dat").write_text("NUMBER OF SIGMA LEVELS = 6\nSIGMA COORDINATE TYPE = UNIFORM\n")
 ob = np.asarray(mesh.open_boundaries[0])
 xy = mesh.nodes[ob, :2]
@@ -110,6 +117,7 @@ manifest = {
     "max_dte_allowed_seconds": M414.external_step(mesh),
     "gauge": a.gauge, "amplitude_m": g["amplitude_m"], "phase_deg": g["phase_deg"],
     "period_seconds": period, "n_obc_nodes": int(len(ob)),
+    "obc_type": 1, "case_obc_type": int(getattr(mesh, "obc_type", 1)),
     "sponge_radius_m": [float(radius.min()), float(radius.max())], "sponge_coef": 0.001,
     "obc_depth_control_change_m_max": float(np.max(np.abs(change))) if len(change) else 0.0,
     "n_nodes": mesh.n_nodes, "n_elements": mesh.n_elements,

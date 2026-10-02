@@ -649,15 +649,23 @@ def run_qa(
     bad_idx = _bad_ids(mesh.elements, integer_only=True, ndim=2) if ne else 0
     # non-finite coordinates fail here and end the run before any geometry
     # is built from them (round 17 F7)
-    _xy = np.asarray(mesh.nodes, dtype=float)
-    n_bad_xy = (int((~np.isfinite(_xy[:, :2])).any(axis=1).sum())
-                if _xy.ndim == 2 and _xy.shape[1] >= 2 else max(int(n_nodes), 1))
+    # numeric (NP, >=2) coordinates, checked without a conversion that could
+    # raise before the report is made (round 18 F4); depths exactly (NP,),
+    # or the time-step diagnostics broadcast (round 18 F5)
+    _xy = np.asarray(mesh.nodes)
+    if _xy.ndim == 2 and _xy.shape[1] >= 2 and _xy.dtype.kind in "iuf":
+        n_bad_xy = int((~np.isfinite(_xy[:, :2].astype(float))).any(axis=1).sum())
+    else:
+        n_bad_xy = max(int(n_nodes), 1)
+    _dep = np.asarray(mesh.depths)
+    if _dep.shape != (n_nodes,) or _dep.dtype.kind not in "iuf":
+        n_bad_xy += max(int(n_nodes), 1)
     for s in [*mesh.open_boundaries, *(s for _ib, s in mesh.land_boundaries)]:
         bad_idx += _bad_ids(s)
     checks.append(QACheck(
         "node_index_valid", "fvcom", True, bad_idx + n_bad_xy == 0,
-        f"0 <= id < {n_nodes}, coordinates finite",
-        f"out-of-range refs = {bad_idx}, non-finite nodes = {n_bad_xy}", bad_idx + n_bad_xy,
+        f"0 <= id < {n_nodes}, numeric finite coordinates, depths (NP,)",
+        f"out-of-range refs = {bad_idx}, bad nodes or depths = {n_bad_xy}", bad_idx + n_bad_xy,
     ))
     if bad_idx > 0 or n_bad_xy > 0 or ne == 0 or n_nodes == 0:
         if ne == 0 or n_nodes == 0:

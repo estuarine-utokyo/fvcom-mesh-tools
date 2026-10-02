@@ -42,6 +42,7 @@ from fvcom_mesh_tools.extend import (  # noqa: E402
 from fvcom_mesh_tools.extend_recipe import check_expected, load_extend_recipe  # noqa: E402
 from fvcom_mesh_tools.io.fort14 import read_fort14, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
+from fvcom_mesh_tools.outdir import MARKER, reserve  # noqa: E402
 from fvcom_mesh_tools.patch import improve_patch  # noqa: E402
 from fvcom_mesh_tools.qa import run_qa  # noqa: E402
 
@@ -60,6 +61,13 @@ OUT = Path(sys.argv[3]).resolve()
 S, D = recipe["settings"], recipe["depths"]
 CASE = recipe["case"]
 b = Path(recipe["base"]) / recipe["base_case"]
+# The output may not hold the inputs: with case == base_case and OUT the
+# base's directory, the export would replace the base (review round 18 F6).
+# 445 reserves OUT; run alone, this script reserves it itself.
+if OUT == Path(recipe["base"]).resolve() or OUT in Path(recipe["base"]).resolve().parents:
+    raise SystemExit(f"OUTDIR {OUT} holds the base case {b}")
+if not (OUT / MARKER).exists():
+    OUT = reserve(OUT)
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
 IB = np.asarray(base.open_boundaries[0], np.int64)
 

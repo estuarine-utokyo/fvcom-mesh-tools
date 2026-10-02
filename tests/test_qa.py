@@ -519,3 +519,23 @@ def test_non_finite_coordinates_fail_without_a_crash():
     mesh.nodes[5] = np.nan
     report = run_qa(mesh, channel_check=False)
     assert not _check(report, "node_index_valid").passed
+
+
+@pytest.mark.parametrize("change", ["object_coords", "depths_17", "depths_15", "depths_2d"])
+def test_malformed_nodes_or_depths_fail_integrity_with_a_report(change):
+    """Review of the extend tools, round 18 F4 and F5."""
+    mesh = _pristine()
+    if change == "object_coords":
+        mesh.elements = mesh.elements.copy()
+        mesh.elements[0, 0] = 999
+        xy = mesh.nodes.astype(object)
+        xy[3, 0] = "bad"
+        mesh.nodes = xy
+    elif change == "depths_17":
+        mesh.depths = np.r_[mesh.depths, 5.0]
+    elif change == "depths_15":
+        mesh.depths = mesh.depths[:-1]
+    else:
+        mesh.depths = mesh.depths.reshape(-1, 1)
+    report = run_qa(mesh, coords="metric", channel_check=False)
+    assert not _check(report, "node_index_valid").passed
