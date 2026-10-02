@@ -67,12 +67,20 @@ def coast_normal(land, x: float, y: float, chord_m: float = 3000.0):
 
 def ray_intersection(p, u, q, w) -> np.ndarray:
     """Where the ray ``p + s u`` meets the ray ``q + t w`` (both s, t > 0)."""
+    # known finite 2-vectors, and a finite positive meeting point (review
+    # round 26 F6): NaN slipped past the s, t > 0 test
+    if any(np.ma.is_masked(v) for v in (p, u, q, w)):
+        raise ValueError("a ray has masked values")
     p, u, q, w = (np.asarray(v, float) for v in (p, u, q, w))
+    if any(v.shape != (2,) or not np.isfinite(v).all() for v in (p, u, q, w)):
+        raise ValueError("rays need finite (2,) points and directions")
+    if np.linalg.norm(u) == 0 or np.linalg.norm(w) == 0:
+        raise ValueError("a ray has no direction")
     a = np.column_stack([u, -w])
     if abs(np.linalg.det(a)) < 1e-12:
         raise ValueError("the two sides are parallel")
     s, t = np.linalg.solve(a, q - p)
-    if s <= 0 or t <= 0:
+    if not (np.isfinite(s) and np.isfinite(t)) or s <= 0 or t <= 0:
         raise ValueError("the two sides meet behind one of their start points")
     return p + s * u
 

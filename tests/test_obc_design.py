@@ -141,3 +141,17 @@ def test_a_masked_line_is_refused():
     line = np.ma.array([[0.0, 0.0], [10000.0, 0.0]], mask=[[False, False], [True, False]])
     with pytest.raises(ValueError, match="masked"):
         resample(line, 1000.0)
+
+
+def test_ray_intersection_needs_known_finite_rays():
+    """Review of the extend tools, round 26 F6."""
+    import numpy as np
+    import pytest
+
+    from fvcom_mesh_tools.obc_design import ray_intersection
+
+    with pytest.raises(ValueError):
+        ray_intersection(np.ma.array([0.0, 0.0], mask=[True, False]), [1, 0], [1, 1], [0, -1])
+    with pytest.raises(ValueError):
+        ray_intersection([np.nan, 0], [1, 0], [1, 1], [0, -1])
+    assert np.allclose(ray_intersection([0, 0], [1, 0], [1, 1], [0, -1]), [1, 0])

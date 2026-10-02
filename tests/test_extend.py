@@ -640,3 +640,35 @@ def test_masked_indices_bands_and_limiter_edges_are_refused():
     with pytest.raises(ValueError, match="outside"):
         rfactor_smooth_free(np.array([100.0, 10.0]), np.array([-1]), np.array([0]),
                             np.array([False, True]), rmax=0.2, hmin=1)
+
+
+def test_round_26_inputs_are_checked():
+    """Review round 26 F2-F5."""
+    from fvcom_mesh_tools.extend import (
+        band_field,
+        merge_outer,
+        round_depths_inside,
+        trim_lone_corners,
+        verify_frozen_base,
+    )
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    x, y = np.meshgrid([0.0, 1000.0], [0.0, 1000.0])
+    with pytest.raises(ValueError, match="masked"):
+        band_field(np.ma.array(x, mask=True), y, [[0, 0], [1000, 0]], [1500, 1500], 2000)
+    base = Fort14Mesh("b", np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
+                      np.full(4, 5.0), np.array([[0, 1, 2], [0, 2, 3]]), [np.array([1, 2])], [])
+    outer = np.array([[1.0, 0.0], [1.0, 1.0], [2.0, 0.0], [2.0, 1.0]])
+    m = merge_outer(base, outer, np.array([[0, 2, 1], [2, 3, 1]]), [0, 1], [1, 2], [2, 3])
+    bad_base = Fort14Mesh("b", base.nodes, base.depths, base.elements,
+                          [np.array([1.9, 2.9])], [])
+    with pytest.raises(ValueError, match="whole number"):
+        verify_frozen_base(m, bad_base, [1, 2])
+    with pytest.raises(ValueError, match="masked"):
+        trim_lone_corners(np.array([[0, 1, 2]]), np.ma.array([True], mask=[True]))
+    with pytest.raises(ValueError, match="boolean"):
+        trim_lone_corners(np.array([[0, 1, 2]]), [1])
+    for args in ((np.ma.array([999.0], mask=True), 3.0, None), ([5.0], np.nan, None),
+                 ([5.0], 1.0, np.nan)):
+        with pytest.raises(ValueError):
+            round_depths_inside(*args)

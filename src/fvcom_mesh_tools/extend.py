@@ -97,7 +97,9 @@ def band_field(x, y, line_xy, targets, half_width_m):
     """
     import shapely
 
-    _no_masks(line_xy=line_xy, targets=targets)       # round 25 F4
+    _no_masks(line_xy=line_xy, targets=targets, x=x, y=y)   # rounds 25 F4, 26 F2
+    if np.shape(x) != np.shape(y) or not (np.isfinite(x).all() and np.isfinite(y).all()):
+        raise ValueError("x and y must be finite lattice arrays of one shape")
     line_xy = np.asarray(line_xy, float)
     targets = np.asarray(targets, float)
     if len(line_xy) < 2 or len(targets) != len(line_xy):
@@ -295,8 +297,9 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
         c = np.asarray(chain, np.int64)
         return {frozenset((int(a), int(b))) for a, b in zip(c[:-1], c[1:])}
 
-    want = set().union(*(_edges(c) for c in base.open_boundaries)) if base.open_boundaries \
-        else set()
+    # the base's own chains as whole indices too (round 26 F3)
+    chains = [_indices(c, nb, "a base open boundary") for c in base.open_boundaries]
+    want = set().union(*(_edges(c) for c in chains)) if chains else set()
     if _edges(ib) != want:
         raise ValueError(f"interface_base has {len(_edges(ib))} edge(s); the base's open "
                          f"boundary has {len(want)}, and they must be the same")
@@ -535,6 +538,12 @@ def round_depths_inside(h, hmin, hmax=None, decimals: int = 6) -> np.ndarray:
     grid of ``decimals`` (3.0000004 -> 3.0 below a 3.0000004 floor); the
     bounds are moved inward to that grid first (review round 10 F12).
     """
+    # known, finite depths and finite ordered bounds (review round 26 F5)
+    _no_masks(h=h)
+    if not np.isfinite(np.asarray(h, float)).all():
+        raise ValueError("depths must be finite")
+    if not (np.isfinite(hmin) and (hmax is None or (np.isfinite(hmax) and hmax >= hmin))):
+        raise ValueError(f"bounds must be finite and ordered, not [{hmin}, {hmax}]")
     q = 10.0 ** decimals
     lo = np.ceil(hmin * q) / q
     hi = np.inf if hmax is None else np.floor(hmax * q) / q
@@ -636,8 +645,13 @@ def trim_lone_corners(elements, mutable, keep_nodes=(), max_rounds=20):
 
     Returns ``(elements, mutable, report)``.
     """
+    # unknown flags are not permissions (review round 26 F4)
+    _no_masks(elements=elements, mutable=mutable, keep_nodes=keep_nodes)
     t = np.asarray(elements, np.int64)
-    mut = np.asarray(mutable, bool)
+    mut = np.asarray(mutable)
+    if mut.dtype != bool or mut.shape != (len(t),):
+        raise ValueError(f"mutable must be a boolean ({len(t)},) array, not {mut.dtype} "
+                         f"{mut.shape}")
     keep = set(int(v) for v in keep_nodes)
     dropped, left, limited = 0, [], False
     for _ in range(max_rounds):

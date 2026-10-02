@@ -383,7 +383,13 @@ def sample(names, lon, lat, data_dir=None) -> tuple[np.ndarray, np.ndarray]:
 def non_tp_count(names, which) -> tuple[int, list[str]]:
     """How many points (``which`` from :func:`sample`) came from non-T.P. sources, and which."""
     names = _check(names)
+    # known whole indices in {-1, 0, ..., len(names)-1} (review round 26 F7)
+    if np.ma.is_masked(which):
+        raise ValueError("which has masked values")
     which = np.asarray(which)
+    if which.size and (which.dtype.kind not in "iu" or which.min() < -1
+                       or which.max() >= len(names)):
+        raise ValueError(f"which must hold source indices -1..{len(names) - 1}")
     off = [n for k, n in enumerate(names)
            if DATUM.get(n, "unknown") != "T.P." and (which == k).any()]
     n = int(sum((which == names.index(o)).sum() for o in off))

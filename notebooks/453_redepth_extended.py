@@ -163,6 +163,10 @@ if (sorted(_land_names) != sorted(_gin["land_sha256"])
         or PROV["files"]["base"]["sha256"] != _want_base):
     raise SystemExit("the land or base changed between accepting and recording it")
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
+# sea depths, finite and positive, in the base too: its minimum sets the QA
+# floor below (review round 26 F1)
+if not (np.isfinite(base.depths).all() and (np.asarray(base.depths) > 0).all()):
+    raise SystemExit("the base has depths that are not finite and positive")
 mesh = read_fvcom_case(src_dir / f"{case}_grd.dat", src_dir / f"{case}_dep.dat",
                        src_dir / f"{case}_obc.dat")
 NB = base.n_nodes
@@ -224,7 +228,8 @@ verify_frozen_base(back, base, IB)
 check_no_overlap(back, base.n_elements)
 qa = run_qa(back, name=name, path=written["grd"], max_offenders=10_000,
              # the recipe's depth floor, not QA's 2 m default; the frozen base
-             # keeps its own depths (review round 25 F7)
+             # keeps its own depths, checked positive above (review rounds 25
+             # F7, 26 F1)
              min_depth_m=float(min(D["min_m"], np.min(base.depths))))
 
 

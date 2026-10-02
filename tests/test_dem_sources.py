@@ -334,3 +334,14 @@ def test_a_masked_query_point_is_uncovered(fake_sources):
     q = np.ma.masked_array([139.6, 139.6], mask=[True, False])
     d, w = sample(["fine", "coarse"], q, np.array([35.1, 35.1]), data_dir=fake_sources)
     assert np.isnan(d[0]) and w[0] == -1 and np.isfinite(d[1])
+
+
+def test_non_tp_count_checks_its_indices():
+    """Review round 26 F7."""
+    from fvcom_mesh_tools.dem.sources import non_tp_count
+
+    with pytest.raises(ValueError, match="masked"):
+        non_tp_count(["m7001", "srtm15plus"], np.ma.array([1, 1], mask=True))
+    with pytest.raises(ValueError):
+        non_tp_count(["m7001", "srtm15plus"], np.array([5]))
+    assert non_tp_count(["m7001", "srtm15plus"], np.array([-1, 0, 1])) == (1, ["srtm15plus"])

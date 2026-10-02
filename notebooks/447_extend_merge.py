@@ -74,6 +74,10 @@ if (OUT / "report.json").exists() or (OUT / "merge.json").exists():
 # hashed before it is read (round 21 F2), and checked again before publishing
 BASE_SHA = {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")}
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
+# sea depths, finite and positive, in the base too: its minimum sets the QA
+# floor below (review round 26 F1)
+if not (np.isfinite(base.depths).all() and (np.asarray(base.depths) > 0).all()):
+    raise SystemExit("the base has depths that are not finite and positive")
 IB = np.asarray(base.open_boundaries[0], np.int64)
 
 # The generation must be of this recipe, boundary and base, and its mesh the
@@ -255,7 +259,8 @@ dt_new = float(_dt_allow(back, back.elements[base.n_elements:]).min())
 say(f"time-step allowance: base {dt_base:.2f} s, new elements {dt_new:.2f} s")
 qa = run_qa(back, name=CASE, path=written["grd"], max_offenders=10_000,
              # the recipe's depth floor, not QA's 2 m default; the frozen base
-             # keeps its own depths (review round 25 F7)
+             # keeps its own depths, checked positive above (review rounds 25
+             # F7, 26 F1)
              min_depth_m=float(min(D["min_m"], np.min(base.depths))))
 (OUT / f"{CASE}_qa.json").write_text(json.dumps(qa.to_dict(), indent=1, default=float))
 say(f"QA {qa.n_gate_total - qa.n_gate_failed}/{qa.n_gate_total}")
