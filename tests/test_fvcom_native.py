@@ -715,3 +715,15 @@ def test_an_interrupt_right_after_a_move_is_rolled_back(tmp_path, monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         export_fvcom_case(m, out, "t")
     assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+
+
+def test_read_grd_checks_record_ids(tmp_path):
+    """Review round 19 F6."""
+    from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
+
+    w = export_fvcom_case(_tri(), tmp_path / "c", "t")
+    lines = w["grd"].read_text().splitlines()
+    lines[-1] = "999" + lines[-1][lines[-1].index(" "):]
+    w["grd"].write_text("\n".join(lines) + "\n")
+    with pytest.raises(ValueError, match="node ids"):
+        read_fvcom_case(w["grd"], w["dep"], w["obc"])

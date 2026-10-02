@@ -549,6 +549,14 @@ def read_grd(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
         raise ValueError(
             f"{path.name}: {len(lines) - 2} rows for {n_cells} cells + "
             f"{n_nodes} nodes")
+    # record ids 1..NE and 1..NP in order, as FVCOM reads them: it finds the
+    # node block by its first id (review of the extend tools, round 19 F6)
+    cell_ids = [int(ln.split()[0]) for ln in lines[2:2 + n_cells]]
+    if cell_ids != list(range(1, n_cells + 1)):
+        raise ValueError(f"{path.name}: cell ids must run 1..{n_cells} in order")
+    node_ids = [int(ln.split()[0]) for ln in lines[2 + n_cells:2 + n_cells + n_nodes]]
+    if node_ids != list(range(1, n_nodes + 1)):
+        raise ValueError(f"{path.name}: node ids must run 1..{n_nodes} in order")
     elements = np.array(
         [[int(w) for w in ln.split()[1:4]] for ln in lines[2:2 + n_cells]],
         dtype=np.int64) - 1

@@ -48,6 +48,18 @@ for prod in PRODUCTS:
     if (prod == design_path or prod.resolve() == design_path
             or (prod.exists() and prod.samefile(design_path))):
         raise SystemExit(f"{prod} would overwrite the design {design_path}")
+# nor may two products be one file (round 19 F5)
+_ids = [p.resolve() for p in PRODUCTS]
+if len(set(_ids)) != len(_ids) or any(
+        a.exists() and b.exists() and a.samefile(b)
+        for i, a in enumerate(PRODUCTS) for b in PRODUCTS[i + 1:]):
+    raise SystemExit(f"two of {[p.name for p in PRODUCTS]} are the same file")
+
+
+def _umask() -> int:
+    m = os.umask(0)
+    os.umask(m)
+    return m
 cfg = yaml.safe_load(design_path.read_text())
 DATA = Path(os.environ["DATA_DIR"])
 
@@ -208,8 +220,15 @@ out_csv.parent.mkdir(parents=True, exist_ok=True)
 if bad:
     # a rejected design must not replace a usable boundary (review F8): its
     # report goes beside it under another name, the CSV is left alone
+    # written to a temporary file and moved into place: a rejection name
+    # that is a link to the published CSV must not write through it
+    # (review round 19 F5)
     rej = out_csv.with_suffix(".rejected.json")
-    rej.write_text(json.dumps(report, indent=1, default=float))
+    fd, tmp = tempfile.mkstemp(dir=rej.parent, prefix=rej.name + ".", suffix=".tmp")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(report, indent=1, default=float))
+    os.chmod(tmp, 0o666 & ~_umask())
+    os.replace(tmp, rej)
     raise SystemExit(f"the design is rejected ({'; '.join(bad)}); report in {rej}, "
                      f"{out_csv.name} left as it was")
 header = (f"# Open boundary nodes (lon,lat, EPSG:4326) designed by notebooks/444_design_obc.py\n"

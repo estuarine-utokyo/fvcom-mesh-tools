@@ -13,6 +13,7 @@
 # (This split began when the package was Apache-2.0 and could not import the
 # GPL oceanmesh; it is GPL-3.0-or-later since 2026-10-02.)
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -37,6 +38,7 @@ from fvcom_mesh_tools.extend_recipe import check_expected, load_extend_recipe  #
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.obc_band import build_obc_band  # noqa: E402
+from fvcom_mesh_tools.outdir import TOKEN_ENV, claim  # noqa: E402
 
 T0 = time.time()
 MESH_EPSG = 32654
@@ -49,8 +51,10 @@ def say(msg):
 
 recipe = load_extend_recipe(sys.argv[1])
 check_expected(recipe)          # the recipe the driver recorded (review round 5 F3)
+# under 445 the generation directory lies in the run's reservation; run
+# alone, it is reserved afresh (review round 19 F2)
 OUT = Path(sys.argv[2]).resolve()
-OUT.mkdir(parents=True, exist_ok=True)
+OUT = claim(OUT, owner=OUT.parent if os.environ.get(TOKEN_ENV) else None)
 S = recipe["settings"]
 to_ll = Transformer.from_crs(MESH_EPSG, 4326, always_xy=True)
 to_m = Transformer.from_crs(4326, MESH_EPSG, always_xy=True)
@@ -71,7 +75,7 @@ say(f"base {recipe['base_case']}: NP={base.n_nodes:,} NE={base.n_elements:,}, "
 # the coordinates parsed from the bytes whose digest was checked (round 7 F8)
 OBC = np.asarray(recipe["open_boundary_lonlat"], float)
 bb = tuple(recipe["land"]["bbox"])
-DATA = Path(__import__("os").environ["DATA_DIR"])
+DATA = Path(os.environ["DATA_DIR"])
 land = gpd.read_file(DATA / "geodata/OSM/land-polygons-split-4326/land_polygons.shp",
                      bbox=bb).clip(bb)
 # the base is land for this stage: the only sea to mesh is the new one

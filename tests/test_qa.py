@@ -539,3 +539,15 @@ def test_malformed_nodes_or_depths_fail_integrity_with_a_report(change):
         mesh.depths = mesh.depths.reshape(-1, 1)
     report = run_qa(mesh, coords="metric", channel_check=False)
     assert not _check(report, "node_index_valid").passed
+
+
+def test_an_extra_coordinate_column_does_not_change_planar_qa():
+    """Review of the extend tools, round 19 F4."""
+    mesh = _pristine()
+    mesh.nodes = mesh.nodes.astype(float)
+    mesh.nodes[:, 0] *= 0.1
+    flat = run_qa(mesh, coords="metric", channel_check=False)
+    mesh.nodes = np.c_[mesh.nodes, 10 * mesh.nodes[:, 0]]
+    tall = run_qa(mesh, coords="metric", channel_check=False)
+    assert [c.passed for c in flat.checks] == [c.passed for c in tall.checks]
+    assert not flat.passed

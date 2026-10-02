@@ -21,9 +21,12 @@ def _run(tmp_path, *, tada=True, times=("2020-01-01T00:00:00.000000",
                                     + (f" INPUT_DIR = '{run}/input/',\n"
                                        " GRID_FILE = 'm2_grd.dat',\n" if grid else ""))
     if grid:
+        # a whole grid: n_nodes points, every cell on nodes 1, 2, 3
         (run / "input").mkdir()
         (run / "input" / "m2_grd.dat").write_text(
-            f"Node Number = {grid[0]}\nCell Number = {grid[1]}\n")
+            f"Node Number = {grid[0]}\nCell Number = {grid[1]}\n"
+            + "".join(f"{k} 1 2 3\n" for k in range(1, grid[1] + 1))
+            + "".join(f"{k} {1000.0 * k} {500.0 * (k % 2)}\n" for k in range(1, grid[0] + 1)))
     (run / "fvcom.log").write_text("step ...\n" + extra_log + ("TADA!\n" if tada else ""))
     with netCDF4.Dataset(run / "output" / "m2_0001.nc", "w") as ds:
         ds.createDimension("time", None)
@@ -34,6 +37,11 @@ def _run(tmp_path, *, tada=True, times=("2020-01-01T00:00:00.000000",
         z = ds.createVariable("zeta", "f4", ("time", "node"))
         u = ds.createVariable("ua", "f4", ("time", "nele"))
         v = ds.createVariable("va", "f4", ("time", "nele"))
+        # the grid the run was on (FVCOM's x, y, nv), matching the fixture's
+        ds.createDimension("three", 3)
+        ds.createVariable("x", "f8", ("node",))[:] = [1000.0 * (k + 1) for k in range(n)]
+        ds.createVariable("y", "f8", ("node",))[:] = [500.0 * ((k + 1) % 2) for k in range(n)]
+        ds.createVariable("nv", "i4", ("three", "nele"))[:] = np.tile([[3], [2], [1]], (1, n))
         for k, s in enumerate(times):
             t[k] = np.array(list(s.ljust(26)), dtype="S1")
             z[k] = np.full(n, zeta)
@@ -252,3 +260,12 @@ def test_sub_second_records_are_distinct(tmp_path):
     nml.write_text(nml.read_text().replace("seconds = 86400.0", "seconds = 0.25"))
     info = check_run(run)
     assert not any("do not increase" in r for r in info["reasons"]), info["reasons"]
+
+
+def test_history_from_another_mesh_of_the_same_size_fails(tmp_path):
+    """Review round 19 F7: counts matched, coordinates did not."""
+    run = _run(tmp_path, grid=(3, 3))
+    with netCDF4.Dataset(run / "output" / "m2_0001.nc", "a") as ds:
+        ds["x"][:] = ds["x"][:] + 100000.0
+    info = check_run(run)
+    assert not info["ok"] and any("coordinates" in r for r in info["reasons"])

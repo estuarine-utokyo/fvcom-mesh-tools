@@ -260,8 +260,11 @@ def detect_coords(nodes: np.ndarray) -> str:
 
 
 def _metric_nodes(nodes: np.ndarray, coords: str) -> np.ndarray:
+    # planar x, y only: an extra column made edges and angles 3-D while
+    # areas stayed 2-D (review of the extend tools, round 19 F4)
+    nodes = np.asarray(nodes, dtype=np.float64)[:, :2]
     if coords == "metric":
-        return np.asarray(nodes, dtype=np.float64)
+        return nodes
     lat0 = float(nodes[:, 1].mean())
     lon0 = float(nodes[:, 0].mean())
     return _to_metric(nodes, lat0=lat0, lon0=lon0)

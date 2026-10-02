@@ -207,9 +207,15 @@ def prepare(run_root: Path, cases: dict[str, Path], dte: float | None) -> dict:
         inp.mkdir(parents=True, exist_ok=True)
         out.mkdir(exist_ok=True)
         _, lat = to_ll.transform(mesh.nodes[:, 0], mesh.nodes[:, 1])
-        export_fvcom_case(mesh, inp, "m2", cor=lat, twodm=False,
-                          obc_depth_control=False,
-                          obc_type=getattr(meshes[label], "obc_type", 1))
+        # Both cases on the same tidal boundary, type 1 (elevation): the M2
+        # forcing written below acts only there, and an inherited type 3
+        # would clamp it to zero (review round 19 F3). Read back to check.
+        written = export_fvcom_case(mesh, inp, "m2", cor=lat, twodm=False,
+                                    obc_depth_control=False, obc_type=1)
+        types = {ln.split()[2] for ln in written["obc"].read_text().splitlines()[1:]
+                 if ln.strip()}
+        if types != {"1"}:
+            raise SystemExit(f"{label}: the staged open boundary has types {types}, not 1")
         (inp / "sigma.dat").write_text(
             "NUMBER OF SIGMA LEVELS = 6\nSIGMA COORDINATE TYPE = UNIFORM\n")
         obc = mesh.open_boundaries[0]
@@ -231,6 +237,7 @@ def prepare(run_root: Path, cases: dict[str, Path], dte: float | None) -> dict:
         (case / "m2_run.nml").write_text(M383.namelist(inp, out))
         metrics = M383.mesh_metrics(mesh)
         metrics.update(
+            obc_type=1, case_obc_type=int(getattr(meshes[label], "obc_type", 1)),
             obc_depth_control_change_m=obc_change.tolist(),
             obc_node_ids=(obc + 1).tolist(),
             obc_arc_m=pos.tolist(), obc_offset_m=offset.tolist(),

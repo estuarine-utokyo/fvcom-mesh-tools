@@ -132,6 +132,32 @@ def _grid_counts(path: Path) -> dict[str, int] | None:
     return {"node": np_, "nele": ne_}
 
 
+def _grid_identity(ds, grid_path: Path, name: str) -> list[str]:
+    """Reasons the history ``ds`` is not on the mesh in ``grid_path``."""
+    from fvcom_mesh_tools.io.fvcom_native import read_grd
+
+    try:
+        nodes, elements = read_grd(grid_path)
+    except (OSError, ValueError) as exc:
+        return [f"the staged grid {grid_path} cannot be read: {exc}"]
+    out = []
+    if "x" in ds.variables and "y" in ds.variables:
+        xy = np.column_stack([np.asarray(ds["x"][:], float), np.asarray(ds["y"][:], float)])
+        if xy.shape != nodes[:, :2].shape or not np.allclose(xy, nodes[:, :2], rtol=0,
+                                                             atol=1e-3):
+            out.append(f"{name}: node coordinates are not the staged mesh's")
+    else:
+        out.append(f"{name}: no x, y to tie the history to the staged mesh")
+    if "nv" in ds.variables:
+        nv = np.asarray(ds["nv"][:]).T - 1
+        if nv.shape != elements.shape or not np.array_equal(np.sort(nv, axis=1),
+                                                            np.sort(elements, axis=1)):
+            out.append(f"{name}: connectivity is not the staged mesh's")
+    else:
+        out.append(f"{name}: no nv to tie the history to the staged mesh")
+    return out
+
+
 def _fortran_float(text: str) -> float:
     """A Fortran real as a namelist writes it: ``1.``, ``1.5d0``, ``10``."""
     t = text.strip().lower().replace("d", "e")
@@ -220,10 +246,12 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
     # the staged mesh's size, when the namelist names a readable grid file:
     # the history must be on it (review of the extend tools, round 4 F14)
     staged = None
+    staged_grid = None
     grid, indir = vals.get("GRID_FILE"), vals.get("INPUT_DIR")
     if grid and indir:
         gpath = Path(indir) / grid if Path(indir).is_absolute() else run / indir / grid
         staged = _grid_counts(gpath)
+        staged_grid = gpath if staged is not None else None
         # a grid named but unreadable is a failure, not a skipped check
         # (review round 5 F6)
         if staged is None:
@@ -265,6 +293,11 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                     reasons.append(f"{f.name}: no records")
                     continue
                 stamps += times
+                # the history must be on the staged mesh itself, not one of
+                # the same size (review round 19 F7): node coordinates, and
+                # each element's nodes in any order (FVCOM may reverse them)
+                if staged_grid is not None and not stamps[:-len(times)]:
+                    reasons += _grid_identity(ds, staged_grid, f.name)
                 for var, dim in (("zeta", "node"), ("ua", "nele"), ("va", "nele")):
                     # the layout FVCOM writes; a square transposed array
                     # has the right shape and the wrong meaning (round 13 F4)

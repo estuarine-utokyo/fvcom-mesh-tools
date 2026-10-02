@@ -27,7 +27,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from fvcom_mesh_tools.dem.sources import source_files  # noqa: E402
 from fvcom_mesh_tools.extend_recipe import EXPECT_ENV, load_extend_recipe  # noqa: E402
-from fvcom_mesh_tools.outdir import reserve  # noqa: E402
+from fvcom_mesh_tools.outdir import TOKEN_ENV, new_token, reserve  # noqa: E402
 from fvcom_mesh_tools.provenance import (  # noqa: E402
     changed_files,
     changed_inventory,
@@ -57,7 +57,8 @@ if len(sys.argv) <= 2 and (REPO / "outputs").resolve() not in OUT.parents:
 STATE = {"done": False, "stage": "inputs", "provenance": None, "extra": {}}
 # reserve the output atomically: checking that it is empty and then creating
 # it let two builds into the same directory (review F20)
-OUT = reserve(OUT)
+TOKEN = new_token()           # proves to the stages which run they belong to
+OUT = reserve(OUT, token=TOKEN)
 
 
 def _on_exit():
@@ -111,7 +112,7 @@ for key, name in (("recipe_sha256", "recipe"), ("open_boundary_sha256", "open_bo
         raise SystemExit(f"{name} changed between reading and recording it")
 
 gen = OUT / "generate"
-env = dict(os.environ, PYTHONPATH=str(REPO / "src"),
+env = dict(os.environ, PYTHONPATH=str(REPO / "src"), **{TOKEN_ENV: TOKEN},
            **{var: recipe[key] for key, var in EXPECT_ENV.items()})
 # a failed stage still leaves a report with the provenance and the stage that
 # failed (review round 2 F18): the stages are run first, the report written

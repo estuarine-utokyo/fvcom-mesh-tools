@@ -374,71 +374,65 @@ def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int) -> dict:
     return {"n_new_islands": n_islands}
 
 
-#: A land piece the new mesh covers is a defect when it is larger than this
-#: many times the median area of the new elements over it: the mesh could have
-#: resolved it. Smaller ones are dropped by the resolution principle (what the
-#: element size cannot carry goes). Tokyo Bay - Enshu, 2026-10-02: 2,445
-#: covered pieces, all rocks and islets, at most 1.37 times.
-LAND_COVER_RATIO = 2.0
+#: Covered land is a defect where it is wider than one element: each patch of
+#: land under the new elements is shrunk by this fraction of the local edge
+#: length; whatever survives is land the mesh could have resolved. Narrower
+#: patches -- the coast's approximation, islets below the element size --
+#: are what the resolution principle drops. Tokyo Bay - Enshu, 2026-10-02:
+#: 3,681 covered patches (34 km2), none survives 0.5.
+LAND_COVER_ERODE = 0.5
 
 
 def check_land_cover(mesh: Fort14Mesh, land, n_base_elements: int,
-                     ratio: float = LAND_COVER_RATIO) -> dict:
+                     erode: float = LAND_COVER_ERODE) -> dict:
     """No land the mesh could have resolved may lie under the new elements.
 
     ``land`` is the true land in the mesh's coordinates, without the base's
-    footprint. For every land piece the new elements touch, the share of it
-    they cover is measured; a piece more than half covered and larger than
-    ``ratio`` times the median area of the new elements over it is a defect
-    (review round 15 F2: a mesh over a whole island passed every gate).
-    Coastal elements reaching onto land by the coast's approximation are not
-    pieces covered by half. Raises on the first such piece; returns counts.
+    footprint. Each connected patch of it under the new elements is shrunk
+    inward by ``erode`` times the median edge length of the elements holding
+    it; a patch with anything left is wider than an element there, and
+    fails. Patches are judged on their own: land outside the mesh, such as a
+    mainland a covered peninsula belongs to, does not change the verdict
+    (review rounds 15 F2, 16 F3, 19 F1). Raises on the first such patch;
+    returns counts.
     """
     import shapely
 
-    # controls checked, or a NaN ratio or an out-of-range count would switch
-    # the check off (review round 16 F4)
     ne = len(np.asarray(mesh.elements))
     if not (isinstance(n_base_elements, (int, np.integer)) and 0 <= n_base_elements <= ne):
         raise ValueError(f"n_base_elements must be an integer in [0, {ne}], not "
                          f"{n_base_elements!r}")
-    if not (isinstance(ratio, (int, float, np.integer, np.floating)) and np.isfinite(ratio)
-            and ratio > 0):
-        raise ValueError(f"ratio must be finite and positive, not {ratio!r}")
+    if not (isinstance(erode, (int, float, np.integer, np.floating)) and np.isfinite(erode)
+            and erode > 0):
+        raise ValueError(f"erode must be finite and positive, not {erode!r}")
     xy = np.asarray(mesh.nodes)[:, :2]
     tri = shapely.polygons(xy[np.asarray(mesh.elements)[n_base_elements:]])
     area = shapely.area(tri)
-    cover = shapely.union_all(tri)
     tree = shapely.STRtree(tri)
-    n_covered, worst, bad = 0, 0.0, []
-    for piece in getattr(land, "geoms", [land]):
-        if piece.is_empty or piece.area <= 0:
-            continue
-        under = tree.query(piece, predicate="intersects")
+    covered = land.intersection(shapely.union_all(tri))
+    patches = [g for g in getattr(covered, "geoms", [covered])
+               if g.geom_type == "Polygon" and g.area > 0]
+    worst, bad = 0.0, []
+    for patch in patches:
+        under = tree.query(patch, predicate="intersects")
+        held = shapely.area(shapely.intersection(tri[under], patch))
+        under = under[held > 1e-9 * area[under]]   # not those touching an edge
         if not len(under):
             continue
-        # only elements that cover some of the piece: one touching it along
-        # an edge would weigh in the median with land it does not hold
-        # (review round 16 F3)
-        held = shapely.area(shapely.intersection(tri[under], piece))
-        under = under[held > 1e-9 * area[under]]
-        if not len(under):
-            continue
-        if piece.intersection(cover).area <= 0.5 * piece.area:
-            continue
-        n_covered += 1
-        r = piece.area / float(np.median(area[under]))
-        worst = max(worst, r)
-        if r > ratio:
-            c = piece.representative_point()
-            bad.append((c.x, c.y, piece.area, r))
+        edge = float(np.median(np.sqrt(4.0 * area[under] / np.sqrt(3.0))))
+        left = patch.buffer(-erode * edge).area
+        worst = max(worst, left)
+        if left > 0:
+            c = patch.representative_point()
+            bad.append((c.x, c.y, patch.area, edge))
     if bad:
-        x, y, a, r = bad[0]
-        raise ValueError(f"{len(bad)} land piece(s) the mesh could resolve lie under new "
-                         f"elements, e.g. {a:.0f} m2 at ({x:.0f}, {y:.0f}), {r:.1f} times "
-                         f"the elements over it")
-    return {"n_land_pieces_covered": n_covered, "max_covered_area_ratio": worst,
-            "ratio_limit": ratio}
+        x, y, a, e = bad[0]
+        raise ValueError(f"{len(bad)} patch(es) of land the mesh could resolve lie under new "
+                         f"elements, e.g. {a:.0f} m2 at ({x:.0f}, {y:.0f}) under elements of "
+                         f"about {e:.0f} m")
+    return {"n_covered_patches": len(patches),
+            "covered_area_m2": float(sum(p.area for p in patches)),
+            "max_area_left_after_erosion_m2": worst, "erode": erode}
 
 
 def land_segments(elements, open_chains) -> list[tuple[int, np.ndarray]]:

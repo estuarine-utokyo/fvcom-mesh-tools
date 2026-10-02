@@ -437,7 +437,16 @@ def test_land_the_mesh_could_resolve_must_not_lie_under_it():
     with pytest.raises(ValueError, match="could resolve"):
         check_land_cover(m, shapely.box(1000, 1000, 4000, 4000), n_base_elements=0)
     rep = check_land_cover(m, shapely.box(2400, 2400, 2600, 2600), n_base_elements=0)
-    assert rep["n_land_pieces_covered"] == 1 and rep["max_covered_area_ratio"] < 1
+    assert rep["n_covered_patches"] == 1 and rep["max_area_left_after_erosion_m2"] == 0
+    # round 19 F1: the same resolvable head joined to a large mainland outside
+    # the mesh still fails
+    head = shapely.box(1000, 1000, 4000, 4000)
+    mainland = shapely.union_all([head, shapely.box(2400, 4000, 2600, 9000),
+                                  shapely.box(-50000, 9000, 50000, 60000)])
+    with pytest.raises(ValueError, match="could resolve"):
+        check_land_cover(m, mainland, n_base_elements=0)
+    # a strip narrower than an element along the coast passes
+    check_land_cover(m, shapely.box(0, 4700, 5000, 5000), n_base_elements=0)
 
 
 def test_a_complex_gradation_is_refused():
@@ -452,14 +461,15 @@ def test_a_complex_gradation_is_refused():
         compose_sizing(v, x, y, grade=np.complex128(0.2))
 
 
-def test_land_cover_median_ignores_edge_contacts_and_bad_controls():
-    """Review round 16 F3 and F4."""
+def test_land_cover_ignores_edge_contacts_and_bad_controls():
+    """Review round 16 F3 and F4: elements touching the land along an edge
+    do not set the local size; bad controls are refused."""
     import shapely
 
     from fvcom_mesh_tools.extend import check_land_cover, check_no_overlap
     from fvcom_mesh_tools.io.fort14 import Fort14Mesh
 
-    # a 3 km square of land on six 1 km^2 triangles in the middle of large ones
+    # a 3 km square of land on four inner triangles amid large outer ones
     xy = np.array([[0, 0], [9000, 0], [9000, 9000], [0, 9000],
                    [3000, 3000], [6000, 3000], [6000, 6000], [3000, 6000], [4500, 4500]], float)
     tri = np.array([[4, 5, 8], [5, 6, 8], [6, 7, 8], [7, 4, 8],
@@ -468,11 +478,11 @@ def test_land_cover_median_ignores_edge_contacts_and_bad_controls():
     m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), tri, [], [])
     land = shapely.box(3000, 3000, 6000, 6000)
     with pytest.raises(ValueError, match="could resolve"):
-        check_land_cover(m, land, 0, ratio=2.0)
-    for kw in ({"ratio": np.nan}, {"n_base_elements": -1}, {"n_base_elements": 99}):
-        args = {"ratio": 2.0, "n_base_elements": 0, **kw}
+        check_land_cover(m, land, 0)
+    for kw in ({"erode": np.nan}, {"n_base_elements": -1}, {"n_base_elements": 99}):
+        args = {"erode": 0.5, "n_base_elements": 0, **kw}
         with pytest.raises(ValueError):
-            check_land_cover(m, land, args["n_base_elements"], ratio=args["ratio"])
+            check_land_cover(m, land, args["n_base_elements"], erode=args["erode"])
     with pytest.raises(ValueError):
         check_no_overlap(m, 0, rel_tol=np.nan)
 
