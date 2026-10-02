@@ -102,7 +102,7 @@ def test_verify_catches_a_moved_base_node_and_an_unshared_interface():
     moved[0, 0] += 1e-9
     with pytest.raises(ValueError, match="node coordinates"):
         verify_frozen_base(Fort14Mesh("m", moved, m.depths, m.elements, [], []), base, [1, 2])
-    with pytest.raises(ValueError, match="not shared"):
+    with pytest.raises(ValueError, match="not shared|must be the same"):
         verify_frozen_base(m, base, [0, 3])
 
 
@@ -450,3 +450,40 @@ def test_a_complex_gradation_is_refused():
         graded_up(v, x, y, np.complex128(0.2 + 7j))
     with pytest.raises(ValueError):
         compose_sizing(v, x, y, grade=np.complex128(0.2))
+
+
+def test_land_cover_median_ignores_edge_contacts_and_bad_controls():
+    """Review round 16 F3 and F4."""
+    import shapely
+
+    from fvcom_mesh_tools.extend import check_land_cover, check_no_overlap
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    # a 3 km square of land on six 1 km^2 triangles in the middle of large ones
+    xy = np.array([[0, 0], [9000, 0], [9000, 9000], [0, 9000],
+                   [3000, 3000], [6000, 3000], [6000, 6000], [3000, 6000], [4500, 4500]], float)
+    tri = np.array([[4, 5, 8], [5, 6, 8], [6, 7, 8], [7, 4, 8],
+                    [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
+                    [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]])
+    m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), tri, [], [])
+    land = shapely.box(3000, 3000, 6000, 6000)
+    with pytest.raises(ValueError, match="could resolve"):
+        check_land_cover(m, land, 0, ratio=2.0)
+    for kw in ({"ratio": np.nan}, {"n_base_elements": -1}, {"n_base_elements": 99}):
+        args = {"ratio": 2.0, "n_base_elements": 0, **kw}
+        with pytest.raises(ValueError):
+            check_land_cover(m, land, args["n_base_elements"], ratio=args["ratio"])
+    with pytest.raises(ValueError):
+        check_no_overlap(m, 0, rel_tol=np.nan)
+
+
+def test_frozen_base_needs_the_whole_interface():
+    """Review round 16 F5."""
+    from fvcom_mesh_tools.extend import verify_frozen_base
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    base = Fort14Mesh("b", np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
+                      np.full(4, 5.0), np.array([[0, 1, 2], [0, 2, 3]]), [np.array([1, 2])], [])
+    for ib in ([], [1], [1.9, 2.9]):
+        with pytest.raises(ValueError):
+            verify_frozen_base(base, base, ib)

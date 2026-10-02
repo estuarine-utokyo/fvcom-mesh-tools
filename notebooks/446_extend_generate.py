@@ -9,8 +9,9 @@
 # (UTM 54N; open boundary 0 = the new boundary, open boundary 1 = the base
 # interface) and OUTDIR/generate.json.
 #
-# oceanmesh is GPL: it is imported here, in a script run as a subprocess,
-# never from the fvcom_mesh_tools package.
+# oceanmesh is imported here, in a script 445 runs as a subprocess stage.
+# (This split began when the package was Apache-2.0 and could not import the
+# GPL oceanmesh; it is GPL-3.0-or-later since 2026-10-02.)
 import json
 import sys
 import time

@@ -261,7 +261,22 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
         raise ValueError("base elements changed")
     if not same_bits(merged.depths[:nb], base.depths):
         raise ValueError("base depths changed")
-    ib = np.asarray(interface_base, np.int64)
+    # The interface given must be the base's open boundary, every edge of
+    # it, as whole indices: an empty or partial one let an unmerged base pass
+    # (review round 16 F5).
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
+    ib = _indices(interface_base, nb, "interface_base")
+
+    def _edges(chain):
+        c = np.asarray(chain, np.int64)
+        return {frozenset((int(a), int(b))) for a, b in zip(c[:-1], c[1:])}
+
+    want = set().union(*(_edges(c) for c in base.open_boundaries)) if base.open_boundaries \
+        else set()
+    if _edges(ib) != want:
+        raise ValueError(f"interface_base has {len(_edges(ib))} edge(s); the base's open "
+                         f"boundary has {len(want)}, and they must be the same")
     e = np.sort(np.vstack([merged.elements[:, [0, 1]], merged.elements[:, [1, 2]],
                            merged.elements[:, [2, 0]]]), axis=1)
     owner = np.tile(np.arange(merged.n_elements), 3)
@@ -299,6 +314,12 @@ def check_no_overlap(merged: Fort14Mesh, n_base_elements: int, rel_tol: float = 
     """
     import shapely
 
+    if not (isinstance(rel_tol, (int, float, np.integer, np.floating)) and np.isfinite(rel_tol)
+            and rel_tol >= 0):
+        raise ValueError(f"rel_tol must be finite and non-negative, not {rel_tol!r}")
+    if not (isinstance(n_base_elements, (int, np.integer))
+            and 0 <= n_base_elements <= merged.n_elements):
+        raise ValueError(f"n_base_elements must be in [0, {merged.n_elements}]")
     xy = merged.nodes[:, :2]
     base = shapely.union_all(shapely.polygons(xy[merged.elements[:n_base_elements]]))
     outer = shapely.polygons(xy[merged.elements[n_base_elements:]])
@@ -371,6 +392,15 @@ def check_land_cover(mesh: Fort14Mesh, land, n_base_elements: int,
     """
     import shapely
 
+    # controls checked, or a NaN ratio or an out-of-range count would switch
+    # the check off (review round 16 F4)
+    ne = len(np.asarray(mesh.elements))
+    if not (isinstance(n_base_elements, (int, np.integer)) and 0 <= n_base_elements <= ne):
+        raise ValueError(f"n_base_elements must be an integer in [0, {ne}], not "
+                         f"{n_base_elements!r}")
+    if not (isinstance(ratio, (int, float, np.integer, np.floating)) and np.isfinite(ratio)
+            and ratio > 0):
+        raise ValueError(f"ratio must be finite and positive, not {ratio!r}")
     xy = np.asarray(mesh.nodes)[:, :2]
     tri = shapely.polygons(xy[np.asarray(mesh.elements)[n_base_elements:]])
     area = shapely.area(tri)
@@ -381,6 +411,13 @@ def check_land_cover(mesh: Fort14Mesh, land, n_base_elements: int,
         if piece.is_empty or piece.area <= 0:
             continue
         under = tree.query(piece, predicate="intersects")
+        if not len(under):
+            continue
+        # only elements that cover some of the piece: one touching it along
+        # an edge would weigh in the median with land it does not hold
+        # (review round 16 F3)
+        held = shapely.area(shapely.intersection(tri[under], piece))
+        under = under[held > 1e-9 * area[under]]
         if not len(under):
             continue
         if piece.intersection(cover).area <= 0.5 * piece.area:
