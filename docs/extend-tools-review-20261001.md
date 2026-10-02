@@ -4575,3 +4575,268 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F7 | minor | code read (land not relisted) | yes | fixed, 92ea195 |
 | F8 | minor | test (two-line title) | yes | fixed, 92ea195; test |
 | F9 | minor | tests (negative grade, negative band, NaN ambient) | yes | fixed, 92ea195; tests |
+
+## Round 14
+
+### Answer (verbatim)
+
+Read-only review completed. **3 major, 5 minor and 1 nit findings remain.** The pending GPL finding is counted once as previously known. No files were modified.
+
+## Previous findings
+
+Grouped ranges below cover every numbered finding from rounds 1–13. “RESOLVED” refers to the reported defect; separate remaining gaps appear below.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1-F27; R2-F22; R3-F14; R4–R13-F1 | **NOT RESOLVED** | Direct oceanmesh imports remain. Owner decision pending; finding 1 below. |
+| Generation-nondeterminism hypothesis | **WITHDRAWN** | Supplied repeated production runs contradict it; no new supporting evidence found. |
+| R1-F1, F13–F16 | **RESOLVED** | Mask handling, source/cache identity, fallback preservation, degenerate soundings and source inventories address the reported cases. |
+| R1-F2–F4 | **RESOLVED** | Required QA failures fail execution; depth bounds and final r-factor are checked. Timestep warnings follow the owner’s explicit policy. |
+| R1-F5–F8, F12, F19 | **RESOLVED** | Actual chords, coverage, continuous land checks, protected publication, chain length and resampling progress are checked. |
+| R1-F9–F11, F29 | **RESOLVED** | Serialization, frozen-base verification, seam/overlap checks, single-edge land runs and boundary traversal are corrected. |
+| R1-F17–F18, F28 | **RESOLVED** | Relevant code identity, recipe controls and case names are validated. |
+| R1-F20–F26 | **RESOLVED** | Reservations, source/output separation, fresh smoke roots, depth-before-timestep ordering, absolute paths, executable overrides and case names address the reported defects. |
+| R2-F1–F3, F18, F21 | **RESOLVED** | Reservation/publication protection, re-depth acceptance, failure reporting and reuse refusal address the original reproductions. |
+| R2-F4–F9, F13, F16–F17, F19–F20 | **RESOLVED** | Reported spacing, departure, precision, overlap, traversal, guide, band, coverage and fillet cases are handled. |
+| R2-F10–F12, F14–F15 | **RESOLVED** | Rename identity, geographic controls, resampling progress and limiter validation/convergence are corrected. |
+| R3-F1–F4, F11–F13 | **RESOLVED** | Composed-field diagnostics, spacing controls, reusable bands, side selection, short chains and reversals are handled. |
+| R3-F5–F10 | **RESOLVED** | Publication recovery, early failure handling, interpolation, fort.14 precision, overlap and timestep ordering address the reported cases. |
+| R4-F2–F5, F9–F10 | **RESOLVED** | Reported interpolation, local overlap, guide-placement and boundary-simplicity cases are corrected. |
+| R4-F6–F8, F11–F14 | **RESOLVED** | Rollback, failure reporting, input rechecks, timestep/executable/path validation and required-field checks address the original cases. |
+| R5-F2–F10 | **RESOLVED** | Flip guards, parsed-byte identity, complete guide intersections, protected recovery, grid/path/query validation, early handlers and finite depths are corrected. |
+| R6-F2–F11 | **RESOLVED** | Land windows, output-directory handling, completion checks, failure exits, staging prechecks, recovery, inventories, native values, Fortran strings and relocation validation address the reported cases. |
+| R7-F2–F12 | **RESOLVED** | Whole-source triangulation, quoting/index checks, staged export/relocation, work-area checks, verified CSV consumption, identity rechecks and publication ordering are corrected. |
+| R8-F2–F13 | **RESOLVED** | Reported rollback, connectivity/type, sponge, identity, namelist, cache, dimension-order, serialization and manifest-selection defects are corrected. |
+| R9-F2–F14 | **RESOLVED** | Original root collisions, recovery races, index/dtype defects, namelist/sponge handling, trimming, depth bounds, reading and library paths are corrected. Finding 2 concerns another staging entry point. |
+| R10-F2–F14 | **RESOLVED** | Original destination/finishing collisions, field validation, recovery tracking, comment parsing, QA normalization, serialization and documentation cases are corrected. |
+| R11-F2–F8 | **RESOLVED** | Finishing is isolated; IDs are normalized; malformed/empty fields and connectivity fail; relocation restores absence; re-depth acceptance includes the island gate; spaced paths work. |
+| R12-F2 | **RESOLVED** | 453 reads acceptance once and binds the consumed report and case hashes to accepted provenance. |
+| R12-F3 | **RESOLVED** | Benchmark destinations are unique. Finding 6 concerns the new destination’s parent directory. |
+| R12-F4 | **RESOLVED** | Additional floating fields with a nonleading time dimension are rejected. |
+| R12-F5 | **RESOLVED** | Invalid formatted durations fail; initial-only output cannot certify completion. |
+| R12-F6–F7 | **RESOLVED** | Empty/malformed fort.14 connectivity and fractional boundary types fail; timestep documentation follows owner policy. |
+| R13-F2 | **RESOLVED** | 414 participates in the staging protocol; 416 holds the lock across both copies. |
+| R13-F3 | **RESOLVED** | Benchmark copies use a shorter path; relocation checks FVCOM’s directory limit. |
+| R13-F4–F5 | **RESOLVED** | Required barotropic dimensions are exact; START_DATE is required and output must advance beyond it. |
+| R13-F6–F7 | **RESOLVED** | Acceptance is read once and hash-bound; land datasets are relisted at completion. |
+| R13-F8 | **RESOLVED** | fort.14 titles must occupy one line. |
+| R13-F9 | **PARTIAL** | Negative gradation, invalid ambient sizes and invalid bands are rejected. `graded_up` still accepts nonfinite lattice coordinates; finding 5. The fix also introduced finding 4. |
+
+## Findings
+
+1. **Major — Known F27: package code still imports oceanmesh directly.**  
+   **Location:** `src/fvcom_mesh_tools/mesh_engine/oceanmesh.py:332`; also `mesh_engine/multiscale.py:52`, `mesh_clean.py:1672`, `autofinish/directives.py:20`; `THIRD_PARTY_NOTICES.md:37`.
+
+   **Evidence:** These execution paths contain direct oceanmesh imports. The third-party notices explicitly endorse this arrangement, contrary to the repository’s stated subprocess separation policy. The extension subprocess path does not remove the other imports.
+
+   **Fix:** Complete the pending owner decision, move these operations behind subprocess boundaries or into a separately licensed plugin, and reconcile the notices. **Previously reported; not new.**
+
+2. **Major — Job 411 can overwrite inputs while job 412 is running.**  
+   **Location:** `jobs/octopus/411_m2_prep.sh:25`, `:33`; `notebooks/383_m2_case_prep.py:321`.
+
+   **Evidence:** 411 checks only for existing `m2_*.nc` histories and then prepares cases without acquiring `.staging` or checking `.running`. In a realistic interleaving, 412 acquires `<case>/.running` and starts initialization before its first history exists; 411’s guard passes and 383 overwrites grid, depth, forcing and namelist files. Two simultaneous 411 preparations are likewise uncoordinated.
+
+   An in-memory shell harness executing the actual 411 body with filesystem operations mocked reached preparation successfully with **zero staging-lock calls**. Job 412’s protection at lines 21–25 depends on writers participating in the protocol.
+
+   **Fix:** Acquire `fmesh_stage_lock "$RUN_ROOT"` before inspecting or writing the cases, and hold it through preparation.
+
+3. **Major — Job 414 preserves obsolete staging and smoke-success markers when replacing cases.**  
+   **Location:** `jobs/octopus/414_refine_m2_prep.sh:23–33`; consumer: `jobs/octopus/412_m2_run.sh:37`.
+
+   **Reproduction:** Stage and smoke-test a root through 421/423, then rerun 414 with different base/refined inputs before the long integrations start. The production case output directories can still be empty, so 414 permits replacement. It leaves `STAGED` and `SMOKE_OK` intact. Consequently, 412 with `FMESH_REQUIRE_SMOKE=1` accepts the replacement cases using the previous cases’ smoke result.
+
+   The mocked actual 414 body completed preparation with one lock call and the pre-existing smoke marker unchanged. Preparation also writes the two cases sequentially, so a mid-preparation failure can retain old acceptance markers over a mixed state.
+
+   **Fix:** After acquiring the lock and passing reuse guards, invalidate staging/smoke/run acceptance markers before the first write. Publish staging acceptance only after complete preparation; bind smoke acceptance to the staged inputs.
+
+4. **Minor — The round 13 gradation checks reject valid NumPy scalar values.**  
+   **Location:** `src/fvcom_mesh_tools/extend.py:55`, `:89`.
+
+   **Reproduction:** Both calls below fail with “the gradation must be finite and non-negative,” despite a valid finite positive value:
+
+   ```python
+   graded_up(values, x, y, np.float32(0.2))
+   compose_sizing(values, x, y, grade=np.float32(0.2))
+   ```
+
+   `np.int64(1)` has the same type-check problem. These values supported the arithmetic before the new `isinstance(grade, (int, float))` checks.
+
+   **Fix:** Accept real numeric scalars, including NumPy scalars, normalize them to `float`, and then validate finiteness and sign. Explicitly reject booleans if intended.
+
+5. **Minor — Sizing input validation remains incomplete and inconsistently normalizes inputs.**  
+   **Location:** `src/fvcom_mesh_tools/extend.py:53–57`, `:91–94`, `:110–112`.
+
+   **Reproduction:** With:
+
+   ```python
+   values = np.array([[1., 100.], [1., 100.]])
+   x = np.array([[0., np.nan], [0., np.nan]])
+   y = np.array([[0., 0.], [1., 1.]])
+   ```
+
+   `graded_up(values, x, y, .2)` returns the unchanged field successfully. A NaN size also survives in its returned field.
+
+   Separately, `compose_sizing` validates converted coordinate arrays but passes the original objects to `_limit`: valid nested-list coordinates raise `TypeError`. Matching one-dimensional inputs pass validation and then raise an internal unpacking error.
+
+   **Fix:** Normalize arrays once and share explicit matching, finite, two-dimensional lattice validation between both helpers. Reject NaN/+infinity size bounds in `graded_up`, while preserving the intentional negative-infinity sentinel used for off-band lower bounds.
+
+6. **Minor — The new benchmark scratch location assumes its parent already exists.**  
+   **Location:** `jobs/octopus/416_renumber_benchmark.sh:54`.
+
+   **Evidence:** `mktemp -d "$WORK_DIR/scratch/b416_XXXX"` creates only its final directory. Neither 416 nor `common.sh` creates `$WORK_DIR/scratch`. A valid staged root elsewhere, with a configured WORK_DIR containing the conda installation but no scratch directory, therefore fails with `ENOENT`. The previous location beneath the existing run root did not have this prerequisite.
+
+   **Fix:** Create and validate `$WORK_DIR/scratch` before calling `mktemp`.
+
+7. **Minor — Run validation truncates fractional timestamps before checking cadence.**  
+   **Location:** `src/fvcom_mesh_tools/cli/check_run.py:332`.
+
+   **Reproduction:** An in-memory history with correctly shaped finite fields and timestamps at **0, 0.25, 0.5, 0.75 and 1 second**, matching `NC_OUT_INTERVAL='seconds = 0.25'`, is rejected solely because “the history times do not increase record by record.”
+
+   Conversion to `datetime64[s]` turns several distinct records into identical timestamps. The parser accepts fractional timestamps and intervals, so this rejection contradicts accepted inputs.
+
+   **Fix:** Calculate differences without discarding fractional seconds, using datetime subtraction or microsecond-resolution NumPy timestamps converted to seconds.
+
+8. **Minor — Pure test selections unnecessarily initialize the optional oceanmesh backend.**  
+   **Location:** `tests/conftest.py:29–30`.
+
+   **Evidence:** Collection always calls `_importable("oceanmesh")`, even when no selected test has `needs_oceanmesh`. In this read-only environment, that import initializes matplotlib and aborts otherwise independent test collection because its cache cannot be created. An in-memory fault injection likewise showed an optional-backend initialization `OSError` escaping collection containing only unmarked tests.
+
+   **Fix:** First check whether any selected test requires oceanmesh. Probe/import the backend only when such tests exist.
+
+9. **Nit — Job 401’s usage and experiment description refer to different jobs/configurations.**  
+   **Location:** `jobs/octopus/401_verify_best.sh:12–20`.
+
+   **Evidence:** Its usage instructs submitting `395_target_mode.sh`. Its header describes `field`, `achieved` and `ach1w`, while the actual invocations at lines 71–72 run `best` and `legacy`.
+
+   **Fix:** Update the submission command and header to describe job 401’s actual two variants.
+
+## Verification
+
+- **47 selected tests passed**, covering `test_extend.py`, `test_obc_design.py`, `test_dem_sources.py` and `test_extend_recipe.py`, using disk-free tests with:
+  `pytest.main(["-q", "-s", "--noconftest", "-p", "no:cacheprovider", *selected_nodes])`.
+- **All 56 OCTOPUS shell scripts passed `bash -n`.**
+- **Focused Ruff checks passed** with `ruff check --no-cache` on the reviewed extension modules, notebooks and affected CLI modules.
+- In-memory sizing, history-validation, optional-import fault injection and shell-body mocks reproduced the findings described above.
+- Initial pytest attempts failed because ordinary capture required writable temporary storage, and then because unconditional optional-backend initialization required a writable matplotlib cache. The successful selection avoided both.
+- No production mesh generation, real-data depth processing or FVCOM integrations were run. The supplied production measurements were not independently repeated.
+- Git status remained unchanged, including the pre-existing untracked `recipes/extend/tokyo_bay_enshu_obc.png`. No batch jobs were submitted.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 3 major, 5 minor, 1 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 14: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (subprocess; GPL code must never
+  be imported by `fvcom_mesh_tools`), with fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-13 and their triage are in docs/extend-tools-review-20261001.md.
+Round 13 (your previous answer; 9 findings) was fixed in 92ea195; read
+`git show 92ea195`. Per finding:
+- F1 (= F27): owner decision pending; report it as still open, not as new.
+- F2 `common.sh` `fmesh_stage_lock`/`fmesh_stage_unlock` (same `.staging`
+  protocol as 421/423): 416 holds it across both copies; 414 takes it.
+- F3 416: `mktemp -d "$WORK_DIR/scratch/b416_XXXX"`; relocate_case checks
+  the 80-byte limit.
+- F4 check_run: zeta (time, node), ua/va (time, nele) exactly.
+- F5 check_run: START_DATE required; last record must be after it.
+- F6 453: one read of report.json; provenance hashes of the report and of
+  the case (combined as `collect` combines them) must equal the accepted
+  ones.
+- F7 453: `dataset_files(LAND)` relisted at completion.
+- F8 `write_fort14`: one-line title.
+- F9 `compose_sizing`/`graded_up` input checks.
+Verification after 92ea195: full test suite 1192 passed (batch
+job 123355); on real data 444, the full 445 build (QA 23/23, status ok, 9
+islands on land, grd and dep bit-identical to rounds 4-12) and 453 (status
+ok) all passed, and the stricter check_run (exact zeta/ua/va dimensions,
+START_DATE, output after it) still accepts the two real FVCOM smoke
+histories.
+Owner decision (2026-10-01), unchanged: meshes are made from the real
+depths; the band-floor check (446) and the new-element time-step comparison
+(447, 453) REPORT warnings and do not fail the build. Not a defect.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 (F27) | major | as round 1 | yes, pre-existing | owner decision pending |
+| F2 | major | code read (411 without the lock) | yes | fixed, ea04210 |
+| F3 | major | code read (old markers kept) | yes | fixed, ea04210 |
+| F4 | minor | test (np.float32 grade) | yes, introduced in round 13 | fixed (_grade), ea04210; test |
+| F5 | minor | tests (NaN x, lists, 1-D) | yes | fixed (_lattice), ea04210; test |
+| F6 | minor | code read | yes | fixed, ea04210 |
+| F7 | minor | test (0.25 s records) | yes | fixed, ea04210; test |
+| F8 | minor | code read | yes | fixed, ea04210 |
+| F9 | nit | doc read | yes | fixed, ea04210 |
