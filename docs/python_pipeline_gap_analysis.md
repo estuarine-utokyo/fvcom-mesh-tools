@@ -229,10 +229,9 @@ backend (~40x faster) and to keep the option open for OCSMesh's
 mesh-combination / topology utilities, which oceanmesh does not
 provide.
 
-License footprint widened: oceanmesh is GPL-3.0-or-later. We import
-it directly from the Apache-2.0 toolkit, which means anyone shipping
-``fmesh-buildmesh`` together with ``oceanmesh`` must respect GPL-3.0
-on the combined work. See ``THIRD_PARTY_NOTICES.md``.
+License footprint widened: oceanmesh is GPL-3.0-or-later. (Update,
+2026-10-02: the toolkit itself was relicensed from Apache-2.0 to
+GPL-3.0-or-later for this reason. See ``THIRD_PARTY_NOTICES.md``.)
 
 ### 2.9 Cross-basin portability (DONE, PoC #17)
 
@@ -261,14 +260,10 @@ Two operational notes from PoC #17:
 
 ## 3. License & dependency notes
 
-- ``oceanmesh`` is GPL-3.0-or-later. Importing it from this Apache-2.0
-  package makes the **combined work** GPL-3.0 when redistributed
-  alongside; source distributions of ``fvcom-mesh-tools`` itself remain
-  Apache-2.0. The dependency is gated behind the ``[oceanmesh]`` extra
-  and ``mesh_engine.oceanmesh`` lazy-imports the package, so the base
-  install and ``--engine ocsmesh`` paths stay GPL-3-free.
-- ``ocsmesh`` itself is CC0-1.0; importing it from Apache-2.0 code is
-  fine.
+- ``oceanmesh`` is GPL-3.0-or-later, and since 2026-10-02 so is this
+  package (relicensed from Apache-2.0). The dependency is gated behind the
+  ``[oceanmesh]`` extra and ``mesh_engine.oceanmesh`` lazy-imports it.
+- ``ocsmesh`` itself is CC0-1.0; importing it is fine under any license.
 - ``ocsmesh`` pulls ``gmsh`` (GPL-2.0+) at runtime when the gmsh engine
   is selected. We use it as an external tool via ``ocsmesh``, not by
   linking to ``libgmsh`` directly, but downstream redistributors should

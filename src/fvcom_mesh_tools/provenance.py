@@ -223,10 +223,11 @@ def code_identity(state: dict[str, Any]) -> dict[str, Any]:
 def _version(name: str) -> str | None:
     """The installed distribution's version, without importing it.
 
-    Importing would load ``oceanmesh``, which is GPL and may not be imported
-    from this Apache-2.0 package (CLAUDE.md; review, round 1).  For an
-    editable install the metadata is from install time; the commit in
-    ``code`` is what identifies such a tree.
+    Importing would load each library just to read its version -- slow, and
+    with side effects (``oceanmesh`` sets up matplotlib); the metadata is
+    enough (review, round 1, when the package could not import GPL code at
+    all).  For an editable install the metadata is from install time; the
+    commit in ``code`` is what identifies such a tree.
     """
     try:
         return importlib.metadata.version(name)

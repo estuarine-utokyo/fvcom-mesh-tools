@@ -64,7 +64,8 @@ def test_collect_hashes_a_shapefile_set_together_and_records_libraries(repo, tmp
 
 
 def test_collect_imports_no_library(monkeypatch):
-    """review round 1: importing oceanmesh (GPL) from this package is barred."""
+    """Versions come from metadata, without importing (review round 1; then
+    because GPL code was barred, now because importing has side effects)."""
     import importlib
 
     def refuse(name, *a, **k):

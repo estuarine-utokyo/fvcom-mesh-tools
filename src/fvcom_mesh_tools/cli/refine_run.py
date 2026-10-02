@@ -1,10 +1,11 @@
 """``fmesh-refine``: refine a region of an existing FVCOM mesh from a recipe.
 
 The generator itself is ``notebooks/420_local_refine.py``. It fills the hole
-with DistMesh from the GPL-3.0 ``oceanmesh`` fork, and the licence policy of
-this Apache-2.0 package forbids importing that, so this command runs it as a
+with DistMesh from the ``oceanmesh`` fork, and this command runs it as a
 **subprocess** -- which is also how a batch job runs it
-(``jobs/octopus/417_hires_refine.sh``).
+(``jobs/octopus/417_hires_refine.sh``). (The split began when this package
+was Apache-2.0 and could not import the GPL-3.0 oceanmesh; it is
+GPL-3.0-or-later since 2026-10-02, and the split is kept.)
 
     fmesh-refine recipes/refine/kimitsu_port_hires.yaml
     fmesh-refine my_port.yaml --out outputs/my_port --seeds 0,1,2 --land land.shp

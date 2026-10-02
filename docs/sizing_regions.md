@@ -33,8 +33,9 @@ The example's empty region list also skips the new limiter.
 OceanMesh degree-sized values. Local distances use 111000 m/degree and cosine
 of mean latitude; use local domains away from poles/dateline. The limiter is
 an eight-neighbour multi-source Dijkstra lower envelope, enforcing the slope
-on graph edges, not a continuous Euclidean gradient bound. This avoids a GPL
-OceanMesh import in the Apache package. Runtime is O(N log N).
+on graph edges, not a continuous Euclidean gradient bound. It was written to
+avoid a GPL OceanMesh import while the package was Apache-2.0 (it is
+GPL-3.0-or-later since 2026-10-02). Runtime is O(N log N).
 
 Reports include polygon area (including portions outside the lattice), sample
 count, target, achieved minimum/median, hmin yield fraction, CFL floor range,

@@ -331,7 +331,7 @@ this operation.
 
 ## 5. The patch generator
 
-`src/fvcom_mesh_tools/patch.py` (Apache-clean) and
+`src/fvcom_mesh_tools/patch.py` (no oceanmesh import) and
 `notebooks/420_local_refine.py` (the DistMesh call). Run it with
 
 ```bash
@@ -506,11 +506,13 @@ mesh is delivered and had no coverage at all.
 
 ### Where the code goes
 
-The package is Apache-2.0 and **must not import oceanmesh (GPL)**. The split:
+The split below was made when the package was Apache-2.0 and could not
+import oceanmesh (GPL). Since 2026-10-02 the package is GPL-3.0-or-later and
+may import it; the split is kept:
 
 - `src/fvcom_mesh_tools/refine.py` — the recipe, and the pre-flight refusals.
 - `src/fvcom_mesh_tools/patch.py` — selection, rings, the coastline modes,
-  sizing, stitching, seam repair, verification. License-clean, 47 tests.
+  sizing, stitching, seam repair, verification. 47 tests.
 - `notebooks/420_local_refine.py` — the DistMesh call, as notebook 325 does.
 - `notebooks/421_local_refine_map.py` — the figures.
 

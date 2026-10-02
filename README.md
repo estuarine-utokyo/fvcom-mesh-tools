@@ -114,11 +114,9 @@ pfix/egfix support (see its README section 6.3) — install per its
 | Multi-mesh stitching | [OCSMesh](https://github.com/noaa-ocs-modeling/OCSMesh) (`ops.combine_mesh`) | CC0-1.0 | imported |
 | Auxiliary mesh utilities (legacy) | [MeshKernelPy](https://github.com/Deltares/MeshKernelPy), [stompy](https://github.com/rustychris/stompy) | MIT | optional, imported |
 
-`oceanmesh` is GPL-3.0; the combined work, when redistributed together
-with this toolkit, must respect GPL-3.0. The `--engine ocsmesh` path is
-GPL-only-runtime (gmsh is invoked as an external tool through OCSMesh,
-not linked). See `THIRD_PARTY_NOTICES.md` and `docs/architecture.md`
-for the full rationale.
+`oceanmesh` is GPL-3.0-or-later, and so is this toolkit (since
+2026-10-02; it was Apache-2.0 before). See `THIRD_PARTY_NOTICES.md` and
+`docs/architecture.md`.
 
 ## Installation
 
@@ -533,5 +531,8 @@ and `fort.14` post-processing.
 
 ## License
 
-Apache License 2.0. See `LICENSE` and `NOTICE`. Third-party backend licenses
-are documented in `THIRD_PARTY_NOTICES.md`.
+GNU General Public License, version 3 or (at your option) any later version
+(GPL-3.0-or-later). See `LICENSE` and `NOTICE`. Until 2026-10-02 the project
+was Apache-2.0; it was relicensed by its sole copyright holder because it
+imports the GPL-3.0-or-later oceanmesh. Third-party backend licenses are
+documented in `THIRD_PARTY_NOTICES.md`.

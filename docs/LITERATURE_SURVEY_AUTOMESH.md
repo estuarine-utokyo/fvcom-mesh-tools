@@ -47,7 +47,8 @@ DOI: 10.25923/csba-m072. Code: github.com/noaa-ocs-modeling/OCSMesh —
   classification only; line placement is manual/domain-given.
 - Cleanup: deterministic targeted passes (isolates, pinched nodes,
   folded boundary elements, slivers); smoothing delegated to engine.
-- CC0 = liftable verbatim into our Apache-2.0 package.
+- CC0 = liftable verbatim into our package (GPL-3.0-or-later since 2026-10-02;
+  Apache-2.0 when this survey was written).
 
 ### 1.3 End-to-end automation (2025-2026)
 

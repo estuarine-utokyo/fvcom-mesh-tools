@@ -356,17 +356,15 @@ solver clashes on libraries like `numpy` / `netCDF4` / `hdf5`.
 
 | Component                | License                     |
 | ------------------------ | --------------------------- |
-| `fvcom-mesh-tools` code  | Apache-2.0                  |
+| `fvcom-mesh-tools` code  | GPL-3.0-or-later            |
 | `oceanmesh`              | GPL-3.0-or-later            |
 | OCSMesh                  | CC0-1.0                     |
 | gmsh (called by OCSMesh) | GPL-2.0-or-later (runtime)  |
 
-Importing `oceanmesh` directly from this Apache-2.0 toolkit means the
-**combined work** is subject to GPL-3.0 obligations when redistributed.
-Source distributions of `fvcom-mesh-tools` itself remain Apache-2.0;
-the GPL footprint kicks in only when you ship `oceanmesh` alongside.
-The `--engine ocsmesh` path stays Apache-friendly (CC0 + GPL-only-runtime
-through gmsh).
+The toolkit imports `oceanmesh` and is itself GPL-3.0-or-later (relicensed
+from Apache-2.0 on 2026-10-02 by its sole copyright holder). Every other
+backend it imports is under a GPL-compatible license; the JIGSAW core,
+whose terms are not, is never imported or bundled.
 
 See `THIRD_PARTY_NOTICES.md` for the full attribution text.
 

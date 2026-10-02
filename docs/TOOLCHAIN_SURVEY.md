@@ -73,7 +73,7 @@ achievable today by passing a low zorder.
 | land behind mesh in matplotlib | exists (zorder) |
 | labeled 5 km reference grid (A1/B2/C4) | missing |
 
-### 1.4 fvcom-mesh-tools (this repo, Apache-2.0) — FVCOM I/O + QA + repair
+### 1.4 fvcom-mesh-tools (this repo, GPL-3.0-or-later since 2026-10-02; Apache-2.0 before) — FVCOM I/O + QA + repair
 
 CLIs (all flag-driven): `fmesh-buildmesh` (DEM → engine → depth → boundaries →
 rivers → quality → perpfix → fort.14, ~45 flags), `fmesh-perpfix` (first-ring

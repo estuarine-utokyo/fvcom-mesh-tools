@@ -83,7 +83,7 @@ structures are mixed: the L-shaped breakwater above has a 60 m body and a
 
 The centreline comes from the medial axis of the thin part -- Voronoi vertices
 of the densified outline that fall inside it, joined into a graph and pruned
-of short spurs. That is numpy/scipy/shapely only (Apache-2.0). Where OSM maps a
+of short spurs. That is numpy/scipy/shapely only. Where OSM maps a
 structure as a LINE (`man_made=breakwater`, `man_made=pier` ways), the line is
 the centreline and no medial axis is needed -- but those ways are **not in the
 data on disk** (the Geofabrik free extract has no `man_made` layer); see §5.
@@ -105,7 +105,7 @@ knows nothing about walls.
 
 ### 3.4 Split the mesh along it
 
-After meshing, a new function (Apache side, `patch.py` or its own module) cuts
+After meshing, a new function (package side, `patch.py` or its own module) cuts
 the mesh along each wall:
 
 * a node **inside** a wall: its fan of elements is divided by the two wall

@@ -1,8 +1,14 @@
 fvcom-mesh-tools
 Copyright 2026 Jun Sasaki and fvcom-mesh-tools contributors
 
-Licensed under the Apache License, Version 2.0 (the "License").
-See the LICENSE file for the full text of the License.
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version. See the LICENSE file for the full text.
+
+Before 2026-10-02 the project was licensed under the Apache License,
+Version 2.0. It was relicensed by its sole copyright holder, because it
+imports the GPL-3.0-or-later oceanmesh.
 
 For licenses of third-party software invoked or imported by this project,
 see THIRD_PARTY_NOTICES.md.

@@ -2,11 +2,12 @@
 # and fill it at the target size, leaving everything outside bit-for-bit
 # unchanged.  The design and its reasoning are in docs/local_refine.md.
 #
-# The split of work follows the licence policy (CLAUDE.md): selection, the rim,
-# the coastline modes, stitching and verification live in the Apache-2.0
-# package (fvcom_mesh_tools.patch); the fill is DistMesh from the GPL
-# oceanmesh fork and therefore lives here, in a notebook, exactly as
-# notebooks/325_sample_repro.py does.
+# The split of work: selection, the rim, the coastline modes, stitching and
+# verification live in the package (fvcom_mesh_tools.patch); the fill is
+# DistMesh from the oceanmesh fork and lives here, in a notebook, exactly as
+# notebooks/325_sample_repro.py does. (The split began under the earlier
+# Apache-2.0 licence, which kept GPL code out of the package; the package is
+# GPL-3.0-or-later since 2026-10-02.)
 #
 #   python notebooks/420_local_refine.py recipes/refine/futtsu_nori.yaml
 #

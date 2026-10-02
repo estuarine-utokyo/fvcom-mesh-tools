@@ -61,7 +61,7 @@ at 29.0 deg), and the refinement must add none.
 
 | what | where | access | needed for |
 |---|---|---|---|
-| **fvcom-mesh-tools** (this repository, Apache-2.0) | https://github.com/estuarine-utokyo/fvcom-mesh-tools | public | everything |
+| **fvcom-mesh-tools** (this repository, GPL-3.0-or-later; Apache-2.0 before 2026-10-02) | https://github.com/estuarine-utokyo/fvcom-mesh-tools | public | everything |
 | **oceanmesh, the laboratory's fork** (GPL-3.0) | https://github.com/estuarine-utokyo/oceanmesh, branch `main` (tested at `76903e3`) | public | the fill in `fmesh-refine` |
 | **xcoast** | https://github.com/estuarine-utokyo/xcoast | public | making the OSM land polygons for a new area (§2.3); land in some figures |
 | **a base FVCOM model** | e.g. `TB-FVCOM` (`input/goto2023/grid/`), the laboratory's model repository | laboratory only | the recipe's `base_mesh`, `base_depth`, `base_obc` -- an FVCOM grd/dep/obc **in UTM zone 54N metres (EPSG:32654) with exactly one open boundary arc** (§2.5) |
@@ -502,10 +502,11 @@ exactly zero amplitude is a defect.
 | `fmesh-refine-depths` | the earlier depth finisher (floor, cap, then the refinement's limiter); kept for old scripts |
 | `jobs/octopus/refine_workflow.sh RECIPE` | the whole chain as batch jobs (§3) |
 
-The generator lives in `notebooks/`, not in the package, because it imports
-the GPL-3.0 oceanmesh; the Apache-2.0 package may not (`CLAUDE.md`). Its
-parts -- selection, rim, walls, stitching, verification, QA -- are in the
-package and have unit tests.
+The generator lives in `notebooks/`, not in the package. This split dates
+from when the package was Apache-2.0 and could not import the GPL-3.0
+oceanmesh; since 2026-10-02 the package is GPL-3.0-or-later and may, but
+the split is kept. Its parts -- selection, rim, walls, stitching,
+verification, QA -- are in the package and have unit tests.
 
 ---
 

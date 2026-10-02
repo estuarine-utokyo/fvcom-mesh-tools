@@ -28,12 +28,17 @@ A `Makefile` exposes `install`, `test`, `lint`, `format`, `clean` targets.
 
 ## License policy (do not violate)
 
-- The project is **Apache-2.0**.
-- **Do not `import` GPL-licensed packages** (`oceanmesh`, `gmsh`) from
-  `fvcom_mesh_tools`. They must be invoked as a subprocess, or kept in a
-  separate plugin package with its own GPL license.
+- The project is **GPL-3.0-or-later** (relicensed from Apache-2.0 on
+  2026-10-02 by its sole copyright holder, because it imports `oceanmesh`).
+- Import only packages whose licenses are compatible with GPL-3.0
+  (permissive ones such as MIT/BSD/CC0, LGPL, GPL-3.0, GPL-2.0-or-later).
+  `oceanmesh` (GPL-3.0-or-later) may be imported. Do not import or bundle
+  code under GPL-2.0-only or with non-free/extra restrictions.
 - JIGSAW (`jigsawpy`) carries a non-OSI license that restricts commercial
-  distribution. Keep it as an optional extra; do not bundle it.
+  distribution and is not GPL-compatible. Keep it as an optional extra;
+  never import or bundle it.
+- New source files need no license header; `LICENSE`, `NOTICE` and the
+  `license` field in `pyproject.toml` state the license.
 - See `THIRD_PARTY_NOTICES.md` for the canonical handling rules.
 
 ## Code organization
