@@ -373,6 +373,12 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                 if missing:
                     reasons.append(f"{f.name}: the history output lacks {', '.join(missing)}")
                     continue
+                # Times indexed by the fields' record dimension (round 24 F6)
+                tv = ds["Times"]
+                if tv.ndim != 2 or tv.dimensions[0] != "time" or tv.dtype.kind not in "SU":
+                    reasons.append(f"{f.name}: Times is {tv.dimensions} {tv.dtype}, not "
+                                   f"(time, DateStrLen) characters")
+                    continue
                 raw_times = ds["Times"][:]
                 # a masked character is unknown, not its fill (round 23 F4)
                 if np.ma.is_masked(raw_times):

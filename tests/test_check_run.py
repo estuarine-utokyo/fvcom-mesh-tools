@@ -376,3 +376,16 @@ def test_masked_times_and_first_output_outside_the_run_fail(tmp_path):
         nml.write_text(nml.read_text() + f" NC_FIRST_OUT = '{nfo}',\n")
         info = check_run(run)
         assert not info["ok"] and any("outside" in r for r in info["reasons"])
+
+
+def test_times_on_another_dimension_fail(tmp_path):
+    """Review round 24 F6."""
+    run = _run(tmp_path)
+    f = run / "output" / "m2_0001.nc"
+    with netCDF4.Dataset(f, "a") as ds:
+        ds.renameVariable("Times", "Times_old")
+        ds.createDimension("stamp", 2)
+        t = ds.createVariable("Times", "S1", ("stamp", "DateStrLen"))
+        t[:] = ds["Times_old"][:]
+    info = check_run(run)
+    assert not info["ok"] and any("Times is" in r for r in info["reasons"])

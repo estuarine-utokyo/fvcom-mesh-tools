@@ -34,6 +34,7 @@ degenerate control volume). Quality/topology acceptance is
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
@@ -534,13 +535,37 @@ __all__ = [
 # column is read only to be ignored.
 
 
+_INT_RE = re.compile(r"[+-]?[0-9]+")
+_REAL_RE = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eEdD][+-]?[0-9]+)?")
+
+
+def _fint(tok: str) -> int:
+    """An integer as FVCOM's list-directed read takes it: plain ASCII digits
+    (Python's int() also takes '1_0' and full-width digits; review rounds 23
+    F7, 24 F5)."""
+    if not _INT_RE.fullmatch(tok):
+        raise ValueError(f"{tok!r} is not an integer")
+    return int(tok)
+
+
+def _freal(tok: str) -> float:
+    """A real as FVCOM's list-directed read takes it (a D exponent too)."""
+    if not _REAL_RE.fullmatch(tok):
+        if tok.lstrip("+-").lower() in ("nan", "inf", "infinity"):
+            raise ValueError(f"non-finite value {tok!r}")
+        raise ValueError(f"{tok!r} is not a number")
+    return float(tok.replace("d", "e").replace("D", "e"))
+
+
 def _header_count(line: str, label: str) -> int:
     if "=" not in line:
         raise ValueError(f"expected a '{label} = N' header, got {line!r}")
     key, value = line.split("=", 1)
     if key.strip().lower() != label.lower():
         raise ValueError(f"expected header {label!r}, got {key.strip()!r}")
-    return int(value.strip().split()[0])
+    if not value.split():
+        raise ValueError(f"header {label!r} has no count")
+    return _fint(value.split()[0])
 
 
 def read_grd(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
@@ -569,17 +594,17 @@ def read_grd(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
         raise ValueError(f"{path.name}: a node row has fewer than 3 fields")
     # record ids 1..NE and 1..NP in order, as FVCOM reads them: it finds the
     # node block by its first id (review of the extend tools, round 19 F6)
-    cell_ids = [int(ln.split()[0]) for ln in lines[2:2 + n_cells]]
+    cell_ids = [_fint(ln.split()[0]) for ln in lines[2:2 + n_cells]]
     if cell_ids != list(range(1, n_cells + 1)):
         raise ValueError(f"{path.name}: cell ids must run 1..{n_cells} in order")
-    node_ids = [int(ln.split()[0]) for ln in lines[2 + n_cells:2 + n_cells + n_nodes]]
+    node_ids = [_fint(ln.split()[0]) for ln in lines[2 + n_cells:2 + n_cells + n_nodes]]
     if node_ids != list(range(1, n_nodes + 1)):
         raise ValueError(f"{path.name}: node ids must run 1..{n_nodes} in order")
     elements = np.array(
-        [[int(w) for w in ln.split()[1:4]] for ln in lines[2:2 + n_cells]],
+        [[_fint(w) for w in ln.split()[1:4]] for ln in lines[2:2 + n_cells]],
         dtype=np.int64) - 1
     rows = lines[2 + n_cells:2 + n_cells + n_nodes]
-    nodes = np.array([[float(w) for w in ln.split()[1:3]] for ln in rows],
+    nodes = np.array([[_freal(w) for w in ln.split()[1:3]] for ln in rows],
                      dtype=float)
     # A NaN coordinate reaches FVCOM as a mesh it cannot build and reaches
     # every geometric test here as a comparison that is quietly False; the
@@ -604,7 +629,7 @@ def read_dep(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     # (review of the extend tools, round 21 F5)
     if len(lines) != 1 + n_nodes or any(len(ln.split()) < 3 for ln in lines[1:]):
         raise ValueError(f"{path.name}: expected exactly {n_nodes} rows of 'X Y H'")
-    data = np.array([[float(w) for w in ln.split()[:3]]
+    data = np.array([[_freal(w) for w in ln.split()[:3]]
                      for ln in lines[1:1 + n_nodes]], dtype=float)
     if data.shape != (n_nodes, 3):
         raise ValueError(f"{path.name}: expected {n_nodes} rows of 'X Y H'")
@@ -639,9 +664,7 @@ def read_obc(path: str | Path, with_types: bool = False):
         raise ValueError(f"{path.name}: every OBC row needs 'I NODE TYPE'")
     # all three fields are plain ASCII integers, the counter too, as FVCOM's
     # list-directed read takes them (review rounds 22 F8, 23 F7)
-    import re
-
-    if any(not re.fullmatch(r"[+-]?[0-9]+", f) for r in rows for f in r[:3]):
+    if any(not _INT_RE.fullmatch(f) for r in rows for f in r[:3]):
         raise ValueError(f"{path.name}: an OBC row counter, node or type is not an "
                          f"integer")
     ids = np.array([int(r[1]) for r in rows], dtype=np.int64) - 1

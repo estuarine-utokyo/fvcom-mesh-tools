@@ -177,6 +177,14 @@ def compose_sizing(ambient, x, y, *, grade, floor=None, bands=()):
     return h, report
 
 
+def _no_masks(**arrays) -> None:
+    """Refuse masked values: a conversion would turn them into the data under
+    the mask (review round 24 F4)."""
+    for name, a in arrays.items():
+        if np.ma.is_masked(a):
+            raise ValueError(f"{name} has masked values")
+
+
 def _signed_areas(nodes, elements):
     a = nodes[elements]
     return 0.5 * ((a[:, 1, 0] - a[:, 0, 0]) * (a[:, 2, 1] - a[:, 0, 1])
@@ -201,6 +209,8 @@ def merge_outer(base: Fort14Mesh, outer_nodes, outer_elements, interface_outer,
     """
     from fvcom_mesh_tools.io.fvcom_native import _indices
 
+    _no_masks(base_nodes=base.nodes, base_depths=base.depths, base_elements=base.elements,
+              outer_nodes=outer_nodes, outer_elements=outer_elements)
     # a NaN or infinite tolerance would accept any interface (round 17 F4)
     if not (isinstance(tol_m, (int, float, np.integer, np.floating)) and np.isfinite(tol_m)
             and tol_m >= 0):
@@ -252,6 +262,9 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
     (one base element and one outer element on it).
     """
     nb, eb = base.n_nodes, base.n_elements
+    _no_masks(merged_nodes=merged.nodes, merged_depths=merged.depths,
+              merged_elements=merged.elements, base_nodes=base.nodes, base_depths=base.depths,
+              base_elements=base.elements)
 
     def same_bits(a, b):
         # dtype and bit pattern: numerical equality lets -0.0 pass for +0.0
@@ -340,7 +353,8 @@ def check_no_overlap(merged: Fort14Mesh, n_base_elements: int, rel_tol: float = 
     return {"n_outer_touching_base": int(len(cand))}
 
 
-def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int) -> dict:
+def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int,
+                       n_base_elements: int | None = None) -> dict:
     """Every hole in the new part of the mesh must be land, give or take the
     coast's approximation.
 
@@ -367,10 +381,23 @@ def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int) -> dict:
     d1, d2 = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
     areas = 0.5 * np.abs(d1[:, 0] * d2[:, 1] - d2[:, 0] * d1[:, 1])
     obc = set(int(v) for c in mesh.open_boundaries for v in np.asarray(c).tolist())
+    # Only a hole the base itself has is left alone: a new hole between base
+    # nodes is checked like any other (review round 24 F3). With
+    # n_base_elements, the base's holes are its own closed boundary loops;
+    # without it, the old rule (a loop of base nodes only) is kept.
+    if n_base_elements is not None:
+        base_holes = {frozenset(int(v) for v in lp)
+                      for lp in boundary_loops(els[:n_base_elements])}
+
+        def is_base_hole(lp):
+            return frozenset(lp) in base_holes
+    else:
+        def is_base_hole(lp):
+            return max(lp) < n_base_nodes
     n_islands, worst, bad = 0, 0.0, []
     for loop in boundary_loops(els):
         loop = [int(v) for v in loop]
-        if obc & set(loop) or max(loop) < n_base_nodes:
+        if obc & set(loop) or is_base_hole(loop):
             continue
         n_islands += 1
         hole = shapely.Polygon(xy[loop])
@@ -523,6 +550,7 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=500
     limit is not reached -- infeasible (e.g. a fixed 1 m node beside a free
     node held at 3 m) or not converged within ``max_iter``.
     """
+    _no_masks(h0=h0, ei=ei, ej=ej, free=free)
     h = np.asarray(h0, float).copy()
     free = np.asarray(free, bool)
     ei, ej = np.asarray(ei), np.asarray(ej)

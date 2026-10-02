@@ -180,7 +180,7 @@ import geopandas as gpd  # noqa: E402
 import shapely  # noqa: E402
 
 _land = shapely.union_all(list(gpd.read_file(LAND).to_crs(MESH_EPSG).geometry))
-islands = check_island_holes(mesh, _land, NB)
+islands = check_island_holes(mesh, _land, NB, base.n_elements)
 _foot = shapely.union_all(shapely.polygons(base.nodes[base.elements][:, :, :2]))
 land_cover = check_land_cover(mesh, _land.difference(_foot.buffer(1.0)), base.n_elements)
 

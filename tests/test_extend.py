@@ -573,3 +573,48 @@ def test_a_lost_element_is_not_an_island():
     m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [np.array([0, 1, 2])], [])
     with pytest.raises(ValueError, match="open water"):
         check_island_holes(m, shapely.Polygon(), n_base_nodes=27)
+
+
+def test_a_new_hole_among_base_nodes_is_checked():
+    """Review round 24 F3: a hole whose nodes all have base ids was skipped."""
+    import shapely
+
+    from fvcom_mesh_tools.extend import check_island_holes
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    n = 6
+    xy = np.array([[i * 1000.0, j * 1000.0] for j in range(n) for i in range(n)])
+    tri = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            a, b, c, d = j * n + i, j * n + i + 1, (j + 1) * n + i + 1, (j + 1) * n + i
+            tri += [[a, b, c], [a, c, d]]
+    n_base_el = 2 * (n - 1)                  # the bottom row of cells is the base
+    removed = tri.pop(n_base_el + 2 * 2)     # an outer cell of the second row
+    assert max(removed) < 3 * n               # all its nodes have "base" ids
+    m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [np.array([0, 1, 2])], [])
+    # the old rule (node ids only) let it through
+    assert check_island_holes(m, shapely.Polygon(), n_base_nodes=3 * n)["n_new_islands"] == 0
+    with pytest.raises(ValueError, match="open water"):
+        check_island_holes(m, shapely.Polygon(), n_base_nodes=3 * n, n_base_elements=n_base_el)
+
+
+def test_masked_depths_are_refused_by_merge_verify_and_limiter():
+    """Review round 24 F4."""
+    from dataclasses import replace
+
+    from fvcom_mesh_tools.extend import merge_outer, rfactor_smooth_free, verify_frozen_base
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    base = Fort14Mesh("b", np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
+                      np.ma.array([5.0, 6.0, 7.0, 8.0], mask=[True, False, False, False]),
+                      np.array([[0, 1, 2], [0, 2, 3]]), [np.array([1, 2])], [])
+    outer = np.array([[1.0, 0.0], [1.0, 1.0], [2.0, 0.0], [2.0, 1.0]])
+    with pytest.raises(ValueError, match="masked"):
+        merge_outer(base, outer, np.array([[0, 2, 1], [2, 3, 1]]), [0, 1], [1, 2], [2, 3])
+    clean = replace(base, depths=np.array([5.0, 6.0, 7.0, 8.0]))
+    with pytest.raises(ValueError, match="masked"):
+        verify_frozen_base(base, clean, [1, 2])
+    with pytest.raises(ValueError, match="masked"):
+        rfactor_smooth_free(np.ma.array([10.0, 5.0], mask=[True, False]), np.array([0]),
+                            np.array([1]), [False, True], rmax=0.2, hmin=3)

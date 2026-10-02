@@ -771,3 +771,28 @@ def test_masked_cor_and_sponge_and_odd_integers_are_refused(tmp_path):
         p.write_text(f"OBC Node Number = 2\n{first} 5 1\n2 9 1\n")
         with pytest.raises(ValueError, match="integer"):
             read_obc(p)
+
+
+@pytest.mark.parametrize("change", ["header", "cell_id", "conn", "depth"])
+def test_python_only_number_spellings_are_refused(tmp_path, change):
+    """Review round 24 F5."""
+    from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
+
+    w = export_fvcom_case(_tri(), tmp_path / "c", "t")
+    g, d, o = (w[k].read_text().splitlines() for k in ("grd", "dep", "obc"))
+    if change == "header":
+        o[0] = "OBC Node Number = ２"
+    elif change == "cell_id":
+        g[2] = "１" + g[2][1:]
+    elif change == "conn":
+        f = g[2].split()
+        f[1] = "0_" + f[1]
+        g[2] = " ".join(f)
+    else:
+        f = d[1].split()
+        f[2] = "1_0"
+        d[1] = " ".join(f)
+    for k, lines in (("grd", g), ("dep", d), ("obc", o)):
+        w[k].write_text("\n".join(lines) + "\n")
+    with pytest.raises(ValueError):
+        read_fvcom_case(w["grd"], w["dep"], w["obc"])

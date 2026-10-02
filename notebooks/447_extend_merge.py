@@ -216,7 +216,7 @@ say("depths: " + json.dumps(depth_report))
 # ----------------------------------------------------------------- export
 # no hole in the new sea without land in it (review round 11 F7), checked
 # before anything is written (round 12 F2)
-islands = check_island_holes(merged, land_utm, base.n_nodes)
+islands = check_island_holes(merged, land_utm, base.n_nodes, base.n_elements)
 say("islands: " + json.dumps(islands))
 # and no land the mesh could resolve under the new elements (round 15 F2):
 # land_with_base holds the base footprint, which is taken out
