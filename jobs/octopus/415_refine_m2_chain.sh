@@ -14,6 +14,10 @@
 #       outputs/refine_futtsu_nori_tool/fvcom/futtsu_nori_tool [DTE]
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# both paths, before any directory is made or job submitted: the jobs need
+# them, and a chain submitted without them fails later (review round 21 F10)
+: "${DATA_DIR:?DATA_DIR is not set (login profile)}"
+: "${WORK_DIR:?WORK_DIR is not set (login profile)}"
 REPO=$(pwd)
 BASE=${1:-$REPO/outputs/base_tool/TokyoBayTool}
 REFINED=${2:-$REPO/outputs/refine_futtsu_nori_tool/fvcom/futtsu_nori_tool}

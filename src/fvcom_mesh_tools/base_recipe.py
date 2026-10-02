@@ -81,10 +81,11 @@ def load_base_recipe(path) -> dict[str, Any]:
     """
     import json
 
-    import yaml
 
     path = Path(path).resolve()
-    raw = yaml.safe_load(path.read_text())
+    from fvcom_mesh_tools.yaml_strict import load_unique
+
+    raw = load_unique(path.read_text())    # no repeated keys (round 21 F7)
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: a base recipe is a mapping")
     missing = [k for k in ("name", "case", "open_boundary", "domain", "land", "edits",

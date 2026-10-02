@@ -6,6 +6,7 @@ import json
 
 import netCDF4
 import numpy as np
+import pytest
 
 from fvcom_mesh_tools.cli.check_run import check_run, main
 
@@ -325,3 +326,17 @@ def test_float32_history_coordinates_are_accepted(tmp_path):
         ds.createVariable("x", "f4", ("node",))[:] = np.float32(xs)
         ds.createVariable("y", "f4", ("node",))[:] = np.float32(ys)
     assert check_run(run)["ok"], check_run(run)["reasons"]
+
+
+def test_history_past_end_date_and_bad_timing_controls_fail(tmp_path):
+    """Review round 21 F1 and F9."""
+    from fvcom_mesh_tools.cli.check_run import _interval
+
+    days = tuple(f"2020-01-0{d}T00:00:00.000000" for d in range(1, 6))
+    info = check_run(_run(tmp_path / "a", times=days, end="2020-01-02 00:00:00"))
+    assert not info["ok"] and any("past END_DATE" in r for r in info["reasons"])
+    info = check_run(_run(tmp_path / "b", end="garbage"))
+    assert not info["ok"] and any("END_DATE" in r for r in info["reasons"])
+    for v in ("seconds = 0", "seconds = 1e999"):
+        with pytest.raises(ValueError):
+            _interval(v, "")

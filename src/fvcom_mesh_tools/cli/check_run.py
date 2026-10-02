@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -142,15 +143,17 @@ def _staged_mesh(grid_path: Path, dep_path: Path | None):
         return f"the staged grid {grid_path} cannot be read: {exc}"
     depths = None
     if dep_path is not None:
+        from fvcom_mesh_tools.io.fvcom_native import read_dep
+
+        # the strict reader: header, count, rows and finite values, as
+        # FVCOM's READ_DEPTH requires (review round 21 F4)
         try:
-            rows = [ln.split() for ln in dep_path.read_text().splitlines()[1:] if ln.strip()]
-            dep = np.array([[float(v) for v in r[:3]] for r in rows])
+            dxy, depths = read_dep(dep_path)
         except (OSError, ValueError, IndexError) as exc:
             return f"the staged depths {dep_path} cannot be read: {exc}"
-        if dep.shape != (len(nodes), 3) or not np.allclose(dep[:, :2], nodes[:, :2],
-                                                           rtol=0, atol=1e-6):
+        if dxy.shape != nodes[:, :2].shape or not np.allclose(dxy, nodes[:, :2],
+                                                              rtol=0, atol=1e-6):
             return f"the staged depths {dep_path} do not match the staged grid"
-        depths = dep[:, 2]
     return nodes, elements, depths
 
 
@@ -218,9 +221,17 @@ def _interval(value: str, text: str) -> timedelta:
         dte, isplit = _nml_value(text, "EXTSTEP_SECONDS"), _nml_value(text, "ISPLIT")
         if dte is None or isplit is None:
             raise ValueError("NC_OUT_INTERVAL in cycles needs EXTSTEP_SECONDS and ISPLIT")
-        return timedelta(seconds=n * _fortran_float(dte) * int(_fortran_float(isplit)))
-    return timedelta(seconds=n * {"seconds": 1, "minutes": 60, "hours": 3600,
-                                  "days": 86400}[unit])
+        seconds = n * _fortran_float(dte) * int(_fortran_float(isplit))
+    else:
+        seconds = n * {"seconds": 1, "minutes": 60, "hours": 3600, "days": 86400}[unit]
+    # finite and positive, or the gap and coverage checks mean nothing
+    # (review round 21 F9)
+    if not (math.isfinite(seconds) and seconds > 0):
+        raise ValueError(f"NC_OUT_INTERVAL = {value!r} is not a finite positive interval")
+    try:
+        return timedelta(seconds=seconds)
+    except OverflowError:
+        raise ValueError(f"NC_OUT_INTERVAL = {value!r} is too long") from None
 
 
 def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> dict:
@@ -265,10 +276,16 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
             except ValueError as exc:
                 reasons.append(str(exc))
                 vals[key] = None
-        v = vals["END_DATE"]
-        end = _parse_time(v) if v else None
-        v = vals["NC_FIRST_OUT"] or vals["START_DATE"]
-        first = _parse_time(v) if v else None
+        # an unreadable date is a failure reason, not a crash (round 21 F9)
+        def _date(key):
+            try:
+                return _parse_time(vals[key]) if vals.get(key) else None
+            except (ValueError, OverflowError) as exc:
+                reasons.append(f"{key} = {vals[key]!r} cannot be read ({exc})")
+                return None
+
+        end = _date("END_DATE")
+        first = _date("NC_FIRST_OUT") or _date("START_DATE")
         v = vals["NC_OUT_INTERVAL"]
         if v is not None:
             # present but unreadable fails closed: it used to switch the gap
@@ -308,8 +325,11 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
             reasons.append(f"the namelist's grid {gpath} cannot be read for its counts")
     # a run must integrate over a positive interval: END_DATE after
     # START_DATE (output may start as late as END_DATE; review round 12 F5)
-    start = _parse_time(vals["START_DATE"]) if vals.get("START_DATE") else None
-    if nml_path.exists() and start is None:
+    try:
+        start = _parse_time(vals["START_DATE"]) if vals.get("START_DATE") else None
+    except (ValueError, OverflowError):
+        start = None                       # reported above
+    if nml_path.exists() and start is None and not vals.get("START_DATE"):
         reasons.append(f"no START_DATE found in {nml}")
     if end is not None and start is not None and end <= start:
         reasons.append(f"END_DATE {end} is not after the start {start}")
@@ -425,6 +445,9 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
             reasons.append(f"the output starts at {stamps[0]}, not at {first}")
         if end is not None and stamps[-1] < end - tol:
             reasons.append(f"the output stops at {stamps[-1]} before END_DATE {end}")
+        # nor run past it: records after END_DATE are another run's (round 21 F1)
+        if end is not None and stamps[-1] > end + tol:
+            reasons.append(f"the output runs to {stamps[-1]}, past END_DATE {end}")
         # some output after the start: an initial record alone is no
         # integration, however short the run (review round 13 F5)
         if start is not None and stamps[-1] <= start:

@@ -45,7 +45,6 @@ def check_case_name(name) -> str:
 
 def load_extend_recipe(path) -> dict[str, Any]:
     """Read and check an extension recipe; relative paths resolve against it."""
-    import yaml
 
     from fvcom_mesh_tools.dem.sources import SOURCES
 
@@ -53,7 +52,9 @@ def load_extend_recipe(path) -> dict[str, Any]:
     # the bytes parsed are the bytes hashed: a provenance hash taken later
     # could describe another file (review of the extend tools, round 5 F3)
     data = path.read_bytes()
-    raw = yaml.safe_load(data.decode())
+    from fvcom_mesh_tools.yaml_strict import load_unique
+
+    raw = load_unique(data.decode())       # no repeated keys (round 21 F7)
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: an extension recipe is a mapping")
     missing = [k for k in _KEYS if k not in raw]

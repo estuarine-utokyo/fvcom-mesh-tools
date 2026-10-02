@@ -142,3 +142,11 @@ def test_the_recipe_name_is_one_path_component(tmp_path):
     """Review round 15 F7."""
     with pytest.raises(ValueError):
         load_extend_recipe(_write(tmp_path, name="x/../../escaped"))
+
+
+def test_a_repeated_key_is_refused(tmp_path):
+    """Review round 21 F7: the last of two values won silently."""
+    p = _write(tmp_path)
+    p.write_text(p.read_text() + "case: TokyoBayEnshu\n")
+    with pytest.raises(ValueError, match="duplicate key 'case'"):
+        load_extend_recipe(p)

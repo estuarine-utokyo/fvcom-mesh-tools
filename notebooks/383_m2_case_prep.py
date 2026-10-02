@@ -164,7 +164,10 @@ def namelist(input_dir, output_dir):
     text = text[text.index("&NML_CASE") :]
     changes = dict(
         CASE_TITLE=fortran_string("383 M2 mesh comparison"),
-        # the experiment's own dates, not the template's (review round 20 F8)
+        # the experiment's own dates, format and zone, not the template's
+        # (review rounds 20 F8, 21 F6)
+        DATE_FORMAT=fortran_string("YMD"),
+        TIMEZONE=fortran_string("UTC"),
         START_DATE=fortran_string(START),
         NC_FIRST_OUT=fortran_string(START),
         END_DATE=fortran_string(END),

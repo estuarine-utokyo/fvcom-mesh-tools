@@ -311,3 +311,26 @@ def test_a_grid_stored_lon_by_lat_is_not_transposed(tmp_path, monkeypatch):
     monkeypatch.setitem(sources.DATUM, "t", "T.P.")
     d, _ = sample(["t"], np.array([139.0]), np.array([35.1]), data_dir=tmp_path)
     assert d[0] == pytest.approx(20.0)
+
+
+def test_masked_coordinates_are_unknown(tmp_path, monkeypatch):
+    """Review round 21 F8."""
+    import netCDF4
+
+    with netCDF4.Dataset(tmp_path / "m.nc", "w") as ds:
+        ds.createDimension("lon", 2)
+        ds.createDimension("lat", 2)
+        v = ds.createVariable("lon", "f8", ("lon",), fill_value=1000.0)
+        v[:] = np.ma.masked_array([139.0, 139.1], mask=[True, False])
+        ds.createVariable("lat", "f8", ("lat",))[:] = [35.0, 35.1]
+        ds.createVariable("z", "f4", ("lat", "lon"))[:] = -10.0
+    monkeypatch.setitem(sources.SOURCES, "m", Grid("m.nc", "z"))
+    monkeypatch.setitem(sources.DATUM, "m", "T.P.")
+    with pytest.raises(ValueError, match="masked"):
+        sample(["m"], np.array([139.05]), np.array([35.05]), data_dir=tmp_path)
+
+
+def test_a_masked_query_point_is_uncovered(fake_sources):
+    q = np.ma.masked_array([139.6, 139.6], mask=[True, False])
+    d, w = sample(["fine", "coarse"], q, np.array([35.1, 35.1]), data_dir=fake_sources)
+    assert np.isnan(d[0]) and w[0] == -1 and np.isfinite(d[1])

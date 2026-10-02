@@ -128,8 +128,15 @@ class Grid:
                 raise ValueError(f"{path} is a zip archive, not netCDF -- unpack it first")
         x0, x1, y0, y1 = _window(lon, lat, 0.02)
         with netCDF4.Dataset(path) as ds:
-            glon = np.asarray(ds["lon"][:], float)
-            glat = np.asarray(ds["lat"][:], float)
+            # masked axis values are unknown coordinates, not their fill
+            # (review round 21 F8)
+            raw_lon, raw_lat = ds["lon"][:], ds["lat"][:]
+            if np.ma.is_masked(raw_lon) or np.ma.is_masked(raw_lat):
+                raise ValueError(f"{path}: lon or lat has masked values")
+            glon = np.asarray(np.ma.getdata(raw_lon), float)
+            glat = np.asarray(np.ma.getdata(raw_lat), float)
+            if not (np.isfinite(glon).all() and np.isfinite(glat).all()):
+                raise ValueError(f"{path}: lon or lat is not finite")
             if not (np.all(np.diff(glon) > 0) and np.all(np.diff(glat) > 0)):
                 raise ValueError(f"{path}: lon and lat must increase")
             i0 = max(int(np.searchsorted(glon, x0)) - 1, 0)
@@ -350,8 +357,9 @@ def sample(names, lon, lat, data_dir=None) -> tuple[np.ndarray, np.ndarray]:
     """
     names = _check(names)
     root = _data_dir(data_dir)
-    lon = np.asarray(lon, float)
-    lat = np.asarray(lat, float)
+    # a masked query point is unknown: it stays uncovered (round 21 F8)
+    lon = np.ma.filled(np.ma.asarray(lon, dtype=float), np.nan)
+    lat = np.ma.filled(np.ma.asarray(lat, dtype=float), np.nan)
     depth = np.full(lon.shape, np.nan)
     which = np.full(lon.shape, -1, dtype=np.int16)
     for k, name in enumerate(names):

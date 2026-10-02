@@ -589,10 +589,16 @@ def read_dep(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     with path.open() as f:
         lines = [ln for ln in (x.strip() for x in f) if ln]
     n_nodes = _header_count(lines[0], "Node Number")
+    # exactly the declared rows, each X Y H and finite: FVCOM reads to the end
+    # (review of the extend tools, round 21 F5)
+    if len(lines) != 1 + n_nodes or any(len(ln.split()) < 3 for ln in lines[1:]):
+        raise ValueError(f"{path.name}: expected exactly {n_nodes} rows of 'X Y H'")
     data = np.array([[float(w) for w in ln.split()[:3]]
                      for ln in lines[1:1 + n_nodes]], dtype=float)
     if data.shape != (n_nodes, 3):
         raise ValueError(f"{path.name}: expected {n_nodes} rows of 'X Y H'")
+    if not np.isfinite(data).all():
+        raise ValueError(f"{path.name}: non-finite value in 'X Y H'")
     return data[:, :2], data[:, 2]
 
 
@@ -613,14 +619,19 @@ def read_obc(path: str | Path, with_types: bool = False):
     with path.open() as f:
         lines = [ln for ln in (x.strip() for x in f) if ln]
     n = _header_count(lines[0], "OBC Node Number")
-    rows = [ln.split() for ln in lines[1:1 + n]]
+    rows = [ln.split() for ln in lines[1:]]
+    # exactly the declared rows, each with its explicit type: a missing type
+    # is not type 1 (review of the extend tools, round 21 F5)
     if len(rows) != n:
-        raise ValueError(f"{path.name}: expected {n} OBC rows")
+        raise ValueError(f"{path.name}: expected exactly {n} OBC rows, found {len(rows)}")
+    if any(len(r) < 3 for r in rows):
+        raise ValueError(f"{path.name}: every OBC row needs 'I NODE TYPE'")
     ids = np.array([int(r[1]) for r in rows], dtype=np.int64) - 1
+    types = np.array([int(r[2]) for r in rows], dtype=np.int64)
+    if not ((types >= 1) & (types <= 10)).all():
+        raise ValueError(f"{path.name}: OBC types must be 1-10")
     if not with_types:
         return ids
-    types = np.array([int(r[2]) if len(r) > 2 else 1 for r in rows],
-                     dtype=np.int64)
     return ids, types
 
 

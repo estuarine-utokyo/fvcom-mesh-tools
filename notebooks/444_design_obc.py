@@ -17,7 +17,6 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-import yaml
 from pyproj import Transformer
 from scipy.optimize import brentq
 
@@ -60,7 +59,9 @@ def _umask() -> int:
     m = os.umask(0)
     os.umask(m)
     return m
-cfg = yaml.safe_load(design_path.read_text())
+from fvcom_mesh_tools.yaml_strict import load_unique  # noqa: E402
+
+cfg = load_unique(design_path.read_text())      # no repeated keys (round 21 F7)
 DATA = Path(os.environ["DATA_DIR"])
 
 to_m = Transformer.from_crs(4326, MESH_EPSG, always_xy=True)

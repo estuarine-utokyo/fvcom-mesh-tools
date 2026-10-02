@@ -11,6 +11,10 @@
 #   bash jobs/octopus/410_m2_chain.sh [path/to/candidate.14]
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# both paths, before any directory is made or job submitted: the jobs need
+# them, and a chain submitted without them fails later (review round 21 F10)
+: "${DATA_DIR:?DATA_DIR is not set (login profile)}"
+: "${WORK_DIR:?WORK_DIR is not set (login profile)}"
 REPO=$(pwd)
 B_MESH=${1:-$REPO/outputs/verify_409.115302/fit/sample_repro_final.14}
 [ -f "$B_MESH" ] || { echo "mesh not found: $B_MESH"; exit 2; }
@@ -27,8 +31,6 @@ for v in "$RUN_ROOT" "$B_MESH"; do
 done
 echo "run root: $RUN_ROOT"
 echo "B mesh  : $B_MESH"
-
-id() { sed 's/^\([0-9:]*\.[a-z]*\).*/\1/;s/^0://' <<<"$1" | tr -d ' '; }
 
 prep=$(qsub -v "FMESH_RUN_ROOT=$RUN_ROOT,FMESH_B_MESH=$B_MESH" jobs/octopus/411_m2_prep.sh)
 prep=$(grep -oE '[0-9]+\.[a-z]+' <<<"$prep" | head -1)

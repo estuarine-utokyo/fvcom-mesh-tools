@@ -44,7 +44,7 @@ from fvcom_mesh_tools.io.fort14 import read_fort14, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case, read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.outdir import claim  # noqa: E402
 from fvcom_mesh_tools.patch import improve_patch  # noqa: E402
-from fvcom_mesh_tools.provenance import file_sha256  # noqa: E402
+from fvcom_mesh_tools.provenance import dataset_files, file_sha256  # noqa: E402
 from fvcom_mesh_tools.qa import run_qa  # noqa: E402
 
 T0 = time.time()
@@ -71,6 +71,8 @@ if OUT == Path(recipe["base"]).resolve() or OUT in Path(recipe["base"]).resolve(
 OUT = claim(OUT)
 if (OUT / "report.json").exists() or (OUT / "merge.json").exists():
     raise SystemExit(f"{OUT} holds a finished build")
+# hashed before it is read (round 21 F2), and checked again before publishing
+BASE_SHA = {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")}
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
 IB = np.asarray(base.open_boundaries[0], np.int64)
 
@@ -80,7 +82,9 @@ IB = np.asarray(base.open_boundaries[0], np.int64)
 _gen = json.loads((GEN / "generate.json").read_text())
 _want = {"recipe_sha256": recipe["recipe_sha256"],
          "open_boundary_sha256": recipe["open_boundary_sha256"],
-         "base_sha256": {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")},
+         "base_sha256": BASE_SHA,
+         "land_sha256": {q.name: file_sha256(q)
+                         for q in dataset_files(GEN / "land_with_base.shp")},
          "outer_utm14_sha256": file_sha256(GEN / "outer_utm.14")}
 if _gen.get("inputs") != _want:
     raise SystemExit(f"{GEN} was not generated from this recipe, boundary and base "
@@ -265,6 +269,8 @@ if dt_new < dt_base:
     # (owner, 2026-10-01)
     warnings_.append(f"new elements limit the time step ({dt_new:.2f} s < base "
                      f"{dt_base:.2f} s, raw depths)")
+if {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")} != BASE_SHA:
+    raise SystemExit("the base changed while it was being used")
 (OUT / "merge.json").write_text(json.dumps({
     "finish": {k: v for k, v in info.items() if not isinstance(v, (list, dict))},
     "coast_fit": cf.to_dict(), "frozen_base": contract, "repair": repair,

@@ -39,7 +39,7 @@ from fvcom_mesh_tools.io.fort14 import Fort14Mesh, write_fort14  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.obc_band import build_obc_band  # noqa: E402
 from fvcom_mesh_tools.outdir import TOKEN_ENV, claim  # noqa: E402
-from fvcom_mesh_tools.provenance import file_sha256  # noqa: E402
+from fvcom_mesh_tools.provenance import dataset_files, file_sha256  # noqa: E402
 
 T0 = time.time()
 MESH_EPSG = 32654
@@ -62,6 +62,9 @@ to_m = Transformer.from_crs(4326, MESH_EPSG, always_xy=True)
 
 # ------------------------------------------------------------------ base
 b = Path(recipe["base"]) / recipe["base_case"]
+# hashed before it is read, and again before the manifest is written: the
+# manifest names what was consumed (review round 21 F2)
+BASE_SHA = {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")}
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
 if len(base.open_boundaries) != 1:
     raise SystemExit(f"the base has {len(base.open_boundaries)} open boundaries; one is needed")
@@ -368,9 +371,14 @@ mesh = Fort14Mesh("outer", nodes, dn, t.astype(np.int64),
 write_fort14(mesh, OUT / "outer_utm.14")
 # what this generation was made from, for 447 to check before it uses it
 # (review round 20 F1)
+if {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")} != BASE_SHA:
+    raise SystemExit("the base changed while it was being used")
+# the generated land too, every file of it: 447 finishes and accepts against
+# it (round 21 F3)
 inputs = {"recipe_sha256": recipe["recipe_sha256"],
           "open_boundary_sha256": recipe["open_boundary_sha256"],
-          "base_sha256": {k: file_sha256(Path(f"{b}_{k}.dat")) for k in ("grd", "dep", "obc")},
+          "base_sha256": BASE_SHA,
+          "land_sha256": {q.name: file_sha256(q) for q in dataset_files(LAND_SHP)},
           "outer_utm14_sha256": file_sha256(OUT / "outer_utm.14")}
 (OUT / "generate.json").write_text(json.dumps({
     "inputs": inputs,

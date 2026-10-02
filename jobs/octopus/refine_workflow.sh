@@ -28,6 +28,10 @@
 # monitor (the command is printed at the end).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# both paths, before any directory is made or job submitted: the jobs need
+# them, and a chain submitted without them fails later (review round 21 F10)
+: "${DATA_DIR:?DATA_DIR is not set (login profile)}"
+: "${WORK_DIR:?WORK_DIR is not set (login profile)}"
 RECIPE=${1:?usage: bash jobs/octopus/refine_workflow.sh RECIPE.yaml}
 [ -f "$RECIPE" ] || { echo "no such recipe: $RECIPE"; exit 2; }
 NAME=$(basename "${RECIPE%.yaml}")
