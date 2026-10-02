@@ -5912,3 +5912,273 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F4 | minor | test (object coordinates) | yes, introduced in round 17 | fixed, 371de18; test |
 | F5 | minor | tests (17, 15 and (16, 1) depths) | yes | fixed, 371de18; tests |
 | F6 | minor | code read | yes | fixed, 371de18 |
+
+## Round 19
+
+### Answer (verbatim)
+
+Found **3 major and 4 minor defects**. No files were modified. Production mesh generation and FVCOM execution were not run; no shared-data reads or batch submissions occurred.
+
+Previous-finding statuses cover every numbered finding. Ranges refer to the original reproductions.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1-F27; R2-F22; R3-F14; R4–R15-F1 | RESOLVED | The approved GPL relicensing permits oceanmesh imports. |
+| Generation-nondeterminism hypothesis | WITHDRAWN | The supplied repeated production measurements contradict it. |
+| R1-F1–F26, F28–F29 | RESOLVED | Original source, geometry, serialization, validation, reservation and smoke reproductions are addressed. F4 follows the approved warning policy. |
+| R2-F1–F21 | RESOLVED | Reservations, publication recovery, interpolation, seam checks and provenance address the original cases. |
+| R3-F1–F13 | RESOLVED | Final-field reporting, chord spacing, band iteration, ladders, serialization and timestep ordering are corrected. F1 follows the warning policy. |
+| R4-F2–F14 | RESOLVED | Harmonic coefficients, interpolation shape, local overlap, publication recovery, input identity and runtime checks are corrected. |
+| R5-F2–F10 | RESOLVED | Flip guards, parsed-byte hashes, continuous intersections, recovery protection and finite-depth checks are present. |
+| R6-F2–F11 | RESOLVED | Window, output, completion, failure-exit, provenance, native-value and path checks address the original cases. |
+| R7-F2–F12 | RESOLVED | Whole-source triangulation, export validation, protected relocation, verified CSV consumption and completion identity checks are corrected. |
+| R8-F2–F13 | RESOLVED | Rollback, type validation, sponge handling, parsing, caches, axis order and manifest selection are corrected. |
+| R9-F2–F14 | RESOLVED | Original concurrency, recovery, index, dtype, trimming, depth-bound and library-path defects are corrected. |
+| R10-F2–F14 | RESOLVED | Destination isolation, field validation, recovery tracking, parsing, serialization and documentation address the original cases. |
+| R11-F2–F8 | RESOLVED | Finishing products are isolated; malformed indices fail; relocation, unsupported water holes and spaced paths are handled. |
+| R12-F2–F7 | RESOLVED | Accepted-build hashes, isolated benchmarks, record dimensions, duration, advancement and serialization address the original cases. |
+| R13-F2–F9 | RESOLVED | Locks, paths, history checks, acceptance identity, inventories, titles and sizing validation are corrected. |
+| R14-F2–F9 | RESOLVED | Locks, markers, lattice validation, scratch creation, fractional cadence, backend selection and documentation are corrected. |
+| R15-F2 | PARTIAL | Resolvable covered islands are checked; resolvable mainland portions can still escape—finding 1. |
+| R15 small-island objection | WITHDRAWN | The owner’s resolution principle permits dropping unresolvable islets. Finding 1 concerns a resolvable peninsula. |
+| R15-F3–F7 | RESOLVED | Marker preservation, scalar validation, backend probing, isolated-element detection and recipe-name validation are corrected. |
+| R16-F1–F2 | RESOLVED | The approved private-use policy is reflected in the environment and notices. |
+| R16-F3–F6 | RESOLVED | Positive-area contacts, control validation, complete-interface verification and the relicensing comment address the original cases. |
+| R17-F1–F9 | RESOLVED | Notices, environment paths, design protection, QA controls, missing-land handling, coordinate checks and interface counts are corrected. |
+| R18-F1 | RESOLVED | 448 explicitly exports type 1, reads it back and records both boundary types. |
+| R18-F2 | RESOLVED | The rejection destination is checked against the design, including file identity. |
+| R18-F3 | RESOLVED | Requiring `.csv` prevents the original success-product collisions. |
+| R18-F4 | RESOLVED | The object-coordinate reproduction returns failed integrity QA without conversion failure. |
+| R18-F5 | RESOLVED | Depths must have numeric dtype and exactly `(NP,)` shape. |
+| R18-F6 | PARTIAL | Base-directory aliases are refused, but an existing reservation bypasses output ownership—finding 2. |
+
+No additional behavioral regression unique to `371de18` was substantiated. Its reservation protection remains incomplete; the other findings are pre-existing.
+
+1. **Major — Land-cover acceptance ignores resolvable portions of mainland.**
+
+   **Location:** [extend.py:427](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:427).
+
+   **Reproduction:** On the pristine **16-node, 18-element** grid, each element has area **0.5 km²**. Supply a peninsula head `box(1000, 750, 2750, 2500)`, area **3.0625 km²**. Supplied alone, the gate rejects it as **6.1 times** the element area.
+
+   Connect that same head through a narrow corridor to a large mainland polygon outside the mesh. The mesh now covers **3.1625 km²** of land, but the gate returns:
+
+   ```text
+   n_land_pieces_covered = 0
+   max_covered_area_ratio = 0.0
+   QA passed = True
+   ```
+
+   The `covered <= 0.5 * piece.area` condition measures the entire connected mainland polygon. Adding land outside the mesh therefore disables detection of the unchanged, resolvable covered head. Both 447 and 453 use this gate.
+
+   **Fix:** Add a local mainland-overlap check based on covered patches, local element size and permitted coastline approximation. Do not use the entire connected mainland’s area to exempt an interior covered peninsula. Test that attaching exterior mainland does not change acceptance.
+
+2. **Major — Standalone extension stages do not enforce output ownership.**
+
+   **Location:** [447_extend_merge.py:69](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/447_extend_merge.py:69); related path at [446_extend_generate.py:53](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/446_extend_generate.py:53).
+
+   **Evidence:** `.reserved` remains after successful builds. Executing the actual new guard against an earlier output containing that marker bypassed `reserve()` entirely. It checks neither ownership nor completion.
+
+   An in-memory native-export reproduction then replaced the existing case’s depths from **5 m to 6 m**, retaining the old reservation marker. A standalone rerun—or another merge while 445 owns the directory—can replace case files and reports. The normal 445 reservation does not protect against this bypass. Standalone 446 likewise accepts a populated destination and overwrites generation products.
+
+   **Fix:** Pass and validate a reservation token between 445 and its stages. Standalone invocations must reserve fresh destinations. Refuse completed outputs and acquire an exclusive merge-stage lock to prevent simultaneous merges.
+
+3. **Major — The refinement M2 experiment can still ignore its tidal forcing.**
+
+   **Location:** [414_refine_m2_prep.py:210](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/414_refine_m2_prep.py:210).
+
+   **Evidence:** Unlike corrected 448, 414 exports each input’s inherited boundary type. A supported type-3 synthetic case produces:
+
+   ```text
+   OBC Node Number = 2
+   1 5 3
+   2 9 3
+   ```
+
+   The subsequent code writes M2 elevation forcing. Type 3 clamps elevation to zero, so that forcing is ignored. Complete, finite output can still be analyzed; an unforced zero response also satisfies the half-window convergence criterion. Different inherited types additionally undermine the claim that the two experiments differ only in the refinement.
+
+   **Fix:** Stage both M2 cases with the same explicitly selected tidal boundary type, normally 1. Read back and record the staged types, as 448 now does.
+
+4. **Minor — QA uses extra coordinate columns to approve invalid planar geometry.**
+
+   **Location:** [qa.py:264](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/qa.py:264); acceptance at [qa.py:656](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/qa.py:656).
+
+   **Reproduction:**
+
+   ```python
+   mesh = _pristine()
+   mesh.nodes[:, 0] *= 0.1
+   mesh.nodes = np.c_[mesh.nodes, 10 * mesh.nodes[:, 0]]
+   run_qa(mesh, coords="metric", channel_check=False)
+   ```
+
+   Before adding the third column, all **18 elements** fail the minimum-angle gate at **5.71°**, and the reported timestep is **14.2784 s**. Afterward, QA reports **passed=True**, with timestep **142.7843 s**.
+
+   The integrity check permits `(NP, >=2)`, but `_metric_nodes` retains every column. Edge lengths and angles use three dimensions, while signed areas and overlap use x/y.
+
+   **Fix:** Normalize geometry to `nodes[:, :2]` throughout QA, or require exactly two coordinate columns. Test that an additional column cannot change planar QA or timestep results.
+
+5. **Minor — A rejection report can corrupt the previous boundary through an alias.**
+
+   **Location:** [444_design_obc.py:212](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:212).
+
+   **Reproduction:** Make `boundary.rejected.json` a hard link or symlink to the existing `boundary.csv`, with a separate design recipe. The product guards accept this because they compare products only against the design.
+
+   Executing the actual rejection branch with an in-memory hard-link model replaced the previous CSV with:
+
+   ```json
+   {"problems": ["injected rejection"]}
+   ```
+
+   It then reported that `boundary.csv` was “left as it was.”
+
+   **Fix:** Publish rejection reports using a unique temporary file and `os.replace`, and reject rejection destinations that alias success products.
+
+6. **Minor — The native grid reader accepts invalid record identifiers.**
+
+   **Location:** [fvcom_native.py:553](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:553).
+
+   **Reproduction:** Replace every node-record identifier in the pristine native grid with `999`, leaving coordinates, connectivity and depth rows unchanged. `read_fvcom_case` accepts it as the same **16-node, 18-element** mesh because `read_grd` discards the identifiers.
+
+   This is not a valid FVCOM grid: the production reader uses the first node identifier `1` to detect the transition from connectivity to node records. The fort.14 reader already rejects comparable identifier corruption.
+
+   **Fix:** Validate cell identifiers as `1..NE` and node identifiers as `1..NP` in order before returning the mesh. Preserve support for the documented trailing columns.
+
+7. **Minor — Smoke completion accepts history from a different mesh with matching counts.**
+
+   **Location:** [check_run.py:226](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/cli/check_run.py:226).
+
+   **Reproduction:** An in-memory NetCDF history had valid times, `TADA`, finite `zeta/ua/va`, and the staged **3-node, 1-element** counts. The staged coordinates were near `(0, 0)` with **5 m** depths; history coordinates were translated near `(100000, 90000)` with **100 m** depths.
+
+   ```text
+   ok = True
+   reasons = []
+   ```
+
+   `_grid_counts` binds history only to header counts. Fresh smoke directories prevent the original ordinary stale-output case, but injected or misplaced foreign histories remain indistinguishable.
+
+   **Fix:** Compare history connectivity, coordinates and bathymetry against the staged inputs, allowing FVCOM’s orientation reversal and documented numeric tolerances. Require these identity checks before issuing success.
+
+Verification:
+
+- Read-only `pytest.main` selection across extension, recipes, OBC design, DEM sources, QA and provenance: **93 passed, 57 deselected**. Deselected tests required writable fixtures.
+- Scoped `ruff check --no-cache`: **passed**.
+- `bash -n`: **all 56 OCTOPUS scripts passed**.
+- Small synthetic arrays, in-memory file mocks and an in-memory NetCDF reproduced the findings. Initial history probes omitted grid-read mocks and failed closed; completing the mocks reproduced finding 7.
+- `git diff --exit-code`: **clean**. The pre-existing untracked boundary PNG remained untouched.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 3 major, 4 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 19: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-18 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 18 (your previous answer; 6 findings) was fixed in 371de18; read it.
+Per finding:
+- F1 448: `export_fvcom_case(..., obc_type=1)`, written _obc.dat read back
+  (types must all be 1), manifest records obc_type and case_obc_type.
+- F2/F3 444: output must end in .csv; CSV, .json, .png and .rejected.json
+  checked against the design by path, resolved path and samefile.
+- F4/F5 `run_qa`: coordinates (NP, >=2) numeric checked without
+  conversion; depths exactly (NP,) numeric; failures go to node_index_valid
+  and end QA.
+- F6 447: OUTDIR may not be or contain the base directory; without the
+  reservation marker it reserves OUTDIR itself.
+Verification after 371de18: full test suite 1207 passed (batch
+job 124205); on real data 444, 445 (QA 23/23, status ok, grd bit-identical
+to rounds 4-17) and 453 (status ok) passed; check_run accepts the two real
+FVCOM smoke histories.
+Owner decision (2026-10-01), unchanged: meshes are made from the real
+depths; the band-floor check (446) and the new-element time-step comparison
+(447, 453) REPORT warnings and do not fail the build. Not a defect.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | major | test (head joined to a mainland) | yes | fixed (eroded covered patches; measured on the real build first), 94364a4; test |
+| F2 | major | code read (marker accepted without ownership) | yes | fixed (reservation token, outdir.claim), 94364a4; test |
+| F3 | major | code read (414 inherits the OBC type) | yes | fixed, 94364a4 |
+| F4 | minor | test (extra column) | yes | fixed, 94364a4; test |
+| F5 | minor | code read (write_text through a link) | yes | fixed, 94364a4 |
+| F6 | minor | test (node id 999) | yes | fixed, 94364a4; test |
+| F7 | minor | test (translated history) | yes | fixed, 94364a4; test; a real history passes |
