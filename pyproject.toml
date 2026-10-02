@@ -38,13 +38,17 @@ dem = ["rasterio>=1.3", "netCDF4>=1.6", "pyproj>=3.6"]
 # a clone at ~/Github/oceanmesh (docs/USER_GUIDE.md §2).
 oceanmesh = ["oceanmesh @ git+https://github.com/estuarine-utokyo/oceanmesh.git@main",
              "fvcom-mesh-tools[dem,io-vector]"]
+# Optional, for private use only: OCSMesh imports Triangle and jigsawpy loads
+# the JIGSAW core, whose licences forbid commercial redistribution and are not
+# GPL-compatible. Never redistribute them with this package
+# (THIRD_PARTY_NOTICES.md).
 ocsmesh = ["ocsmesh", "gmsh", "fvcom-mesh-tools[dem,io-vector]"]
 meshkernel = ["meshkernel"]
 jigsaw = ["jigsawpy"]
 viz = ["matplotlib>=3.8", "plotly>=5.15"]
 test = ["pytest>=7.4"]
 dev = ["ruff>=0.5", "pytest>=7.4"]
-all = ["fvcom-mesh-tools[oceanmesh,ocsmesh,viz]"]
+all = ["fvcom-mesh-tools[oceanmesh,viz]"]   # GPL-compatible extras only
 
 [project.scripts]
 fmesh-perpfix = "fvcom_mesh_tools.cli.perpfix:main"

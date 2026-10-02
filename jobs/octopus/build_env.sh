@@ -48,7 +48,9 @@ done
 echo "=== import smoke test ==="
 python - <<'PY'
 import importlib
-for m in ["oceanmesh", "fvcom_mesh_tools", "xcoast", "ocsmesh", "jigsawpy",
+# OCSMesh and jigsawpy are optional and outside the default environment
+# (Triangle and the JIGSAW core are not GPL-compatible; review round 16)
+for m in ["oceanmesh", "fvcom_mesh_tools", "xcoast",
           "geopandas", "rasterio", "netCDF4", "numba", "skfmm", "yaml"]:
     mod = importlib.import_module(m)
     print(f"{m:18s} {getattr(mod, '__version__', '-'):12s} {mod.__file__}")

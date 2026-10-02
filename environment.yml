@@ -26,12 +26,15 @@ dependencies:
   - utide       # tidal harmonic analysis and prediction (MIT)
   - plotly
   - pyogrio     # xcoast
-  - triangle    # oceanmesh optional import
   - fiona
   - pyproj
-  # Mesh-generation backends
-  - ocsmesh   # CC0-1.0; primary for the --engine ocsmesh path and mesh-combine
-  - jigsawpy  # alternate OCSMesh backend
+  # Not in the default environment (owner, 2026-10-02): OCSMesh imports
+  # Triangle at package load, and jigsawpy loads the JIGSAW core; both forbid
+  # commercial redistribution and are not GPL-compatible. They serve only the
+  # optional paths (--engine ocsmesh, fmesh-mesh-combine, --repair-skewed-
+  # elements). For private use, install them yourself:
+  #   mamba install -c conda-forge ocsmesh jigsawpy triangle
+  # and never redistribute them together with this package.
   # C++ build chain for building oceanmesh from source
   # (CGAL headers + its gmp/mpfr arithmetic backends)
   - cgal

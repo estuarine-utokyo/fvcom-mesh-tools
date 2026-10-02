@@ -33,10 +33,14 @@ A `Makefile` exposes `install`, `test`, `lint`, `format`, `clean` targets.
 - Import only packages whose licenses are compatible with GPL-3.0
   (permissive ones such as MIT/BSD/CC0, LGPL, GPL-3.0, GPL-2.0-or-later).
   `oceanmesh` (GPL-3.0-or-later) may be imported. Do not import or bundle
-  code under GPL-2.0-only or with non-free/extra restrictions.
-- JIGSAW (`jigsawpy`) carries a non-OSI license that restricts commercial
-  distribution and is not GPL-compatible. Keep it as an optional extra;
-  never import or bundle it.
+  code under GPL-2.0-only or with non-free/extra restrictions; the one
+  exception is the existing optional OCSMesh paths below, and no new code
+  may depend on them.
+- Triangle (loaded by OCSMesh at import) and JIGSAW (`jigsawpy`) restrict
+  commercial distribution and are not GPL-compatible. They are not in the
+  default environment; the OCSMesh paths that need them stay optional, are
+  imported lazily, and must never be bundled or redistributed with the
+  package (owner, 2026-10-02; THIRD_PARTY_NOTICES.md).
 - New source files need no license header; `LICENSE`, `NOTICE` and the
   `license` field in `pyproject.toml` state the license.
 - See `THIRD_PARTY_NOTICES.md` for the canonical handling rules.

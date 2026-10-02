@@ -168,8 +168,8 @@ the compiled raster stack:
 | `pip install -e ".[io-vector]"` | + shapely / geopandas / fiona | coastline / river-point / multipolygon-area helpers |
 | `pip install -e ".[dem]"` | + rasterio / netCDF4 / pyproj | `dem.subset` / `dem.interp` / `dem.bbox`, `fmesh-subset-dem` |
 | `pip install -e ".[oceanmesh]"` | + oceanmesh and the above | `fmesh-buildmesh --engine oceanmesh` (default) |
-| `pip install -e ".[ocsmesh]"` | + ocsmesh, gmsh, and the above | `fmesh-mesh-combine --strategy {overlap,neighbor}` (Triangle-based, gmsh-free at runtime); `fmesh-buildmesh --engine ocsmesh` (**deprecated**, slated for removal) |
-| `pip install -e ".[all]"` | superset of the above plus `viz` | every CLI and helper |
+| `pip install -e ".[ocsmesh]"` | + ocsmesh, gmsh, and the above | `fmesh-mesh-combine --strategy {overlap,neighbor}` (Triangle-based, gmsh-free at runtime); `fmesh-buildmesh --engine ocsmesh` (**deprecated**, slated for removal); `--repair-skewed-elements`. **Private use only**: OCSMesh loads Triangle, which is not GPL-compatible; never redistribute it with this package (`THIRD_PARTY_NOTICES.md`). |
+| `pip install -e ".[all]"` | the GPL-compatible extras: `oceanmesh` and `viz` | every CLI and helper except the OCSMesh paths |
 
 Note: `oceanmesh` on PyPI lists deps that conflict with conda-forge
 versions; under `[oceanmesh]` pip will pull the PyPI variant. Under

@@ -774,6 +774,7 @@ def _mesh_with_one_sliver() -> Fort14Mesh:
     )
 
 
+@pytest.mark.needs_ocsmesh
 def test_repair_skewed_elements_removes_sliver() -> None:
     mesh = _mesh_with_one_sliver()
     out, info = repair_skewed_elements(
@@ -788,6 +789,7 @@ def test_repair_skewed_elements_removes_sliver() -> None:
     assert out.n_elements == mesh.n_elements - 1
 
 
+@pytest.mark.needs_ocsmesh
 def test_repair_skewed_elements_noop_preserves_boundaries() -> None:
     """A clean mesh: no element removed, original boundary lists kept."""
     mesh = _mesh_with_one_sliver()

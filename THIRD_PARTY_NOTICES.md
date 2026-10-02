@@ -13,22 +13,34 @@ compatible licenses in use are permissive ones (CC0, MIT), GPL-3.0 itself
 and GPL-2.0-or-later. A component whose terms add restrictions the GPL does
 not allow (JIGSAW's core) is never imported or bundled.
 
-## Backends imported as Python modules
+## Backends imported as Python modules (GPL-compatible)
 
 | Backend | License | Notes |
 |---------|---------|-------|
-| [oceanmesh](https://github.com/CHLNDDEV/oceanmesh) (the laboratory's fork: https://github.com/estuarine-utokyo/oceanmesh) | GPL-3.0-or-later | The DistMesh generator, smoothing and patch remeshing. Default `fmesh-buildmesh --engine`. Same license as this package. |
-| [OCSMesh](https://github.com/noaa-ocs-modeling/OCSMesh) | CC0-1.0 (public domain dedication) | NOAA Coastal Survey; used by `--engine ocsmesh` (gmsh-driven generation) and by `fmesh-mesh-combine` (`ops.combine_mesh`). |
+| [oceanmesh](https://github.com/CHLNDDEV/oceanmesh) (the laboratory's fork: https://github.com/estuarine-utokyo/oceanmesh) | GPL-3.0-or-later | The DistMesh generator, smoothing and patch remeshing (`oceanmesh.remesh_patch`, the DistMesh one in `mesh_merge`). Default `fmesh-buildmesh --engine`. Same license as this package. |
 | [MeshKernelPy](https://github.com/Deltares/MeshKernelPy) | MIT | Deltares; orthogonalization and smoothing. Optional. |
 | [stompy](https://github.com/rustychris/stompy) | MIT | UnstructuredGrid utilities. Not on PyPI; install from git. |
 | [PyFVCOM](https://github.com/pwcazenave/PyFVCOM) | MIT | FVCOM postprocessing helpers. |
 
-## Backends invoked as external tools, or not used directly
+## Optional backends that are not GPL-compatible (private use only)
+
+These are **not** in the default environment (owner's decision,
+2026-10-02). They serve only optional paths, which import them lazily. They
+may be installed for private use (`mamba install -c conda-forge ocsmesh
+jigsawpy triangle`), but must **never be redistributed together with this
+package**.
+
+| Backend | License | Used by | Why private only |
+|---------|---------|---------|------------------|
+| [OCSMesh](https://github.com/noaa-ocs-modeling/OCSMesh) | CC0-1.0 itself | `fmesh-buildmesh --engine ocsmesh` (deprecated), `fmesh-mesh-combine`, `fmesh-meshclean --repair-skewed-elements` | Importing it loads [Triangle](https://www.cs.cmu.edu/~quake/triangle.html) at package initialisation (`ocsmesh.engines.triangle`). |
+| [Triangle](https://www.cs.cmu.edu/~quake/triangle.html) (via the `triangle` Python wrapper) | Shewchuk's terms: no sale or inclusion in commercial products without permission (the wrapper's own LGPL does not lift them) | reached through OCSMesh; the fork's separate `oceanmesh/remesh_patch.py` jigsaw path, which this package does not call | Restricts commercial distribution; not GPL-compatible. |
+| [JIGSAW / jigsawpy](https://github.com/dengwirda/jigsaw-python) | JIGSAW's own license (wrappers and core) restricting commercial use | OCSMesh's optional engine; the fork's separate `remesh_patch.py` jigsaw path | Restricts commercial distribution; not GPL-compatible. |
+
+## Backends invoked as external tools
 
 | Backend | License | Handling |
 |---------|---------|----------|
 | [gmsh](https://gmsh.info/) | GPL-2.0-or-later | OCSMesh's `MeshDriver(engine="gmsh")` runs gmsh; compatible with this package's GPL-3.0-or-later in any case. |
-| [JIGSAW / jigsawpy](https://github.com/dengwirda/jigsaw-python) | LGPL-3.0 (`jigsawpy` wrappers); the JIGSAW core C++ has its own license that restricts commercial distribution | Pulled in transitively as an OCSMesh dependency on conda-forge. Never imported by this package and never bundled with it: its core's terms are not GPL-compatible. |
 
 ## Installation hints
 

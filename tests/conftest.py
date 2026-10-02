@@ -24,6 +24,9 @@ def _importable(name: str) -> bool:
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "needs_oceanmesh: needs the laboratory's oceanmesh fork installed")
+    config.addinivalue_line(
+        "markers", "needs_ocsmesh: needs OCSMesh, an optional private-use backend "
+                   "outside the default environment (THIRD_PARTY_NOTICES.md)")
 
 
 @pytest.hookimpl(hookwrapper=True, trylast=True)
@@ -34,9 +37,14 @@ def pytest_collection_modifyitems(config, items):
     # extend tools, rounds 14 F8, 15 F5). As a wrapper, this runs after the
     # selection hooks have removed the deselected items.
     yield
-    marked = [item for item in items if "needs_oceanmesh" in item.keywords]
-    if not marked or _importable("oceanmesh"):
-        return
-    skip = pytest.mark.skip(reason="needs the laboratory's oceanmesh fork, not installed")
-    for item in marked:
-        item.add_marker(skip)
+    for marker, module, reason in (
+            ("needs_oceanmesh", "oceanmesh", "needs the laboratory's oceanmesh fork, not "
+                                             "installed"),
+            ("needs_ocsmesh", "ocsmesh", "needs OCSMesh (optional, private use), not "
+                                         "installed")):
+        marked = [item for item in items if marker in item.keywords]
+        if not marked or _importable(module):
+            continue
+        skip = pytest.mark.skip(reason=reason)
+        for item in marked:
+            item.add_marker(skip)
