@@ -4375,8 +4375,8 @@ def improve_patch(
             # Valence is tracked over the whole mesh, not over the
             # candidate's own fan -- counting the fan gave [5,5,7,7] where
             # the mesh had [5,5,7,9] and let a flip through against a limit
-            # of 8 (review finding 4, 2026-09-22).  It is a cost here rather
-            # It is a veto, so the gate cannot be breached at any point.
+            # of 8 (review finding 4, 2026-09-22).  It is a veto, not a
+            # cost, so the gate cannot be breached at any point.
             # Allowing an intermediate excess does buy reach -- the greedy
             # pass can route through it -- but it leaves nodes at 9 that no
             # later flip can bring down, and on this patch `preserve` failed
@@ -4432,11 +4432,12 @@ def improve_patch(
             if not fan_flips:
                 break
 
-    # Valence cleanup.  Intermediate excess is allowed above because
-    # forbidding it blocks the sequences that end below the limit -- but
-    # ending above it is a C5 failure, so any node still over the gate gets
-    # one more round of flips whose only job is to bring it down, taken
-    # whenever they do not cost anything the other gates measure.
+    # Valence cleanup.  The flips above never take a node over the limit
+    # (a veto), but a node may already be over it in the input, and ending
+    # above it is a C5 failure; so any node still over the gate gets one
+    # more round of flips whose only job is to bring it down, taken whenever
+    # they do not cost anything the other gates measure (review of the
+    # extend tools, round 27 F8).
     n_valence_fixed = 0
     for _ in range(rounds):
         val = np.bincount(tri.ravel(), minlength=len(xy))

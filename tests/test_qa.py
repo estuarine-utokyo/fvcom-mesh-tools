@@ -567,3 +567,9 @@ def test_masked_mesh_values_fail_integrity(what):
         setattr(mesh, what, np.ma.masked_array(a, mask=mask))
     report = run_qa(mesh, coords="metric", channel_check=False)
     assert not _check(report, "node_index_valid").passed
+
+
+def test_an_unknown_coords_mode_is_refused():
+    """Review of the extend tools, round 27 F6."""
+    with pytest.raises(ValueError, match="coords"):
+        run_qa(_pristine(), coords="metrc", channel_check=False)

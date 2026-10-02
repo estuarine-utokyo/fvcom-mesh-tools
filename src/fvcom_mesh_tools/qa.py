@@ -573,6 +573,9 @@ def run_qa(
                        min_channel_wh_gate=min_channel_wh_gate, min_dt_s=min_dt_s,
                        tiny_area_m2=tiny_area_m2, duplicate_tol_m=duplicate_tol_m,
                        max_offenders=max_offenders, land_interior_m=land_interior_m)
+    # a typo must not turn metres into degrees (review round 27 F6)
+    if coords not in ("auto", "metric", "lonlat"):
+        raise ValueError(f"coords must be 'auto', 'metric' or 'lonlat', not {coords!r}")
     if land_solid_shp is not None and not Path(land_solid_shp).exists():
         raise FileNotFoundError(f"land_solid_shp {land_solid_shp} does not exist")
     n_nodes = mesh.n_nodes

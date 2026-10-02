@@ -128,6 +128,13 @@ for script, args in (("446_extend_generate.py", [recipe["recipe_path"], str(gen)
         failed = {"stage": script, "returncode": rc}
         break
 STATE["stage"] = "report"
+# both stages must have left their reports before the build can be "ok"
+# (review round 27 F7)
+if not failed:
+    for need in (gen / "generate.json", OUT / "merge.json"):
+        if not need.exists():
+            failed = {"stage": need.name, "missing": str(need)}
+            break
 # every input the provenance names, the bathymetry and land data included
 # (review round 6 F8), and the datasets listed again: a file that appeared
 # since is a change too (round 7 F9)
@@ -161,7 +168,8 @@ report = {
 (OUT / "report.json").write_text(json.dumps(report, indent=1, default=str))
 STATE["done"] = True
 if failed:
-    raise SystemExit(f"{failed['stage']} failed ({failed.get('returncode', 'inputs changed')}); "
+    raise SystemExit(f"{failed['stage']} failed "
+                     f"({failed.get('returncode', failed.get('missing', 'inputs changed'))}); "
                      f"report in {OUT / 'report.json'}")
 qa = report["merge"]["qa"]
 say(f"QA {qa['n_gate_total'] - qa['n_gate_failed']}/{qa['n_gate_total']}; "

@@ -672,3 +672,30 @@ def test_round_26_inputs_are_checked():
                  ([5.0], 1.0, np.nan)):
         with pytest.raises(ValueError):
             round_depths_inside(*args)
+
+
+def test_round_27_inputs_are_checked():
+    """Review round 27 F1-F4."""
+    import shapely
+
+    from fvcom_mesh_tools.extend import (
+        band_field,
+        check_island_holes,
+        land_segments,
+        trim_lone_corners,
+    )
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    nodes = np.array([[0.0, 0.0], [1000.0, 0.0], [0.0, 1000.0]])
+    m = Fort14Mesh("m", nodes, np.full(3, 5.0), np.array([[0, 1, 2]]),
+                   [np.ma.array([0, 1], mask=True)], [])
+    with pytest.raises(ValueError, match="masked"):
+        check_island_holes(m, shapely.Polygon(), n_base_elements=0)
+    with pytest.raises(ValueError, match="whole number"):
+        trim_lone_corners([[0.9, 1.9, 2.9], [0.9, 2.9, 3.9]], np.array([False, False]))
+    for chain in ([0.9, 1.9], np.ma.array([0, 1], mask=True)):
+        with pytest.raises(ValueError):
+            land_segments(np.array([[0, 1, 2]]), [chain])
+    x, y = np.meshgrid([0.0, 1000.0], [0.0, 1000.0])
+    with pytest.raises(ValueError, match=r"\(N, 2\)"):
+        band_field(x, y, [[0, 0, 0], [1000, 0, 1000]], [100, 200], 1)

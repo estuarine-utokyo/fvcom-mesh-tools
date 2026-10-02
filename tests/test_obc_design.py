@@ -155,3 +155,15 @@ def test_ray_intersection_needs_known_finite_rays():
     with pytest.raises(ValueError):
         ray_intersection([np.nan, 0], [1, 0], [1, 1], [0, -1])
     assert np.allclose(ray_intersection([0, 0], [1, 0], [1, 1], [0, -1]), [1, 0])
+
+
+def test_ray_intersection_does_not_depend_on_direction_length():
+    """Review of the extend tools, round 27 F5."""
+    import numpy as np
+    import pytest
+
+    from fvcom_mesh_tools.obc_design import ray_intersection
+
+    assert np.allclose(ray_intersection([0, 0], [1e-7, 0], [1, 1], [0, -1e-7]), [1, 0])
+    with pytest.raises(ValueError, match="not finite"):
+        ray_intersection([1.6e308, 0], [1, 1], [1.6e308, 1e308], [1, -1])

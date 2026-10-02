@@ -102,6 +102,13 @@ def band_field(x, y, line_xy, targets, half_width_m):
         raise ValueError("x and y must be finite lattice arrays of one shape")
     line_xy = np.asarray(line_xy, float)
     targets = np.asarray(targets, float)
+    # planar (N, 2) lines: Shapely projects in x, y, and a third column would
+    # enter only the along-line distances (review round 27 F4)
+    if line_xy.ndim != 2 or line_xy.shape[1] != 2 or not np.isfinite(line_xy).all():
+        raise ValueError(f"line_xy must be finite (N, 2), not {line_xy.shape}")
+    if targets.shape != (len(line_xy),) or not (np.isfinite(targets).all()
+                                                 and (targets > 0).all()):
+        raise ValueError("targets must be finite positive sizes, one target per point")
     if len(line_xy) < 2 or len(targets) != len(line_xy):
         raise ValueError("a band needs a line of two points or more and one target per point")
     line = shapely.LineString(line_xy)
@@ -190,6 +197,27 @@ def _no_masks(**arrays) -> None:
     for name, a in arrays.items():
         if np.ma.is_masked(a):
             raise ValueError(f"{name} has masked values")
+
+
+def _checked_geometry(mesh: Fort14Mesh):
+    """``(xy (N, 2), elements (M, 3), open chains)`` of ``mesh``, checked:
+    no masks, finite planar coordinates, triangles and chains of whole
+    in-range node indices (review round 27 F1)."""
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
+    _no_masks(nodes=mesh.nodes, elements=mesh.elements,
+              **{f"open_boundary_{k}": c for k, c in enumerate(mesh.open_boundaries)})
+    nodes = np.asarray(mesh.nodes)
+    if nodes.ndim != 2 or nodes.shape[1] < 2 or nodes.dtype.kind not in "iuf":
+        raise ValueError(f"nodes must be numeric (N, 2), not {nodes.dtype} {nodes.shape}")
+    xy = nodes[:, :2].astype(float)
+    if not np.isfinite(xy).all():
+        raise ValueError("node coordinates must be finite")
+    els = _indices(mesh.elements, len(xy), "elements", ndim=2)
+    if els.size and els.shape[1] != 3:
+        raise ValueError(f"elements must be (M, 3), not {els.shape}")
+    chains = [_indices(c, len(xy), "an open boundary") for c in mesh.open_boundaries]
+    return xy, els, chains
 
 
 def _signed_areas(nodes, elements):
@@ -346,9 +374,9 @@ def check_no_overlap(merged: Fort14Mesh, n_base_elements: int, rel_tol: float = 
     if not (isinstance(n_base_elements, (int, np.integer))
             and 0 <= n_base_elements <= merged.n_elements):
         raise ValueError(f"n_base_elements must be in [0, {merged.n_elements}]")
-    xy = merged.nodes[:, :2]
-    base = shapely.union_all(shapely.polygons(xy[merged.elements[:n_base_elements]]))
-    outer = shapely.polygons(xy[merged.elements[n_base_elements:]])
+    xy, els, _ = _checked_geometry(merged)
+    base = shapely.union_all(shapely.polygons(xy[els[:n_base_elements]]))
+    outer = shapely.polygons(xy[els[n_base_elements:]])
     tree = shapely.STRtree(outer)
     cand = np.unique(tree.query(base, predicate="intersects"))
     if len(cand):
@@ -383,13 +411,12 @@ def check_island_holes(mesh: Fort14Mesh, land, n_base_elements: int) -> dict:
 
     from fvcom_mesh_tools.io.fvcom_native import boundary_loops
 
-    xy = np.asarray(mesh.nodes)[:, :2]
-    els = np.asarray(mesh.elements)
+    xy, els, chains = _checked_geometry(mesh)
     corners = xy[els]
     edges = np.linalg.norm(corners - np.roll(corners, 1, axis=1), axis=2)
     d1, d2 = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
     areas = 0.5 * np.abs(d1[:, 0] * d2[:, 1] - d2[:, 0] * d1[:, 1])
-    obc = set(int(v) for c in mesh.open_boundaries for v in np.asarray(c).tolist())
+    obc = set(int(v) for c in chains for v in c.tolist())
     # Only a hole the base itself has is left alone: a new hole between base
     # nodes is checked like any other (review rounds 24 F3, 25 F3). The base
     # element count is required and checked; no rule by node ids remains.
@@ -461,8 +488,8 @@ def check_land_cover(mesh: Fort14Mesh, land, n_base_elements: int,
     if not (isinstance(erode, (int, float, np.integer, np.floating)) and np.isfinite(erode)
             and erode > 0):
         raise ValueError(f"erode must be finite and positive, not {erode!r}")
-    xy = np.asarray(mesh.nodes)[:, :2]
-    corners = xy[np.asarray(mesh.elements)[n_base_elements:]]
+    xy, els, _ = _checked_geometry(mesh)
+    corners = xy[els[n_base_elements:]]
     tri = shapely.polygons(corners)
     area = shapely.area(tri)
     # the elements' own edge lengths, not an equilateral stand-in (round 20 F6)
@@ -502,11 +529,17 @@ def land_segments(elements, open_chains) -> list[tuple[int, np.ndarray]]:
     1 for a closed loop without one (an island).  An open chain's end nodes
     appear in the land runs too, as in ADCIRC.
     """
-    from fvcom_mesh_tools.io.fvcom_native import boundary_loops
+    from fvcom_mesh_tools.io.fvcom_native import _indices, boundary_loops
 
+    # whole, unmasked, in-range indices: a truncated or masked chain would
+    # invent open edges (review round 27 F3)
+    _no_masks(elements=elements, **{f"chain_{k}": c for k, c in enumerate(open_chains)})
+    els = np.asarray(elements)
+    n = int(els.max()) + 1 if els.size else 0
+    elements = _indices(els, n, "elements", ndim=2)
     open_edges = set()
     for c in open_chains:
-        c = np.asarray(c, np.int64)
+        c = _indices(c, n, "an open chain")
         open_edges |= {frozenset((int(a), int(b))) for a, b in zip(c[:-1], c[1:])}
     out = []
     for loop in boundary_loops(np.asarray(elements)):
@@ -646,8 +679,18 @@ def trim_lone_corners(elements, mutable, keep_nodes=(), max_rounds=20):
     Returns ``(elements, mutable, report)``.
     """
     # unknown flags are not permissions (review round 26 F4)
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
     _no_masks(elements=elements, mutable=mutable, keep_nodes=keep_nodes)
-    t = np.asarray(elements, np.int64)
+    # whole indices, checked before any cast: immutable input is returned as
+    # given, never rewritten (review round 27 F2)
+    raw = np.asarray(elements)
+    n = int(np.max(raw)) + 1 if raw.size and np.isfinite(raw).all() else 0
+    t = _indices(raw, max(n, 1), "elements", ndim=2)
+    if t.size and t.shape[1] != 3:
+        raise ValueError(f"elements must be (M, 3), not {t.shape}")
+    keep_nodes = _indices(np.asarray(list(keep_nodes)), max(n, 1), "keep_nodes") \
+        if len(list(keep_nodes)) else np.empty(0, np.int64)
     mut = np.asarray(mutable)
     if mut.dtype != bool or mut.shape != (len(t),):
         raise ValueError(f"mutable must be a boolean ({len(t)},) array, not {mut.dtype} "
