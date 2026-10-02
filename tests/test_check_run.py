@@ -358,3 +358,21 @@ def test_start_date_is_checked_on_its_own_and_cycle_controls_too(tmp_path):
             _interval("cycles = 1", text)
     with pytest.raises(ValueError):
         _interval("seconds = 1e-9", "")
+
+
+def test_masked_times_and_first_output_outside_the_run_fail(tmp_path):
+    """Review round 23 F4 and F5."""
+    run = _run(tmp_path / "a")
+    with netCDF4.Dataset(run / "output" / "m2_0001.nc", "a") as ds:
+        t = ds["Times"][:]
+        mask = np.zeros(t.shape, bool)
+        mask[0, :5] = True
+        ds["Times"][:] = np.ma.masked_array(t, mask=mask)
+    info = check_run(run)
+    assert not info["ok"] and any("masked" in r for r in info["reasons"])
+    for nfo in ("2019-12-31 00:00:00", "2020-01-03 00:00:00"):
+        run = _run(tmp_path / nfo[:10])
+        nml = run / "m2_run.nml"
+        nml.write_text(nml.read_text() + f" NC_FIRST_OUT = '{nfo}',\n")
+        info = check_run(run)
+        assert not info["ok"] and any("outside" in r for r in info["reasons"])

@@ -16,13 +16,24 @@ class _UniqueLoader(yaml.SafeLoader):
     pass
 
 
-def _mapping(loader, node):
-    # Duplicates are looked for among the keys written in this mapping; merge
-    # keys (<<) are then expanded as SafeLoader does, an explicit key
-    # overriding a merged one (review round 22 F5).
+_MERGE = "tag:yaml.org,2002:merge"
+
+
+def _check_keys(loader, node, visited) -> None:
+    """Refuse a key written twice in ``node``, and in every mapping merged
+    into it (inline or by alias), which flattening never hands to the
+    mapping constructor (review rounds 22 F5, 23 F1)."""
+    if id(node) in visited:
+        return
+    visited.add(id(node))
     seen = set()
-    for key_node, _value in node.value:
-        if key_node.tag == "tag:yaml.org,2002:merge":
+    for key_node, value_node in node.value:
+        if key_node.tag == _MERGE:
+            parts = (value_node.value if isinstance(value_node, yaml.SequenceNode)
+                     else [value_node])
+            for part in parts:
+                if isinstance(part, yaml.MappingNode):
+                    _check_keys(loader, part, visited)
             continue
         key = loader.construct_object(key_node, deep=True)
         if key in seen:
@@ -30,6 +41,13 @@ def _mapping(loader, node):
             raise ValueError(f"duplicate key {key!r} at line {mark.line + 1}, "
                              f"column {mark.column + 1}")
         seen.add(key)
+
+
+def _mapping(loader, node):
+    # Duplicates are looked for among the keys written in this mapping and
+    # in what it merges; merge keys (<<) are then expanded as SafeLoader
+    # does, an explicit key overriding a merged one.
+    _check_keys(loader, node, set())
     loader.flatten_mapping(node)
     return loader.construct_mapping(node, deep=True)
 

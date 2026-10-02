@@ -371,6 +371,8 @@ def _check_exportable(mesh: Fort14Mesh) -> None:
 
 
 def _check_cor(mesh: Fort14Mesh, cor) -> np.ndarray:
+    if np.ma.is_masked(cor):                 # unknown, not its fill (round 23 F6)
+        raise ValueError("cor has masked values")
     cor = np.asarray(cor, dtype=np.float64)
     if cor.shape != (mesh.n_nodes,):
         raise ValueError(f"cor shape {cor.shape} does not match n_nodes = {mesh.n_nodes}")
@@ -385,6 +387,8 @@ def _check_sponge(mesh: Fort14Mesh, sponge) -> list[tuple[int, float, float]]:
     rows = [] if sponge is None else list(sponge)
     if not rows:
         return []
+    if any(np.ma.is_masked(r) for r in rows):   # round 23 F6
+        raise ValueError("sponge rows have masked values")
     arr = np.asarray(rows, dtype=float)
     if arr.ndim != 2 or arr.shape[1] != 3:
         raise ValueError(f"sponge rows are (node, radius, damping), not shape {arr.shape}")
@@ -633,12 +637,13 @@ def read_obc(path: str | Path, with_types: bool = False):
         raise ValueError(f"{path.name}: expected exactly {n} OBC rows, found {len(rows)}")
     if any(len(r) < 3 for r in rows):
         raise ValueError(f"{path.name}: every OBC row needs 'I NODE TYPE'")
-    # all three fields are integers, the counter too (FVCOM reads it as one;
-    # review round 22 F8)
-    try:
-        [int(r[0]) for r in rows]
-    except ValueError:
-        raise ValueError(f"{path.name}: an OBC row counter is not an integer") from None
+    # all three fields are plain ASCII integers, the counter too, as FVCOM's
+    # list-directed read takes them (review rounds 22 F8, 23 F7)
+    import re
+
+    if any(not re.fullmatch(r"[+-]?[0-9]+", f) for r in rows for f in r[:3]):
+        raise ValueError(f"{path.name}: an OBC row counter, node or type is not an "
+                         f"integer")
     ids = np.array([int(r[1]) for r in rows], dtype=np.int64) - 1
     types = np.array([int(r[2]) for r in rows], dtype=np.int64)
     if not ((types >= 1) & (types <= 10)).all():

@@ -157,3 +157,12 @@ def test_merge_keys_still_work():
     from fvcom_mesh_tools.yaml_strict import load_unique
 
     assert load_unique("d:\n  <<: {a: 1, b: 2}\n  b: 3\n") == {"d": {"a": 1, "b": 3}}
+
+
+def test_duplicates_inside_merged_mappings_are_refused():
+    """Review round 23 F1."""
+    from fvcom_mesh_tools.yaml_strict import load_unique
+
+    for text in ("d:\n  <<: {a: 1, a: 2}\n", "x: &x {p: 1, p: 2}\ny:\n  <<: *x\n"):
+        with pytest.raises(ValueError, match="duplicate key"):
+            load_unique(text)

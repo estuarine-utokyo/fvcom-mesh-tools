@@ -151,6 +151,17 @@ if PROV["files"]["built_report"]["sha256"] != hashlib.sha256(_built_bytes).hexdi
 _acc = hashlib.sha256("".join(ACCEPTED[k] for k in ("grd", "dep", "obc")).encode()).hexdigest()
 if PROV["files"]["built_case"]["sha256"] != _acc:
     raise SystemExit("the built case changed between accepting and recording it")
+# the land and base recorded are those the accepted build was generated with
+# (combined as collect combines them; review round 23 F3)
+_land_names = [Path(q).name for q in PROV["files"]["land"]["paths"]]
+_want_land = hashlib.sha256("".join(_gin["land_sha256"].get(n, "?") for n in _land_names)
+                            .encode()).hexdigest()
+_want_base = hashlib.sha256("".join(_gin["base_sha256"][k] for k in ("grd", "dep", "obc"))
+                            .encode()).hexdigest()
+if (sorted(_land_names) != sorted(_gin["land_sha256"])
+        or PROV["files"]["land"]["sha256"] != _want_land
+        or PROV["files"]["base"]["sha256"] != _want_base):
+    raise SystemExit("the land or base changed between accepting and recording it")
 base = read_fvcom_case(f"{b}_grd.dat", f"{b}_dep.dat", f"{b}_obc.dat")
 mesh = read_fvcom_case(src_dir / f"{case}_grd.dat", src_dir / f"{case}_dep.dat",
                        src_dir / f"{case}_obc.dat")

@@ -344,6 +344,11 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
         reasons.append(f"no START_DATE found in {nml}")
     if end is not None and start is not None and end <= start:
         reasons.append(f"END_DATE {end} is not after the start {start}")
+    # FVCOM refuses a first output outside the run (round 23 F5)
+    nfo = vals.get("NC_FIRST_OUT")
+    if nfo and start is not None and end is not None and first is not None and not (
+            start <= first <= end):
+        reasons.append(f"NC_FIRST_OUT {first} is outside [{start}, {end}]")
     if end is None:
         reasons.append(f"no END_DATE found in {nml}")
     else:
@@ -368,8 +373,13 @@ def check_run(run_dir, *, log="fvcom.log", nml="m2_run.nml", casename=None) -> d
                 if missing:
                     reasons.append(f"{f.name}: the history output lacks {', '.join(missing)}")
                     continue
+                raw_times = ds["Times"][:]
+                # a masked character is unknown, not its fill (round 23 F4)
+                if np.ma.is_masked(raw_times):
+                    reasons.append(f"{f.name}: Times has masked characters")
+                    continue
                 times = [_parse_time(str(t)) for t in
-                         np.atleast_1d(netCDF4.chartostring(ds["Times"][:]))]
+                         np.atleast_1d(netCDF4.chartostring(raw_times))]
                 if not times:
                     reasons.append(f"{f.name}: no records")
                     continue

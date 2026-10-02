@@ -754,3 +754,20 @@ def test_read_obc_needs_an_integer_counter(tmp_path):
         p.write_text(f"OBC Node Number = 2\n{first} 5 1\n2 9 1\n")
         with pytest.raises(ValueError, match="counter"):
             read_obc(p)
+
+
+def test_masked_cor_and_sponge_and_odd_integers_are_refused(tmp_path):
+    """Review round 23 F6 and F7."""
+    from fvcom_mesh_tools.io.fvcom_native import read_obc
+
+    with pytest.raises(ValueError, match="masked"):
+        write_cor(_tri(), tmp_path / "c.dat", np.ma.array([35.0, 36.0, 37.0],
+                                                          mask=[True, False, False]))
+    with pytest.raises(ValueError, match="masked"):
+        write_spg(_tri(), tmp_path / "s.dat", np.ma.array([[0.0, 100.0, 0.001]],
+                                                          mask=[[False, True, False]]))
+    p = tmp_path / "x_obc.dat"
+    for first in ("1_0", "\uff11"):
+        p.write_text(f"OBC Node Number = 2\n{first} 5 1\n2 9 1\n")
+        with pytest.raises(ValueError, match="integer"):
+            read_obc(p)

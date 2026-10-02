@@ -348,9 +348,10 @@ def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int) -> dict:
     beyond the base's ``n_base_nodes``, is an island. Inside the polygon it
     bounds, the water farther than half the local edge length from the
     supplied ``land`` (in the mesh's coordinates) must be less than one
-    local element's area: a hole in open water -- elements lost in finishing
-    or repair -- passed every other check (review round 11 F7), and so did a
-    large hole around a tiny islet (round 22 F6). On Tokyo Bay - Enshu
+    local element's area, and the hole must hold some land: a hole in open
+    water -- elements lost in finishing or repair -- passed every other
+    check (review round 11 F7), and so did a large hole around a tiny islet
+    (round 22 F6) and a lost element (round 23 F2). On Tokyo Bay - Enshu
     (2026-10-03) the nine island holes leave at most 43,000 m2 against
     elements of about 170,000 m2. Raises on the first such hole; returns
     counts.
@@ -381,7 +382,9 @@ def check_island_holes(mesh: Fort14Mesh, land, n_base_nodes: int) -> dict:
         water = hole.difference(local.buffer(0.5 * edge)).area
         limit = float(np.median(areas[ring]))
         worst = max(worst, water / limit)
-        if water > limit:
+        # some land in it, and less than one element of water away from it
+        # (strictly; review round 23 F2: a lost element had no land at all)
+        if local.intersection(hole).area <= 0 or water >= limit * (1 - 1e-9):
             bad.append((loop[0], float(hole.area), water))
     if bad:
         v, a, w = bad[0]

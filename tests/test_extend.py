@@ -553,3 +553,23 @@ def test_land_cover_erodes_by_the_real_median_edge():
     m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [], [])
     with pytest.raises(ValueError, match="could resolve"):
         check_land_cover(m, shapely.box(0, 2000, 5000, 3050), n_base_elements=0)
+
+
+def test_a_lost_element_is_not_an_island():
+    """Review round 23 F2: one missing triangle, no land."""
+    import shapely
+
+    from fvcom_mesh_tools.extend import check_island_holes
+    from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+    n = 9
+    xy = np.array([[i * 1000.0, j * 1000.0] for j in range(n) for i in range(n)])
+    tri = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            a, b, c, d = j * n + i, j * n + i + 1, (j + 1) * n + i + 1, (j + 1) * n + i
+            tri += [[a, b, c], [a, c, d]]
+    del tri[2 * (4 * (n - 1) + 4)]                    # one interior triangle
+    m = Fort14Mesh("m", xy, np.full(len(xy), 10.0), np.array(tri), [np.array([0, 1, 2])], [])
+    with pytest.raises(ValueError, match="open water"):
+        check_island_holes(m, shapely.Polygon(), n_base_nodes=27)
