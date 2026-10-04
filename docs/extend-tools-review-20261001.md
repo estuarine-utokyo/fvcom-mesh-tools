@@ -15247,3 +15247,214 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 run produces (injected infinities, integers beyond float range, longdouble). Its
 contract is now stated once, in `_number` and `_judge`: integers are judged exactly,
 floats must be finite, anything else fails.
+
+## Round 53
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `8ed9a6a`. **Three minor defects are substantiated.** No files were modified.
+
+Previous statuses concern the original findings, using recorded triage, current code and selected regressions; every historical reproduction was not rerun.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R30, except recorded withdrawals | RESOLVED | Original interpolation, freezing, publication, provenance, validation and environment corrections remain. Current licensing and timestep decisions apply. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, mask, connectivity and bounds cases remain corrected. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains the established loader contract. |
+| R32, all | RESOLVED | Boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Original node, corridor, limiter, empty-mesh and gradation corrections remain. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original documentation, array, overflow and planar-shape corrections remain. |
+| R34-F3 | WITHDRAWN | The approved calibrated method remains controlling. |
+| R35–R47, all | RESOLVED | Original permission, dtype, geometry, tangent, publication and reporting cases remain corrected. The `1e100` coordinate contract applies. |
+| R48, all | RESOLVED | Original normalization, singleton, finite-actual comparison and reporting-schema cases remain corrected. |
+| R49, all | RESOLVED | Original oversized-integer exceptions, log-name validation and interactive-log collision cases remain corrected. |
+| R50, all | RESOLVED | Original conversion, terminal-leg ordering and export-name cases remain corrected. |
+| R51-F1, F2 | RESOLVED | Leg termination validation and exact integer judgments remain corrected. |
+| R51-F3 | PARTIAL | Ordinary destinations are protected; input aliases and staged inputs remain exposed: finding 1. |
+| R52-F1 | RESOLVED | NumPy floating infinities fail; reproduced in memory. |
+| R52-F2 | RESOLVED | Integer judgments and records preserve Python integers, including `10**400` thresholds; reproduced. |
+| R52-F3 | PARTIAL | Ordinary `.nc` destinations are refused, but the complete input-protection issue remains: finding 1. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and owner decisions remain controlling. |
+
+No newly introduced defect was substantiated in `dd49ce5`. Finding 1 is incomplete remediation; findings 2–3 are pre-existing.
+
+1. **Minor — The marker guard still permits removal of checker inputs.**
+
+   **Location:** [cli/check_run.py:514](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/cli/check_run.py:514).
+
+   Entirely mocked executions of the actual CLI recorded these unlink operations:
+
+   | Arguments / filesystem condition | Result |
+   |---|---|
+   | `--marker /review/run/input/m2_dep.dat` | Depth input unlinked before checking |
+   | `--nml sub/../m2_run.nml --marker /review/run/m2_run.nml` | Namelist unlinked |
+   | History `output/m2_0001.nc` is a symlink to `/review/storage/history.bin`; marker names that history | History symlink unlinked |
+
+   The guard omits namelist-selected grid/depth inputs, compares a resolved marker against unresolved log/namelist paths, and tests the resolved target’s suffix instead of the supplied `.nc` name.
+
+   **Reachability:** Direct CLI use with conflicting marker arguments only. Job 448 passes no marker.
+
+   **Fix:** Identify effective checker inputs before unlinking. Resolve both sides of comparisons, protect staged grid/depth files and history paths, check existing file identity, and retain the `.nc` rejection for the supplied path as well.
+
+2. **Minor — Rendering a correctly failed infinite-count check raises an exception.**
+
+   **Location:** [quality.py:258](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:258), called by `format_threshold_table`.
+
+   Reproduced in memory:
+
+   ```python
+   passed, checks = check_thresholds(
+       {"n_flipped": float("-inf")}, max_flipped=0
+   )
+   assert passed is False
+   format_threshold_table(checks)
+   ```
+
+   The last call raises `OverflowError: cannot convert float infinity to integer`. Positive infinity and a longdouble normalized to infinity behave identically. The failure verdict cannot be rendered.
+
+   **Reachability:** Direct helper use with injected invalid metrics only; extension inputs produce integer counts.
+
+   **Fix:** Handle nonfinite numeric values before integer formatting, displaying an invalid value while preserving the `FAIL` verdict and exact finite integers.
+
+3. **Minor — Comparison-table deltas still round exact integer counts.**
+
+   **Location:** [quality.py:273](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:273).
+
+   Reproduction:
+
+   ```python
+   format_comparison_table(
+       [("before", {"n_flipped": 2**53}),
+        ("after", {"n_flipped": 2**53 + 1})],
+       keys=("n_flipped",),
+   )
+   ```
+
+   The displayed counts are exact, but the delta is **`0`**, rather than **`+1`**. Counts `10**400` and `10**400 + 1` instead raise `OverflowError` during float conversion.
+
+   **Reachability:** Direct helper use with unusually large counts only; realistic extension meshes do not reach these magnitudes.
+
+   **Fix:** Subtract integer operands as Python integers. Reserve floating conversion for floating metrics and handle conversion failures explicitly.
+
+Verification: the core read-only pytest selection passed **124 tests**, with **72 deselected** because they require writable temporary files. An initial broader selection passed 255 tests but had 23 Matplotlib cache-directory failures under the read-only restriction. Scoped `ruff check --no-cache` and shell syntax checks passed. Mocked reproductions used no filesystem mutations; `git diff --exit-code` passed and the working tree remained clean.
+
+No real-data mesh build, QA or FVCOM integration was rerun; no new NP/NE or timestep measurements were taken, no batch jobs were submitted, and no `$DATA_DIR` contents were read.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 3 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 53: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 52 (your previous answer; 3 minor) was fixed in dd49ce5; read it. Per finding:
+- F1, F2 check_thresholds: integers judged and recorded as Python ints; every NumPy floating
+  type becomes a float first, so an infinite longdouble fails.
+- F3 fmesh-check-run: a --marker with a .nc name is refused.
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | code read (the guard listed inputs and missed some) | yes, direct CLI use only | fixed, c3a741d by changing the rule instead of extending the list: a marker is removed only if it is a small JSON verdict written by this tool (`ok`, `reasons`) and is not a symlink; anything else is left alone and the run stops with exit 2; test |
+| F2 | minor | test (`-inf` rendered) | yes | fixed, c3a741d: shown as "invalid", FAIL kept; test |
+| F3 | minor | test (2**53, 2**53+1) | yes | fixed, c3a741d: exact integer deltas; test |
