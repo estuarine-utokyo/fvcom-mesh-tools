@@ -60,6 +60,7 @@ def _grid(path: Path, var: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
     with netCDF4.Dataset(path) as ds:
         lat, lon, z = ds["lat"][:], ds["lon"][:], ds[var][:]
+        dims = tuple(ds[var].dimensions)
     # a masked cell is missing, not the number under the mask (a -9999 fill
     # would become a 9999 m depth; review round 29 F1): missing cells are
     # NaN, which the interpolation hands on to the next source. The axes
@@ -68,6 +69,12 @@ def _grid(path: Path, var: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         raise ValueError(f"{path.name}: the lat or lon axis has masked values")
     lat, lon = np.asarray(lat, float), np.asarray(lon, float)
     z = np.ma.filled(np.ma.asarray(z, float), np.nan)
+    # the declared storage order decides the axes, not the shape: a square
+    # (lon, lat) grid passes a shape test as (lat, lon) (review round 30 F5)
+    if dims == ("lon", "lat"):
+        z = z.T
+    elif dims != ("lat", "lon"):
+        raise ValueError(f"{path.name}: {var} has dimensions {dims}, not (lat, lon)")
     if z.shape != (lat.size, lon.size):
         raise ValueError(f"{path.name}: expected (lat, lon) = "
                          f"{(lat.size, lon.size)}, got {z.shape}")
@@ -80,7 +87,7 @@ def interpolate_m7001_tp(lon: np.ndarray, lat: np.ndarray) -> tuple[np.ndarray, 
     Returns ``(depth, source)``, where ``source`` is 0 for the fine M7001 grid
     and 1 for the Kanto-wide blend.  Raises if any point is covered by neither.
     """
-    from scipy.interpolate import RegularGridInterpolator
+    from fvcom_mesh_tools.dem.sources import _bilinear_index
 
     lon = np.asarray(lon, float)
     lat = np.asarray(lat, float)
@@ -93,8 +100,13 @@ def interpolate_m7001_tp(lon: np.ndarray, lat: np.ndarray) -> tuple[np.ndarray, 
         if not path.exists():
             raise FileNotFoundError(path)
         glat, glon, z = _grid(path, var)
-        g = RegularGridInterpolator((glat, glon), z, bounds_error=False, fill_value=np.nan)
-        zi = g(pts)
+        if not (np.all(np.diff(glat) > 0) and np.all(np.diff(glon) > 0)):
+            raise ValueError(f"{path.name}: lat and lon must be strictly increasing")
+        # a missing corner spoils a sample only where its weight is not zero
+        # (review round 30 F6)
+        fi = np.interp(pts[:, 1], glon, np.arange(len(glon)), left=np.nan, right=np.nan)
+        fj = np.interp(pts[:, 0], glat, np.arange(len(glat)), left=np.nan, right=np.nan)
+        zi = _bilinear_index(z, fi, fj)
         take = np.isnan(depth) & np.isfinite(zi)
         depth[take] = -zi[take]
         source[take] = tag
@@ -128,12 +140,30 @@ def rfactor_smooth(
     ``rmax`` and edge set.  Returns ``(depth, iterations, final max r)``.
     """
     h = np.asarray(h0, float).copy()
+    ei, ej = np.asarray(ei), np.asarray(ej)
+    if ei.size == 0 and ej.size == 0:
+        ei = ej = np.empty(0, np.int64)
+    # known, finite, positive depths, edge ends that are nodes, and sane
+    # controls; the floor holds from the start, and depths whose sums would
+    # overflow are refused (review round 30 F8, F9)
+    if np.ma.is_masked(h0) or h.ndim != 1 or not (np.isfinite(h).all() and (h > 0).all()):
+        raise ValueError("depths must be a known, finite, positive (N,) array")
+    if ei.shape != ej.shape or ei.dtype.kind not in "iu" or ej.dtype.kind not in "iu" \
+            or (ei.size and (min(ei.min(), ej.min()) < 0 or max(ei.max(), ej.max()) >= len(h))):
+        raise ValueError("ei and ej must be matching whole node indices")
+    if not (0 < rmax < 1 and np.isfinite(hmin) and hmin > 0 and int(max_iter) >= 1):
+        raise ValueError(f"bad controls: rmax {rmax}, hmin {hmin}, max_iter {max_iter}")
+    deg = np.bincount(np.r_[ei, ej], minlength=len(h)).max(initial=0)
+    big = np.finfo(float).max / (4 * (int(deg) + 1))
+    if max(h.max(initial=0.0), hmin) > big:
+        raise ValueError(f"depths beyond {big:.1e} m cannot be limited without overflow")
+    h = np.maximum(h, hmin)
     for it in range(int(max_iter)):
         hi, hj = h[ei], h[ej]
         r = np.abs(hi - hj) / (hi + hj)
         bad = r > rmax + 1e-9
         if not bad.any():
-            return h, it, float(r.max())
+            return h, it, float(r.max(initial=0.0))
         delta = np.where(bad, np.maximum((np.abs(hi - hj) - rmax * (hi + hj)) / 2.0, 0.0), 0.0)
         sgn = np.sign(hi - hj)
         add = np.zeros_like(h)
@@ -145,7 +175,11 @@ def rfactor_smooth(
         h += add / np.where(cnt > 0, cnt, 1.0)
         h = np.maximum(h, hmin)
     hi, hj = h[ei], h[ej]
-    return h, int(max_iter), float((np.abs(hi - hj) / (hi + hj)).max())
+    r = float((np.abs(hi - hj) / (hi + hj)).max(initial=0.0))
+    if not r <= rmax + 1e-9:         # not reached: a result that breaks the limit is no result
+        raise ValueError(f"r-factor limit {rmax} not reached in {max_iter} iterations "
+                         f"(r = {r:.6f})")
+    return h, int(max_iter), r
 
 
 def production_depths(

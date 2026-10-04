@@ -152,8 +152,19 @@ def _acceptance_problem():
         for name, rep in (("merge.json", merged), ("generate.json", generated)):
             if not isinstance(rep, dict):
                 raise ValueError(f"{name} is not an object")
-        if not all(isinstance(generated.get(k), dict) for k in ("inputs", "settings")):
-            raise ValueError("generate.json lacks its inputs and settings")
+        if not isinstance(generated.get("settings"), dict) or not generated["settings"]:
+            raise ValueError("generate.json lacks its settings")
+        # the generation must name the very recipe and boundary this build
+        # parsed, and carry every identity the merge accepted against
+        # (review round 30 F1)
+        ident = generated.get("inputs")
+        if not isinstance(ident, dict) or not all(
+                ident.get(k) for k in ("recipe_sha256", "open_boundary_sha256", "base_sha256",
+                                       "land_sha256", "outer_utm14_sha256")):
+            raise ValueError("generate.json lacks its input identities")
+        for k in ("recipe_sha256", "open_boundary_sha256"):
+            if ident[k] != recipe[k]:
+                raise ValueError(f"generate.json's {k} is not this build's")
         for k in ("n_nodes", "n_elements"):
             if _count(generated.get(k), f"generate {k}") <= 0 or _count(
                     merged.get(k), f"merge {k}") <= 0:
@@ -170,10 +181,19 @@ def _acceptance_problem():
         return f"QA {total - nfail}/{total}"
     if problems:
         return f"merge problems: {problems}"
-    for kind in ("grd", "dep", "obc"):
-        f = OUT / f"{recipe['case']}_{kind}.dat"
-        if not f.is_file() or f.stat().st_size == 0:
-            return f"missing or empty product {f.name}"
+    # the products parse, and agree with what the merge reported
+    from fvcom_mesh_tools.io.fvcom_native import read_dep, read_grd, read_obc
+
+    try:
+        case = recipe["case"]
+        nodes, els = read_grd(OUT / f"{case}_grd.dat")
+        read_dep(OUT / f"{case}_dep.dat")
+        read_obc(OUT / f"{case}_obc.dat")
+    except (OSError, ValueError, IndexError) as exc:
+        return f"unreadable product ({type(exc).__name__}: {exc})"
+    if (len(nodes), len(els)) != (merged["n_nodes"], merged["n_elements"]):
+        return (f"products hold NP={len(nodes)} NE={len(els)}, the merge reported "
+                f"NP={merged['n_nodes']} NE={merged['n_elements']}")
     return None
 
 

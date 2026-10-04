@@ -595,12 +595,16 @@ def round_depths_inside(h, hmin, hmax=None, decimals: int = 6) -> np.ndarray:
     # the grid ends are taken from the bounds' shortest decimal forms, so a
     # bound that is already on the grid is its own end (0.07 * 100 is
     # 7.000000000000001 in binary; review round 29 F8)
-    from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+    from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, localcontext
 
-    step = Decimal(1).scaleb(-int(decimals))
-    lo = float(Decimal(repr(float(hmin))).quantize(step, rounding=ROUND_CEILING))
-    hi = np.inf if hmax is None else float(
-        Decimal(repr(float(hmax))).quantize(step, rounding=ROUND_FLOOR))
+    # in a context of our own: the caller's precision must not decide whether
+    # a 309-digit endpoint can be quantized (review round 30 F2)
+    with localcontext() as ctx:
+        ctx.prec = 400
+        step = Decimal(1).scaleb(-int(decimals))
+        lo = float(Decimal(repr(float(hmin))).quantize(step, rounding=ROUND_CEILING))
+        hi = np.inf if hmax is None else float(
+            Decimal(repr(float(hmax))).quantize(step, rounding=ROUND_FLOOR))
     if lo > hi or lo < hmin or hi > (np.inf if hmax is None else hmax):
         raise ValueError(f"no {decimals}-decimal depth lies in [{hmin}, {hmax}]")
     out = np.clip(np.round(np.asarray(h, float), int(decimals)), lo, hi)

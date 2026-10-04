@@ -41,8 +41,13 @@ conda activate "$_env" || { echo "ERROR: cannot activate conda env $_env"; exit 
 # the active env is the requested one: by name, or by prefix when FMESH_ENV is
 # a path (conda then reports the env's name, review round 29 F5)
 if [[ $_env == */* ]]; then
-    [ "$(realpath -e -- "${CONDA_PREFIX:-/nonexistent}")" = "$(realpath -e -- "$_env")" ] \
-        || { echo "ERROR: conda prefix is '${CONDA_PREFIX:-}', not $_env"; exit 2; }
+    # each side resolved on its own: two failed resolutions are two empty
+    # strings, which compare equal (review round 30 F3)
+    _want=$(realpath -e -- "$_env") || { echo "ERROR: no such conda env path: $_env"; exit 2; }
+    _have=$(realpath -e -- "${CONDA_PREFIX:-}") \
+        || { echo "ERROR: CONDA_PREFIX '${CONDA_PREFIX:-}' does not exist"; exit 2; }
+    [ -n "$_want" ] && [ "$_want" = "$_have" ] \
+        || { echo "ERROR: conda prefix is '$_have', not $_want"; exit 2; }
 else
     [ "${CONDA_DEFAULT_ENV:-}" = "$_env" ] \
         || { echo "ERROR: conda env is '${CONDA_DEFAULT_ENV:-}', not $_env"; exit 2; }

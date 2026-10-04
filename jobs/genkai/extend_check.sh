@@ -42,8 +42,10 @@ from pathlib import Path
 
 import yaml
 
+from fvcom_mesh_tools.yaml_strict import load_unique
+
 run, recipe, base = (Path(a).resolve() for a in sys.argv[1:4])
-doc = yaml.safe_load(recipe.read_text())
+doc = load_unique(recipe.read_text())      # the strict loader: a repeated key is refused
 # the paths are assigned as values and emitted by YAML, never spliced into
 # text: a path may hold '#' or ': ' (review round 29 F6)
 doc["base"] = str(base)
