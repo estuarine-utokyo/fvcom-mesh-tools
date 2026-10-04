@@ -14756,3 +14756,242 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F1 | minor | test (`10**400`, both branches) | yes, the round 49 fix was incomplete | fixed, 4eb97ad: one conversion (`_as_float`) used for judging and reporting; test |
 | F2 | minor | code read of the leg loop (the break at `end_normal` drops later legs) | yes, pre-existing, reachable from the design YAML | fixed, 4eb97ad: the whole leg list is validated first; the shipped design (end_normal on its last leg) is unchanged. Exercised by the next real-data run |
 | F3 | minor | test (`./../old`) | yes, pre-existing (direct call) | fixed, 4eb97ad: `export_fvcom_case` requires a plain case name; test |
+
+## Round 51
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `fe9bdb4`. **Three minor findings**, including one regression introduced by `4eb97ad`.
+
+Previous statuses concern the original reported reproductions, based on the review record, current code and selected regressions. Every historical probe was not rerun. Grouped rows cover every previous finding.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R8, all | RESOLVED | Interpolation, frozen-base, serialization, publication, provenance and failure-handling corrections remain. Current licensing and timestep decisions apply. |
+| R9–R16, all | RESOLVED | Ownership, indexing, recovery, geometry and land-check corrections remain. |
+| R17–R24, all | RESOLVED | Input identity, validation, YAML, publication and land-check corrections remain. |
+| R25–R30, all | RESOLVED | Limiter, rounding, acceptance, permission and environment corrections remain. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, mask, connectivity and bounds cases remain corrected. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains the established loader contract. |
+| R32, all | RESOLVED | Boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded historical experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Original node, corridor, limiter, empty-mesh and gradation cases remain corrected. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original documentation, array, overflow and planar-shape cases remain corrected. |
+| R34-F3 | WITHDRAWN | Nearest-target selection remains the approved calibrated method. |
+| R35–R45, all | RESOLVED | Original permission, dtype, geometry, tangent and precision cases remain corrected; the `1e100` coordinate contract applies. |
+| R46, all | RESOLVED | Subsequent fixes cover publication, dtype, connectivity, tangent and collapsed-angle cases. |
+| R47, all | RESOLVED | Subsequent fixes complete normalization, publication protection, validation and reporting corrections. |
+| R48, all | RESOLVED | Integer chains, normalized connectivity, singleton refusal, finite comparisons and no-OBC reporting remain corrected. |
+| R49-F1 and R50-F1 | RESOLVED | Both comparison branches return failed checks for `10**400` without raising; reproduced. Finding 2 concerns precision loss instead. |
+| R49-F2 | RESOLVED | Shared setup validates log names before logging. |
+| R49-F3 | RESOLVED | OCTOPUS setup parses scheduler IDs separately from its process-specific interactive fallback. |
+| R50-F2 | RESOLVED | The actual preflight rejects a leg following `end_normal`; reproduced. Finding 1 concerns conflicting conditions within one leg. |
+| R50-F3 | RESOLVED | Invalid case names are rejected before filesystem mutation; the guard passed in memory. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and the owner’s resolution policy remain controlling. |
+
+1. **Minor — A terminal design leg silently discards another termination condition.**
+
+   **Location:** [444_design_obc.py:96](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:96), branch at line 105.
+
+   This malformed leg passes the new preflight:
+
+   ```yaml
+   - {bearing: 0.0, until: end_normal, until_lon: 141.5}
+   ```
+
+   The `end_normal` branch ignores `until_lon` completely. Adding this condition to the supplied design’s final leg leaves its geometry and downstream checks unchanged.
+
+   Executing the actual preflight and construction block with synthetic endpoints confirmed that these two legs produce identical vertices:
+
+   ```python
+   {"bearing": 90, "until": "end_normal"}
+   {"bearing": 90, "until": "end_normal", "until_lon": 100}
+   ```
+
+   Both meet the synthetic end-normal ray at approximately `[10, 0]`, despite the second leg’s explicit longitude target of `100`.
+
+   **Reachability:** The extension tools’ own design YAML through notebook/job 444; requires malformed input. Pre-existing since `b0584f9`, not introduced by round 50.
+
+   **Fix:** Validate each leg’s complete schema before construction: require `bearing` and exactly one termination condition, reject unknown keys or `until` values, and retain the final-position rule for `end_normal`.
+
+2. **Minor — Round 50 newly permits a rounded NumPy integer to pass an exact count threshold.**
+
+   **Location:** [quality.py:180](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:180), comparison at line 219.
+
+   **Reproduction:**
+
+   ```python
+   check_thresholds(
+       {"n_flipped": np.uint64(2**53 + 1)},
+       max_flipped=2**53,
+   )
+   ```
+
+   Current result:
+
+   ```text
+   passed=True
+   actual=9007199254740992.0
+   threshold=9007199254740992.0
+   ```
+
+   The actual count is **9007199254740993**, one above the threshold. Conversion to float rounds it down before judging and reporting.
+
+   Running the same reproduction against `4eb97ad^` returned `False`. Round 50’s addition of NumPy integer support therefore introduces this passing result. Python integers already had the underlying precision gap.
+
+   **Reachability:** Direct helper calls with unusually large counts only; extension-generated counts cannot realistically reach this magnitude.
+
+   **Fix:** Compare and report integer counts as integers, or reject conversions that lose integer precision before evaluating the threshold. Preserve the corrected handling of unconvertible actual values.
+
+3. **Minor — The run-check CLI can delete an input through `--marker`.**
+
+   **Location:** [cli/check_run.py:507](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/cli/check_run.py:507).
+
+   **Reproduction:**
+
+   ```bash
+   fmesh-check-run /review/run --marker /review/run/m2_run.nml
+   ```
+
+   `main()` unlinks the marker before checking whether it names an input. An entirely mocked filesystem reproduction using the actual `main()` and `check_run()` produced:
+
+   ```text
+   no namelist m2_run.nml
+   exit=1
+   deleted=/review/run/m2_run.nml
+   namelist remains=False
+   ```
+
+   Naming `fvcom.log` similarly removes the log before validation.
+
+   **Reachability:** Direct use of the run-check CLI/helper with a conflicting marker path only. Job 448 invokes it without `--marker`. Pre-existing since `2acacdb`, unrelated to round 50.
+
+   **Fix:** Before removing an old marker, reject paths that alias the namelist, log, staged inputs or history files. Check resolved paths and existing file identity; preserve stale-marker invalidation for valid marker destinations.
+
+**Verification:** Used the existing `fvcom-mesh-tools` environment with `PYTHONDONTWRITEBYTECODE=1`, `PYTHONPATH=src`, and `pytest.main` options `-q -s -p no:cacheprovider`. An in-memory collection hook excluded tests requiring temporary filesystem fixtures.
+
+- Extension, recipe, design, source and review guards: **101 passed, 63 deselected**, four existing extreme-input warnings.
+- Coast-fit, quality, perpendicularity, QA, finishing, native I/O, provenance, reservation and run checks: **88 passed, 96 deselected**.
+- `bash -n`: passed for all **eight** in-scope shell files.
+- Initial system-Python dependency check failed because Shapely was absent; verification then used the existing project environment.
+- Synthetic reproductions used memory and mocks. Git status remained clean.
+
+No files were modified, shared data were read, or jobs were submitted. Real-data generation, mesh QA/count/timestep measurements and FVCOM integration were **not run**.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 3 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 51: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 50 (your previous answer; 3 minor) was fixed in 4eb97ad; read it. Per finding:
+- F1 check_thresholds: one float conversion for judging and reporting.
+- F2 notebook 444: the leg list is validated first (end_normal only on the final leg).
+- F3 export_fvcom_case: a plain case name is required.
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | code read of the leg loop (the `end_normal` branch ignores `until_lon`) | yes, pre-existing, reachable from the design YAML | fixed, 7d0a627: every leg needs a bearing and exactly one of `until: end_normal`, `until_lon`, `until_lat`, no other key. Exercised by the next real-data run |
+| F2 | minor | test (`uint64` 2**53+1) | yes (introduced in 4eb97ad) | fixed, 7d0a627: integers stay integers when judged; test |
+| F3 | minor | test (`--marker` on the namelist) | yes, pre-existing (direct CLI use) | fixed, 7d0a627: a marker naming the log, the namelist, a history file or a directory is refused with exit 2; test |
