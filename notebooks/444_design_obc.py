@@ -66,15 +66,23 @@ cfg = load_unique(design_path.read_text())      # no repeated keys (round 21 F7)
 # key would silently fall back to a default (review round 54 F2)
 _REQUIRED = {"start", "end", "legs", "radii_m", "spacing", "land_bbox"}
 _OPTIONAL = {"chord_m"}
-if not isinstance(cfg, dict) or (_REQUIRED - set(cfg)) or (set(cfg) - _REQUIRED - _OPTIONAL):
-    raise SystemExit(f"the design needs exactly {sorted(_REQUIRED)} (and optionally "
-                     f"{sorted(_OPTIONAL)}); missing "
-                     f"{sorted(_REQUIRED - set(cfg or {}))}, unknown "
-                     f"{sorted(set(cfg or {}) - _REQUIRED - _OPTIONAL)}")
+if not isinstance(cfg, dict):
+    raise SystemExit(f"the design must be a mapping, not {type(cfg).__name__}")
+_keys = {str(k) for k in cfg}                 # YAML keys may be numbers: compare as text
+
+
+def _check_keys(what, got, required, optional=()):
+    miss, extra = sorted(required - got), sorted(got - required - set(optional))
+    if miss or extra:
+        raise SystemExit(f"{what}: missing {miss}, unknown {extra} "
+                         f"(needs {sorted(required)}, optionally {sorted(optional)})")
+
+
+_check_keys("the design", _keys, _REQUIRED, _OPTIONAL)
 _SP = {"min_m", "cfl_dt_s", "cfl_cr", "bathymetry"}
-if not isinstance(cfg["spacing"], dict) or set(cfg["spacing"]) != _SP:
-    raise SystemExit(f"spacing needs exactly {sorted(_SP)}, not "
-                     f"{sorted(cfg['spacing']) if isinstance(cfg['spacing'], dict) else cfg['spacing']!r}")
+if not isinstance(cfg["spacing"], dict):
+    raise SystemExit(f"spacing must be a mapping, not {cfg['spacing']!r}")
+_check_keys("spacing", {str(k) for k in cfg["spacing"]}, _SP)
 DATA = Path(os.environ["DATA_DIR"])
 
 to_m = Transformer.from_crs(4326, MESH_EPSG, always_xy=True)
@@ -94,7 +102,11 @@ land_ll = gpd.read_file(DATA / "geodata/OSM/land-polygons-split-4326/land_polygo
                         bbox=bb).clip(bb)
 land = shapely.ops.transform(lambda x, y, z=None: to_m.transform(x, y),
                              shapely.unary_union(land_ll.geometry.values))
-chord = float(cfg.get("chord_m", 3000))
+_chord = cfg.get("chord_m", 3000)
+if isinstance(_chord, bool) or not isinstance(_chord, (int, float)) or not (
+        np.isfinite(_chord) and _chord > 0):
+    raise SystemExit(f"chord_m must be a finite positive number, not {_chord!r}")
+chord = float(_chord)
 bs, S0 = coast_normal(land, *to_m.transform(*cfg["start"]), chord_m=chord)
 be, E0 = coast_normal(land, *to_m.transform(*cfg["end"]), chord_m=chord)
 print(f"[obc] start {ll(S0).round(5).tolist()} normal {bs:.1f} deg; "

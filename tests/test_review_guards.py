@@ -1096,3 +1096,20 @@ def test_round54_guards(tmp_path):
     fifo = run / "marker.json"
     os.mkfifo(fifo)
     assert check_main([str(run), "--marker", str(fifo)]) == 2 and fifo.exists()
+
+
+def test_round55_guards():
+    from fvcom_mesh_tools.obc_design import fillet, resample
+    from fvcom_mesh_tools.quality import check_thresholds
+
+    # F2: a longdouble limit keeps its digits; a fractional one is refused
+    big = np.longdouble("9007199254740993")
+    assert check_thresholds({"n_flipped": 9007199254740993}, max_flipped=big)[0]
+    with pytest.raises(ValueError, match="whole number"):
+        check_thresholds({"n_flipped": 1}, max_flipped=np.nextafter(np.longdouble(1),
+                                                                    np.longdouble(2)))
+    # F3: a boolean is not a radius or a spacing
+    with pytest.raises(ValueError, match="boolean"):
+        fillet([[0, 0], [10, 0], [10, 10]], [True])
+    with pytest.raises(ValueError, match="boolean"):
+        resample([[0, 0], [10, 0]], True)

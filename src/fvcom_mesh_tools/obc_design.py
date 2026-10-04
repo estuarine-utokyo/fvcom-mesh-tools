@@ -120,8 +120,10 @@ def fillet(vertices, radii, n_arc: int = 60) -> np.ndarray:
     # finite positive radii, real sides, a real arc (review r2 F20)
     if not np.isfinite(x).all() or np.any(np.linalg.norm(np.diff(x, axis=0), axis=1) <= 0):
         raise ValueError("the vertices must be finite and distinct")
-    if not all(np.isfinite(float(r)) and float(r) > 0 for r in radii):
-        raise ValueError(f"radii must be finite and positive: {radii}")
+    if not all(isinstance(r, (int, float, np.integer, np.floating))
+               and not isinstance(r, (bool, np.bool_)) and np.isfinite(float(r)) and float(r) > 0
+               for r in radii):
+        raise ValueError(f"radii must be finite and positive numbers (not booleans): {radii}")
     if int(n_arc) < 2:
         raise ValueError("n_arc must be 2 or more")
     out = [x[0]]
@@ -191,6 +193,8 @@ def resample(line, spacing) -> np.ndarray:
 
     if not callable(spacing):
         no_complex(spacing=spacing)
+        if isinstance(spacing, (bool, np.bool_)):
+            raise ValueError("spacing must be a number, not a boolean")
     f = spacing if callable(spacing) else (lambda p, h=float(spacing): np.full(len(p), h))
 
     def h_at(t):

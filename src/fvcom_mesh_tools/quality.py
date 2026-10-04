@@ -237,10 +237,14 @@ def check_thresholds(
         if limit is None:
             continue
         # a count limit is a whole number, never a bool (review round 54 F3)
-        if _number(limit) is None or isinstance(_number(limit), float) and not float(
-                _number(limit)).is_integer():
+        # integrality is judged in the value's own precision (a longdouble keeps its digits)
+        if isinstance(limit, (bool, np.bool_)) or not isinstance(
+                limit, (int, np.integer, float, np.floating)):
             raise ValueError(f"the limit for {key} must be a whole number, not {limit!r}")
-        _le(key, int(_number(limit)))
+        if isinstance(limit, (float, np.floating)) and not (
+                np.isfinite(limit) and limit == np.floor(limit)):
+            raise ValueError(f"the limit for {key} must be a whole number, not {limit!r}")
+        _le(key, int(limit))
 
     overall = all(c.passed for c in checks) if checks else True
     return overall, checks
