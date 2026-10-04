@@ -4215,8 +4215,8 @@ def improve_patch(
     # finite scoring controls: NaN would silence every comparison (review round 41 F4)
     min_angle_deg = real_scalar(min_angle_deg, "min_angle_deg")
     max_angle_deg = real_scalar(max_angle_deg, "max_angle_deg")
-    if not 0 <= min_angle_deg < max_angle_deg <= 180:
-        raise ValueError("need 0 <= min_angle_deg < max_angle_deg <= 180")
+    if not 0 < min_angle_deg < max_angle_deg < 180:   # both divide the score (round 42 F5)
+        raise ValueError("need 0 < min_angle_deg < max_angle_deg < 180")
     max_area_change = real_scalar(max_area_change, "max_area_change")
     if not 0 < max_area_change < 1:
         raise ValueError(f"max_area_change must be in (0, 1), not {max_area_change}")

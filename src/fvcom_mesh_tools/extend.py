@@ -344,6 +344,11 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
     if _edges(ib) != want:
         raise ValueError(f"interface_base has {len(_edges(ib))} edge(s); the base's open "
                          f"boundary has {len(want)}, and they must be the same")
+    # the merged coordinates and connectivity the seam test indexes are whole and
+    # finite (review round 42 F1); new depths may still be NaN
+    from fvcom_mesh_tools._checks import checked_geometry
+
+    checked_geometry(merged.nodes, merged.elements, "verify_frozen_base")
     e = np.sort(np.vstack([merged.elements[:, [0, 1]], merged.elements[:, [1, 2]],
                            merged.elements[:, [2, 0]]]), axis=1)
     owner = np.tile(np.arange(merged.n_elements), 3)

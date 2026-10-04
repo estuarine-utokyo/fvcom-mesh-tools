@@ -428,8 +428,20 @@ def fit_boundary_to_coast(
     lo_all, hi_all = _angles_deg(xy, tri)
     res.min_angle_before_deg = float(lo_all.min())
     res.max_angle_before_deg = float(hi_all.max())
-    if ids.size == 0:
+
+    def _unchanged():
+        """A result for a mesh left as it is: the 'after' statistics are the 'before'
+        ones, the time step included when depths were given (review round 42 F6)."""
+        res.after = res.before
+        res.min_angle_after_deg = res.min_angle_before_deg
+        res.max_angle_after_deg = res.max_angle_before_deg
+        if depths is not None:
+            res.dt_before_s = res.dt_after_s = float(
+                min(a.min() for a in _implied_dt(xy0, tri, d_chk)))
         return res
+
+    if ids.size == 0:
+        return _unchanged()
     res.before = _stats(off0)
 
     frozen = set() if fixed is None else set(np.asarray(fixed).ravel().tolist())
@@ -439,10 +451,7 @@ def fit_boundary_to_coast(
         frozen |= set(e[touch[:, ::-1]].ravel().tolist())
     movable = np.array([i for i in ids if i not in frozen], dtype=np.int64)
     if movable.size == 0:
-        res.after = res.before
-        res.min_angle_after_deg = res.min_angle_before_deg
-        res.max_angle_after_deg = res.max_angle_before_deg
-        return res
+        return _unchanged()
 
     # Local edge length per movable node: the mean of its boundary edges.
     be = boundary_edges(tri)

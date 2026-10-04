@@ -57,7 +57,8 @@ def test_fillet_refuses_a_radius_that_does_not_fit():
 
 
 def test_resample_never_goes_below_the_spacing():
-    """Review F5: the remainder is spread over all steps, which only grow."""
+    """Review F5: the remainder is merged into the last step, dropping preceding
+    nodes where needed so that no step falls below the spacing."""
     line = np.array([[0, 0], [10_000, 0]], float)
     n = resample(line, 3_000)
     d = np.diff(n[:, 0])

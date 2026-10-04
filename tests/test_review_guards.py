@@ -714,3 +714,44 @@ def test_round41_guards():
                     land_boundaries=[])
     out, _ = align_open_boundary_local(mf, max_outer=1, n_jitter=1)
     assert out.elements.dtype.kind == "i"
+
+
+def test_round42_guards():
+    import shapely
+
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+    from fvcom_mesh_tools.coast_fit import fit_boundary_to_coast
+    from fvcom_mesh_tools.io.fvcom_native import apply_obc_depth_control
+    from fvcom_mesh_tools.patch import improve_patch
+
+    tri1 = np.array([[0, 1, 2]])
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    # F2: a chain that doubles back
+    m = Fort14Mesh(title="t", nodes=xy, elements=tri1, depths=np.ones(3),
+                   open_boundaries=[np.array([0, 1, 0])], land_boundaries=[])
+    with pytest.raises(ValueError, match="doubles back"):
+        align_open_boundary_local(m, max_outer=1, n_jitter=1)
+    # F3: a third coordinate column
+    lat, tris, n = _lattice_mesh()
+    m3 = Fort14Mesh(title="t", nodes=np.c_[lat, np.zeros(len(lat))], elements=tris,
+                    depths=np.full(len(lat), 10.0), open_boundaries=[np.arange(n)],
+                    land_boundaries=[])
+    with pytest.raises(ValueError, match="N, 2"):
+        align_open_boundary_local(m3, max_outer=1, n_jitter=1)
+    # F4: extended-precision depths keep their change
+    d0 = np.nextafter(np.longdouble(10), np.longdouble(np.inf))
+    ml = Fort14Mesh(title="t", nodes=xy, elements=tri1,
+                    depths=np.array([d0, 10, 10], dtype=np.longdouble),
+                    open_boundaries=[np.array([0, 1])], land_boundaries=[])
+    out, change = apply_obc_depth_control(ml)
+    assert change[0] == out.depths[0] - ml.depths[0] != 0
+    # F5: the angle endpoints divide the score
+    for lo, hi in ((0, 130), (30, 180)):
+        with pytest.raises(ValueError):
+            improve_patch(xy, tri1, np.ones(3, bool), np.zeros(1, bool), rounds=1,
+                          min_angle_deg=lo, max_angle_deg=hi)
+    # F6: an unchanged fit reports its after-statistics
+    res = fit_boundary_to_coast(xy, tri1, shapely.box(-1, 2, 2, 3), fixed=[0, 1, 2],
+                                depths=np.ones(3))
+    assert np.isfinite([res.min_angle_after_deg, res.max_angle_after_deg, res.dt_before_s,
+                        res.dt_after_s]).all()

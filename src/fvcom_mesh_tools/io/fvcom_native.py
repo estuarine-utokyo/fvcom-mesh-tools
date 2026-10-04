@@ -334,7 +334,9 @@ def apply_obc_depth_control(mesh: Fort14Mesh) -> tuple[Fort14Mesh, np.ndarray]:
     nxt, _ = fvcom_next_obc(mesh.nodes, mesh.elements, obc)
     # the change in the validated float vector (unsigned depths would wrap), the
     # written depths in the mesh's own dtype (review round 41 F5)
-    change = dep[nxt] - dep[obc]
+    wide = np.asarray(mesh.depths, dtype=np.result_type(np.asarray(mesh.depths).dtype,
+                                                        np.float64))
+    change = wide[nxt] - wide[obc]
     depths = np.array(mesh.depths, copy=True)
     depths[obc] = depths[nxt]
     return replace(mesh, depths=depths), change

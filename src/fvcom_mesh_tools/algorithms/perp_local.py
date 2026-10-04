@@ -208,10 +208,17 @@ def align_open_boundary_local(
     # the mesh and every boundary chain are checked before any cast (review
     # round 40 F5)
     xy_chk, elements = checked_geometry(mesh.nodes, mesh.elements, "align_open_boundary_local")
+    if xy_chk.shape[1] != 2:        # the repair is planar (review round 42 F3)
+        raise ValueError(f"nodes must be (N, 2), not {xy_chk.shape}")
     chains = [_indices(s, mesh.n_nodes, "an open boundary") for s in mesh.open_boundaries]
     for c in chains:         # an undefined tangent must not read as perpendicular (r41 F2)
         if c.size >= 2 and not (np.linalg.norm(np.diff(xy_chk[c, :2], axis=0), axis=1) > 0).all():
             raise ValueError("an open boundary has coincident consecutive nodes")
+        # every central difference too: a chain that doubles back has a zero
+        # tangent, which would read as perfectly perpendicular (round 42 F2)
+        if c.size >= 3 and not (np.linalg.norm(xy_chk[c[2:], :2] - xy_chk[c[:-2], :2],
+                                               axis=1) > 0).all():
+            raise ValueError("an open boundary doubles back on itself: undefined tangent")
     nodes = mesh.nodes.copy()
     n_nodes = mesh.n_nodes
     rng = np.random.default_rng(seed)

@@ -736,5 +736,10 @@ def test_verify_refuses_an_undefined_side_of_the_seam():
     m = merge_outer(base, on, oe, [0, 3], [1, 2], [1, 2])
     nodes = m.nodes.copy()
     nodes[5] = np.nan
-    with pytest.raises(ValueError, match="undefined"):
+    with pytest.raises(ValueError, match="finite"):
         verify_frozen_base(Fort14Mesh("m", nodes, m.depths, m.elements, [], []), base, [1, 2])
+    # round 42 F1: a negative vertex is not the last node
+    bad = m.elements.copy()
+    bad[3, 1] = -1
+    with pytest.raises(ValueError, match="outside|whole|elements"):
+        verify_frozen_base(Fort14Mesh("m", m.nodes, m.depths, bad, [], []), base, [1, 2])
