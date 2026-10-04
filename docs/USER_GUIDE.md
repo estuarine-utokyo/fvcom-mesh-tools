@@ -94,7 +94,8 @@ pip install -e . --no-deps --no-build-isolation                          # this 
 ```
 
 - **Compiling oceanmesh:** it compiles C++ (CGAL). On OCTOPUS,
-  `qsub jobs/octopus/build_env.sh` does the compile step as a batch job.
+  `qsub jobs/octopus/build_env.sh` does the compile step as a batch job; on
+  GENKAI, `pjsub jobs/genkai/build_env.sh`.
 - **Other packages:** add them with `mamba install -c conda-forge ...`,
   never with pip. The `pip install -e` lines above are the only use of pip.
 - **Editable install:** `fmesh-refine` needs this repository installed
@@ -121,7 +122,11 @@ M7001 is licensed survey data and is not public. The depth ladder
 - **Login nodes** have the network and no heavy computing: install, clone
   and submit there.
 - **Compute nodes** run everything else, through `qsub`. The job scripts are
-  in `jobs/octopus/`.
+  in `jobs/octopus/`. GENKAI (`pjsub`) has its own site layer in
+  `jobs/genkai/` (`build_env.sh`; `extend_check.sh`, the end-to-end check of
+  the extension tools). Both source `jobs/common_core.sh`, the
+  machine-independent set-up; only job ids, conda location and library
+  defaults differ.
 - **Paths come from the environment, set once in the login profile:**
   `$DATA_DIR` (input data) and `$WORK_DIR` (repositories, conda, scratch,
   runs); a job stops if either is unset. The FVCOM executable is

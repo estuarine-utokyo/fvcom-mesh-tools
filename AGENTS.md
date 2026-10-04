@@ -18,8 +18,10 @@ the owner's global settings, plus the rules for delegated work.
 - Batch system: NQSV. Submit with `qsub`, check with `qstat`. Job
   scripts live in `jobs/octopus/` and source `jobs/octopus/common.sh`
   (logs go to `logs/<name>.<jobid>.log`). Copy an existing script as a
-  template. The `notebooks/*.pjsub` files are for GENKAI (`pjsub`) and
-  do not run here.
+  template. The machine-independent set-up is `jobs/common_core.sh`;
+  GENKAI (`pjsub`) scripts live in `jobs/genkai/`. The old
+  `notebooks/*.pjsub` files predate the portability rule (they use
+  `$HOME` paths) and are not maintained.
 - The login node is shared: anything heavier than a few seconds of CPU
   (mesh generation, finishing, sweeps, figure batches) must run as a
   batch job, never directly. Unit tests (`pytest -q`, ~30 s) and

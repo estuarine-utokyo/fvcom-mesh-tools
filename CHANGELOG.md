@@ -8,6 +8,17 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Added -- GENKAI site layer (2026-10-04)
+
+- `jobs/common_core.sh`: the machine-independent job set-up (logging, conda,
+  threads, `DATA_DIR`/`WORK_DIR` checks, `fmesh_fvcom`, stage locks), split
+  out of `jobs/octopus/common.sh`, which keeps only the NQSV job id and the
+  OCTOPUS `FVCOM_LIBS` default.
+- `jobs/genkai/`: `common.sh` (pjsub job id; conda at
+  `$WORK_DIR/miniforge3`, else `$WORK_DIR/mambaforge`), `build_env.sh` and
+  `extend_check.sh` (pytest, 444, 445, 453 and the grid fingerprint into a
+  fresh `$WORK_DIR/scratch/<name>`).
+
 ### Added -- astronomical tide on the open boundary (2026-09-30)
 
 - `tide_models.py`: NAO.99 reader and sampler; `astronomy` (period, f,
