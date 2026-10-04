@@ -264,6 +264,7 @@ def fvcom_next_obc(
     from fvcom_mesh_tools._checks import checked_geometry
 
     nodes, tri = checked_geometry(nodes, elements, "fvcom_next_obc")
+    nodes = nodes[:, :2]                     # planar: a third column has no normal (r41 F6)
     obc = _indices(obc_nodes, len(nodes), "obc_nodes")
     is_obc = np.zeros(len(nodes), bool)
     is_obc[obc] = True
@@ -328,11 +329,13 @@ def apply_obc_depth_control(mesh: Fort14Mesh) -> tuple[Fort14Mesh, np.ndarray]:
         raise ValueError(f"depths must be finite and ({mesh.n_nodes},), not {dep.shape}")
     chains = [_indices(b, mesh.n_nodes, "an open boundary") for b in mesh.open_boundaries]
     if not any(len(c) for c in chains):         # nothing to control (review round 40 F6)
-        return replace(mesh, depths=dep.copy()), np.empty(0)
+        return replace(mesh, depths=np.array(mesh.depths, copy=True)), np.empty(0)
     obc = np.concatenate(chains)
     nxt, _ = fvcom_next_obc(mesh.nodes, mesh.elements, obc)
-    depths = mesh.depths.copy()
-    change = depths[nxt] - depths[obc]
+    # the change in the validated float vector (unsigned depths would wrap), the
+    # written depths in the mesh's own dtype (review round 41 F5)
+    change = dep[nxt] - dep[obc]
+    depths = np.array(mesh.depths, copy=True)
     depths[obc] = depths[nxt]
     return replace(mesh, depths=depths), change
 

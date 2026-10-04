@@ -653,9 +653,9 @@ def test_a_zero_width_transition_stays_finite():
 def test_the_repaired_mesh_stays_inside_the_valence_gate():
     """The guard counted incident faces over a subset, not over the mesh, and
     read [5,5,7,7] where the mesh had [5,5,7,9].  Valence is now tracked
-    globally; it is a cost on a flip rather than a veto, because forbidding
-    every intermediate excess also blocks the sequences that end below the
-    limit, so what is asserted is the finished mesh."""
+    globally, and a flip that would exceed the limit is vetoed; what is
+    asserted is the finished mesh, including the cleanup of any excess the
+    patch arrived with."""
     nodes, elements, inner = perturbed_patch()
     for rounds in (1, 30):
         _, out_t, _ = improve_patch(nodes, elements, inner,

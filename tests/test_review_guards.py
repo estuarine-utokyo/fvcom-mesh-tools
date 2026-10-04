@@ -671,3 +671,46 @@ def test_round40_guards():
                     open_boundaries=[], land_boundaries=[])
     out, change = apply_obc_depth_control(m0)
     assert out.depths.tolist() == [5.0, 6.0, 7.0] and change.size == 0
+
+
+def test_round41_guards():
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+    from fvcom_mesh_tools.coast_fit import fit_boundary_to_coast
+    from fvcom_mesh_tools.io.fvcom_native import apply_obc_depth_control, fvcom_next_obc
+    from fvcom_mesh_tools.patch import improve_patch
+    from tests.test_coast_fit import _land_above, _strip_mesh
+
+    tri1 = np.array([[0, 1, 2]])
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    # F2: an undefined tangent
+    m = Fort14Mesh(title="t", nodes=np.array([[0.0, 0], [0, 0], [1, 1]]), elements=tri1,
+                   depths=np.ones(3), open_boundaries=[np.array([0, 1])], land_boundaries=[])
+    with pytest.raises(ValueError, match="coincident"):
+        align_open_boundary_local(m, max_outer=1, n_jitter=1)
+    # F3: coast-fit quality controls
+    nodes, tri = _strip_mesh(nx=3, ny=2)
+    land = _land_above(1000, nx=3)
+    kw = {"sweeps": 1, "min_water_width_frac": None}
+    for bad in ({"max_area_change": np.nan}, {"min_angle_deg": np.nan},
+                {"max_angle_deg": 10.0}, {"min_water_width_frac": 2.0}):
+        with pytest.raises(ValueError):
+            fit_boundary_to_coast(nodes, tri, land, **{**kw, **bad})
+    # F4: patch scoring controls
+    for bad in ({"max_area_change": np.nan}, {"max_valence": np.nan}, {"only_below": np.nan}):
+        with pytest.raises(ValueError):
+            improve_patch(xy, tri1, np.zeros(3, bool), np.zeros(1, bool), rounds=1, **bad)
+    # F5: unsigned depths, no wrap in the reported change
+    mu = Fort14Mesh(title="t", nodes=xy, elements=tri1,
+                    depths=np.array([250, 250, 5], dtype=np.uint16),
+                    open_boundaries=[np.array([0, 1])], land_boundaries=[])
+    out, change = apply_obc_depth_control(mu)
+    assert out.depths.tolist() == [5, 5, 5] and change.tolist() == [-245.0, -245.0]
+    # F6: a third coordinate column is not part of the normal
+    nxt, _ = fvcom_next_obc(np.c_[xy, np.zeros(3)], tri1, [0, 1])
+    assert nxt.tolist() == [2, 2]
+    lat, tris, n = _lattice_mesh()
+    mf = Fort14Mesh(title="t", nodes=lat, elements=tris.astype(float),
+                    depths=np.full(len(lat), 10.0), open_boundaries=[np.arange(n)],
+                    land_boundaries=[])
+    out, _ = align_open_boundary_local(mf, max_outer=1, n_jitter=1)
+    assert out.elements.dtype.kind == "i"

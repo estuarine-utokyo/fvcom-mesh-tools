@@ -4205,8 +4205,26 @@ def improve_patch(
     to reach the gates -- when it cannot, that is a fact about the cut, and
     the caller should widen the transition rather than lower the gate.
     """
-    from fvcom_mesh_tools._checks import checked_flags, checked_geometry
+    from fvcom_mesh_tools._checks import (
+        checked_flags,
+        checked_geometry,
+        positive_whole,
+        real_scalar,
+    )
 
+    # finite scoring controls: NaN would silence every comparison (review round 41 F4)
+    min_angle_deg = real_scalar(min_angle_deg, "min_angle_deg")
+    max_angle_deg = real_scalar(max_angle_deg, "max_angle_deg")
+    if not 0 <= min_angle_deg < max_angle_deg <= 180:
+        raise ValueError("need 0 <= min_angle_deg < max_angle_deg <= 180")
+    max_area_change = real_scalar(max_area_change, "max_area_change")
+    if not 0 < max_area_change < 1:
+        raise ValueError(f"max_area_change must be in (0, 1), not {max_area_change}")
+    only_below = real_scalar(only_below, "only_below")
+    if only_below <= 0:
+        raise ValueError("only_below must be positive")
+    max_valence = positive_whole(max_valence, "max_valence")
+    rounds = positive_whole(rounds, "rounds")
     xy, tri = checked_geometry(nodes, elements, "improve_patch")
     xy = xy[:, :2].copy()
     mutable = checked_flags(mutable_faces, len(tri), "mutable_faces")

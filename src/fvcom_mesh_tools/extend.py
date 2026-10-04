@@ -360,8 +360,12 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
         side = []
         for e_ in who:
             c = [v for v in merged.elements[e_] if v not in (a, b)][0]
-            side.append(np.sign((xy[b, 0] - xy[a, 0]) * (xy[c, 1] - xy[a, 1])
-                                - (xy[b, 1] - xy[a, 1]) * (xy[c, 0] - xy[a, 0])))
+            cross = ((xy[b, 0] - xy[a, 0]) * (xy[c, 1] - xy[a, 1])
+                     - (xy[b, 1] - xy[a, 1]) * (xy[c, 0] - xy[a, 0]))
+            if not np.isfinite(cross) or cross == 0:      # an undefined side (round 41 F1)
+                raise ValueError(f"interface edge {a}-{b}: the side of element {int(e_)} is "
+                                 "undefined (non-finite or zero-area)")
+            side.append(np.sign(cross))
         if side[0] * side[1] >= 0:
             raise ValueError(f"interface edge {a}-{b}: the base and the outer element are "
                              "on the same side (they overlap)")

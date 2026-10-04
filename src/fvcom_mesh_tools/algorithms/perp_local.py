@@ -207,10 +207,12 @@ def align_open_boundary_local(
 
     # the mesh and every boundary chain are checked before any cast (review
     # round 40 F5)
-    checked_geometry(mesh.nodes, mesh.elements, "align_open_boundary_local")
+    xy_chk, elements = checked_geometry(mesh.nodes, mesh.elements, "align_open_boundary_local")
     chains = [_indices(s, mesh.n_nodes, "an open boundary") for s in mesh.open_boundaries]
+    for c in chains:         # an undefined tangent must not read as perpendicular (r41 F2)
+        if c.size >= 2 and not (np.linalg.norm(np.diff(xy_chk[c, :2], axis=0), axis=1) > 0).all():
+            raise ValueError("an open boundary has coincident consecutive nodes")
     nodes = mesh.nodes.copy()
-    elements = mesh.elements
     n_nodes = mesh.n_nodes
     rng = np.random.default_rng(seed)
     passes: list[dict[str, int]] = []
@@ -335,7 +337,7 @@ def align_open_boundary_local(
         obc_type=mesh.obc_type,
         nodes=nodes,
         depths=mesh.depths.copy(),
-        elements=mesh.elements.copy(),
+        elements=elements.copy(),
         open_boundaries=[np.asarray(s).copy() for s in mesh.open_boundaries],
         land_boundaries=[(ib, np.asarray(s).copy())
                          for ib, s in mesh.land_boundaries],

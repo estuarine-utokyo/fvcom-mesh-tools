@@ -727,3 +727,14 @@ def test_extreme_finite_depths_are_refused_not_turned_into_inf_or_a_false_pass()
     with pytest.raises(ValueError, match="overflow"):
         round_depths_inside([4], 1e308)
     assert round_depths_inside([4.1234567], 1, decimals=3).tolist() == [4.123]
+
+
+def test_verify_refuses_an_undefined_side_of_the_seam():
+    """Review round 41 F1: a NaN vertex made the opposite-side test pass."""
+    base = _base()
+    on, oe = _outer()
+    m = merge_outer(base, on, oe, [0, 3], [1, 2], [1, 2])
+    nodes = m.nodes.copy()
+    nodes[5] = np.nan
+    with pytest.raises(ValueError, match="undefined"):
+        verify_frozen_base(Fort14Mesh("m", nodes, m.depths, m.elements, [], []), base, [1, 2])
