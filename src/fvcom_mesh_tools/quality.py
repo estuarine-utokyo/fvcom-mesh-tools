@@ -232,14 +232,15 @@ def check_thresholds(
         _ge("alpha_mean", min_alpha_mean)
     if max_frac_lt_20deg is not None:
         _le("frac_lt_20deg", max_frac_lt_20deg)
-    if max_valence is not None:
-        _le("max_valence", int(max_valence))
-    if max_overconnected is not None:
-        _le("n_overconnected", int(max_overconnected))
-    if max_flipped is not None:
-        _le("n_flipped", int(max_flipped))
-    if max_disjoint_elems is not None:
-        _le("n_disjoint_elems", int(max_disjoint_elems))
+    for key, limit in (("max_valence", max_valence), ("n_overconnected", max_overconnected),
+                       ("n_flipped", max_flipped), ("n_disjoint_elems", max_disjoint_elems)):
+        if limit is None:
+            continue
+        # a count limit is a whole number, never a bool (review round 54 F3)
+        if _number(limit) is None or isinstance(_number(limit), float) and not float(
+                _number(limit)).is_integer():
+            raise ValueError(f"the limit for {key} must be a whole number, not {limit!r}")
+        _le(key, int(_number(limit)))
 
     overall = all(c.passed for c in checks) if checks else True
     return overall, checks

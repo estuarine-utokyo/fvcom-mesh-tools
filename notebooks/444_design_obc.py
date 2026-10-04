@@ -62,6 +62,19 @@ def _umask() -> int:
 from fvcom_mesh_tools.yaml_strict import load_unique  # noqa: E402
 
 cfg = load_unique(design_path.read_text())      # no repeated keys (round 21 F7)
+# the keys the design may carry, and the ones it must: an unknown or misspelled
+# key would silently fall back to a default (review round 54 F2)
+_REQUIRED = {"start", "end", "legs", "radii_m", "spacing", "land_bbox"}
+_OPTIONAL = {"chord_m"}
+if not isinstance(cfg, dict) or (_REQUIRED - set(cfg)) or (set(cfg) - _REQUIRED - _OPTIONAL):
+    raise SystemExit(f"the design needs exactly {sorted(_REQUIRED)} (and optionally "
+                     f"{sorted(_OPTIONAL)}); missing "
+                     f"{sorted(_REQUIRED - set(cfg or {}))}, unknown "
+                     f"{sorted(set(cfg or {}) - _REQUIRED - _OPTIONAL)}")
+_SP = {"min_m", "cfl_dt_s", "cfl_cr", "bathymetry"}
+if not isinstance(cfg["spacing"], dict) or set(cfg["spacing"]) != _SP:
+    raise SystemExit(f"spacing needs exactly {sorted(_SP)}, not "
+                     f"{sorted(cfg['spacing']) if isinstance(cfg['spacing'], dict) else cfg['spacing']!r}")
 DATA = Path(os.environ["DATA_DIR"])
 
 to_m = Transformer.from_crs(4326, MESH_EPSG, always_xy=True)

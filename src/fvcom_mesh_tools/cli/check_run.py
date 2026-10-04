@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 from datetime import datetime, timedelta
@@ -502,10 +503,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _is_verdict(path: Path) -> bool:
     """True for a small JSON file of the shape ``check_run`` returns."""
+    import os
+    import stat
+
     try:
-        if path.stat().st_size > 1_000_000:
+        # a regular file only, opened without following a link or blocking on a
+        # FIFO, and read to at most the size limit (review round 54 F1)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > 1_000_000:
+                return False
+            with os.fdopen(fd, "rb", closefd=False) as fh:
+                data = fh.read(1_000_001)
+        finally:
+            os.close(fd)
+        if len(data) > 1_000_000:
             return False
-        doc = json.loads(path.read_text())
+        doc = json.loads(data.decode())
     except (OSError, ValueError):
         return False
     return isinstance(doc, dict) and isinstance(doc.get("ok"), bool) and "reasons" in doc
@@ -520,7 +535,7 @@ def main(argv: list[str] | None = None) -> int:
         # path names (an input, a history file, a link to one) is left alone, so the
         # guard does not depend on knowing every input (review rounds 51 F3, 52 F3, 53 F1)
         mk = args.marker
-        if mk.is_symlink() or (mk.exists() and not _is_verdict(mk)):
+        if mk.is_symlink() or (os.path.lexists(mk) and not _is_verdict(mk)):
             print(f"[check-run] --marker {mk} exists and is not a verdict written by this "
                   "tool; refusing to remove it", file=sys.stderr)
             return 2

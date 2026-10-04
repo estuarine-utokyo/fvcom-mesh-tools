@@ -1077,3 +1077,22 @@ def test_round53_guards(tmp_path):
     (run / "old.json").write_text('{"ok": false, "reasons": ["x"]}')
     check_main([str(run), "--marker", str(run / "old.json")])      # a stale verdict goes
     assert not (run / "old.json").exists() or (run / "old.json").read_text().startswith("{")
+
+
+def test_round54_guards(tmp_path):
+    import os
+
+    from fvcom_mesh_tools.cli.check_run import main as check_main
+    from fvcom_mesh_tools.quality import check_thresholds
+
+    # F3: a bool is not a count limit
+    for limit in (True, np.bool_(True), 1.5):
+        with pytest.raises(ValueError, match="whole number"):
+            check_thresholds({"n_flipped": 1}, max_flipped=limit)
+    assert check_thresholds({"n_flipped": 1}, max_flipped=1)[0]
+    # F1: a FIFO is not read (it would block); a stale verdict still goes
+    run = tmp_path / "run"
+    run.mkdir()
+    fifo = run / "marker.json"
+    os.mkfifo(fifo)
+    assert check_main([str(run), "--marker", str(fifo)]) == 2 and fifo.exists()
