@@ -15458,3 +15458,202 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F1 | minor | code read (the guard listed inputs and missed some) | yes, direct CLI use only | fixed, c3a741d by changing the rule instead of extending the list: a marker is removed only if it is a small JSON verdict written by this tool (`ok`, `reasons`) and is not a symlink; anything else is left alone and the run stops with exit 2; test |
 | F2 | minor | test (`-inf` rendered) | yes | fixed, c3a741d: shown as "invalid", FAIL kept; test |
 | F3 | minor | test (2**53, 2**53+1) | yes | fixed, c3a741d: exact integer deltas; test |
+
+## Round 54
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `82bf97c`. **Three minor defects are substantiated.** No files were modified.
+
+Previous statuses cover the original findings, using the recorded triage, current code and selected regressions. Every historical reproduction was not rerun.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R30, except withdrawn objections below | RESOLVED | Original interpolation, freezing, serialization, publication, provenance, validation and environment corrections remain. Current licensing and timestep decisions apply. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, mask, connectivity and bounds cases remain corrected. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains the established loader contract. |
+| R32, all | RESOLVED | Boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Original node, corridor, limiter, empty-mesh and gradation cases remain corrected. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original documentation, array, overflow and planar-shape cases remain corrected. |
+| R34-F3 | WITHDRAWN | The approved calibrated nearest-point method remains controlling. |
+| R35–R47, all | RESOLVED | Original permission, dtype, geometry, tangent, publication and reporting cases remain corrected. The `1e100` coordinate contract applies. |
+| R48, all | RESOLVED | Original normalization, singleton, finite-actual comparison and reporting cases remain corrected. |
+| R49–R50, all | RESOLVED | Original oversized-integer, log, terminal-leg ordering and export-name cases remain corrected. |
+| R51-F1, F2 | RESOLVED | Leg validation and exact integer judgments remain corrected. |
+| R51-F3 and R52-F3 | RESOLVED | Existing checker inputs and symlinks are refused without unlinking; mocked CLI regressions passed. |
+| R52-F1, F2 | RESOLVED | Floating infinities fail; integer judgments and records preserve exact integers. |
+| R53-F1 | RESOLVED | The original input/link removal cases are protected. Finding 1 below concerns nonregular files. |
+| R53-F2 | RESOLVED | Failed infinite metrics render as `invalid`; reproduced. |
+| R53-F3 | RESOLVED | Integer comparison deltas preserve `+1` beyond `2**53`; reproduced. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and owner decisions remain controlling. |
+
+1. **Minor — The new marker inspection can block on a FIFO or exhaust memory reading a device.**
+
+   **Location:** [cli/check_run.py:506](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/cli/check_run.py:506).
+
+   `_is_verdict()` checks `st_size`, then calls `read_text()` without requiring a regular file. FIFOs and character devices commonly report size zero. An idle FIFO blocks; `/dev/zero` supplies an endless stream.
+
+   **Reproduction:** An entirely mocked execution of the actual CLI with `--marker /review/device`, whose stat reported `S_IFIFO` and size zero, reached `read_text()` before invoking `check_run`. The read spy interrupted execution, avoiding an actual blocking read.
+
+   **Reachability:** Direct checker CLI/helper use with an unusual marker destination. Job 448 supplies no marker.
+
+   **Fix:** Reject nonregular files before parsing. Open with appropriate no-follow/nonblocking protection, verify the opened file with `fstat`, and read at most the size limit plus one byte.
+
+   **Introduced by:** `c3a741d`.
+
+2. **Minor — Design recipe keys can be silently ignored, changing the effective design settings.**
+
+   **Location:** [444_design_obc.py:64](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:64), default at line 84.
+
+   The design mapping has no complete schema validation. For example, replacing `chord_m` with a misspelled key silently selects the default:
+
+   ```yaml
+   chord_mm: 8000
+   ```
+
+   Executing the actual land/coast-normal block with small mocked inputs passed **`3000.0` to both coast-normal calls**, without rejecting `chord_mm`. Subsequent angle checks use that same unintended chord, so they cannot detect the discrepancy.
+
+   **Reachability:** The extension tools’ own custom design YAML through notebook/job 444; requires malformed input. Pre-existing since `b0584f9`.
+
+   **Fix:** Validate the complete design mapping before reading land. Reject unknown keys, distinguish required fields from optional `chord_m`, and validate the spacing mapping similarly.
+
+3. **Minor — Count thresholds bypass boolean rejection.**
+
+   **Location:** [quality.py:235](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:235).
+
+   The four count-threshold branches call `int()` before `_number()` can reject boolean values:
+
+   ```python
+   check_thresholds({"n_flipped": 1}, max_flipped=True)[0]
+   # True
+   ```
+
+   Python `True` and NumPy `np.bool_(True)` both become threshold **1**, permitting one flipped element. The same behavior affects `max_valence`, `max_overconnected` and `max_disjoint_elems`. By comparison, `min_alpha_mean=True` correctly fails.
+
+   **Reachability:** Direct helper calls with invalid threshold types only. The extension recipe and notebooks do not supply these boolean thresholds. Pre-existing.
+
+   **Fix:** Validate threshold types before conversion, explicitly rejecting Python and NumPy booleans while preserving exact integer values.
+
+Verification: capture-free pytest (`-q -s -p no:cacheprovider`, with bytecode disabled) passed **95 core tests**. A broader selected run produced **273 passed and 23 failures**, all caused by Matplotlib requiring a writable cache directory. Initial harness attempts also encountered read-only heredoc/capture restrictions and an AST-selector error; corrected in-memory probes completed. Scoped `ruff check --no-cache`, shell syntax checks, and `git diff --exit-code` passed; the working tree remained clean.
+
+No real-data mesh build, QA or FVCOM run was performed. No new NP/NE or timestep measurements were taken, no batch jobs were submitted, and no `$DATA_DIR` contents were read.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 3 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 54: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 53 (your previous answer; 3 minor) was fixed in c3a741d; read it. Per finding:
+- F1 fmesh-check-run: a marker is removed only if it is a small JSON verdict written by this
+  tool and not a symlink.
+- F2 a failed infinite metric renders as "invalid".
+- F3 comparison-table integer deltas are exact.
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | code read (`read_text` on a FIFO); test with a real FIFO | yes, introduced in c3a741d | fixed, 7931f19: `os.open` with O_NOFOLLOW and O_NONBLOCK, `fstat` must say regular, read capped at the limit; test |
+| F2 | minor | code read (`chord_mm` falls back to the default) | yes, pre-existing, reachable from the design YAML | fixed, 7931f19: exact key sets for the design and its spacing mapping, checked against the shipped design (passes). Exercised by the next real-data run |
+| F3 | minor | tests (`True`, `np.bool_`, 1.5) | yes, pre-existing | fixed, 7931f19: a count limit is a whole number, never a bool; test |
