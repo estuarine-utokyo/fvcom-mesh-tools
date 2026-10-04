@@ -899,9 +899,62 @@ def test_round46_guards(tmp_path):
     # F4: coincident boundary nodes have no tangent
     m = Fort14Mesh("t", np.array([[0.0, 0], [0, 0], [1, 1]]), np.ones(3), t1,
                    [np.array([0, 1])], [])
-    with pytest.raises(ValueError, match="tangent"):
+    with pytest.raises(ValueError, match="coincident|tangent"):
         open_bdy_perpendicularity(m)
     # F5: a collapsed triangle fails the angle gate
     z = Fort14Mesh("zero", np.zeros((3, 2)), np.full(3, 5.0), t1, [], [])
     passed, _ = check_thresholds(compute_metrics(z), max_flipped=0, max_frac_lt_20deg=0)
     assert not passed
+
+
+def test_round47_guards(tmp_path):
+    from fvcom_mesh_tools.algorithms.perpendicularity import (
+        align_open_boundary_first_ring,
+        fixed_node_mask,
+        open_bdy_perpendicularity,
+    )
+    from fvcom_mesh_tools.algorithms.quality import alpha_quality
+    from fvcom_mesh_tools.cli.perpfix import main
+    from fvcom_mesh_tools.quality import check_thresholds
+
+    t1 = np.array([[0, 1, 2]])
+    xy3 = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    # F2: planar APIs want two columns
+    m3 = Fort14Mesh("t", np.c_[xy3, [0, 100, 100]], np.ones(3), t1, [np.array([0, 1])], [])
+    with pytest.raises(ValueError, match="N, 2"):
+        align_open_boundary_first_ring(m3)
+    with pytest.raises(ValueError, match="N, 2"):
+        alpha_quality(m3)
+    # F3: float connectivity is normalized all the way through smoothing
+    xy = np.array([[0.0, 0], [1, 0], [0, 1], [1, 1], [0, 2], [1, 2]])
+    tri = np.array([[0, 1, 2], [1, 3, 2], [2, 3, 4], [3, 5, 4]], float)
+    ms = Fort14Mesh("t", xy, np.ones(6), tri, [np.array([0.0, 1.0])], [])
+    out, _ = align_open_boundary_first_ring(ms, smooth_iters=1)
+    assert out.elements.dtype.kind == "i"
+    # F4: coincident consecutive boundary vertices, a singleton chain
+    mc = Fort14Mesh("t", np.array([[0.0, 0], [1, 0], [1, 0], [2, 0], [1, 1]]), np.ones(5),
+                    np.array([[0, 1, 4], [2, 3, 4]]), [np.array([0, 1, 2, 3])], [])
+    with pytest.raises(ValueError):
+        open_bdy_perpendicularity(mc)
+    with pytest.raises(ValueError):
+        open_bdy_perpendicularity(Fort14Mesh("t", xy3, np.ones(3), t1, [np.array([0])], []))
+    # F5: controls
+    base = Fort14Mesh("t", xy3, np.ones(3), t1, [np.array([0, 1])], [])
+    for kw in ({"alpha": np.nan}, {"alpha": 2.0}, {"n_iters": -1}, {"smooth_iters": -1}):
+        with pytest.raises(ValueError):
+            align_open_boundary_first_ring(base, **kw)
+    # F6: masked and negative chains of the unselected boundaries
+    for chain in (np.ma.array([2], mask=[True]), np.array([-1])):
+        mb = Fort14Mesh("t", xy3, np.ones(3), t1, [np.array([0, 1])], [(0, chain)])
+        with pytest.raises(ValueError):
+            fixed_node_mask(mb)
+    # F7: no open boundary, quiet or not
+    src, dst = tmp_path / "in.14", tmp_path / "out.14"
+    write_fort14(Fort14Mesh("t", xy3, np.ones(3), t1, [], []), src)
+    assert main([str(src), str(dst)]) == 0 and dst.exists()
+    # F8: a requested threshold on a missing metric fails
+    assert check_thresholds({}, max_flipped=0, min_alpha_mean=0.9)[0] is False
+    assert check_thresholds({"n_flipped": None}, max_flipped=0)[0] is False
+    # F9: moved counts the nodes whose coordinates changed
+    _, info = align_open_boundary_first_ring(base)
+    assert info["moved"] <= info["movable_first_ring"]

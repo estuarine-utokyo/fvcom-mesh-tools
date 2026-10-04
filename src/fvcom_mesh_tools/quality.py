@@ -187,7 +187,8 @@ def check_thresholds(
 
     def _ge(metric: str, threshold: float) -> None:
         actual = metrics.get(metric)
-        if actual is None:
+        if actual is None:           # a requested threshold on a missing metric fails (r47 F8)
+            checks.append(ThresholdCheck(metric, "≥", float(threshold), float("nan"), False))
             return
         passed = (
             isinstance(actual, (int, float))
@@ -200,6 +201,7 @@ def check_thresholds(
     def _le(metric: str, threshold: float) -> None:
         actual = metrics.get(metric)
         if actual is None:
+            checks.append(ThresholdCheck(metric, "≤", float(threshold), float("nan"), False))
             return
         passed = (
             isinstance(actual, (int, float))

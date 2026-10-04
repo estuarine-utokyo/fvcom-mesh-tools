@@ -81,3 +81,13 @@ def promoted_nodes(nodes, what: str = "nodes") -> np.ndarray:
         raise ValueError(f"{what} has masked values")
     no_complex(**{what: nodes})
     return np.asarray(nodes, dtype=np.float64)
+
+
+def checked_planar(nodes, elements, what: str = "the mesh") -> tuple[np.ndarray, np.ndarray]:
+    """``checked_geometry`` for the planar APIs: exactly two coordinate columns,
+    so that no helper measures some lengths in two dimensions and others in
+    three, and no column is silently dropped (review round 47 F2)."""
+    xy, tri = checked_geometry(nodes, elements, what)
+    if xy.shape[1] != 2:
+        raise ValueError(f"{what}: nodes must be (N, 2), not {xy.shape}")
+    return xy, tri

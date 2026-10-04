@@ -50,10 +50,9 @@ def boundary_tangents(bdy_xy: np.ndarray) -> np.ndarray:
 
 def _checked_mesh(mesh: Fort14Mesh):
     """Promoted finite coordinates and whole, in-range connectivity (review round 46 F3)."""
-    from fvcom_mesh_tools._checks import checked_geometry
+    from fvcom_mesh_tools._checks import checked_planar
 
-    xy, els = checked_geometry(mesh.nodes, mesh.elements, "perpendicularity")
-    return xy[:, :2], els
+    return checked_planar(mesh.nodes, mesh.elements, "perpendicularity")
 
 
 def _checked_chain(mesh: Fort14Mesh, segment_index: int) -> np.ndarray:
@@ -65,6 +64,9 @@ def _checked_chain(mesh: Fort14Mesh, segment_index: int) -> np.ndarray:
 def _defined_tangents(bdy_xy: np.ndarray) -> np.ndarray:
     """Unit tangents; a coincident or doubled-back boundary has no tangent, and a
     zero one would read as perfectly perpendicular (review round 46 F4)."""
+    if len(bdy_xy) < 2 or not (np.linalg.norm(np.diff(bdy_xy, axis=0), axis=1) > 0).all():
+        raise ValueError("an open boundary needs two or more nodes, none coincident with "
+                         "the next")
     t = boundary_tangents(bdy_xy)
     if not np.allclose(np.linalg.norm(t, axis=1), 1.0):
         raise ValueError("the open boundary has an undefined tangent (coincident or "
@@ -93,11 +95,15 @@ def fixed_node_mask(mesh: Fort14Mesh) -> np.ndarray:
     geometry (open arc, coastline) is invariant under any algorithm exposed
     in this module.
     """
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
     fixed = np.zeros(mesh.n_nodes, dtype=bool)
+    # every chain, whichever segment is being worked on, whole and in range
+    # (review round 47 F6)
     for ids in mesh.open_boundaries:
-        fixed[ids] = True
+        fixed[_indices(ids, mesh.n_nodes, "an open boundary")] = True
     for _ibtype, ids in mesh.land_boundaries:
-        fixed[ids] = True
+        fixed[_indices(ids, mesh.n_nodes, "a land boundary")] = True
     return fixed
 
 
@@ -183,6 +189,8 @@ def _build_incidence(mesh: Fort14Mesh, segment_index: int) -> _IncidenceCache:
     int_node = np.where(inc_a_in, inc[:, 1], inc[:, 0])
 
     edge_vec_orig = nodes[int_node] - nodes[bdy_node]
+    if not (np.abs(edge_vec_orig).max(axis=1, initial=0.0) > 0).all():
+        raise ValueError("an incident edge has zero length: no perpendicular target")
     edge_len_orig = np.linalg.norm(edge_vec_orig, axis=1)
     perp_at_bdy = perp[inv_map[bdy_node]]
     sign_orig = np.sign((edge_vec_orig * perp_at_bdy).sum(axis=1))
@@ -326,13 +334,30 @@ def align_open_boundary_first_ring(
         containing parameter echo, count of moved interior nodes, and the
         per-parent-count breakdown of incident edges.
     """
+    from fvcom_mesh_tools._checks import positive_whole, real_scalar
+
+    # controls in their documented ranges (review round 47 F5)
+    alpha = real_scalar(alpha, "alpha")
+    smooth_alpha = real_scalar(smooth_alpha, "smooth_alpha")
+    if not (0 < alpha <= 1 and 0 < smooth_alpha <= 1):
+        raise ValueError("alpha and smooth_alpha must lie in (0, 1]")
+    n_iters = positive_whole(n_iters, "n_iters")
+    if isinstance(smooth_iters, (bool, np.bool_)) or not isinstance(
+            smooth_iters, (int, np.integer)) or smooth_iters < 0:
+        raise ValueError(f"smooth_iters must be a non-negative whole number, not "
+                         f"{smooth_iters!r}")
     if not mesh.open_boundaries:
-        return mesh, {"moved": 0, "note": "no open boundaries"}
+        return mesh, {"alpha": alpha, "n_iters": n_iters, "smooth_iters": smooth_iters,
+                      "smooth_alpha": smooth_alpha, "segment_index": segment_index,
+                      "moved": 0, "first_ring_by_parent_count": {},
+                      "movable_first_ring_by_parent_count": {},
+                      "note": "no open boundaries"}
 
     cache = _build_incidence(mesh, segment_index)
     fixed = fixed_node_mask(mesh)
 
-    nodes = _checked_mesh(mesh)[0].copy()          # float64 throughout (review round 46 F2)
+    nodes0, elements = _checked_mesh(mesh)          # float64 throughout (round 46 F2, 47 F3)
+    nodes = nodes0.copy()
     for _ in range(n_iters):
         nodes = _apply_perp_step(nodes, cache, fixed, alpha)
 
@@ -352,7 +377,7 @@ def align_open_boundary_first_ring(
     if smooth_iters > 0:
         for _ in range(smooth_iters):
             nodes = _laplacian_smooth_second_ring(
-                nodes, mesh.elements, first_ring, fixed, smooth_alpha,
+                nodes, elements, first_ring, fixed, smooth_alpha,
             )
 
     out = Fort14Mesh(
@@ -360,7 +385,7 @@ def align_open_boundary_first_ring(
         obc_type=mesh.obc_type,
         nodes=nodes,
         depths=mesh.depths.copy(),
-        elements=mesh.elements.copy(),
+        elements=elements.copy(),
         open_boundaries=[a.copy() for a in mesh.open_boundaries],
         land_boundaries=[(ib, a.copy()) for (ib, a) in mesh.land_boundaries],
     )
@@ -370,7 +395,8 @@ def align_open_boundary_first_ring(
         "smooth_iters": smooth_iters,
         "smooth_alpha": smooth_alpha,
         "segment_index": segment_index,
-        "moved": int(movable_first_ring.size),
+        "moved": int((nodes != nodes0).any(axis=1).sum()),     # coordinates that changed
+        "movable_first_ring": int(movable_first_ring.size),
         "first_ring_by_parent_count": by_parent_count,
         "movable_first_ring_by_parent_count": movable_by_parent_count,
     }

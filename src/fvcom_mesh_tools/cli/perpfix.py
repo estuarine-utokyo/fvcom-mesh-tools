@@ -84,6 +84,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.n_iters < 1:
         print("--iters must be >= 1.", file=sys.stderr)
         return 2
+    if args.smooth_iters < 0 or not 0.0 < args.smooth_alpha <= 1.0:
+        print("--smooth-iters must be >= 0 and --smooth-alpha in (0, 1].", file=sys.stderr)
+        return 2
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -104,11 +107,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # a result with more inverted or collapsed elements than the input is not
     # published (review round 46 F1)
-    if n_flipped_after > n_flipped_before:
-        print(f"refusing to write {args.output}: the alignment made "
-              f"{n_flipped_after - n_flipped_before} more element(s) inverted or collapsed "
-              f"({n_flipped_before} -> {n_flipped_after}); try a smaller --alpha",
-              file=sys.stderr)
+    newly = (signed_areas(after) <= 0) & (signed_areas(before) > 0)
+    if newly.any():
+        print(f"refusing to write {args.output}: the alignment inverted or collapsed "
+              f"{int(newly.sum())} element(s) that were valid (e.g. element "
+              f"{int(np.flatnonzero(newly)[0])}); try a smaller --alpha", file=sys.stderr)
         return 1
 
     write_fort14(after, args.output)

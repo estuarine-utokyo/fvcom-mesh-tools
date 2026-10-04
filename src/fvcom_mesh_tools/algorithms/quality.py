@@ -22,9 +22,9 @@ def edge_lengths_planar(mesh: Fort14Mesh) -> np.ndarray:
 
     Column order: ``[l_01, l_12, l_20]`` matching ``elements`` columns.
     """
-    from fvcom_mesh_tools._checks import checked_geometry
+    from fvcom_mesh_tools._checks import checked_planar
 
-    xy, els = checked_geometry(mesh.nodes, mesh.elements, "edge_lengths_planar")
+    xy, els = checked_planar(mesh.nodes, mesh.elements, "edge_lengths_planar")
     p0 = xy[els[:, 0]]
     p1 = xy[els[:, 1]]
     p2 = xy[els[:, 2]]
@@ -41,9 +41,9 @@ def alpha_quality(mesh: Fort14Mesh) -> np.ndarray:
     1 = equilateral, 0 = degenerate. Scale-free so it works on lon/lat
     meshes without unit conversion.
     """
-    from fvcom_mesh_tools._checks import checked_geometry
+    from fvcom_mesh_tools._checks import checked_planar
 
-    xy, els = checked_geometry(mesh.nodes, mesh.elements, "alpha_quality")
+    xy, els = checked_planar(mesh.nodes, mesh.elements, "alpha_quality")
     p0 = xy[els[:, 0]]
     p1 = xy[els[:, 1]]
     p2 = xy[els[:, 2]]
