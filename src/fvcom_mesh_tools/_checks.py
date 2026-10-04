@@ -37,3 +37,33 @@ def positive_whole(value, name: str) -> int:
             or value < 1:
         raise ValueError(f"{name} must be a positive whole number, not {value!r}")
     return int(value)
+
+
+def checked_geometry(nodes, elements, what: str = "the mesh") -> tuple[np.ndarray, np.ndarray]:
+    """``(xy, tri)``: finite float coordinates (N, >= 2) and whole in-range
+    triangle indices (M, 3), refusing masks and complex values before any
+    conversion (review round 39 F2, F3)."""
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
+    for name, a in (("nodes", nodes), ("elements", elements)):
+        if np.ma.is_masked(a):
+            raise ValueError(f"{what}: {name} has masked values")
+    no_complex(nodes=nodes, elements=elements)
+    xy = np.asarray(nodes, float)
+    if xy.ndim != 2 or xy.shape[1] < 2 or not np.isfinite(xy).all():
+        raise ValueError(f"{what}: nodes must be finite (N, >= 2), not {xy.shape}")
+    tri = _indices(elements, len(xy), f"{what}: elements", ndim=2)
+    if tri.shape[1:] != (3,):
+        raise ValueError(f"{what}: elements must be (M, 3), not {tri.shape}")
+    return xy, tri
+
+
+def checked_flags(flags, n: int, name: str) -> np.ndarray:
+    """A boolean ``(n,)`` permission array; a mask or another dtype or shape is
+    refused (a masked permission is no permission; review round 39 F1)."""
+    if np.ma.is_masked(flags):
+        raise ValueError(f"{name} has masked values")
+    arr = np.asarray(flags)
+    if arr.dtype != bool or arr.shape != (n,):
+        raise ValueError(f"{name} must be a boolean ({n},) array, not {arr.dtype} {arr.shape}")
+    return arr

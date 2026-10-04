@@ -573,3 +573,53 @@ def test_round38_guards(tmp_path):
     assert not list(tmp_path.glob("x.*"))
     # F5: the validator keeps its docstring
     assert _check_exportable.__doc__
+
+
+def test_round39_guards(tmp_path):
+    import shapely
+
+    from fvcom_mesh_tools.coast_fit import fit_boundary_to_coast
+    from fvcom_mesh_tools.io.fvcom_native import (
+        apply_obc_depth_control,
+        fvcom_next_obc,
+        write_grd,
+    )
+    from fvcom_mesh_tools.patch import improve_patch
+
+    # F1: masked or mistyped permissions
+    nodes, tris, n = _lattice_mesh()
+    nodes = nodes.copy()
+    every = np.ones(len(nodes), bool)
+    faces = np.ones(len(tris), bool)
+    masked = np.ma.array(every, mask=every)
+    with pytest.raises(ValueError, match="masked"):
+        improve_patch(nodes, tris, masked, faces, rounds=1)
+    with pytest.raises(ValueError, match="masked"):
+        improve_patch(nodes, tris, every, np.ma.array(faces, mask=faces), rounds=1)
+    with pytest.raises(ValueError, match="boolean"):
+        improve_patch(nodes, tris, every.astype(int), faces, rounds=1)
+    # F2: masked and complex coordinates, fractional connectivity
+    tri1 = np.array([[0, 1, 2]])
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    land = shapely.Polygon([(-1, -1), (2, -1), (2, 2), (-1, 2)])
+    for bad in (np.ma.array(xy, mask=True), xy + 9j):
+        with pytest.raises(ValueError, match="masked|complex"):
+            improve_patch(bad, tri1, np.zeros(3, bool), np.zeros(1, bool), rounds=1)
+        with pytest.raises(ValueError, match="masked|complex"):
+            fit_boundary_to_coast(bad, tri1, land, fixed=np.array([0, 1, 2]))
+    with pytest.raises(ValueError, match="whole"):
+        improve_patch(xy, np.array([[0.0, 1.0, 2.9]]), np.zeros(3, bool), np.zeros(1, bool),
+                      rounds=1)
+    # F3: depth control and next-OBC
+    with pytest.raises(ValueError, match="masked|complex"):
+        fvcom_next_obc(np.ma.array(xy, mask=True), tri1, [0, 1])
+    with pytest.raises(ValueError, match="whole"):
+        apply_obc_depth_control(Fort14Mesh(
+            title="t", nodes=xy, elements=tri1, depths=np.ones(3),
+            open_boundaries=[np.array([0.5, 1.0])], land_boundaries=[]))
+    # F4: an overflowed area is not an orientation verdict
+    huge = Fort14Mesh(title="t", nodes=np.array([[0.0, 0.0], [2e200, 3e200], [1e200, 1e200]]),
+                      elements=tri1, depths=np.ones(3), open_boundaries=[], land_boundaries=[])
+    with pytest.raises(ValueError, match="not finite"):
+        write_grd(huge, tmp_path / "x.dat")
+    assert not list(tmp_path.glob("x.*"))

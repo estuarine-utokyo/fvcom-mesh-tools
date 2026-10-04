@@ -376,9 +376,10 @@ def fit_boundary_to_coast(
         Fitted coordinates plus before/after statistics.  ``elements`` is
         never modified.
     """
-    xy0 = np.asarray(nodes, dtype=float)
+    from fvcom_mesh_tools._checks import checked_geometry
+
+    xy0, tri = checked_geometry(nodes, elements, "fit_boundary_to_coast")
     xy = xy0.copy()
-    tri = np.asarray(elements, dtype=np.int64)
     coast = land.boundary
     shapely.prepare(land)
 

@@ -71,6 +71,8 @@ def _validate_for_export(mesh: Fort14Mesh) -> None:
     no_complex(nodes=mesh.nodes, depths=mesh.depths)       # review round 37 F2
     _check_exportable(mesh)
     sa = _signed_areas(mesh)
+    if not np.isfinite(sa).all():          # inf - inf is NaN, and NaN <= 0 is False
+        raise ValueError("an element area is not finite: the coordinates are too large")
     n_bad = int((sa <= 0).sum())
     if n_bad:
         raise ValueError(
@@ -259,9 +261,10 @@ def fvcom_next_obc(
     ties by its neighbour ordering, so a margin near zero means the choice
     is not reproducible from geometry alone.
     """
-    nodes = np.asarray(nodes, float)
-    tri = np.asarray(elements, int)
-    obc = np.asarray(obc_nodes, int)
+    from fvcom_mesh_tools._checks import checked_geometry
+
+    nodes, tri = checked_geometry(nodes, elements, "fvcom_next_obc")
+    obc = _indices(obc_nodes, len(nodes), "obc_nodes")
     is_obc = np.zeros(len(nodes), bool)
     is_obc[obc] = True
     nbrs: list[set[int]] = [set() for _ in range(len(nodes))]
@@ -308,7 +311,8 @@ def apply_obc_depth_control(mesh: Fort14Mesh) -> tuple[Fort14Mesh, np.ndarray]:
     with different bathymetry than the one written. Returns the new mesh
     and the per-OBC-node depth change (new - old), in open-boundary order.
     """
-    obc = np.concatenate([np.asarray(b, int) for b in mesh.open_boundaries])
+    obc = np.concatenate([_indices(b, mesh.n_nodes, "an open boundary")
+                          for b in mesh.open_boundaries])
     nxt, _ = fvcom_next_obc(mesh.nodes, mesh.elements, obc)
     depths = mesh.depths.copy()
     change = depths[nxt] - depths[obc]

@@ -4205,11 +4205,16 @@ def improve_patch(
     to reach the gates -- when it cannot, that is a fact about the cut, and
     the caller should widen the transition rather than lower the gate.
     """
-    xy = np.array(nodes, dtype=float)[:, :2]
-    tri = np.array(elements, dtype=np.int64)
-    mutable = np.asarray(mutable_faces, dtype=bool)
+    from fvcom_mesh_tools._checks import checked_flags, checked_geometry
+
+    xy, tri = checked_geometry(nodes, elements, "improve_patch")
+    xy = xy[:, :2].copy()
+    mutable = checked_flags(mutable_faces, len(tri), "mutable_faces")
+    movable = checked_flags(movable, len(xy), "movable")
+    if slidable is not None:
+        slidable = checked_flags(slidable, len(xy), "slidable")
     lines = _slide_lines(slide_on)
-    can_slide = (np.asarray(slidable, dtype=bool) if slidable is not None
+    can_slide = (slidable if slidable is not None
                  and lines else np.zeros(len(xy), dtype=bool))
     slide = _boundary_neighbours(xy, tri, len(xy), can_slide) \
         if can_slide.any() else {}
