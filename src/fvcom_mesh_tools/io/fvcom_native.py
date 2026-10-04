@@ -283,6 +283,8 @@ def fvcom_next_obc(
         normal = np.zeros(2)
         for m in sorted(j for j in nbrs[n] if is_obc[j]):
             d = nodes[m] - nodes[n]
+            if not np.hypot(*d) > 0:
+                raise ValueError(f"OBC nodes {n} and {m} coincide: no edge normal")
             unit = np.array([d[1], -d[0]]) / np.hypot(*d)
             for e in node_elems[n]:
                 if m in tri[e]:
@@ -291,12 +293,17 @@ def fvcom_next_obc(
                     normal += np.sign(c[0] * d[1] - c[1] * d[0]) * unit
         if not normal.any():
             raise ValueError(f"OBC node {n} has no OBC neighbour; cannot define its normal")
+        if not np.isfinite(normal).all() or not np.hypot(*normal) > 0:
+            raise ValueError(f"OBC node {n} has no defined normal")
         normal /= np.hypot(*normal)
         cand = sorted(j for j in nbrs[n] if not is_obc[j])
         if not cand:
             raise ValueError(f"OBC node {n} has no interior neighbour")
         vec = nodes[cand] - nodes[n]
-        dots = (vec @ normal) / np.hypot(vec[:, 0], vec[:, 1])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            dots = (vec @ normal) / np.hypot(vec[:, 0], vec[:, 1])
+        if not np.isfinite(dots).all():
+            raise ValueError(f"OBC node {n} has a coincident interior neighbour")
         order = np.argsort(-dots)
         next_obc[i] = cand[order[0]]
         margin[i] = dots[order[0]] - dots[order[1]] if len(cand) > 1 else np.inf
@@ -311,8 +318,18 @@ def apply_obc_depth_control(mesh: Fort14Mesh) -> tuple[Fort14Mesh, np.ndarray]:
     with different bathymetry than the one written. Returns the new mesh
     and the per-OBC-node depth change (new - old), in open-boundary order.
     """
-    obc = np.concatenate([_indices(b, mesh.n_nodes, "an open boundary")
-                          for b in mesh.open_boundaries])
+    from fvcom_mesh_tools._checks import no_complex
+
+    if np.ma.is_masked(mesh.depths):
+        raise ValueError("depths has masked values")
+    no_complex(depths=mesh.depths)
+    dep = np.asarray(mesh.depths, float)
+    if dep.shape != (mesh.n_nodes,) or not np.isfinite(dep).all():
+        raise ValueError(f"depths must be finite and ({mesh.n_nodes},), not {dep.shape}")
+    chains = [_indices(b, mesh.n_nodes, "an open boundary") for b in mesh.open_boundaries]
+    if not any(len(c) for c in chains):         # nothing to control (review round 40 F6)
+        return replace(mesh, depths=dep.copy()), np.empty(0)
+    obc = np.concatenate(chains)
     nxt, _ = fvcom_next_obc(mesh.nodes, mesh.elements, obc)
     depths = mesh.depths.copy()
     change = depths[nxt] - depths[obc]

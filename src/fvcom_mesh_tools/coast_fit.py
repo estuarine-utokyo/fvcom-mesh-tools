@@ -376,10 +376,39 @@ def fit_boundary_to_coast(
         Fitted coordinates plus before/after statistics.  ``elements`` is
         never modified.
     """
-    from fvcom_mesh_tools._checks import checked_geometry
+    from fvcom_mesh_tools._checks import (
+        checked_geometry,
+        no_complex,
+        positive_whole,
+        real_scalar,
+    )
+    from fvcom_mesh_tools.io.fvcom_native import _indices
 
     xy0, tri = checked_geometry(nodes, elements, "fit_boundary_to_coast")
     xy = xy0.copy()
+    # known, real controls and index lists, before any early return (review
+    # round 40 F1-F3)
+    if fixed is not None:
+        if np.ma.is_masked(fixed):
+            raise ValueError("fixed has masked values")
+        no_complex(fixed=fixed)
+        fixed = _indices(np.asarray(fixed).ravel(), len(xy), "fixed")
+    max_move_frac = real_scalar(max_move_frac, "max_move_frac")
+    if max_move_frac < 0:
+        raise ValueError(f"max_move_frac must be non-negative, not {max_move_frac}")
+    relax = real_scalar(relax, "relax")
+    if not 0 < relax <= 1:
+        raise ValueError(f"relax must be in (0, 1], not {relax}")
+    positive_whole(sweeps, "sweeps")
+    if dt_floor_s is not None:
+        dt_floor_s = real_scalar(dt_floor_s, "dt_floor_s")
+    if depths is not None:
+        if np.ma.is_masked(depths):
+            raise ValueError("depths has masked values")
+        no_complex(depths=depths)
+        d_chk = np.asarray(depths, float)
+        if d_chk.shape != (len(xy),) or not np.isfinite(d_chk).all():
+            raise ValueError(f"depths must be finite and ({len(xy)},), not {d_chk.shape}")
     coast = land.boundary
     shapely.prepare(land)
 

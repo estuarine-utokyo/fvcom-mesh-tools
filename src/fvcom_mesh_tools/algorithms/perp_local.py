@@ -202,6 +202,13 @@ def align_open_boundary_local(
         if movable.dtype != bool or movable.shape != (mesh.n_nodes,):
             raise ValueError(f"movable must be a boolean ({mesh.n_nodes},) array, not "
                              f"{movable.dtype} {movable.shape}")
+    from fvcom_mesh_tools._checks import checked_geometry
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
+    # the mesh and every boundary chain are checked before any cast (review
+    # round 40 F5)
+    checked_geometry(mesh.nodes, mesh.elements, "align_open_boundary_local")
+    chains = [_indices(s, mesh.n_nodes, "an open boundary") for s in mesh.open_boundaries]
     nodes = mesh.nodes.copy()
     elements = mesh.elements
     n_nodes = mesh.n_nodes
@@ -219,8 +226,7 @@ def align_open_boundary_local(
         n_viol_total = 0
         n_accept = 0
         unresolved = []
-        for seg in mesh.open_boundaries:
-            seg = np.asarray(seg, dtype=np.int64)
+        for seg in chains:
             if seg.size < 2:
                 continue
             in_seg = np.zeros(n_nodes, dtype=bool)
@@ -315,8 +321,7 @@ def align_open_boundary_local(
     # no pass, or after a late move, the passes' own list is not the truth
     adj, _bn, _n2e, _e2 = _edge_arrays(elements, n_nodes)
     unresolved = []
-    for seg in mesh.open_boundaries:
-        seg = np.asarray(seg, dtype=np.int64)
+    for seg in chains:
         if seg.size < 2:
             continue
         in_seg = np.zeros(n_nodes, dtype=bool)

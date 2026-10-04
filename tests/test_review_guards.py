@@ -623,3 +623,51 @@ def test_round39_guards(tmp_path):
     with pytest.raises(ValueError, match="not finite"):
         write_grd(huge, tmp_path / "x.dat")
     assert not list(tmp_path.glob("x.*"))
+
+
+def test_round40_guards():
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+    from fvcom_mesh_tools.coast_fit import fit_boundary_to_coast
+    from fvcom_mesh_tools.io.fvcom_native import apply_obc_depth_control, fvcom_next_obc
+    from tests.test_coast_fit import _land_above, _strip_mesh
+
+    nodes, tri = _strip_mesh(nx=3, ny=2)
+    land = _land_above(240, nx=3)
+    kw = {"sweeps": 1, "min_water_width_frac": None, "freeze_fixed_neighbours": False}
+    # F1: fixed indices are whole and in range
+    for fixed in ([5.9], [999], np.ma.array([5], mask=True), np.array([5 + 9j])):
+        with pytest.raises(ValueError):
+            fit_boundary_to_coast(nodes, tri, land, fixed=fixed, **kw)
+    assert fit_boundary_to_coast(nodes, tri, land, fixed=[5], **kw).nodes[5].tolist() \
+        == nodes[5].tolist()
+    # F2: movement budget and relaxation
+    for bad in ({"max_move_frac": -0.25}, {"max_move_frac": np.nan}, {"relax": 0.0},
+                {"relax": np.nan}, {"sweeps": 0}):
+        with pytest.raises(ValueError):
+            fit_boundary_to_coast(nodes, tri, land, **{**kw, **bad})
+    # F3: depths
+    for dep in (np.ma.array(np.full(len(nodes), 10.0), mask=True), np.full(len(nodes), 10 + 9j),
+                np.full(len(nodes), np.nan), np.full(3, 10.0)):
+        with pytest.raises(ValueError):
+            fit_boundary_to_coast(nodes, tri, land, depths=dep, **kw)
+    tri1 = np.array([[0, 1, 2]])
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    m = Fort14Mesh(title="t", nodes=xy, elements=tri1, depths=np.array([5.0, 6.0, np.nan]),
+                   open_boundaries=[np.array([0, 1])], land_boundaries=[])
+    with pytest.raises(ValueError, match="finite"):
+        apply_obc_depth_control(m)
+    # F4: coincident OBC nodes have no normal
+    with pytest.raises(ValueError, match="coincide|normal"):
+        fvcom_next_obc([[0.0, 0.0], [0.0, 0.0], [1.0, 0.0]], tri1, [0, 1])
+    # F5: boundary chains are checked before the repair
+    lat, tris, n = _lattice_mesh()
+    for chain in (np.arange(6) + 0.9, np.ma.array(np.arange(6), mask=True)):
+        mesh = Fort14Mesh(title="t", nodes=lat, elements=tris, depths=np.full(len(lat), 10.0),
+                          open_boundaries=[chain], land_boundaries=[])
+        with pytest.raises(ValueError):
+            align_open_boundary_local(mesh, max_outer=1, n_jitter=1)
+    # F6: no open boundary, nothing to control
+    m0 = Fort14Mesh(title="t", nodes=xy, elements=tri1, depths=np.array([5.0, 6.0, 7.0]),
+                    open_boundaries=[], land_boundaries=[])
+    out, change = apply_obc_depth_control(m0)
+    assert out.depths.tolist() == [5.0, 6.0, 7.0] and change.size == 0
