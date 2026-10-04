@@ -213,6 +213,8 @@ def align_open_boundary_local(
     if xy_chk.shape[1] != 2:        # the repair is planar (review round 42 F3)
         raise ValueError(f"nodes must be (N, 2), not {xy_chk.shape}")
     chains = [_indices(s, mesh.n_nodes, "an open boundary") for s in mesh.open_boundaries]
+    if any(c.size < 2 for c in chains):         # a chain with no tangent is no chain (r48 F3)
+        raise ValueError("an open boundary needs two or more nodes")
     for c in chains:         # an undefined tangent must not read as perpendicular (r41 F2)
         if c.size >= 2 and not (np.linalg.norm(np.diff(xy_chk[c, :2], axis=0), axis=1) > 0).all():
             raise ValueError("an open boundary has coincident consecutive nodes")
@@ -353,8 +355,8 @@ def align_open_boundary_local(
         nodes=nodes,
         depths=mesh.depths.copy(),
         elements=elements.copy(),
-        open_boundaries=[np.asarray(s).copy() for s in mesh.open_boundaries],
-        land_boundaries=[(ib, np.asarray(s).copy())
+        open_boundaries=[c.copy() for c in chains],      # the validated integer chains
+        land_boundaries=[(ib, _indices(s, n_nodes, "a land boundary"))
                          for ib, s in mesh.land_boundaries],
     )
     info: dict[str, Any] = {

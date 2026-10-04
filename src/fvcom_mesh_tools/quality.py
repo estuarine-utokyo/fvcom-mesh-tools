@@ -108,15 +108,20 @@ def compute_metrics(
             "n_disjoint_elems": 0,
         }
 
+    from fvcom_mesh_tools._checks import checked_planar
+
+    # one validation, and its normalized connectivity used throughout (review
+    # round 48 F2)
+    _, elements = checked_planar(mesh.nodes, mesh.elements, "compute_metrics")
     alpha = alpha_quality(mesh)
     angles = min_interior_angle(mesh)  # degrees
     sa = signed_areas(mesh)
-    valence = node_valence(mesh.elements, n_nodes=NP)
+    valence = node_valence(elements, n_nodes=NP)
     over_flag, _ = overconnected_nodes_flag(
-        mesh.elements, n_nodes=NP, max_nbr=int(max_nbr_elem),
+        elements, n_nodes=NP, max_nbr=int(max_nbr_elem),
     )
 
-    adj = face_face_adjacency(mesh.elements)
+    adj = face_face_adjacency(elements)
     n_comp, labels = connected_components(adj, directed=False, return_labels=True)
     comp_sizes = np.bincount(labels, minlength=int(n_comp))
     largest = int(comp_sizes.max()) if comp_sizes.size else 0
@@ -192,7 +197,7 @@ def check_thresholds(
             return
         passed = (
             isinstance(actual, (int, float))
-            and not (isinstance(actual, float) and np.isnan(actual))
+            and bool(np.isfinite(actual))          # an infinite metric is no measurement (r48 F4)
             and float(actual) >= float(threshold)
         )
         checks.append(ThresholdCheck(metric, "≥", float(threshold),
@@ -205,7 +210,7 @@ def check_thresholds(
             return
         passed = (
             isinstance(actual, (int, float))
-            and not (isinstance(actual, float) and np.isnan(actual))
+            and bool(np.isfinite(actual))
             and float(actual) <= float(threshold)
         )
         checks.append(ThresholdCheck(metric, "≤", float(threshold),

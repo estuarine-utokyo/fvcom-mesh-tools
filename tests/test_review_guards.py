@@ -958,3 +958,31 @@ def test_round47_guards(tmp_path):
     # F9: moved counts the nodes whose coordinates changed
     _, info = align_open_boundary_first_ring(base)
     assert info["moved"] <= info["movable_first_ring"]
+
+
+def test_round48_guards():
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+    from fvcom_mesh_tools.algorithms.perpendicularity import align_open_boundary_first_ring
+    from fvcom_mesh_tools.quality import check_thresholds, compute_metrics
+
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    # F1: the returned chains are integer
+    m = Fort14Mesh("m", xy, np.ones(3), np.array([[0, 1, 2]]), [np.array([0.0, 1.0])],
+                   [(0, np.array([1.0, 2.0, 0.0]))])
+    out, _ = align_open_boundary_first_ring(m)
+    assert out.open_boundaries[0].dtype.kind == "i" and out.land_boundaries[0][1].dtype.kind == "i"
+    assert out.nodes[out.open_boundaries[0]].shape == (2, 2)
+    # F2: float connectivity through the unified metrics
+    mf = Fort14Mesh("m", xy, np.ones(3), np.array([[0.0, 1.0, 2.0]]), [], [])
+    assert compute_metrics(mf)["n_elements"] == 1
+    # F3: a singleton chain is refused by the local repair too
+    ms = Fort14Mesh("m", xy, np.ones(3), np.array([[0, 1, 2]]), [np.array([0])], [])
+    with pytest.raises(ValueError, match="two or more"):
+        align_open_boundary_local(ms)
+    # F4: an infinite metric is no measurement
+    assert not check_thresholds({"alpha_mean": float("inf")}, min_alpha_mean=0.9)[0]
+    assert not check_thresholds({"n_flipped": float("-inf")}, max_flipped=0)[0]
+    # F5: the no-OBC schema
+    _, info = align_open_boundary_first_ring(Fort14Mesh("m", xy, np.ones(3),
+                                                        np.array([[0, 1, 2]]), [], []))
+    assert info["movable_first_ring"] == 0

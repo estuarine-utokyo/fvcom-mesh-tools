@@ -349,7 +349,7 @@ def align_open_boundary_first_ring(
     if not mesh.open_boundaries:
         return mesh, {"alpha": alpha, "n_iters": n_iters, "smooth_iters": smooth_iters,
                       "smooth_alpha": smooth_alpha, "segment_index": segment_index,
-                      "moved": 0, "first_ring_by_parent_count": {},
+                      "moved": 0, "movable_first_ring": 0, "first_ring_by_parent_count": {},
                       "movable_first_ring_by_parent_count": {},
                       "note": "no open boundaries"}
 
@@ -380,14 +380,18 @@ def align_open_boundary_first_ring(
                 nodes, elements, first_ring, fixed, smooth_alpha,
             )
 
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
     out = Fort14Mesh(
         title=mesh.title,
         obc_type=mesh.obc_type,
         nodes=nodes,
         depths=mesh.depths.copy(),
         elements=elements.copy(),
-        open_boundaries=[a.copy() for a in mesh.open_boundaries],
-        land_boundaries=[(ib, a.copy()) for (ib, a) in mesh.land_boundaries],
+        # the validated integer chains, not the inputs' own dtype (review round 48 F1)
+        open_boundaries=[_checked_chain(mesh, k) for k in range(len(mesh.open_boundaries))],
+        land_boundaries=[(ib, _indices(a, mesh.n_nodes, "a land boundary"))
+                         for (ib, a) in mesh.land_boundaries],
     )
     info = {
         "alpha": alpha,
