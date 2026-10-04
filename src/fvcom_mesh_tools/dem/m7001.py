@@ -55,60 +55,36 @@ def _data_dir() -> Path:
     return Path(root)
 
 
-def _grid(path: Path, var: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    import netCDF4
-
-    with netCDF4.Dataset(path) as ds:
-        lat, lon, z = ds["lat"][:], ds["lon"][:], ds[var][:]
-        dims = tuple(ds[var].dimensions)
-    # a masked cell is missing, not the number under the mask (a -9999 fill
-    # would become a 9999 m depth; review round 29 F1): missing cells are
-    # NaN, which the interpolation hands on to the next source. The axes
-    # must be whole.
-    if np.ma.is_masked(lat) or np.ma.is_masked(lon):
-        raise ValueError(f"{path.name}: the lat or lon axis has masked values")
-    lat, lon = np.asarray(lat, float), np.asarray(lon, float)
-    z = np.ma.filled(np.ma.asarray(z, float), np.nan)
-    # the declared storage order decides the axes, not the shape: a square
-    # (lon, lat) grid passes a shape test as (lat, lon) (review round 30 F5)
-    if dims == ("lon", "lat"):
-        z = z.T
-    elif dims != ("lat", "lon"):
-        raise ValueError(f"{path.name}: {var} has dimensions {dims}, not (lat, lon)")
-    if z.shape != (lat.size, lon.size):
-        raise ValueError(f"{path.name}: expected (lat, lon) = "
-                         f"{(lat.size, lon.size)}, got {z.shape}")
-    return lat, lon, z
-
-
 def interpolate_m7001_tp(lon: np.ndarray, lat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Depth (positive down, metres, T.P. datum) at the given geographic points.
 
     Returns ``(depth, source)``, where ``source`` is 0 for the fine M7001 grid
     and 1 for the Kanto-wide blend.  Raises if any point is covered by neither.
-    """
-    from fvcom_mesh_tools.dem.sources import _bilinear_index
 
+    Each grid is read by ``dem.sources.Grid``, the loader reviewed for masked
+    cells, dimension order, axes and zero-weight missing corners (review rounds
+    29-31): a missing cell is NaN and the point goes to the next source.
+    """
+    from fvcom_mesh_tools.dem.sources import Grid
+
+    if np.ma.is_masked(lon) or np.ma.is_masked(lat):
+        raise ValueError("the query coordinates have masked values")
     lon = np.asarray(lon, float)
     lat = np.asarray(lat, float)
-    pts = np.column_stack([lat, lon])
-    depth = np.full(len(pts), np.nan)
-    source = np.full(len(pts), -1, dtype=np.int8)
+    if lon.ndim != 1 or lon.shape != lat.shape:
+        raise ValueError(f"lon and lat must be matching (N,) arrays, not {lon.shape} and "
+                         f"{lat.shape}")
+    if not (np.isfinite(lon).all() and np.isfinite(lat).all()):
+        raise ValueError("the query coordinates must be finite")
+    depth = np.full(len(lon), np.nan)
+    source = np.full(len(lon), -1, dtype=np.int8)
     root = _data_dir()
     for tag, (rel, var) in enumerate(((_FINE, "elevation"), (_WIDE, "z"))):
-        path = root / rel
-        if not path.exists():
-            raise FileNotFoundError(path)
-        glat, glon, z = _grid(path, var)
-        if not (np.all(np.diff(glat) > 0) and np.all(np.diff(glon) > 0)):
-            raise ValueError(f"{path.name}: lat and lon must be strictly increasing")
-        # a missing corner spoils a sample only where its weight is not zero
-        # (review round 30 F6)
-        fi = np.interp(pts[:, 1], glon, np.arange(len(glon)), left=np.nan, right=np.nan)
-        fj = np.interp(pts[:, 0], glat, np.arange(len(glat)), left=np.nan, right=np.nan)
-        zi = _bilinear_index(z, fi, fj)
-        take = np.isnan(depth) & np.isfinite(zi)
-        depth[take] = -zi[take]
+        if not lon.size:
+            break
+        d = Grid(rel, var).depth(lon, lat, root)
+        take = np.isnan(depth) & np.isfinite(d)
+        depth[take] = d[take]
         source[take] = tag
     if np.isnan(depth).any():
         raise ValueError(f"{int(np.isnan(depth).sum())} nodes outside every M7001 product")
@@ -117,7 +93,16 @@ def interpolate_m7001_tp(lon: np.ndarray, lat: np.ndarray) -> tuple[np.ndarray, 
 
 def node_edges(elements: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Unique undirected node-node edges of a triangulation (0-based)."""
-    tri = np.asarray(elements, dtype=np.int64)
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
+    # whole, unmasked, non-negative indices, checked before the cast (review
+    # round 31 F8)
+    raw = np.asarray(elements)
+    n = int(np.nanmax(raw)) + 1 if raw.size and raw.dtype.kind in "iuf" \
+        and np.isfinite(raw).all() else 1
+    tri = _indices(elements, n, "elements", ndim=2)
+    if tri.size and tri.shape[1] != 3:
+        raise ValueError(f"elements must be (M, 3), not {tri.shape}")
     e = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]), axis=1)
     e = np.unique(e, axis=0)
     return e[:, 0], e[:, 1]
@@ -140,6 +125,8 @@ def rfactor_smooth(
     ``rmax`` and edge set.  Returns ``(depth, iterations, final max r)``.
     """
     h = np.asarray(h0, float).copy()
+    if np.ma.is_masked(ei) or np.ma.is_masked(ej):
+        raise ValueError("ei or ej has masked values")
     ei, ej = np.asarray(ei), np.asarray(ej)
     if ei.size == 0 and ej.size == 0:
         ei = ej = np.empty(0, np.int64)
@@ -196,12 +183,19 @@ def production_depths(
     ``lon``/``lat`` are the node coordinates in EPSG:4326; ``elements`` is the
     0-based triangle table.  Returns ``(depth, report)``.
     """
+    if not (np.isfinite([hmin, hmax]).all() and 0 < hmin <= hmax):
+        raise ValueError(f"the depth bounds must be finite with 0 < hmin <= hmax, not "
+                         f"[{hmin}, {hmax}]")
     raw, source = interpolate_m7001_tp(lon, lat)
     floored = np.maximum(raw, hmin)
     ei, ej = node_edges(elements)
     r_before = float((np.abs(floored[ei] - floored[ej]) / (floored[ei] + floored[ej])).max())
     smoothed, iters, r_after = rfactor_smooth(floored, ei, ej, rmax=rmax, hmin=hmin)
     depth = np.minimum(smoothed, hmax)
+    if len(elements) and int(np.max(elements)) >= len(depth):
+        raise ValueError("the elements name a node the coordinates do not have")
+    if not (np.isfinite(depth).all() and (depth >= hmin).all() and (depth <= hmax).all()):
+        raise ValueError("the production depths are not finite and within their bounds")
     report = {
         "n_nodes": int(len(depth)),
         "n_edges": int(len(ei)),

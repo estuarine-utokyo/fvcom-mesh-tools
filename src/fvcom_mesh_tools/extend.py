@@ -111,6 +111,10 @@ def band_field(x, y, line_xy, targets, half_width_m):
         raise ValueError("targets must be finite positive sizes, one target per point")
     if len(line_xy) < 2 or len(targets) != len(line_xy):
         raise ValueError("a band needs a line of two points or more and one target per point")
+    if isinstance(half_width_m, (bool, np.bool_)) or np.ndim(half_width_m) != 0 \
+            or not (np.isfinite(half_width_m) and half_width_m >= 0):
+        raise ValueError(f"half_width_m must be a finite non-negative number, not "
+                         f"{half_width_m!r}")
     line = shapely.LineString(line_xy)
     pts = shapely.points(np.ravel(x), np.ravel(y))
     d = shapely.distance(pts, line)
@@ -595,12 +599,13 @@ def round_depths_inside(h, hmin, hmax=None, decimals: int = 6) -> np.ndarray:
     # the grid ends are taken from the bounds' shortest decimal forms, so a
     # bound that is already on the grid is its own end (0.07 * 100 is
     # 7.000000000000001 in binary; review round 29 F8)
-    from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, localcontext
+    from decimal import ROUND_CEILING, ROUND_FLOOR, Context, Decimal, InvalidOperation, localcontext
 
-    # in a context of our own: the caller's precision must not decide whether
-    # a 309-digit endpoint can be quantized (review round 30 F2)
-    with localcontext() as ctx:
-        ctx.prec = 400
+    # a fresh context of our own, not a copy of the caller's (its precision,
+    # exponent limits and traps must not decide whether a 309-digit endpoint
+    # can be quantized; review rounds 30 F2, 31 F2)
+    with localcontext(Context(prec=400, Emax=999999, Emin=-999999,
+                              traps=[InvalidOperation])):
         step = Decimal(1).scaleb(-int(decimals))
         lo = float(Decimal(repr(float(hmin))).quantize(step, rounding=ROUND_CEILING))
         hi = np.inf if hmax is None else float(

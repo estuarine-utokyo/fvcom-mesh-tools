@@ -22,6 +22,8 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
@@ -181,19 +183,24 @@ def _acceptance_problem():
         return f"QA {total - nfail}/{total}"
     if problems:
         return f"merge problems: {problems}"
-    # the products parse, and agree with what the merge reported
-    from fvcom_mesh_tools.io.fvcom_native import read_dep, read_grd, read_obc
+    # the products read as one case (nodes, depths and boundary agree with each
+    # other) and agree with what the merge reported (review rounds 29-31)
+    from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case
 
     try:
         case = recipe["case"]
-        nodes, els = read_grd(OUT / f"{case}_grd.dat")
-        read_dep(OUT / f"{case}_dep.dat")
-        read_obc(OUT / f"{case}_obc.dat")
-    except (OSError, ValueError, IndexError) as exc:
+        mesh = read_fvcom_case(OUT / f"{case}_grd.dat", OUT / f"{case}_dep.dat",
+                               OUT / f"{case}_obc.dat")
+        n_obc = _count(merged["n_open_boundary_nodes"], "n_open_boundary_nodes")
+    except (OSError, ValueError, IndexError, KeyError) as exc:
         return f"unreadable product ({type(exc).__name__}: {exc})"
-    if (len(nodes), len(els)) != (merged["n_nodes"], merged["n_elements"]):
-        return (f"products hold NP={len(nodes)} NE={len(els)}, the merge reported "
-                f"NP={merged['n_nodes']} NE={merged['n_elements']}")
+    got = (mesh.n_nodes, mesh.n_elements, sum(len(b) for b in mesh.open_boundaries))
+    if got != (merged["n_nodes"], merged["n_elements"], n_obc):
+        return (f"products hold NP={got[0]} NE={got[1]} open-boundary nodes={got[2]}, the "
+                f"merge reported NP={merged['n_nodes']} NE={merged['n_elements']} "
+                f"open-boundary nodes={n_obc}")
+    if not (np.asarray(mesh.depths) > 0).all():
+        return "the depth file holds a depth that is not positive"
     return None
 
 
