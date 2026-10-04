@@ -171,15 +171,30 @@ class ThresholdCheck:
         }
 
 
+def _number(value: Any):
+    """``value`` as a Python number, or None when it is not one. Integers stay
+    integers, so that 2**53 + 1 is not judged as 2**53 (review round 51 F2)."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value, (int, float, np.integer, np.floating)):
+        return None
+    return value.item() if isinstance(value, (np.integer, np.floating)) else value
+
+
 def _as_float(value: Any) -> float:
-    """``value`` as a float, NaN when it has none (a Python integer beyond float range,
-    a string, ...); the one conversion used to judge and to report (r49 F1, r50 F1)."""
-    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
-        return float("nan")
+    """The number as a float for the record; NaN when it has none (an integer beyond
+    float range; r49 F1, r50 F1)."""
     try:
         return float(value)
     except (OverflowError, ValueError, TypeError):
         return float("nan")
+
+
+def _judge(actual: Any, op: str, threshold: float | int) -> tuple[float, bool]:
+    n = _number(actual)
+    if n is None or (isinstance(n, float) and not np.isfinite(n)):    # inf is no measurement
+        return _as_float(actual) if n is not None else float("nan"), False
+    t = threshold.item() if isinstance(threshold, (np.integer, np.floating)) else threshold
+    return _as_float(n), bool(n >= t if op == "≥" else n <= t)
 
 
 def check_thresholds(
@@ -206,8 +221,7 @@ def check_thresholds(
         if actual is None:           # a requested threshold on a missing metric fails (r47 F8)
             checks.append(ThresholdCheck(metric, "≥", float(threshold), float("nan"), False))
             return
-        a = _as_float(actual)
-        passed = bool(np.isfinite(a)) and a >= float(threshold)   # inf is no measurement (r48 F4)
+        a, passed = _judge(actual, "≥", threshold)
         checks.append(ThresholdCheck(metric, "≥", float(threshold), a, passed))
 
     def _le(metric: str, threshold: float) -> None:
@@ -215,8 +229,7 @@ def check_thresholds(
         if actual is None:
             checks.append(ThresholdCheck(metric, "≤", float(threshold), float("nan"), False))
             return
-        a = _as_float(actual)
-        passed = bool(np.isfinite(a)) and a <= float(threshold)
+        a, passed = _judge(actual, "≤", threshold)
         checks.append(ThresholdCheck(metric, "≤", float(threshold), a, passed))
 
     if min_alpha_mean is not None:

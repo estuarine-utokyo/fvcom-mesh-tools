@@ -93,6 +93,16 @@ print(f"[obc] start {ll(S0).round(5).tolist()} normal {bs:.1f} deg; "
 _legs = cfg["legs"]
 if not isinstance(_legs, list) or not _legs:
     raise SystemExit("legs must be a non-empty list")
+# each leg: a bearing and exactly one way to end, nothing else (review round 51 F1)
+for _i, _g in enumerate(_legs):
+    if not isinstance(_g, dict) or "bearing" not in _g:
+        raise SystemExit(f"leg {_i}: needs a bearing")
+    _extra = set(_g) - {"bearing", "until", "until_lon", "until_lat"}
+    _stops = [kk for kk in ("until_lon", "until_lat") if kk in _g]
+    _end = _g.get("until")
+    if _extra or _end not in (None, "end_normal") or (len(_stops) + (_end is not None)) != 1:
+        raise SystemExit(f"leg {_i}: needs a bearing and exactly one of 'until: end_normal', "
+                         f"'until_lon', 'until_lat' (found {sorted(_g)})")
 _ends = [i for i, g in enumerate(_legs) if g.get("until") == "end_normal"]
 if _ends and _ends != [len(_legs) - 1]:
     raise SystemExit(f"'until: end_normal' must be on the final leg only; found on leg(s) "

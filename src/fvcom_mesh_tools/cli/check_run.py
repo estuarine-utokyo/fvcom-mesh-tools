@@ -29,6 +29,7 @@ import argparse
 import json
 import math
 import re
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -504,6 +505,17 @@ def main(argv: list[str] | None = None) -> int:
     # A marker from an earlier attempt must not survive this one's failure
     # (review 2, R1): it goes first, and comes back only on success.
     if args.marker is not None:
+        # never an input of the check: the log, the namelist or a history file
+        # (review round 51 F3)
+        run = args.run_dir.resolve()
+        mk = args.marker.resolve()
+        case = args.casename or re.sub(r"_run\.nml$", "", args.nml)
+        if mk in (run / args.log, run / args.nml) or (
+                mk.parent == run and re.fullmatch(re.escape(case) + r"_\d+\.nc", mk.name)) \
+                or mk.is_dir():
+            print(f"[check-run] --marker {args.marker} names an input of the check or a "
+                  "directory; refusing to remove it", file=sys.stderr)
+            return 2
         args.marker.unlink(missing_ok=True)
     info = check_run(args.run_dir, log=args.log, nml=args.nml, casename=args.casename)
     verdict = "OK" if info["ok"] else "FAILED"

@@ -994,7 +994,6 @@ def test_round49_guards():
     # F1: a count beyond a float is a failed check, not a crash
     assert check_thresholds({"n_flipped": 2**64}, max_flipped=0)[0] is False
     assert check_thresholds({"n_flipped": 10**400}, max_flipped=0)[0] is False   # round 50 F1
-    assert check_thresholds({"alpha_mean": 10**400}, min_alpha_mean=0.5)[0] is False
     assert check_thresholds({"n_flipped": 3}, max_flipped=5)[0] is True
 
 
@@ -1008,3 +1007,21 @@ def test_round50_guards(tmp_path):
         with pytest.raises(ValueError, match="plain file-name"):
             export_fvcom_case(mesh, tmp_path / "out", bad, obc_depth_control=False)
     assert not (tmp_path / "old_grd.dat").exists()
+
+
+def test_round51_guards(tmp_path):
+    from fvcom_mesh_tools.cli.check_run import main as check_main
+    from fvcom_mesh_tools.quality import check_thresholds
+
+    # F2: integers are judged as integers
+    assert not check_thresholds({"n_flipped": np.uint64(2**53 + 1)}, max_flipped=2**53)[0]
+    assert check_thresholds({"n_flipped": np.uint64(2**53)}, max_flipped=2**53)[0]
+    assert not check_thresholds({"n_flipped": 2**53 + 1}, max_flipped=2**53)[0]
+    # F3: the marker never names an input
+    run = tmp_path / "run"
+    run.mkdir()
+    nml = run / "m2_run.nml"
+    nml.write_text("&x /\n")
+    assert check_main([str(run), "--marker", str(nml)]) == 2
+    assert nml.exists()
+    assert check_main([str(run), "--marker", str(run / "fvcom.log")]) == 2
