@@ -12483,3 +12483,297 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F5 | minor | test (uint16 depths) | yes (the no-OBC copy introduced in d3e7186) | fixed, 87652c7: change in float, depths in the mesh's own dtype; test |
 | F6 | minor | tests (three-column nodes, float connectivity) | yes, pre-existing | fixed, 87652c7: planar columns for normals; normalized connectivity used; test |
 | F7 | nit | code read | yes | fixed, 87652c7 |
+
+## Round 42
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `76609b2`, including `87652c7` and the portability changes. Found **six minor defects and one nit**. No files were modified.
+
+**Previous finding status**
+
+These statuses reflect the recorded triage, current code and selected regressions. Not every historical fault injection was rerun.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R8, all numbered findings | RESOLVED | Original interpolation, publication, provenance, frozen-base and failure-handling corrections remain present. Current licensing and timestep-warning decisions apply. |
+| R9–R16, all | RESOLVED | Original ownership, indexing, serialization, recovery, geometry and backend-policy corrections remain. |
+| R17–R24, all | RESOLVED | Original validation, input-identity, YAML, history, publication and land-check corrections remain. |
+| R25–R30, all | RESOLVED | Original limiter, rounding, geometry, permission, acceptance and environment corrections remain. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, mask, connectivity, bound and acceptance cases remain corrected. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains established loader policy. |
+| R32-F1–F10 | RESOLVED | Original boundary, width, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded historical experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Original repeated-node, corridor, limiter, empty-mesh and gradation corrections remain. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original guide, array, overflow and planar-shape corrections remain. |
+| R34-F3 | WITHDRAWN | Nearest-target selection remains the approved calibrated method. |
+| R35-F1–F5 | RESOLVED | Frozen-node, backup, bound, target and count corrections remain. |
+| R36-F1–F5 | RESOLVED | Permission, complex-value, overflow, tolerance and licensing corrections remain. |
+| R37-F1–F4 | RESOLVED | Complete guard regression passed. |
+| R38-F1–F5 | RESOLVED | Complete guard regression passed. |
+| R39-F1–F4 | RESOLVED | Complete guard regression passed. |
+| R40-F1–F6 | RESOLVED | Original index, movement, depth, coincident-node, chain and empty-OBC cases are corrected; regression passed. |
+| R41-F1 | PARTIAL | Undefined cross-products are rejected, but unchecked connectivity can still receive seam-verification success: finding 1. |
+| R41-F2 | PARTIAL | Coincident consecutive nodes are rejected; zero central tangents remain accepted: finding 2. |
+| R41-F3 | RESOLVED | Reported invalid coast-fit controls are rejected; regression passed. |
+| R41-F4 | PARTIAL | NaN controls are rejected, but accepted scoring endpoints still divide by zero: finding 5. |
+| R41-F5 | PARTIAL | Unsigned subtraction and the no-OBC copy are corrected; active extended-precision changes are misreported: finding 4. |
+| R41-F6 | PARTIAL | Native planar normals and normalized connectivity are corrected; local repair still mishandles accepted three-column coordinates: finding 3. |
+| R41-F7 | RESOLVED | The valence-policy test explanation was corrected. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Supplied measurements and the owner’s resolution policy remain controlling. |
+
+**Findings**
+
+1. **Minor — Frozen-base verification accepts negative seam connectivity.**
+
+   **Location:** [extend.py:347](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:347), also line 363.
+
+   **Reproduction:** Using `_base()` and `_outer()` from `tests/test_extend.py`:
+
+   ```python
+   base = _base()
+   nodes, elements = _outer()
+   merged = merge_outer(base, nodes, elements, [0, 3], [1, 2], [1, 2])
+   merged.elements[3, 1] = -1
+   verify_frozen_base(merged, base, [1, 2])
+   ```
+
+   Verification returns successfully, reporting **one verified interface edge**. NumPy interprets the invalid `-1` vertex as the last node, so the side calculation appears valid. `checked_geometry` correctly rejects this connectivity.
+
+   **Fix:** Validate merged geometry and connectivity before constructing edge keys or indexing coordinates. Retain the intentional allowance for unfinished new depths to be NaN. Pre-existing; later pipeline validation provides additional protection.
+
+2. **Minor — A reversed boundary chain still produces a passing undefined tangent.**
+
+   **Location:** [perp_local.py:212](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/perp_local.py:212), [perpendicularity.py:36](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/perpendicularity.py:36).
+
+   **Reproduction:** Use coordinates `[[0,0],[1,0],[0,1]]`, triangle `[[0,1,2]]`, depths of one and OBC `[0,1,0]`. Call:
+
+   ```python
+   align_open_boundary_local(mesh, max_outer=1, n_jitter=1)
+   ```
+
+   It reports **`violations: 0` and `remaining: []`**. Both consecutive boundary sides have nonzero length, so the new guard passes. The middle central difference is zero, and its zero tangent is interpreted as perfect perpendicularity.
+
+   **Fix:** Reject repeated/reversing boundary chains and explicitly require every computed planar tangent to be finite and nonzero before evaluating deviations. Pre-existing residual of R41-F2.
+
+3. **Minor — Local perpendicularity repair accepts three-column coordinates and then crashes.**
+
+   **Location:** [perp_local.py:215](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/perp_local.py:215), also line 266.
+
+   **Reproduction:** Build `_lattice_mesh()` from `tests/test_review_guards.py`, with bottom-row OBC `np.arange(n)` and depths of 10. Append a zero auxiliary coordinate column:
+
+   ```python
+   mesh.nodes = np.c_[nodes, np.zeros(len(nodes))]
+   align_open_boundary_local(mesh, max_outer=1, n_jitter=1)
+   ```
+
+   Geometry validation accepts the representation, but repair raises **`ValueError`** at `edge @ n_hat`: the edge has three components and the normal has two. The planar version completes and accepts one move.
+
+   The validated coordinates are used for the entry guard, while subsequent calculations use `mesh.nodes.copy()`.
+
+   **Fix:** Perform repair using validated floating planar coordinates, preserving auxiliary columns when constructing the returned mesh; alternatively, explicitly reject unsupported coordinate shapes at entry. Pre-existing residual of R41-F6.
+
+4. **Minor — The round 41 depth-control fix misreports extended-precision changes.**
+
+   **Location:** [fvcom_native.py:327](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:327), also lines 337–339.
+
+   **Reproduction:** On the triangle from finding 2 with OBC `[0,1]`, use:
+
+   ```python
+   depths = np.array([
+       np.nextafter(np.longdouble(10), np.longdouble(np.inf)),
+       10, 10,
+   ], dtype=np.longdouble)
+   ```
+
+   `apply_obc_depth_control` preserves the depth dtype and changes the first depth to exactly 10. However, it reports **`change == [0,0]`**. Subtracting the actual original depths from the returned depths gives **`[-8.67361738e-19, 0]`**.
+
+   The float64 validation vector loses the difference before subtraction, while the newly preserved output dtype retains it.
+
+   **Fix:** Compute changes in a floating dtype that preserves the supported input precision, such as `np.result_type(original.dtype, np.float64)` for floating inputs. Explicitly reject representations whose differences cannot be represented reliably. Introduced by `87652c7`.
+
+5. **Minor — Patch-quality validation permits singular scoring endpoints.**
+
+   **Location:** [patch.py:4218](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:4218), with divisions at lines 4075–4076.
+
+   **Reproduction:** Using the finite triangle above:
+
+   ```python
+   with np.errstate(divide="raise", invalid="raise"):
+       improve_patch(
+           xy, tri, np.ones(3, bool), np.zeros(1, bool),
+           rounds=1, min_angle_deg=0, max_angle_deg=180,
+       )
+   ```
+
+   Entry validation accepts the controls, then scoring raises **`FloatingPointError: divide by zero`**. Either endpoint alone also triggers the problem. Under default NumPy settings these operations warn and produce infinities.
+
+   **Fix:** Require `0 < min_angle_deg < max_angle_deg < 180`, or explicitly implement zero/180 as disabled scoring terms without dividing by zero. Pre-existing arithmetic; the new validation remains incomplete.
+
+6. **Minor — Coast-fit no-op results contain incorrect after-statistics.**
+
+   **Location:** [coast_fit.py:431](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/coast_fit.py:431), also lines 441–445.
+
+   **Reproduction:** Fit the finite triangle above against `shapely.box(-1,2,2,3)`, supplying `fixed=[0,1,2]` and depths of one.
+
+   Coordinates remain unchanged, but the returned statistics contain:
+
+   ```text
+   min_angle_deg: [45.00000000000001, nan]
+   max_angle_deg: [90.0, nan]
+   dt_s:         [nan, nan]
+   ```
+
+   The early return leaves known after-angles unset. The separate “no movable nodes” branch copies angles but still skips timestep statistics despite supplied depths.
+
+   **Fix:** Initialize unchanged after-statistics before early returns, and compute/copy timestep statistics when depths are supplied. A common result-finalization path would keep all no-op branches consistent. Pre-existing.
+
+7. **Nit — The resampling regression docstring describes a different algorithm.**
+
+   **Location:** [test_obc_design.py:60](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/tests/test_obc_design.py:60).
+
+   **Evidence:** The docstring says the remainder is “spread over all steps.” The implementation merges it into the terminal step, removing preceding nodes when necessary to preserve the floor. The test itself expects **`[3000,3000,4000]`**, confirming that only the last step grows.
+
+   **Fix:** Update the explanation to describe terminal remainder merging and spacing-floor preservation. Pre-existing.
+
+**Verification**
+
+- Read-only `pytest.main(...)` harness with `--capture=sys -p no:cacheprovider`, excluding filesystem-writing fixtures:
+  - Extension/design/DEM/coast/guard selection: **105 passed, 59 deselected**.
+  - Related QA, repair, finishing, I/O, run-check, sizing, provenance and ownership selection: **257 passed, 123 deselected**.
+- Complete round 37–39 guard functions passed without creating temporary files; rounds 40–41 passed in the core selection.
+- Initial related-test execution had **23 failures** caused by Matplotlib’s writable-cache requirement. With cache initialization mocked in memory, the final selection passed; mesh algorithms were not mocked.
+- Small in-memory NetCDF probes passed for axis aliases/order, masked-corner fallback, source priority and non-TP counting/warnings.
+- Scoped `ruff check --no-cache` passed.
+- `bash -n` passed for all nine scoped shell files. Shell-fragment probes confirmed unset path variables stop execution and `FVCOM_LIBS` derives correctly.
+- `git status --porcelain` remained empty; `git diff --exit-code` passed.
+- Production mesh generation, QA gates, NP/NE, implied timestep and FVCOM integration were **not rerun**. Shared data was not read and no batch jobs were submitted.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 6 minor, 1 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 42: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 41 (your previous answer; 6 minor, 1 nit) was fixed in 87652c7; read it. Per finding:
+- F1 verify_frozen_base: an undefined seam side is refused.
+- F2 align_open_boundary_local: coincident consecutive boundary nodes refused.
+- F3, F4 fit_boundary_to_coast and improve_patch: quality controls validated.
+- F5 apply_obc_depth_control: change in float, dtype kept.
+- F6 fvcom_next_obc planar columns; align_open_boundary_local uses normalized connectivity.
+- F7 test docstring.
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | test (vertex -1) | yes, pre-existing | fixed, e10325d: `checked_geometry` first; test |
+| F2 | minor | test (chain `[0, 1, 0]`) | yes | fixed, e10325d: central differences must be non-zero; test |
+| F3 | minor | test (three-column nodes) | yes | fixed, e10325d: rejected at entry (the repair is planar); test |
+| F4 | minor | test (long double depths) | yes, introduced in 87652c7 | fixed, e10325d: change in `result_type(dtype, float64)`; test |
+| F5 | minor | test (angles 0 and 180) | yes | fixed, e10325d: `0 < min < max < 180`; test |
+| F6 | minor | test (fixed-only fit with depths) | yes | fixed, e10325d: `_unchanged()` shared by both no-op branches; test |
+| F7 | nit | code read | yes | fixed, e10325d |
+
+### Verification on GENKAI after round 41 (2026-10-05)
+
+`jobs/genkai/extend_check.sh`, job 7000725, commit 87652c7, scratch
+`$WORK_DIR/scratch/extcheck41g`, 16 cores: pytest **1280 passed, 9 skipped, 0
+failed**; 444 designed 191 nodes; 445 QA **23/23**, NP=14,673, NE=27,011; 453
+ran (r max 0.2000001); the build's boundary hash equals 444's CSV. The grd
+sha256 `966f8d0566509231...` is **identical** to that of extcheck28g (commit
+fbc9019, before rounds 29-41): the fixes of those rounds changed nothing in
+the real build, and GENKAI reproduced its own mesh bit for bit across two jobs.
