@@ -480,3 +480,60 @@ def test_round36_guards():
             check_no_overlap(mesh2, 1, rel_tol=tol)
     with pytest.raises(ValueError, match="overlap the base"):
         check_no_overlap(mesh2, 1)
+
+
+def test_round37_guards(tmp_path):
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+    from fvcom_mesh_tools.dem.sources import sample
+    from fvcom_mesh_tools.extend import check_land_cover
+    from fvcom_mesh_tools.io.fvcom_native import write_cor, write_dep, write_grd
+    from fvcom_mesh_tools.obc_band import build_obc_band
+    from fvcom_mesh_tools.obc_design import fillet, ray_intersection, resample
+
+    # F1: complex inputs of the geometry and sizing interfaces
+    c = np.array([[0, 0], [10, 0]], complex) + 9j
+    with pytest.raises(ValueError, match="complex"):
+        resample(c, 3)
+    with pytest.raises(ValueError, match="complex"):
+        ray_intersection(np.array([0 + 9j, 0]), [1, 0], [1, -1], [0, 1])
+    with pytest.raises(ValueError, match="complex"):
+        fillet([[0, 0], [10, 0], [10, 10]], [np.complex128(2 + 9j)])
+    arc = np.c_[139.0 + np.arange(6) * 0.01, np.full(6, 35.0)]
+    with pytest.raises(ValueError, match="complex"):
+        build_obc_band(arc, np.full(6, 100 + 9j))
+    with pytest.raises(ValueError, match="complex"):
+        sample(["srtm15plus"], np.array([0.5 + 9j]), np.array([0.5]))
+    # F2: native writers
+    mesh = Fort14Mesh(title="t", nodes=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+                      elements=np.array([[0, 1, 2]]), depths=np.array([5.0, 6.0, 7.0]),
+                      open_boundaries=[], land_boundaries=[])
+    bad = Fort14Mesh(title="t", nodes=mesh.nodes, elements=mesh.elements,
+                     depths=mesh.depths + 9j, open_boundaries=[], land_boundaries=[])
+    badxy = Fort14Mesh(title="t", nodes=mesh.nodes + 9j, elements=mesh.elements,
+                       depths=mesh.depths, open_boundaries=[], land_boundaries=[])
+    for fn, m in ((write_dep, bad), (write_grd, badxy)):
+        with pytest.raises(ValueError, match="complex"):
+            fn(m, tmp_path / "x.dat")
+    with pytest.raises(ValueError, match="complex"):
+        write_cor(mesh, tmp_path / "x.dat", np.full(3, 35 + 9j))
+    with pytest.raises(ValueError, match="complex"):
+        write_fort14(bad, tmp_path / "x.14")
+    assert not list(tmp_path.glob("x.*"))
+    # F3: a bool erosion
+    import shapely
+
+    m1 = Fort14Mesh(title="t", nodes=np.array([[0.0, 0], [100, 0], [0, 100]]),
+                    elements=np.array([[0, 1, 2]]), depths=np.ones(3),
+                    open_boundaries=[], land_boundaries=[])
+    with pytest.raises(ValueError, match="erode"):
+        check_land_cover(m1, shapely.Polygon([(0, 0), (100, 0), (0, 100)]), 0, erode=True)
+    # F4: controls, and what remains read from the mesh returned
+    nodes, tris, n = _lattice_mesh()
+    m6 = Fort14Mesh(title="t", nodes=nodes, elements=tris, depths=np.full(len(nodes), 10.0),
+                    open_boundaries=[np.arange(n)], land_boundaries=[])
+    for kw in ({"min_angle": np.nan}, {"max_area_change": np.nan}, {"dev_max": np.nan},
+               {"max_outer": 0}, {"max_angle": 20.0}, {"w_steps": ()}, {"seed": -1}):
+        with pytest.raises(ValueError):
+            align_open_boundary_local(m6, **kw)
+    _, info = align_open_boundary_local(m6, movable=np.zeros(len(nodes), bool))
+    assert info["remaining"]                       # nothing could move: still violating

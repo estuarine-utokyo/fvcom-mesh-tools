@@ -357,6 +357,9 @@ def sample(names, lon, lat, data_dir=None) -> tuple[np.ndarray, np.ndarray]:
     """
     names = _check(names)
     root = _data_dir(data_dir)
+    from fvcom_mesh_tools._checks import no_complex
+
+    no_complex(lon=lon, lat=lat)        # review round 37 F1
     # a masked query point is unknown: it stays uncovered (round 21 F8)
     lon = np.ma.filled(np.ma.asarray(lon, dtype=float), np.nan)
     lat = np.ma.filled(np.ma.asarray(lat, dtype=float), np.nan)

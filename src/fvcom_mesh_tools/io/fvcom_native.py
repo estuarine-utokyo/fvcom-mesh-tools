@@ -41,6 +41,7 @@ from typing import Sequence
 
 import numpy as np
 
+from fvcom_mesh_tools._checks import no_complex
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh
 
 
@@ -67,6 +68,7 @@ def _signed_areas(mesh: Fort14Mesh) -> np.ndarray:
 def _validate_for_export(mesh: Fort14Mesh) -> None:
     if mesh.n_elements == 0 or mesh.n_nodes == 0:
         raise ValueError("cannot export an empty mesh")
+    no_complex(nodes=mesh.nodes, depths=mesh.depths)       # review round 37 F2
     _check_exportable(mesh)
     sa = _signed_areas(mesh)
     n_bad = int((sa <= 0).sum())
@@ -339,6 +341,7 @@ def _indices(a, n: int, what: str, ndim: int = 1) -> np.ndarray:
 
 
 def _check_exportable(mesh: Fort14Mesh) -> None:
+    no_complex(nodes=mesh.nodes, depths=mesh.depths)
     """Refuse, before any file is written, a mesh FVCOM cannot read: element
     or boundary indices that are not whole numbers in ``[0, NP)``, or
     coordinates and depths that are not finite (review of the extend tools,
@@ -376,6 +379,7 @@ def _check_exportable(mesh: Fort14Mesh) -> None:
 def _check_cor(mesh: Fort14Mesh, cor) -> np.ndarray:
     if np.ma.is_masked(cor):                 # unknown, not its fill (round 23 F6)
         raise ValueError("cor has masked values")
+    no_complex(cor=cor)
     cor = np.asarray(cor, dtype=np.float64)
     if cor.shape != (mesh.n_nodes,):
         raise ValueError(f"cor shape {cor.shape} does not match n_nodes = {mesh.n_nodes}")

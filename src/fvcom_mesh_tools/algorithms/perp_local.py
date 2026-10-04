@@ -173,6 +173,28 @@ def align_open_boundary_local(
     candidate, so a caller's frozen contract cannot be broken by it (review
     round 35 F1).
     """
+    # finite, ordered thresholds and whole iteration counts: a NaN bound makes
+    # every quality test pass, and zero passes reports nothing (review round
+    # 37 F4)
+    from fvcom_mesh_tools._checks import positive_whole, real_scalar
+
+    dev_max, dev_target = real_scalar(dev_max, "dev_max"), real_scalar(dev_target, "dev_target")
+    min_angle, max_angle = real_scalar(min_angle, "min_angle"), real_scalar(max_angle,
+                                                                           "max_angle")
+    max_area_change = real_scalar(max_area_change, "max_area_change")
+    jitter_sigma_frac = real_scalar(jitter_sigma_frac, "jitter_sigma_frac")
+    if not (0 < dev_target <= dev_max <= 90 and 0 <= min_angle < max_angle <= 180
+            and max_area_change > 0 and jitter_sigma_frac >= 0):
+        raise ValueError("need 0 < dev_target <= dev_max <= 90, 0 <= min_angle < max_angle "
+                         "<= 180, max_area_change > 0 and jitter_sigma_frac >= 0")
+    max_outer, n_jitter = positive_whole(max_outer, "max_outer"), positive_whole(
+        n_jitter, "n_jitter")
+    if isinstance(seed, (bool, np.bool_)) or not isinstance(seed, (int, np.integer)) \
+            or seed < 0:
+        raise ValueError(f"seed must be a non-negative whole number, not {seed!r}")
+    w_steps = tuple(real_scalar(w, "a w_steps entry") for w in w_steps)
+    if not w_steps or not all(0 < w <= 1 for w in w_steps):
+        raise ValueError(f"w_steps must be fractions in (0, 1], not {w_steps}")
     if movable is not None:
         if np.ma.is_masked(movable):          # a masked permission is no permission
             raise ValueError("movable has masked values")
@@ -289,6 +311,20 @@ def align_open_boundary_local(
         if n_viol_total == 0 or n_accept == 0:
             break
 
+    # what is left is read from the mesh returned, not from the passes: with
+    # no pass, or after a late move, the passes' own list is not the truth
+    adj, _bn, _n2e, _e2 = _edge_arrays(elements, n_nodes)
+    unresolved = []
+    for seg in mesh.open_boundaries:
+        seg = np.asarray(seg, dtype=np.int64)
+        if seg.size < 2:
+            continue
+        in_seg = np.zeros(n_nodes, dtype=bool)
+        in_seg[seg] = True
+        tang = boundary_tangents(nodes[seg])
+        unresolved += [int(v) for k, v in enumerate(seg)
+                       if _dev_of(nodes, int(v), tang[k], adj.get(int(v), ()), in_seg)
+                       > dev_max]
     out = Fort14Mesh(
         title=mesh.title,
         obc_type=mesh.obc_type,

@@ -28,6 +28,8 @@ from typing import Any
 
 import numpy as np
 
+from fvcom_mesh_tools._checks import no_complex
+
 __all__ = ["build_obc_band", "corridor_targets", "apply_corridor"]
 
 DEG_PER_M = 1.0 / 111e3
@@ -90,6 +92,7 @@ def build_obc_band(
     # into a different geometry without a word (review round 32 F5, F6)
     if np.ma.is_masked(arc_ll) or np.ma.is_masked(h_arc_m):
         raise ValueError("arc_ll or h_arc_m has masked values")
+    no_complex(arc_ll=arc_ll, h_arc_m=h_arc_m)
     arc_ll = np.asarray(arc_ll, dtype=float)
     h_arc_m = np.asarray(h_arc_m, dtype=float)
     if arc_ll.ndim != 2 or arc_ll.shape[1] != 2 or not np.isfinite(arc_ll).all():
@@ -192,6 +195,7 @@ def corridor_targets(
     for what, a in (("arc_ll", arc_ll), ("h_arc_m", h_arc_m), ("closure_ll", closure_ll)):
         if a is not None and np.ma.is_masked(a):
             raise ValueError(f"{what} has masked values")
+        no_complex(**{what: a})
     arc_ll = np.asarray(arc_ll, dtype=float)
     h_arc_m = np.asarray(h_arc_m, dtype=float)
     if arc_ll.ndim != 2 or arc_ll.shape[1] != 2 or len(arc_ll) < 2 \

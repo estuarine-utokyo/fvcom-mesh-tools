@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from fvcom_mesh_tools._checks import no_complex
+
 __all__ = [
     "bearing_vector",
     "coast_normal",
@@ -71,6 +73,7 @@ def ray_intersection(p, u, q, w) -> np.ndarray:
     # round 26 F6): NaN slipped past the s, t > 0 test
     if any(np.ma.is_masked(v) for v in (p, u, q, w)):
         raise ValueError("a ray has masked values")
+    no_complex(p=p, u=u, q=q, w=w)
     p, u, q, w = (np.asarray(v, float) for v in (p, u, q, w))
     if any(v.shape != (2,) or not np.isfinite(v).all() for v in (p, u, q, w)):
         raise ValueError("rays need finite (2,) points and directions")
@@ -105,6 +108,7 @@ def fillet(vertices, radii, n_arc: int = 60) -> np.ndarray:
     """
     if np.ma.is_masked(vertices) or np.ma.is_masked(radii):     # review round 25 F4
         raise ValueError("vertices or radii have masked values")
+    no_complex(vertices=vertices, radii=list(radii))
     x = np.asarray(vertices, float)
     # planar (N >= 2, 2): a third column would enter some lengths and not
     # others (review round 34 F5)
@@ -170,6 +174,7 @@ def resample(line, spacing) -> np.ndarray:
     """
     if np.ma.is_masked(line):                   # unknown, not its fill (round 25 F4)
         raise ValueError("the line has masked coordinates")
+    no_complex(line=line)
     xy = np.asarray(line, float)
     if xy.ndim != 2 or xy.shape[1] != 2 or len(xy) < 2:
         raise ValueError(f"the line must be (N >= 2, 2), not {xy.shape}")

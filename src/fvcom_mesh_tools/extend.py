@@ -28,6 +28,7 @@ from dataclasses import replace
 
 import numpy as np
 
+from fvcom_mesh_tools._checks import no_complex, positive_whole, real_scalar
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh
 from fvcom_mesh_tools.sizing import _limit
 
@@ -65,24 +66,8 @@ def _grade(grade) -> float:
     return g
 
 
-def _real(value, name: str) -> float:
-    """A finite real number (NumPy scalars too; not a bool, not complex) as a
-    float (review round 33 F5)."""
-    if isinstance(value, (bool, np.bool_)) or not isinstance(
-            value, (int, float, np.integer, np.floating)):
-        raise ValueError(f"{name} must be a real number, not {value!r}")
-    v = float(value)
-    if not np.isfinite(v):
-        raise ValueError(f"{name} must be finite, not {value!r}")
-    return v
-
-
-def _whole(value, name: str) -> int:
-    """A positive whole number, not 1.9 and not a bool (review round 33 F5)."""
-    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) \
-            or value < 1:
-        raise ValueError(f"{name} must be a positive whole number, not {value!r}")
-    return int(value)
+_real = real_scalar
+_whole = positive_whole
 
 
 def _lattice(values, x, y):
@@ -224,8 +209,7 @@ def _no_masks(**arrays) -> None:
     for name, a in arrays.items():
         if np.ma.is_masked(a):
             raise ValueError(f"{name} has masked values")
-        if a is not None and np.asarray(a).dtype.kind == "c":
-            raise ValueError(f"{name} has complex values")
+        no_complex(**{name: a})
 
 
 def _checked_geometry(mesh: Fort14Mesh):
@@ -520,8 +504,7 @@ def check_land_cover(mesh: Fort14Mesh, land, n_base_elements: int,
             and 0 <= n_base_elements <= ne):
         raise ValueError(f"n_base_elements must be an integer in [0, {ne}], not "
                          f"{n_base_elements!r}")
-    if not (isinstance(erode, (int, float, np.integer, np.floating)) and np.isfinite(erode)
-            and erode > 0):
+    if _real(erode, "erode") <= 0:
         raise ValueError(f"erode must be finite and positive, not {erode!r}")
     xy, els, _ = _checked_geometry(mesh)
     corners = xy[els[n_base_elements:]]

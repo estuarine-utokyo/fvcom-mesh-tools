@@ -203,6 +203,7 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
     came back 2.3e-11 m different, which is physically nothing and is still a
     round trip this docstring promises and did not deliver.
     """
+    from fvcom_mesh_tools._checks import no_complex
     from fvcom_mesh_tools.io.fvcom_native import _indices
 
     path = Path(path).resolve()
@@ -218,6 +219,7 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
                     ("elements", mesh.elements)):
         if np.ma.is_masked(a):
             raise ValueError(f"{what} has masked values")
+    no_complex(nodes=mesh.nodes, depths=mesh.depths)
     # shapes too, before the destination is touched (review round 11 F5)
     nodes_a, depths_a = np.asarray(mesh.nodes), np.asarray(mesh.depths)
     if nodes_a.ndim != 2 or nodes_a.shape[1] != 2 or depths_a.shape != (n_nodes,):
