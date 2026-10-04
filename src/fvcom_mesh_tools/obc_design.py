@@ -106,6 +106,10 @@ def fillet(vertices, radii, n_arc: int = 60) -> np.ndarray:
     if np.ma.is_masked(vertices) or np.ma.is_masked(radii):     # review round 25 F4
         raise ValueError("vertices or radii have masked values")
     x = np.asarray(vertices, float)
+    # planar (N >= 2, 2): a third column would enter some lengths and not
+    # others (review round 34 F5)
+    if x.ndim != 2 or x.shape[1] != 2 or len(x) < 2:
+        raise ValueError(f"vertices must be (N >= 2, 2), not {x.shape}")
     radii = list(radii)
     if len(radii) != len(x) - 2:
         raise ValueError(f"{len(x) - 2} interior corner(s), {len(radii)} radii")
@@ -164,6 +168,8 @@ def resample(line, spacing) -> np.ndarray:
     if np.ma.is_masked(line):                   # unknown, not its fill (round 25 F4)
         raise ValueError("the line has masked coordinates")
     xy = np.asarray(line, float)
+    if xy.ndim != 2 or xy.shape[1] != 2 or len(xy) < 2:
+        raise ValueError(f"the line must be (N >= 2, 2), not {xy.shape}")
     if not np.isfinite(xy).all():
         raise ValueError("the line has non-finite coordinates")
     seg = np.linalg.norm(np.diff(xy, axis=0), axis=1)

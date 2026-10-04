@@ -358,3 +358,33 @@ def test_round33_guards():
             apply_corridor(np.zeros((1, 2)), np.zeros((1, 2)), np.zeros((1, 2)),
                            np.array([[0.0, 0.0]]), np.array([100.0]), grade=g,
                            arc_mean_lat=35.0)
+
+
+def test_round34_guards():
+    from fvcom_mesh_tools.obc_band import apply_corridor, build_obc_band, corridor_targets
+    from fvcom_mesh_tools.obc_design import fillet, resample
+
+    # F1: distinct arc nodes whose offsets fold the guide onto one point
+    arc = 0.001 * np.array([[-1, -1], [0, -1], [1, 0], [0, 1], [-1, 0], [-2, 1]], float)
+    with pytest.raises(ValueError, match="coincident"):
+        build_obc_band(arc, np.full(6, 88.8), skip_ends=2, taper="local")
+    # F2: masks, a NaN in the field, shapes
+    z = np.zeros((1, 2))
+    kw = {"grade": 0.2, "arc_mean_lat": 0.0}
+    pts, tgt = np.array([[0.0, 0.0]]), np.array([100.0])
+    with pytest.raises(ValueError, match="masked"):
+        apply_corridor(z, z, np.ma.array([[0.1, 0.0]], mask=[[1, 0]]), pts, tgt, **kw)
+    with pytest.raises(ValueError, match="finite"):
+        apply_corridor(z, z, np.array([[np.nan, 0.0]]), pts, tgt, **kw)
+    with pytest.raises(ValueError, match="shape"):
+        apply_corridor(z, z, np.zeros((2, 2)), pts, tgt, **kw)
+    # F4: a scaling that overflows
+    with pytest.raises(ValueError, match="overflowed"):
+        corridor_targets(np.array([[0.0, 0.0], [0.001, 0.0]]), [100.0, 100.0],
+                         mesh_factor=1e-320)
+    # F5: planar helpers want two columns
+    line = np.array([[0.0, 0, 0], [100.0, 0, 50]])
+    with pytest.raises(ValueError, match="N >= 2, 2"):
+        fillet(line, [])
+    with pytest.raises(ValueError, match="N >= 2, 2"):
+        resample(line, 10)

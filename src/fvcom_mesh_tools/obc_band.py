@@ -150,6 +150,12 @@ def build_obc_band(
     hi = n - skip_ends
     inner_ll = inner_ll[lo:hi]
     m = len(inner_ll)
+    # every constraint must have a length: offsets larger than the local
+    # curvature supports can fold the guide line onto itself (review round 34 F1)
+    guide = _metric(inner_ll, cosw)
+    if len(guide) < 2 or (np.linalg.norm(np.diff(guide, axis=0), axis=1) < 0.01).any():
+        raise ValueError("the inner guide line has coincident points: the offset is larger "
+                         "than the local curvature of the arc supports")
     arc_seg = np.column_stack([np.arange(n - 1), np.arange(1, n)])
     inner_seg = (np.column_stack([np.arange(m - 1),
                                   np.arange(1, m)]) + n)
@@ -239,7 +245,11 @@ def corridor_targets(
                 pts.append(a * (1 - f) + b * f)
                 tgt.append(h0 * (1 - s) + h1 * s)
         tgt[-1] = h1                    # the far end carries its exact target
-    return np.asarray(pts), np.asarray(tgt)
+    pts_a, tgt_a = np.asarray(pts), np.asarray(tgt)
+    if not (np.isfinite(pts_a).all() and np.isfinite(tgt_a).all() and (tgt_a > 0).all()):
+        raise ValueError("the corridor points or targets overflowed: check mesh_factor and "
+                         "the sizes")
+    return pts_a, tgt_a
 
 
 def apply_corridor(
@@ -264,6 +274,22 @@ def apply_corridor(
     from fvcom_mesh_tools.extend import _grade
 
     grade = _grade(grade)           # finite, non-negative, real (review round 33 F7)
+    # known, finite inputs of matching shapes; the field returned is the one
+    # checked (review round 34 F2)
+    for what, a in (("lon_g", lon_g), ("lat_g", lat_g), ("values_deg", values_deg),
+                    ("points_m", points_m), ("targets_m", targets_m)):
+        if np.ma.is_masked(a):
+            raise ValueError(f"{what} has masked values")
+    lon_g, lat_g = np.asarray(lon_g, float), np.asarray(lat_g, float)
+    values_deg = np.asarray(values_deg, float)
+    points_m, targets_m = np.asarray(points_m, float), np.asarray(targets_m, float)
+    if lon_g.shape != lat_g.shape or lon_g.shape != values_deg.shape:
+        raise ValueError("lon_g, lat_g and values_deg must share one shape")
+    if points_m.ndim != 2 or points_m.shape[1] != 2 or targets_m.shape != (len(points_m),) \
+            or not len(points_m):
+        raise ValueError("points_m must be (N, 2) with one target per point")
+    if not all(np.isfinite(a).all() for a in (lon_g, lat_g, values_deg, points_m, targets_m)):
+        raise ValueError("the lattice, field, corridor points and targets must be finite")
     cosw = float(np.cos(np.deg2rad(arc_mean_lat)))
     q = np.column_stack([lon_g.ravel() * cosw * 111e3,
                          lat_g.ravel() * 111e3])
@@ -272,6 +298,6 @@ def apply_corridor(
     corr = np.maximum(t - grade * np.maximum(0.0, d - t), 0.0)
     corr = corr.reshape(values_deg.shape) * DEG_PER_M
     out = np.maximum(np.asarray(values_deg, dtype=float), corr)
-    if not np.isfinite(corr).all():
+    if not np.isfinite(out).all():
         raise ValueError("the corridor field is not finite")
     return out, int((corr > values_deg).sum())
