@@ -174,7 +174,8 @@ if imp["min_angle_deg"] < 30.0 or imp["max_angle_deg"] > 130.0:
     imp = {**imp2, "n_flips": imp["n_flips"] + imp2["n_flips"],
            "n_moves": imp["n_moves"] + imp2["n_moves"], "soft_pass": True}
 merged = replace(merged, nodes=nodes, elements=elems)
-merged, perp = align_open_boundary_local(merged)
+# only the new nodes may move: the base is frozen (review round 35 F1)
+merged, perp = align_open_boundary_local(merged, movable=np.arange(merged.n_nodes) >= NB)
 verify_frozen_base(merged, base, IB)
 repair = {"lone_corners": lone, "improve": imp,
           "perpendicularity": {k: v for k, v in perp.items() if not isinstance(v, list)},

@@ -399,6 +399,7 @@ def check_no_overlap(merged: Fort14Mesh, n_base_elements: int, rel_tol: float = 
             and rel_tol >= 0):
         raise ValueError(f"rel_tol must be finite and non-negative, not {rel_tol!r}")
     if not (isinstance(n_base_elements, (int, np.integer))
+            and not isinstance(n_base_elements, (bool, np.bool_))     # review round 35 F5
             and 0 <= n_base_elements <= merged.n_elements):
         raise ValueError(f"n_base_elements must be in [0, {merged.n_elements}]")
     xy, els, _ = _checked_geometry(merged)
@@ -509,7 +510,9 @@ def check_land_cover(mesh: Fort14Mesh, land, n_base_elements: int,
     import shapely
 
     ne = len(np.asarray(mesh.elements))
-    if not (isinstance(n_base_elements, (int, np.integer)) and 0 <= n_base_elements <= ne):
+    if not (isinstance(n_base_elements, (int, np.integer))
+            and not isinstance(n_base_elements, (bool, np.bool_))     # review round 35 F5
+            and 0 <= n_base_elements <= ne):
         raise ValueError(f"n_base_elements must be an integer in [0, {ne}], not "
                          f"{n_base_elements!r}")
     if not (isinstance(erode, (int, float, np.integer, np.floating)) and np.isfinite(erode)
@@ -603,6 +606,9 @@ def round_depths_inside(h, hmin, hmax=None, decimals: int = 6) -> np.ndarray:
     """
     # known, finite depths and finite ordered bounds (review round 26 F5)
     _no_masks(h=h)
+    # real bounds: a complex one would lose its imaginary part (review round 35 F3)
+    hmin = _real(hmin, "hmin")
+    hmax = None if hmax is None else _real(hmax, "hmax")
     if not np.isfinite(np.asarray(h, float)).all():
         raise ValueError("depths must be finite")
     if not (np.isfinite(hmin) and (hmax is None or (np.isfinite(hmax) and hmax >= hmin))):

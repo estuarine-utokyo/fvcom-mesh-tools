@@ -388,3 +388,53 @@ def test_round34_guards():
         fillet(line, [])
     with pytest.raises(ValueError, match="N >= 2, 2"):
         resample(line, 10)
+
+
+def _lattice_mesh(n=6, shear=0.37):
+    """A triangulated n x n lattice; row 0 is the extension, rows 1.. the base."""
+    ij = [(i, j) for j in range(n) for i in range(n)]
+    nodes = np.array([[1000.0 * (i + shear * j), 1000.0 * j] for i, j in ij])
+    tris = []
+    for j in range(n - 1):
+        for i in range(n - 1):
+            a, b, c, d = j * n + i, j * n + i + 1, (j + 1) * n + i, (j + 1) * n + i + 1
+            tris += [[a, b, d], [a, d, c]]
+    return nodes, np.array(tris), n
+
+
+def test_perpendicularity_repair_never_moves_a_frozen_node():
+    # round 35 F1
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+
+    nodes, tris, n = _lattice_mesh()
+    mesh = Fort14Mesh(title="t", nodes=nodes, elements=tris, depths=np.full(len(nodes), 10.0),
+                      open_boundaries=[np.arange(n)], land_boundaries=[])
+    frozen = np.arange(len(nodes)) >= n                      # rows 1.. are the base
+    out, _ = align_open_boundary_local(mesh, movable=~frozen)
+    assert np.array_equal(out.nodes[frozen], nodes[frozen])
+    moved, _ = align_open_boundary_local(mesh)               # without the mask they move
+    assert not np.array_equal(moved.nodes[frozen], nodes[frozen])
+    with pytest.raises(ValueError, match="movable"):
+        align_open_boundary_local(mesh, movable=np.ones(len(nodes), int))
+
+
+def test_round35_guards():
+    from fvcom_mesh_tools.extend import check_land_cover
+    from fvcom_mesh_tools.obc_band import apply_corridor
+
+    with pytest.raises(ValueError, match="hmin|real"):
+        round_depths_inside([4.0], 3.0, np.complex128(5 + 8j))
+    with pytest.raises(ValueError, match="real"):
+        round_depths_inside([4.0], True)
+    z = np.zeros((1, 2))
+    for t in (-100.0, 0.0):
+        with pytest.raises(ValueError, match="positive"):
+            apply_corridor(z, z, np.full((1, 2), 1e-4), np.array([[0.0, 0.0]]),
+                           np.array([t]), grade=0.2, arc_mean_lat=0.0)
+    import shapely
+
+    mesh = Fort14Mesh(title="t", nodes=np.array([[0.0, 0], [100, 0], [0, 100]]),
+                      elements=np.array([[0, 1, 2]]), depths=np.ones(3),
+                      open_boundaries=[], land_boundaries=[])
+    with pytest.raises(ValueError):
+        check_land_cover(mesh, shapely.Polygon([(0, 0), (100, 0), (0, 100)]), True, erode=0.1)

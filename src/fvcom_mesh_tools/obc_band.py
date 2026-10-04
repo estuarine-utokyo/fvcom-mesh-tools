@@ -290,6 +290,8 @@ def apply_corridor(
         raise ValueError("points_m must be (N, 2) with one target per point")
     if not all(np.isfinite(a).all() for a in (lon_g, lat_g, values_deg, points_m, targets_m)):
         raise ValueError("the lattice, field, corridor points and targets must be finite")
+    if not (targets_m > 0).all():
+        raise ValueError("corridor targets must be positive sizes")
     cosw = float(np.cos(np.deg2rad(arc_mean_lat)))
     q = np.column_stack([lon_g.ravel() * cosw * 111e3,
                          lat_g.ravel() * 111e3])

@@ -161,12 +161,23 @@ def align_open_boundary_local(
     w_steps: tuple[float, ...] = (1.0, 0.8, 0.6, 0.4, 0.2),
     n_jitter: int = 40,
     jitter_sigma_frac: float = 0.05,
+    movable: np.ndarray | None = None,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Fix per-node open-boundary perpendicularity locally, without
     regressing the quality gates. Returns ``(new_mesh, info)``;
     ``info["remaining"]`` lists OBC nodes still above ``dev_max``
     (empty on full success).
+
+    ``movable`` is an optional boolean ``(n_nodes,)`` mask of the nodes the
+    repair may move (default: every interior node); a frozen node is never a
+    candidate, so a caller's frozen contract cannot be broken by it (review
+    round 35 F1).
     """
+    if movable is not None:
+        movable = np.asarray(movable)
+        if movable.dtype != bool or movable.shape != (mesh.n_nodes,):
+            raise ValueError(f"movable must be a boolean ({mesh.n_nodes},) array, not "
+                             f"{movable.dtype} {movable.shape}")
     nodes = mesh.nodes.copy()
     elements = mesh.elements
     n_nodes = mesh.n_nodes
@@ -203,7 +214,8 @@ def align_open_boundary_local(
                 t_v = tangent_of[v]
                 n_hat = np.array([-t_v[1], t_v[0]])
                 cands = [i for i in adj.get(v, ())
-                         if not in_seg[i] and not boundary_nodes[i]]
+                         if not in_seg[i] and not boundary_nodes[i]
+                         and (movable is None or movable[i])]
 
                 def _dev_edge(i, v=v, t_v=t_v):
                     vec = nodes[i] - nodes[v]

@@ -294,7 +294,7 @@ try:
     # an existing backup is an unresolved earlier failure: never overwrite
     # it (review round 7 F11)
     old_prev = [p.with_name(p.name + ".prev") for _, p in staged
-                if p.with_name(p.name + ".prev").exists()]
+                if os.path.lexists(p.with_name(p.name + ".prev"))]   # a dangling link too (r35 F2)
     if old_prev:
         raise SystemExit(f"backups of an earlier failed publication remain: "
                          f"{[q.name for q in old_prev]}; resolve them first")
