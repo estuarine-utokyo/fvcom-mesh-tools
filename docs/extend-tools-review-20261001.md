@@ -14065,3 +14065,274 @@ own recipes, CLIs or job scripts can reach: every finding sits in a legacy helpe
 (`fmesh-perpfix`, the perpendicularity and quality modules, depth control,
 coast fit, patch repair) reached from the extension pipeline only through
 inputs the pipeline itself produces, and each is a malformed-input guard.
+
+## Round 48
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol). The reviewer was asked to say whether each finding is reachable from the extension tools' own inputs; its answer: none is.
+
+Reviewed HEAD `cb7e196`. **Four minor findings and one nit.** None is reachable through the supplied extension recipe and jobs; each requires a direct helper call or an injected metric. The working tree is unchanged.
+
+Previous findings are covered below. Historical statuses rely on the recorded triage, current code and selected regressions; I did not rerun every historical reproduction.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R8, all | RESOLVED | Interpolation, frozen-base, publication, provenance and failure-handling corrections remain. |
+| R9–R16, all | RESOLVED | Ownership, indexing, serialization, recovery and geometry corrections remain. |
+| R17–R24, all | RESOLVED | Input identity, YAML, publication and land-check corrections remain. |
+| R25–R30, all | RESOLVED | Limiter, rounding, acceptance, permission and environment corrections remain. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, mask, connectivity and bounds cases remain corrected. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains established loader policy. |
+| R32, all | RESOLVED | Boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Original node, corridor, limiter, empty-mesh and gradation cases remain corrected. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original guide, array, overflow and planar-shape cases remain corrected. |
+| R34-F3 | WITHDRAWN | Nearest-target selection remains the approved calibrated method. |
+| R35–R45, all | RESOLVED | Original guard cases remain corrected; applicable regressions passed. |
+| R46-F1–F5 | RESOLVED | The subsequent fixes cover the original corruption, dtype, connectivity, tangent and collapsed-angle reproductions. |
+| R47-F1 | RESOLVED | The `[8] → [12]` inversion swap now returns exit 1 with zero publications. |
+| R47-F2 | RESOLVED | Active planar APIs reject additional coordinate columns. |
+| R47-F3 | PARTIAL | Masking and smoothing use normalized indices, but returned boundary chains remain unnormalized: finding 1. |
+| R47-F4 | RESOLVED | The global metric and aligner reject the original coincidences, singleton chain and zero incident edge. Finding 3 concerns the separate local helper. |
+| R47-F5 | RESOLVED | Function and CLI reject the reported invalid alignment controls. |
+| R47-F6 | RESOLVED | The global fixed mask validates every open and land chain. |
+| R47-F7 | PARTIAL | The nonquiet CLI completes successfully, but the no-OBC schema omits the field added by the same commit: finding 5. |
+| R47-F8 | RESOLVED | Missing and `None` requested metrics produce failed checks. |
+| R47-F9 | RESOLVED | The original seven-node reproduction reports one moved node, matching actual movement. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and the owner’s resolution policy remain controlling. |
+
+1. **Minor — Alignment returns boundary indices it accepted and normalized internally in their original unusable dtype.**
+
+   Locations: [perpendicularity.py:389](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/perpendicularity.py:389), [perp_local.py:356](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/perp_local.py:356).
+
+   Actual reproduction:
+
+   ```python
+   m = Fort14Mesh(
+       "m", np.array([[0., 0.], [1., 0.], [0., 1.]]),
+       np.ones(3), np.array([[0, 1, 2]]),
+       [np.array([0., 1.])],
+       [(0, np.array([1., 2., 0.]))],
+   )
+   out, _ = align_open_boundary_first_ring(m)
+   out.nodes[out.open_boundaries[0]]
+   # IndexError: arrays used as indices must be of integer (or boolean) type
+   ```
+
+   Both returned boundary arrays remain `float64`, despite successful validation through `_indices()`. The returned `Fort14Mesh` therefore violates its documented integer-chain representation. The local aligner has the same constructor pattern.
+
+   **Fix:** Return copies of the validated int64 chains, including land chains. The successful global floating-chain path is introduced by `98f71ec`; its result-construction correction is incomplete.
+
+   **Reachability:** Direct helper calls only. Extension readers produce integer chains.
+
+2. **Minor — Unified quality metrics discard the connectivity normalization used by their geometry helpers.**
+
+   Location: [quality.py:114](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:114).
+
+   For the same three-node triangle, using `elements=np.array([[0.,1.,2.]])`:
+
+   ```python
+   alpha_quality(m)     # succeeds
+   signed_areas(m)      # succeeds
+   compute_metrics(m)   # IndexError: arrays used as indices must be ...
+   ```
+
+   Geometry helpers validate and normalize the whole-valued connectivity. `compute_metrics()` then passes raw `mesh.elements` to `node_valence()`, which indexes with it.
+
+   **Fix:** Validate and normalize the mesh once at entry and use that connectivity throughout, or explicitly refuse floating connectivity before computing any metrics. Pre-existing.
+
+   **Reachability:** Direct helper calls only. The extension workflow uses integer connectivity and `run_qa()`.
+
+3. **Minor — Local perpendicularity repair silently treats a singleton OBC as successfully checked.**
+
+   Location: [perp_local.py:215](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/perp_local.py:215).
+
+   For triangle `[[0,0],[1,0],[0,1]]`, connectivity `[[0,1,2]]` and OBC `[0]`, the actual result is:
+
+   ```python
+   align_open_boundary_local(m)[1]
+   # {
+   #   'passes': [{'violations': 0, 'accepted': 0}],
+   #   'accepted_total': 0,
+   #   'remaining': [],
+   #   ...
+   # }
+   ```
+
+   Every tangent check and both processing loops skip chains shorter than two nodes. An undefined boundary tangent consequently produces an empty failure list. The global helper now correctly refuses this input.
+
+   **Fix:** Reject every declared open chain shorter than two nodes before tangent construction. An empty list of open chains can remain a no-op. Pre-existing.
+
+   **Reachability:** Direct helper calls only. Generation requires at least six nodes on each constrained line.
+
+4. **Minor — Infinite metric values can pass requested quality gates.**
+
+   Locations: [quality.py:193](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:193), [quality.py:206](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:206).
+
+   Actual reproductions:
+
+   ```python
+   check_thresholds({"alpha_mean": float("inf")}, min_alpha_mean=0.9)[0]
+   # True
+
+   check_thresholds({"n_flipped": float("-inf")}, max_flipped=0)[0]
+   # True
+   ```
+
+   The gate rejects NaN but performs ordinary comparisons on infinities, accepting impossible scientific metrics as passing results.
+
+   **Fix:** Require a finite numeric actual before evaluating either comparison; unavailable or nonfinite actuals should fail. Pre-existing.
+
+   **Reachability:** Direct helper calls with injected metrics only. No such metric was observed from the extension workflow.
+
+5. **Nit — The no-OBC information schema omits the newly added candidate count.**
+
+   Location: [perpendicularity.py:350](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/perpendicularity.py:350).
+
+   The active branch returns `info["movable_first_ring"]`; the no-OBC branch does not. Actual evidence:
+
+   ```python
+   _, info = align_open_boundary_first_ring(mesh_without_obc)
+   info["movable_first_ring"]
+   # KeyError: 'movable_first_ring'
+   ```
+
+   This inconsistency is introduced by `98f71ec`, which adds the field only to the active branch. The original CLI reporting crash is fixed.
+
+   **Fix:** Include `"movable_first_ring": 0` in the no-OBC result.
+
+   **Reachability:** Direct helper calls inspecting that field only. The extension workflow has OBCs.
+
+Verification:
+
+- Read-only `python -B` pytest harness with `-q --capture=sys --tb=short -p no:cacheprovider`: scoped tests **99 passed, 62 deselected**.
+- Broader touched-module selection: **244 passed, 23 failed, 75 deselected**. All 23 failures arose from Matplotlib attempting to create a cache in the read-only environment.
+- Round 37–39 and 43 guard functions passed using nonexistent destinations; round 47 guards passed with file I/O mocked.
+- Synthetic CLI, source-priority, datum-warning and movement-count checks passed.
+- Scoped `ruff check --no-cache` and shell syntax checks passed.
+- `git diff --exit-code` passed; `git status --porcelain` was empty.
+- Production generation, real mesh QA, implied timestep and FVCOM integration were **not rerun**. No large shared datasets were read and no batch jobs were submitted.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 4 minor, 1 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 48: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 47 (your previous answer; 1 major, 8 minor) was fixed in 98f71ec; read it. Per finding:
+- F1 fmesh-perpfix: refuses when any element that was valid becomes inverted or collapsed.
+- F2 planar perpendicularity/quality helpers: exactly two coordinate columns.
+- F3, F6 normalized connectivity and every open/land chain validated throughout.
+- F4 coincident consecutive boundary vertices, singleton chains, zero incident edges refused.
+- F5 alignment controls validated (function and CLI).
+- F7 no-OBC return carries the full schema.
+- F8 check_thresholds: a requested threshold on a missing metric fails.
+- F9 info["moved"] counts changed coordinates.
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | test (float chains) | yes (introduced in 98f71ec) | fixed, 8cea026: validated integer chains returned; test |
+| F2 | minor | test (float connectivity) | yes, pre-existing | fixed, 8cea026: validated once, normalized connectivity used; test |
+| F3 | minor | test (singleton OBC) | yes, pre-existing | fixed, 8cea026; test |
+| F4 | minor | tests (inf metrics) | yes, pre-existing | fixed, 8cea026: finite actuals only; test |
+| F5 | nit | code read | yes (98f71ec) | fixed, 8cea026; test |
