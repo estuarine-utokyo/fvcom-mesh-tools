@@ -277,6 +277,9 @@ def apply_corridor(
 
     from fvcom_mesh_tools.extend import _grade
 
+    no_complex(lon_g=lon_g, lat_g=lat_g, values_deg=values_deg, points_m=points_m,
+               targets_m=targets_m, arc_mean_lat=arc_mean_lat)       # review round 38 F3
+
     grade = _grade(grade)           # finite, non-negative, real (review round 33 F7)
     # known, finite inputs of matching shapes; the field returned is the one
     # checked (review round 34 F2)

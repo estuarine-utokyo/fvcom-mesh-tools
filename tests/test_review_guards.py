@@ -537,3 +537,39 @@ def test_round37_guards(tmp_path):
             align_open_boundary_local(m6, **kw)
     _, info = align_open_boundary_local(m6, movable=np.zeros(len(nodes), bool))
     assert info["remaining"]                       # nothing could move: still violating
+
+
+def test_round38_guards(tmp_path):
+    from fvcom_mesh_tools._checks import no_complex
+    from fvcom_mesh_tools.io.fvcom_native import _check_exportable, write_spg
+    from fvcom_mesh_tools.obc_band import apply_corridor
+    from fvcom_mesh_tools.obc_design import fillet, resample
+
+    # F1: a radius iterator is read once
+    vertices = [[0, 0], [10, 0], [10, 10]]
+    assert fillet(vertices, iter([2.0])).shape == fillet(vertices, [2.0]).shape
+    # F2: complex numbers inside an object array
+    obj = np.array([np.complex128(4 + 9j)], dtype=object)
+    with pytest.raises(ValueError, match="complex"):
+        no_complex(a=obj)
+    with pytest.raises(ValueError, match="complex"):
+        round_depths_inside(obj, 3)
+    no_complex(a=np.array([1.0, 2.0], dtype=object))          # real objects pass
+    # F3: spacing and corridor inputs
+    with pytest.raises(ValueError, match="complex"):
+        resample([[0, 0], [10, 0]], np.complex128(3 + 9j))
+    with pytest.raises(ValueError, match="complex"):
+        resample([[0, 0], [10, 0]], lambda xy: np.full(len(xy), 3 + 9j))
+    z = np.zeros((1, 2))
+    with pytest.raises(ValueError, match="complex"):
+        apply_corridor(z + 9j, z, np.full((1, 2), 1e-4), np.array([[0.0, 0.0]]),
+                       np.array([100.0]), grade=0.2, arc_mean_lat=0.0)
+    # F4: sponge records
+    mesh = Fort14Mesh(title="t", nodes=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+                      elements=np.array([[0, 1, 2]]), depths=np.array([5.0, 6.0, 7.0]),
+                      open_boundaries=[], land_boundaries=[])
+    with pytest.raises(ValueError, match="complex"):
+        write_spg(mesh, tmp_path / "x.spg", np.array([[0, 10, 0.001]], complex) + 9j)
+    assert not list(tmp_path.glob("x.*"))
+    # F5: the validator keeps its docstring
+    assert _check_exportable.__doc__

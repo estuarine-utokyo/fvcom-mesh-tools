@@ -9,7 +9,13 @@ def no_complex(**arrays) -> None:
     """Refuse complex values: a float conversion would keep only the real
     part and go on with altered data (review rounds 36 F2, 37 F1-F2)."""
     for name, a in arrays.items():
-        if a is not None and np.asarray(a).dtype.kind == "c":
+        if a is None:
+            continue
+        arr = np.asarray(a)
+        # an object array can hold complex numbers under a dtype that says
+        # nothing about them (review round 38 F2)
+        if arr.dtype.kind == "c" or (arr.dtype.kind == "O" and any(
+                isinstance(v, (complex, np.complexfloating)) for v in arr.ravel())):
             raise ValueError(f"{name} has complex values")
 
 

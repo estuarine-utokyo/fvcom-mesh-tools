@@ -108,13 +108,13 @@ def fillet(vertices, radii, n_arc: int = 60) -> np.ndarray:
     """
     if np.ma.is_masked(vertices) or np.ma.is_masked(radii):     # review round 25 F4
         raise ValueError("vertices or radii have masked values")
-    no_complex(vertices=vertices, radii=list(radii))
+    radii = list(radii)                    # read once, even from an iterator (round 38 F1)
+    no_complex(vertices=vertices, radii=radii)
     x = np.asarray(vertices, float)
     # planar (N >= 2, 2): a third column would enter some lengths and not
     # others (review round 34 F5)
     if x.ndim != 2 or x.shape[1] != 2 or len(x) < 2:
         raise ValueError(f"vertices must be (N >= 2, 2), not {x.shape}")
-    radii = list(radii)
     if len(radii) != len(x) - 2:
         raise ValueError(f"{len(x) - 2} interior corner(s), {len(radii)} radii")
     # finite positive radii, real sides, a real arc (review r2 F20)
@@ -189,10 +189,14 @@ def resample(line, spacing) -> np.ndarray:
     def at(t):
         return np.column_stack([np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])])
 
+    if not callable(spacing):
+        no_complex(spacing=spacing)
     f = spacing if callable(spacing) else (lambda p, h=float(spacing): np.full(len(p), h))
 
     def h_at(t):
-        h = float(f(at([min(t, total)]))[0])
+        got = f(at([min(t, total)]))
+        no_complex(spacing=got)            # a callable's result too (review round 38 F3)
+        h = float(got[0])
         if not np.isfinite(h) or h <= 0:
             raise ValueError(f"spacing must be positive and finite (got {h} at {t:.1f} m)")
         return h

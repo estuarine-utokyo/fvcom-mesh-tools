@@ -341,11 +341,11 @@ def _indices(a, n: int, what: str, ndim: int = 1) -> np.ndarray:
 
 
 def _check_exportable(mesh: Fort14Mesh) -> None:
-    no_complex(nodes=mesh.nodes, depths=mesh.depths)
     """Refuse, before any file is written, a mesh FVCOM cannot read: element
     or boundary indices that are not whole numbers in ``[0, NP)``, or
     coordinates and depths that are not finite (review of the extend tools,
     rounds 6 F9 and 7 F4)."""
+    no_complex(nodes=mesh.nodes, depths=mesh.depths)
     # masked values are unknown, not the data under the mask (round 22 F7)
     for what, a in (("nodes", mesh.nodes), ("depths", mesh.depths),
                     ("elements", mesh.elements), *(("an open boundary", c)
@@ -396,6 +396,7 @@ def _check_sponge(mesh: Fort14Mesh, sponge) -> list[tuple[int, float, float]]:
         return []
     if any(np.ma.is_masked(r) for r in rows):   # round 23 F6
         raise ValueError("sponge rows have masked values")
+    no_complex(sponge=rows)                  # review round 38 F4
     arr = np.asarray(rows, dtype=float)
     if arr.ndim != 2 or arr.shape[1] != 3:
         raise ValueError(f"sponge rows are (node, radius, damping), not shape {arr.shape}")
