@@ -488,6 +488,13 @@ def export_fvcom_case(
     sponge_rows = _check_sponge(mesh, sponge) if sponge is not None else None
     if obc_depth_control and mesh.open_boundaries:
         mesh, _ = apply_obc_depth_control(mesh)
+    import re
+
+    # one plain file-name component: it prefixes every file and the staging
+    # directory, and a path in it would leave outdir (review round 50 F3)
+    if not (isinstance(casename, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", casename)
+            and casename not in (".", "..")):
+        raise ValueError(f"casename {casename!r} must be one plain file-name component")
     outdir = Path(outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     import shutil

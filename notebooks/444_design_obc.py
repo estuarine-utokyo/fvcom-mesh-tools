@@ -88,6 +88,15 @@ print(f"[obc] start {ll(S0).round(5).tolist()} normal {bs:.1f} deg; "
       f"end {ll(E0).round(5).tolist()} normal {be:.1f} deg", flush=True)
 
 # ------------------------------------------------------------------ sides
+# the whole leg list first: `until: end_normal` ends the walk, so it may only be
+# the final leg, and nothing after it may be silently dropped (review round 50 F2)
+_legs = cfg["legs"]
+if not isinstance(_legs, list) or not _legs:
+    raise SystemExit("legs must be a non-empty list")
+_ends = [i for i, g in enumerate(_legs) if g.get("until") == "end_normal"]
+if _ends and _ends != [len(_legs) - 1]:
+    raise SystemExit(f"'until: end_normal' must be on the final leg only; found on leg(s) "
+                     f"{_ends} of {len(_legs)}")
 verts = [S0]
 cur = S0
 for k, leg in enumerate(cfg["legs"]):

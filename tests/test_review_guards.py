@@ -993,4 +993,18 @@ def test_round49_guards():
 
     # F1: a count beyond a float is a failed check, not a crash
     assert check_thresholds({"n_flipped": 2**64}, max_flipped=0)[0] is False
+    assert check_thresholds({"n_flipped": 10**400}, max_flipped=0)[0] is False   # round 50 F1
+    assert check_thresholds({"alpha_mean": 10**400}, min_alpha_mean=0.5)[0] is False
     assert check_thresholds({"n_flipped": 3}, max_flipped=5)[0] is True
+
+
+def test_round50_guards(tmp_path):
+    from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case
+
+    # F3: the case name is one plain file-name component
+    mesh = Fort14Mesh("m", np.array([[0.0, 0], [1, 0], [0, 1]]), np.ones(3),
+                      np.array([[0, 1, 2]]), [], [])
+    for bad in ("./../old", "a/b", "..", ".hidden", ""):
+        with pytest.raises(ValueError, match="plain file-name"):
+            export_fvcom_case(mesh, tmp_path / "out", bad, obc_depth_control=False)
+    assert not (tmp_path / "old_grd.dat").exists()

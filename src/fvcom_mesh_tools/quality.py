@@ -171,12 +171,15 @@ class ThresholdCheck:
         }
 
 
-def _finite(value: Any) -> bool:
-    """A finite number; a Python integer too large for a float counts as not (r49 F1)."""
+def _as_float(value: Any) -> float:
+    """``value`` as a float, NaN when it has none (a Python integer beyond float range,
+    a string, ...); the one conversion used to judge and to report (r49 F1, r50 F1)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+        return float("nan")
     try:
-        return bool(np.isfinite(float(value)))
+        return float(value)
     except (OverflowError, ValueError, TypeError):
-        return False
+        return float("nan")
 
 
 def check_thresholds(
@@ -203,26 +206,18 @@ def check_thresholds(
         if actual is None:           # a requested threshold on a missing metric fails (r47 F8)
             checks.append(ThresholdCheck(metric, "≥", float(threshold), float("nan"), False))
             return
-        passed = (
-            isinstance(actual, (int, float))
-            and _finite(actual)                    # an infinite metric is no measurement (r48 F4)
-            and float(actual) >= float(threshold)
-        )
-        checks.append(ThresholdCheck(metric, "≥", float(threshold),
-                                     float(actual), passed))
+        a = _as_float(actual)
+        passed = bool(np.isfinite(a)) and a >= float(threshold)   # inf is no measurement (r48 F4)
+        checks.append(ThresholdCheck(metric, "≥", float(threshold), a, passed))
 
     def _le(metric: str, threshold: float) -> None:
         actual = metrics.get(metric)
         if actual is None:
             checks.append(ThresholdCheck(metric, "≤", float(threshold), float("nan"), False))
             return
-        passed = (
-            isinstance(actual, (int, float))
-            and _finite(actual)
-            and float(actual) <= float(threshold)
-        )
-        checks.append(ThresholdCheck(metric, "≤", float(threshold),
-                                     float(actual), passed))
+        a = _as_float(actual)
+        passed = bool(np.isfinite(a)) and a <= float(threshold)
+        checks.append(ThresholdCheck(metric, "≤", float(threshold), a, passed))
 
     if min_alpha_mean is not None:
         _ge("alpha_mean", min_alpha_mean)
