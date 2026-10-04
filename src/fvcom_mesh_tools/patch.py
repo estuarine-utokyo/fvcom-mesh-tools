@@ -6,8 +6,9 @@ deliberately free of any meshing library: it *selects* the faces to remove,
 *extracts* the rim the filler must honour, *stitches* the filled patch back in,
 and *verifies* that everything outside the patch is bit-for-bit what it was.
 The fill itself -- DistMesh with the rim as constrained edges -- lives in a
-notebook, because the only implementation available is GPL (see
-``docs/local_refine.md`` and the licence policy in ``CLAUDE.md``).
+notebook, run as a separate stage. (That split began when the only
+implementation available was GPL and the package was not; the package is
+GPL-3.0-or-later now and the split is kept; see ``docs/local_refine.md``.)
 
 The contract that makes this worth doing is the frozen zone.  A sizing-region
 rebuild produces *a* mesh with a fine fishery in it; this produces *the same

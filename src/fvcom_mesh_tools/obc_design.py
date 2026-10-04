@@ -149,7 +149,10 @@ def fillet(vertices, radii, n_arc: int = 60) -> np.ndarray:
                 for f in np.linspace(0, 1, n_arc)]
         last_tangent = k
     out.append(x[-1])
-    return np.array(out)
+    line = np.array(out)
+    if not np.isfinite(line).all():           # finite inputs can overflow in the arc maths
+        raise ValueError("the rounded line is not finite: the coordinates are too large")
+    return line
 
 
 def resample(line, spacing) -> np.ndarray:

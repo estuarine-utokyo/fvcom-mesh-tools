@@ -124,6 +124,8 @@ def rfactor_smooth(
     the moves each node receives and iterate.  Deterministic for a given
     ``rmax`` and edge set.  Returns ``(depth, iterations, final max r)``.
     """
+    if np.asarray(h0).dtype.kind == "c":        # its real part is not the depth (round 36 F2)
+        raise ValueError("depths have complex values")
     h = np.asarray(h0, float).copy()
     if np.ma.is_masked(ei) or np.ma.is_masked(ej):
         raise ValueError("ei or ej has masked values")

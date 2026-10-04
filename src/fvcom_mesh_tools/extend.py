@@ -219,11 +219,13 @@ def compose_sizing(ambient, x, y, *, grade, floor=None, bands=()):
 
 
 def _no_masks(**arrays) -> None:
-    """Refuse masked values: a conversion would turn them into the data under
-    the mask (review round 24 F4)."""
+    """Refuse masked and complex values: a conversion would turn them into the
+    data under the mask, or into their real part (review rounds 24 F4, 36 F2)."""
     for name, a in arrays.items():
         if np.ma.is_masked(a):
             raise ValueError(f"{name} has masked values")
+        if a is not None and np.asarray(a).dtype.kind == "c":
+            raise ValueError(f"{name} has complex values")
 
 
 def _checked_geometry(mesh: Fort14Mesh):
@@ -395,9 +397,12 @@ def check_no_overlap(merged: Fort14Mesh, n_base_elements: int, rel_tol: float = 
     """
     import shapely
 
-    if not (isinstance(rel_tol, (int, float, np.integer, np.floating)) and np.isfinite(rel_tol)
-            and rel_tol >= 0):
-        raise ValueError(f"rel_tol must be finite and non-negative, not {rel_tol!r}")
+    # a real tolerance below 1: a bool is not one, and 1 would exempt complete
+    # overlap (review round 36 F4)
+    if not (isinstance(rel_tol, (int, float, np.integer, np.floating))
+            and not isinstance(rel_tol, (bool, np.bool_)) and np.isfinite(rel_tol)
+            and 0 <= rel_tol < 1):
+        raise ValueError(f"rel_tol must be a real number in [0, 1), not {rel_tol!r}")
     if not (isinstance(n_base_elements, (int, np.integer))
             and not isinstance(n_base_elements, (bool, np.bool_))     # review round 35 F5
             and 0 <= n_base_elements <= merged.n_elements):

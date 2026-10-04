@@ -174,6 +174,8 @@ def align_open_boundary_local(
     round 35 F1).
     """
     if movable is not None:
+        if np.ma.is_masked(movable):          # a masked permission is no permission
+            raise ValueError("movable has masked values")
         movable = np.asarray(movable)
         if movable.dtype != bool or movable.shape != (mesh.n_nodes,):
             raise ValueError(f"movable must be a boolean ({mesh.n_nodes},) array, not "

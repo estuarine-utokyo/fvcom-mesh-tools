@@ -438,3 +438,45 @@ def test_round35_guards():
                       open_boundaries=[], land_boundaries=[])
     with pytest.raises(ValueError):
         check_land_cover(mesh, shapely.Polygon([(0, 0), (100, 0), (0, 100)]), True, erode=0.1)
+
+
+def test_round36_guards():
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+    from fvcom_mesh_tools.dem.m7001 import rfactor_smooth
+    from fvcom_mesh_tools.extend import check_no_overlap, compose_sizing
+    from fvcom_mesh_tools.obc_design import fillet
+
+    # F1: a masked permission is refused, nothing moves
+    nodes, tris, n = _lattice_mesh()
+    mesh = Fort14Mesh(title="t", nodes=nodes, elements=tris, depths=np.full(len(nodes), 10.0),
+                      open_boundaries=[np.arange(n)], land_boundaries=[])
+    movable = np.ma.array(np.ones(len(nodes), bool), mask=np.arange(len(nodes)) >= n)
+    with pytest.raises(ValueError, match="masked"):
+        align_open_boundary_local(mesh, movable=movable)
+    # F2: complex arrays
+    with pytest.raises(ValueError, match="complex"):
+        round_depths_inside(np.array([4 + 9j]), 3.0)
+    with pytest.raises(ValueError, match="complex"):
+        rfactor_smooth_free(np.array([100 + 9j, 10 + 2j]), [0], [1], [True, True], rmax=0.2,
+                            hmin=1.0)
+    with pytest.raises(ValueError, match="complex"):
+        rfactor_smooth(np.array([100 + 9j, 10 + 2j]), np.array([0]), np.array([1]))
+    x, y = np.meshgrid([0.0, 1000.0], [0.0])
+    with pytest.raises(ValueError, match="complex"):
+        compose_sizing(np.array([[100 + 9j, 100 + 2j]]), x, y, grade=0.2)
+    # F3: finite inputs that overflow
+    with pytest.raises(ValueError, match="finite"):
+        fillet(np.array([[0.0, 0.0], [1e200, 0.0], [1e200, 1e200]]), [1e199])
+    # F4: a bool, or a tolerance that exempts complete overlap
+    import shapely
+
+    del shapely
+    mesh2 = Fort14Mesh(title="t", nodes=np.array([[0.0, 0], [100, 0], [0, 100], [10, 10],
+                                                  [30, 10], [10, 30]]),
+                       elements=np.array([[0, 1, 2], [3, 4, 5]]), depths=np.ones(6),
+                       open_boundaries=[], land_boundaries=[])
+    for tol in (True, 1, 1.5):
+        with pytest.raises(ValueError, match="rel_tol"):
+            check_no_overlap(mesh2, 1, rel_tol=tol)
+    with pytest.raises(ValueError, match="overlap the base"):
+        check_no_overlap(mesh2, 1)
