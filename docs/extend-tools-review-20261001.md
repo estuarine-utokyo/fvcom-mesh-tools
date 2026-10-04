@@ -8837,3 +8837,25 @@ Verification of the fixes so far: `tests/test_extend.py` and
 `tests/test_obc_design.py` 61 passed, `ruff check` clean, `bash -n` on the two
 changed job scripts. F1, F5 and F6 are exercised only by the real-data run
 (`jobs/genkai/extend_check.sh`), not yet run on GENKAI.
+
+### Verification on GENKAI (2026-10-05)
+
+First run of the GENKAI site layer (`jobs/genkai/extend_check.sh`, job 6999875,
+commit fbc9019, scratch `$WORK_DIR/scratch/extcheck28g`), the real-data rebuild
+that OCTOPUS never ran:
+
+| item | OCTOPUS extcheck26 | GENKAI extcheck28g |
+|---|---|---|
+| pytest | 1248 passed | 1242 passed, 5 failed, 4 skipped (the 5: tests that reach OCSMesh, not installed here; marked `needs_ocsmesh` afterwards, d392742) |
+| 444 design | -- | 191 nodes, ends 90.0 deg to the coast |
+| 445 QA | 23/23 | 23/23 |
+| NP / NE | 14,738 / 27,133 | 14,673 / 27,011 |
+| grd sha256 | `51ff856c4d8a1089...` | `966f8d0566509231...` |
+| 453 re-depth | ran | ran, r max 0.2000001 |
+| boundary consumed (F6 check) | -- | build's boundary hash == 444's CSV |
+
+Bit identity across machines is not expected; the gates and counts agree
+closely. The GENKAI build is the new reference. Pitfalls met while setting up:
+the job scripts lacked `#PJM -X` (WORK_DIR not passed), `versioneer` was missing
+for the no-isolation oceanmesh build, and OCSMesh-dependent tests lacked their
+marker.
