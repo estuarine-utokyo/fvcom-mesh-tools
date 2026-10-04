@@ -212,11 +212,19 @@ def write_fort14(mesh: Fort14Mesh, path: str | Path) -> None:
     if not isinstance(mesh.title, str) or len(mesh.title.splitlines()) > 1 \
             or mesh.title.endswith(("\n", "\r")):
         raise ValueError(f"the title must be one line of text, not {mesh.title!r}")
+    # unknown values are not numbers to write: masks before any conversion
+    # drops them (review round 29 F7)
+    for what, a in (("nodes", mesh.nodes), ("depths", mesh.depths),
+                    ("elements", mesh.elements)):
+        if np.ma.is_masked(a):
+            raise ValueError(f"{what} has masked values")
     # shapes too, before the destination is touched (review round 11 F5)
     nodes_a, depths_a = np.asarray(mesh.nodes), np.asarray(mesh.depths)
     if nodes_a.ndim != 2 or nodes_a.shape[1] != 2 or depths_a.shape != (n_nodes,):
         raise ValueError(f"nodes must be (NP, 2) and depths (NP,), not {nodes_a.shape} "
                          f"and {depths_a.shape}")
+    if not (np.isfinite(nodes_a.astype(float)).all() and np.isfinite(depths_a.astype(float)).all()):
+        raise ValueError("coordinates and depths must be finite")
     # whatever the row count: a (0, 4) array is no mesh either, and the
     # reader cannot read an empty one (review round 12 F6)
     els_a = np.asarray(mesh.elements)

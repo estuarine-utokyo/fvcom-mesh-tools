@@ -137,18 +137,36 @@ if not failed:
             break
 
 
+def _count(value, what):
+    """A whole number from a report: not a float, a bool or a string (round 29 F2)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{what} is not an integer: {value!r}")
+    return value
+
+
 def _acceptance_problem():
-    """Why a build whose stages exited 0 is still not "ok", or None (review round 28 F1)."""
+    """Why a build whose stages exited 0 is still not "ok", or None (review rounds 28 F1, 29 F2)."""
     try:
         merged = json.loads((OUT / "merge.json").read_text())
-        json.loads((gen / "generate.json").read_text())
+        generated = json.loads((gen / "generate.json").read_text())
+        for name, rep in (("merge.json", merged), ("generate.json", generated)):
+            if not isinstance(rep, dict):
+                raise ValueError(f"{name} is not an object")
+        if not all(isinstance(generated.get(k), dict) for k in ("inputs", "settings")):
+            raise ValueError("generate.json lacks its inputs and settings")
+        for k in ("n_nodes", "n_elements"):
+            if _count(generated.get(k), f"generate {k}") <= 0 or _count(
+                    merged.get(k), f"merge {k}") <= 0:
+                raise ValueError(f"{k} is not positive")
         qa = merged["qa"]
-        total, nfail = int(qa["n_gate_total"]), int(qa["n_gate_failed"])
-        int(merged["n_nodes"]), int(merged["n_elements"])
+        total, nfail = _count(qa["n_gate_total"], "n_gate_total"), _count(
+            qa["n_gate_failed"], "n_gate_failed")
         problems = merged["problems"]
+        if not isinstance(problems, list):
+            raise ValueError("problems is not a list")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return f"unreadable stage report ({type(exc).__name__}: {exc})"
-    if total <= 0 or nfail:
+    if total <= 0 or nfail != 0:
         return f"QA {total - nfail}/{total}"
     if problems:
         return f"merge problems: {problems}"

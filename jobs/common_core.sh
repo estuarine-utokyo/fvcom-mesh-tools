@@ -38,7 +38,15 @@ _env=${FMESH_ENV:-fvcom-mesh-tools}
 . "${FMESH_CONDA_ROOT:-$WORK_DIR/miniforge3}/etc/profile.d/conda.sh" \
     || { echo "ERROR: cannot source conda from ${FMESH_CONDA_ROOT:-$WORK_DIR/miniforge3}"; exit 2; }
 conda activate "$_env" || { echo "ERROR: cannot activate conda env $_env"; exit 2; }
-[ "${CONDA_DEFAULT_ENV:-}" = "$_env" ] || { echo "ERROR: conda env is '${CONDA_DEFAULT_ENV:-}', not $_env"; exit 2; }
+# the active env is the requested one: by name, or by prefix when FMESH_ENV is
+# a path (conda then reports the env's name, review round 29 F5)
+if [[ $_env == */* ]]; then
+    [ "$(realpath -e -- "${CONDA_PREFIX:-/nonexistent}")" = "$(realpath -e -- "$_env")" ] \
+        || { echo "ERROR: conda prefix is '${CONDA_PREFIX:-}', not $_env"; exit 2; }
+else
+    [ "${CONDA_DEFAULT_ENV:-}" = "$_env" ] \
+        || { echo "ERROR: conda env is '${CONDA_DEFAULT_ENV:-}', not $_env"; exit 2; }
+fi
 set -u
 echo "python=$(command -v python) DATA_DIR=${DATA_DIR} WORK_DIR=${WORK_DIR}"
 

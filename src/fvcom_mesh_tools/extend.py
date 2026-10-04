@@ -580,22 +580,33 @@ def round_depths_inside(h, hmin, hmax=None, decimals: int = 6) -> np.ndarray:
         raise ValueError("depths must be finite")
     if not (np.isfinite(hmin) and (hmax is None or (np.isfinite(hmax) and hmax >= hmin))):
         raise ValueError(f"bounds must be finite and ordered, not [{hmin}, {hmax}]")
-    try:
-        q = 10.0 ** decimals
-    except OverflowError:
-        q = np.inf
-    # scaling by 10**decimals must stay finite, or the rounding returns inf
-    # from finite depths (review round 28 F8)
+    # whole decimals within double precision; scaling by 10**decimals must
+    # stay finite, or the rounding returns inf or NaN from finite depths
+    # (review rounds 28 F8, 29 F4)
+    if isinstance(decimals, bool) or not isinstance(decimals, (int, np.integer)) \
+            or not 0 <= decimals <= 15:
+        raise ValueError(f"decimals must be a whole number from 0 to 15, not {decimals!r}")
+    q = 10.0 ** int(decimals)
     with np.errstate(over="ignore"):
         scaled = [np.abs(np.asarray(h, float)).max(initial=0.0) * q, abs(hmin) * q,
                   0.0 if hmax is None else abs(hmax) * q]
-    if not np.isfinite(q) or not np.isfinite(scaled).all():
+    if not np.isfinite(scaled).all():
         raise ValueError(f"{decimals} decimals overflow for these depths and bounds")
-    lo = np.ceil(hmin * q) / q
-    hi = np.inf if hmax is None else np.floor(hmax * q) / q
-    if lo > hi:
+    # the grid ends are taken from the bounds' shortest decimal forms, so a
+    # bound that is already on the grid is its own end (0.07 * 100 is
+    # 7.000000000000001 in binary; review round 29 F8)
+    from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+
+    step = Decimal(1).scaleb(-int(decimals))
+    lo = float(Decimal(repr(float(hmin))).quantize(step, rounding=ROUND_CEILING))
+    hi = np.inf if hmax is None else float(
+        Decimal(repr(float(hmax))).quantize(step, rounding=ROUND_FLOOR))
+    if lo > hi or lo < hmin or hi > (np.inf if hmax is None else hmax):
         raise ValueError(f"no {decimals}-decimal depth lies in [{hmin}, {hmax}]")
-    return np.clip(np.round(np.asarray(h, float), decimals), lo, hi)
+    out = np.clip(np.round(np.asarray(h, float), int(decimals)), lo, hi)
+    if not np.isfinite(out).all():
+        raise ValueError("the rounded depths are not finite")
+    return out
 
 
 def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=5000):
@@ -639,11 +650,14 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=500
     if not (np.isfinite(h[used]).all() and (h[used] > 0).all()):
         raise ValueError("depths on the limited edges and free nodes must be finite and "
                          "positive")
-    # hi + hj and the corrections must not overflow, or r reads 0 for depths
-    # that break the limit (review round 28 F7)
-    if h[used].max(initial=0.0) > np.finfo(float).max / 4 or (hmax is not None
-                                                    and hmax > np.finfo(float).max / 4):
-        raise ValueError("depths beyond 4e307 m cannot be limited without overflow")
+    # hi + hj and the sums of corrections must not overflow, or r reads 0 or
+    # NaN for depths that break the limit: depths, floor and cap stay below
+    # max / (4 (max degree + 1)) (review rounds 28 F7, 29 F3)
+    deg = np.bincount(np.r_[ei, ej], minlength=len(h)).max(initial=0)
+    big = np.finfo(float).max / (4 * (int(deg) + 1))
+    if h[used].max(initial=0.0) > big or hmin > big or (hmax is not None and hmax > big):
+        raise ValueError(f"depths and bounds beyond {big:.1e} m cannot be limited without "
+                         "overflow")
     # the bounds hold for every free node, on an edge or not (review round 9
     # F10)
     if hmax is not None:
@@ -655,6 +669,8 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=500
         hi, hj = h[ei], h[ej]
         r = np.abs(hi - hj) / (hi + hj)
         bad = r > rmax + 1e-9
+        if not np.isfinite(r).all():
+            raise ValueError("the r-factor is not finite: depths overflowed")
         if not bad.any():
             return h, it, float(r.max())
         excess = np.where(bad, np.abs(hi - hj) - rmax * (hi + hj), 0.0)

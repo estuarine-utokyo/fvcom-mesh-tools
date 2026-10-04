@@ -59,9 +59,15 @@ def _grid(path: Path, var: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     import netCDF4
 
     with netCDF4.Dataset(path) as ds:
-        lat = np.asarray(ds["lat"][:], float)
-        lon = np.asarray(ds["lon"][:], float)
-        z = np.asarray(ds[var][:], float)
+        lat, lon, z = ds["lat"][:], ds["lon"][:], ds[var][:]
+    # a masked cell is missing, not the number under the mask (a -9999 fill
+    # would become a 9999 m depth; review round 29 F1): missing cells are
+    # NaN, which the interpolation hands on to the next source. The axes
+    # must be whole.
+    if np.ma.is_masked(lat) or np.ma.is_masked(lon):
+        raise ValueError(f"{path.name}: the lat or lon axis has masked values")
+    lat, lon = np.asarray(lat, float), np.asarray(lon, float)
+    z = np.ma.filled(np.ma.asarray(z, float), np.nan)
     if z.shape != (lat.size, lon.size):
         raise ValueError(f"{path.name}: expected (lat, lon) = "
                          f"{(lat.size, lon.size)}, got {z.shape}")

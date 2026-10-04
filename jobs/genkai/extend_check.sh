@@ -37,14 +37,18 @@ tail -3 "$R/444.log"
 # just designed named absolutely, so that 445 and 453 consume that boundary
 # and not the checked-in CSV (review round 28 F6)
 python - "$R" recipes/extend/tokyo_bay_enshu.yaml outputs/base_tokyo_bay_tool <<'PY'
-import re, sys
+import sys
 from pathlib import Path
+
+import yaml
+
 run, recipe, base = (Path(a).resolve() for a in sys.argv[1:4])
-text = recipe.read_text()
-for key, value in (("base", base), ("open_boundary", run / "obc" / "obc.csv")):
-    text, n = re.subn(rf"(?m)^{key}:.*$", f"{key}: {value}", text)
-    assert n == 1, f"{recipe}: expected one top-level '{key}:' line, found {n}"
-(run / "recipe.yaml").write_text(text)
+doc = yaml.safe_load(recipe.read_text())
+# the paths are assigned as values and emitted by YAML, never spliced into
+# text: a path may hold '#' or ': ' (review round 29 F6)
+doc["base"] = str(base)
+doc["open_boundary"] = str(run / "obc" / "obc.csv")
+(run / "recipe.yaml").write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True))
 PY
 RECIPE=$R/recipe.yaml
 echo "== 445 $(date -Is)"
