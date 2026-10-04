@@ -16,6 +16,11 @@ _threads="${2:-4}"
     exit 2
 }
 
+# one safe file-name component: the log must stay in logs/ (review round 49 F2)
+[[ $_name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+    echo "ERROR: the log name '$_name' is not a plain file name" >&2
+    exit 2
+}
 mkdir -p logs
 LOG="$(pwd)/logs/${_name}.${JOBID}.log"
 exec > "${LOG}" 2>&1

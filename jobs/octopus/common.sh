@@ -9,9 +9,14 @@
 #   . jobs/octopus/common.sh <log-name> [threads]
 
 # NQSV job ids look like "0:114895.oct"; keep the numeric part.
-JOBID="${PBS_JOBID:-interactive.$$}"
-JOBID="${JOBID##*:}"
-JOBID="${JOBID%%.*}"
+# Only a scheduler id is parsed; the interactive fallback keeps its process id,
+# so two shells do not share a log (review round 49 F3).
+if [ -n "${PBS_JOBID:-}" ]; then
+    JOBID="${PBS_JOBID##*:}"
+    JOBID="${JOBID%%.*}"
+else
+    JOBID="interactive.$$"
+fi
 . jobs/common_core.sh "$@"
 
 # OCTOPUS site layer: the shared FVCOM library install, beside $DATA_DIR in

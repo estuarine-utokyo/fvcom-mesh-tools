@@ -986,3 +986,11 @@ def test_round48_guards():
     _, info = align_open_boundary_first_ring(Fort14Mesh("m", xy, np.ones(3),
                                                         np.array([[0, 1, 2]]), [], []))
     assert info["movable_first_ring"] == 0
+
+
+def test_round49_guards():
+    from fvcom_mesh_tools.quality import check_thresholds
+
+    # F1: a count beyond a float is a failed check, not a crash
+    assert check_thresholds({"n_flipped": 2**64}, max_flipped=0)[0] is False
+    assert check_thresholds({"n_flipped": 3}, max_flipped=5)[0] is True

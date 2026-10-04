@@ -19,6 +19,8 @@
 set -euo pipefail    # the stage failures that are collected carry an explicit `|| rc=1`
 cd "${PJM_O_WORKDIR:?Submit from the repository root}"
 NAME=${FMESH_CHECK:?pjsub -x FMESH_CHECK=<name>}
+# one plain name: the run directory and the log must stay where they are meant to
+[[ $NAME =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "FMESH_CHECK '$NAME' is not a plain name"; exit 2; }
 . jobs/genkai/common.sh "$NAME" 32
 R=$WORK_DIR/scratch/$NAME
 mkdir -p "$WORK_DIR/scratch"

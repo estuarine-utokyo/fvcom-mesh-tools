@@ -171,6 +171,14 @@ class ThresholdCheck:
         }
 
 
+def _finite(value: Any) -> bool:
+    """A finite number; a Python integer too large for a float counts as not (r49 F1)."""
+    try:
+        return bool(np.isfinite(float(value)))
+    except (OverflowError, ValueError, TypeError):
+        return False
+
+
 def check_thresholds(
     metrics: dict[str, Any],
     *,
@@ -197,7 +205,7 @@ def check_thresholds(
             return
         passed = (
             isinstance(actual, (int, float))
-            and bool(np.isfinite(actual))          # an infinite metric is no measurement (r48 F4)
+            and _finite(actual)                    # an infinite metric is no measurement (r48 F4)
             and float(actual) >= float(threshold)
         )
         checks.append(ThresholdCheck(metric, "≥", float(threshold),
@@ -210,7 +218,7 @@ def check_thresholds(
             return
         passed = (
             isinstance(actual, (int, float))
-            and bool(np.isfinite(actual))
+            and _finite(actual)
             and float(actual) <= float(threshold)
         )
         checks.append(ThresholdCheck(metric, "≤", float(threshold),
