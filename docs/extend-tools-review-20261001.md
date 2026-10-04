@@ -8550,3 +8550,290 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F6 | minor | test ("metrc") | yes | fixed, b351d42; test |
 | F7 | minor | code read | yes | fixed, b351d42 |
 | F8 | nit | code read | yes | fixed, b351d42 |
+
+## Round 28
+
+Run on OCTOPUS on 2026-10-04 (gpt-6.1-sol); triaged and fixed on GENKAI.
+
+Eight findings, all **minor**. Findings 2–4 include regressions introduced by `b351d42`; findings 5–6 concern the new GENKAI workflow.
+
+Historical statuses below use the recorded triage, retained corrections and targeted verification. Ranges are inclusive.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1-F27; R2-F22; R3-F14; R4–R15-F1 | RESOLVED | Approved GPL relicensing resolves the import-policy conflict. |
+| R1-F1–F26, F28–F29 | RESOLVED | Source handling, geometry, serialization, limiting, provenance and output protection remain corrected. F4 follows the approved warning policy. |
+| R2-F1–F21 | RESOLVED | Reservation, recovery, geometry, interpolation and acceptance corrections remain present. |
+| R3-F1–F13 | RESOLVED | Spacing, ladders, serialization, timestep ordering and design checks remain corrected. F1 follows the approved warning policy. |
+| R4-F2–F14 | RESOLVED | Interpolation, overlap, containment, recovery, identities and runtime checks remain corrected. |
+| R5-F2–F10 | RESOLVED | Flip protection, parsed-input identities, segment checks, recovery and depth validation remain corrected. |
+| R6-F2–F11 | RESOLVED | Land-window, completion, failure-exit, inventory, native-input and path checks remain corrected. |
+| R7-F2–F12 | RESOLVED | Whole-source interpolation, export validation, relocation protection and identity checks remain corrected. |
+| R8-F2–F13 | RESOLVED | Rollback, parsing, cache identity, dimension order, serialization and manifest selection remain corrected. |
+| R9-F2–F14 | RESOLVED | Concurrency, recovery, index/type checks, trimming and absolute library paths remain corrected. |
+| R10-F2–F14 | RESOLVED | Isolation, history validation, recovery tracking, parsing and serialization remain corrected. |
+| R11-F2–F8 | RESOLVED | Finishing isolation, malformed-input checks, relocation recovery, island validation and spaced paths remain corrected. |
+| R12-F2–F7 | RESOLVED | Accepted-product identities, benchmark isolation, dimensions, duration and serialization remain corrected. |
+| R13-F2–F9 | RESOLVED | Locks, paths, acceptance hashes, inventories, titles and sizing controls remain corrected. |
+| R14-F2–F9 | RESOLVED | Locks, marker ordering, scalar/lattice validation, scratch creation and backend selection remain corrected. |
+| R15-F2–F7 | RESOLVED | Land checks follow the approved resolution policy; remaining corrections remain present. |
+| R16-F1–F6 | RESOLVED | Optional backends follow the owner’s decision; ownership, controls and complete-interface checks remain corrected. |
+| R17-F1–F9 | RESOLVED | Notices, environment paths, product protection, QA controls and coordinate/interface handling remain corrected. |
+| R18-F1–F6 | RESOLVED | Boundary types, product aliases, array validation and standalone output ownership remain corrected. |
+| R19-F1–F7 | RESOLVED | Erosion, ownership tokens, boundary types, publication protection, record IDs and history identities remain corrected. |
+| R20-F1–F9 | RESOLVED | Generation/history identities, native records, erosion, dates and job headers remain corrected. |
+| R21-F1–F11 | RESOLVED | History limits, consumed-input identities, native records, YAML duplicates, masks and timing controls remain corrected. |
+| R22-F1–F9 | RESOLVED | Boundary/base/land identities, dates, timing, YAML merges, hole checks and lexical validation remain corrected. |
+| R23-F1–F7 | RESOLVED | Merged duplicates, positive-land requirements, provenance snapshots, timestamp masks and output bounds remain corrected. |
+| R24-F1–F6 | RESOLVED | Graph-first YAML validation, merge rejection, required element counts, masks and native/timestamp validation remain corrected. |
+| R25-F1–F7 | RESOLVED | Coefficient convergence, indices, element counts, masks, limiter inputs, `=` keys and recipe-aware QA floors remain corrected. |
+| R26-F1–F7 | RESOLVED | Original base-depth, lattice, index, mutability, rounding-input, ray-input and datum-index cases are addressed. |
+| R27-F1 | RESOLVED | Geometry helpers reject masks and validate coordinates, connectivity and OBC indices. |
+| R27-F2 | RESOLVED | Fractional connectivity and protected indices are checked before casting. Finding 2 is a separate regression. |
+| R27-F3 | RESOLVED | Masked/fractional chains are rejected. Finding 3 is a separate regression. |
+| R27-F4 | RESOLVED | Band lines must be finite `(N, 2)` arrays with positive targets. |
+| R27-F5 | PARTIAL | The reported small-direction and infinite-result cases are corrected; normalization still depends on magnitude at extremes. See finding 4. |
+| R27-F6 | RESOLVED | Unknown QA coordinate modes are rejected. |
+| R27-F7 | PARTIAL | Missing reports are detected, but report contents and acceptance are still unchecked before success publication. See finding 1. |
+| R27-F8 | RESOLVED | Valence comments now describe the implemented veto policy. |
+| Nondeterminism hypothesis; objection to omitting land below mesh resolution | WITHDRAWN | Supplied repeatability measurements and the owner’s resolution policy remain controlling. |
+
+1. **Minor — Existing but invalid stage reports still publish success.**
+
+   **Locations:** [445_extend_mesh.py:133](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/445_extend_mesh.py:133), [445_extend_mesh.py:168](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/445_extend_mesh.py:168).
+
+   **Reproduction:** Executing the actual reporting block with in-memory paths, zero stage exits and both report files present:
+   
+   - `merge.json = {}` writes `status: "ok"`, sets `STATE["done"] = True`, then raises `KeyError: 'qa'`.
+   - A merge report containing one failed QA gate and nonempty `problems` prints `QA 22/23` and `done`, retaining `status: "ok"`. Missing case products also go unnoticed.
+
+   This requires an injected stage fault.
+
+   **Fix:** Validate report structure, zero failed gates, empty acceptance problems, and required product existence/readable hashes before writing success or disabling the failure handler.
+
+2. **Minor — Protected-node iterators are consumed before trimming.**
+
+   **Location:** [extend.py:692](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:692).
+
+   `len(list(keep_nodes))` consumes an iterator; the subsequent `list(keep_nodes)` is empty.
+
+   **Reproduction:** For the tests’ six-triangle fan plus spike `[[1, 7, 2]]`, `keep_nodes=[7]` retains all seven elements. `keep_nodes=iter([7])` drops the spike and protected node 7, returning six elements. The pre-`b351d42` implementation retains seven with either input.
+
+   **Fix:** Materialize `keep_nodes` once, then validate and use that same collection.
+
+3. **Minor — Open-chain iterators silently become island boundaries.**
+
+   **Location:** [extend.py:536](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:536).
+
+   Enumerating `open_chains` for mask checking exhausts an iterator before open edges are collected.
+
+   **Reproduction:**
+
+   ```python
+   land_segments([[0, 1, 2]], [[0, 1]])
+   # [(0, array([1, 2, 0]))]
+
+   land_segments([[0, 1, 2]], iter([[0, 1]]))
+   # [(1, array([0, 1, 2, 0]))]
+   ```
+
+   The second call incorrectly closes the open edge and labels the loop as an island. Both inputs produced the first result before `b351d42`.
+
+   **Fix:** Materialize `open_chains` once before mask checking.
+
+4. **Minor — Ray normalization overflows or underflows for finite directions.**
+
+   **Location:** [obc_design.py:77](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/obc_design.py:77).
+
+   **Reproduction:** These perpendicular rays always intersect at `[1, 0]`:
+
+   ```python
+   ray_intersection([0, 0], [scale, 0], [1, 1], [0, -scale])
+   ```
+
+   With `scale=1`, the result is correct. With `1e200`, the norm overflows and the function reports “parallel”; this case worked before `b351d42`. With `1e-200`, the norm underflows and reports “no direction”.
+
+   **Fix:** Divide each direction by its largest absolute component first, then normalize the scaled vector. Reject zero directions before scaling.
+
+5. **Minor — GENKAI verification continues after failed environment setup.**
+
+   **Locations:** [extend_check.sh:18](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/jobs/genkai/extend_check.sh:18), [common_core.sh:35](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/jobs/common_core.sh:35).
+
+   The new check uses `set -uo pipefail`, without `errexit`. Shared setup does not explicitly propagate failed profile sourcing or conda activation.
+
+   **Reproduction:** Executing the shared setup in memory under those shell options, with logging/mkdir mocked and `conda activate` returning 42, reports the current `/usr/bin/python`, returns setup status zero and continues processing. A failed initial `cd` is also unchecked.
+
+   **Fix:** Use `set -euo pipefail` for setup, retaining explicit `|| rc=1` on the intentionally accumulated stage failures. Make profile sourcing and activation explicitly fatal in shared setup.
+
+6. **Minor — The GENKAI end-to-end check does not consume its newly designed boundary.**
+
+   **Location:** [extend_check.sh:35](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/jobs/genkai/extend_check.sh:35).
+
+   **Evidence:** Stage 444 writes `$R/obc/obc.csv`. Stages 445 and 453 instead use the unchanged repository recipe, whose `open_boundary` resolves to the checked-in `tokyo_bay_enshu_obc.csv`. No comparison connects those CSVs. A changed design can therefore pass independently while the subsequent build verifies the older boundary.
+
+   **Fix:** Create a run-local extension recipe with absolute base and generated-boundary paths; use it for both 445 and 453. Assert that the accepted generation’s boundary hash matches stage 444’s output.
+
+7. **Minor — Finite extreme depths can falsely satisfy the r-factor limit.**
+
+   **Location:** [extend.py:638](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:638).
+
+   **Reproduction:**
+
+   ```python
+   rfactor_smooth_free(
+       [1.7e308, 1e307], [0], [1], [False, True],
+       rmax=0.2, hmin=1, max_iter=10,
+   )
+   # unchanged depths, 0 iterations, reported r = 0.0
+   ```
+
+   `hi + hj` overflows to infinity. The actual ratio, computed after scaling both depths, is **0.8888888889**. This requires unphysical extreme input and predates the latest fixes.
+
+   **Fix:** Compute r using scaled depths; make corrections overflow-safe or reject unsupported arithmetic. Use the same stable calculation for final r-factor checks.
+
+8. **Minor — Depth rounding can return infinity from finite inputs.**
+
+   **Location:** [extend.py:580](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:580).
+
+   **Reproduction:** Both calls return `[inf]` despite passing finite-input validation:
+
+   ```python
+   round_depths_inside([1e308], 3)
+   round_depths_inside([4], 1e308)
+   ```
+
+   Decimal scaling overflows inside `np.round` or the inward-rounded bound calculation. This also requires extreme input and predates `b351d42`.
+
+   **Fix:** Use overflow-safe quantization, or reject unsupported scales before multiplying. Require finite rounded results that satisfy the bounds.
+
+Verification: filesystem-free pytest selections passed **96 tests** using `--capture=sys -p no:cacheprovider`; scoped `ruff check --no-cache` passed; `bash -n` passed for all **60** job scripts. The initial pytest invocation failed because its default capture required an unavailable writable temporary directory; the in-memory capture rerun passed.
+
+No files changed. Git status still contains only the pre-existing untracked OBC PNG. Shared-data contents were not read and no jobs were submitted. Production mesh QA, node/element counts, implied timesteps and FVCOM integrations were **not rerun**.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 8 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 28: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-27 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 27 (your previous answer; 7 minor findings, 1 nit) was fixed in
+b351d42; read it. Per finding:
+- F1 `extend._checked_geometry` used by check_no_overlap,
+  check_island_holes, check_land_cover.
+- F2 trim_lone_corners: connectivity and keep_nodes through `_indices`
+  before any cast.
+- F3 land_segments: masks refused; chains through `_indices`.
+- F4 band_field: (N, 2) finite lines, positive targets.
+- F5 ray_intersection: unit directions; finite result required.
+- F6 run_qa: coords in {auto, metric, lonlat}.
+- F7 445: generate.json and merge.json required before "ok".
+- F8 patch.py comments.
+Verification after b351d42: pytest 1248 passed; `check_run` OK on both real runs
+(smoke_enshu extended, m2 smoke refined). The real-data rebuild (444, 445,
+453) is queued on a congested machine (job 124872) and has not run yet; its
+result will be reported next round.
+Also new since round 27: b3ffb09 splits jobs/octopus/common.sh into
+jobs/common_core.sh (machine-independent set-up) and per-site layers
+jobs/octopus/common.sh and jobs/genkai/ (common.sh, build_env.sh,
+extend_check.sh, for the pjsub machine GENKAI). Review it too.
+Owner decision (2026-10-01), unchanged: meshes are made from the real
+depths; the band-floor check (446) and the new-element time-step comparison
+(447, 453) REPORT warnings and do not fail the build. Not a defect.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | code read (a `merge.json` of `{}` reaches `report["merge"]["qa"]` after `STATE["done"]`) | yes | fixed, 57e5f51: `_acceptance_problem()` checks both reports, QA gates, merge problems and the three products before "ok" |
+| F2 | minor | test (iterator `keep_nodes`) | yes, introduced in round 27 | fixed, 57e5f51; test |
+| F3 | minor | test (iterator `open_chains`) | yes, introduced in round 27 | fixed, 57e5f51; test |
+| F4 | minor | test (scales 1e200, 1e-200) | yes, introduced in round 27 | fixed, 57e5f51: scale by the largest component, then normalize; test |
+| F5 | minor | code read | yes | fixed, 57e5f51: `set -euo pipefail` in `extend_check.sh`; conda sourcing, activation and the active env name are fatal in `common_core.sh` |
+| F6 | minor | code read (445/453 took the checked-in CSV) | yes | fixed, 57e5f51: run-local recipe with absolute base and the designed boundary; the build's boundary hash is compared with stage 444's CSV; 444 failure stops the job |
+| F7 | minor | test (1.7e308 / 1e307) | yes (extreme input) | fixed, 57e5f51: depths above max/4 are refused; test |
+| F8 | minor | test (1e308 depth, 1e308 decimals) | yes (extreme input) | fixed, 57e5f51: overflowing scales are refused; test |
+
+Verification of the fixes so far: `tests/test_extend.py` and
+`tests/test_obc_design.py` 61 passed, `ruff check` clean, `bash -n` on the two
+changed job scripts. F1, F5 and F6 are exercised only by the real-data run
+(`jobs/genkai/extend_check.sh`), not yet run on GENKAI.
