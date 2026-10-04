@@ -811,6 +811,7 @@ def test_repair_skewed_elements_noop_preserves_boundaries() -> None:
     assert len(out.land_boundaries) == len(mesh.land_boundaries)
 
 
+@pytest.mark.needs_ocsmesh
 def test_repair_skewed_elements_requires_bbox_when_deletes() -> None:
     """If a deletion happens, bbox/tol_deg must have been supplied."""
     mesh = _mesh_with_one_sliver()
@@ -843,6 +844,7 @@ def test_clean_mesh_phase_f_default_off() -> None:
     assert info["output"]["n_elements"] == mesh.n_elements
 
 
+@pytest.mark.needs_ocsmesh
 def test_clean_mesh_phase_f_explicit_removes_sliver() -> None:
     mesh = _mesh_with_one_sliver()
     cleaned, info = clean_mesh(
