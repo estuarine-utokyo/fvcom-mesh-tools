@@ -1024,7 +1024,9 @@ def test_round51_guards(tmp_path):
     nml.write_text("&x /\n")
     assert check_main([str(run), "--marker", str(nml)]) == 2
     assert nml.exists()
+    (run / "fvcom.log").write_text("log\n")
     assert check_main([str(run), "--marker", str(run / "fvcom.log")]) == 2
+    assert (run / "fvcom.log").exists()
 
 
 def test_round52_guards(tmp_path):
@@ -1045,3 +1047,33 @@ def test_round52_guards(tmp_path):
     hist = run / "output" / "m2_0001.nc"
     hist.write_bytes(b"x")
     assert check_main([str(run), "--marker", str(hist)]) == 2 and hist.exists()
+
+
+def test_round53_guards(tmp_path):
+    from fvcom_mesh_tools.cli.check_run import main as check_main
+    from fvcom_mesh_tools.quality import (
+        check_thresholds,
+        format_comparison_table,
+        format_threshold_table,
+    )
+
+    # F2: a failed infinite count renders
+    ok, checks = check_thresholds({"n_flipped": float("-inf")}, max_flipped=0)
+    assert not ok and "FAIL" in format_threshold_table(checks)
+    # F3: integer deltas are exact
+    table = format_comparison_table([("before", {"n_flipped": 2**53}),
+                                     ("after", {"n_flipped": 2**53 + 1})], keys=("n_flipped",))
+    assert "+1" in table
+    # F1: only a verdict written by this tool may be removed as a marker
+    run = tmp_path / "run"
+    (run / "input").mkdir(parents=True)
+    dep = run / "input" / "m2_dep.dat"
+    dep.write_text("Node Number = 0\n")
+    link = run / "link.json"
+    link.symlink_to(dep)
+    for marker in (dep, link):
+        assert check_main([str(run), "--marker", str(marker)]) == 2
+    assert dep.exists()
+    (run / "old.json").write_text('{"ok": false, "reasons": ["x"]}')
+    check_main([str(run), "--marker", str(run / "old.json")])      # a stale verdict goes
+    assert not (run / "old.json").exists() or (run / "old.json").read_text().startswith("{")

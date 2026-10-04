@@ -255,6 +255,8 @@ def _fmt_value(metric: str, value: Any) -> str:
         return "n/a"
     if isinstance(value, float) and np.isnan(value):
         return "n/a"
+    if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+        return "invalid"          # the FAIL verdict stays; an infinity has no integer form
     if metric in _INT_KEYS:
         return f"{int(value):,}"
     if metric in _PCT_KEYS:
@@ -269,12 +271,17 @@ def _fmt_delta(metric: str, before: Any, after: Any) -> str:
     side is non-numeric or NaN."""
     if before is None or after is None:
         return ""
+    if metric in _INT_KEYS and isinstance(before, (int, np.integer)) \
+            and isinstance(after, (int, np.integer)) \
+            and not isinstance(before, bool) and not isinstance(after, bool):
+        d = int(after) - int(before)           # exact: 2**53 + 1 - 2**53 is 1 (review round 53 F3)
+        return "0" if d == 0 else f"{d:+,}"
     try:
         b = float(before)
         a = float(after)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return ""
-    if np.isnan(b) or np.isnan(a):
+    if not (np.isfinite(b) and np.isfinite(a)):
         return ""
     diff = a - b
     if metric in _INT_KEYS:
