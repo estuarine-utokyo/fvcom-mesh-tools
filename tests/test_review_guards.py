@@ -851,3 +851,57 @@ def test_round45_guards():
         boundary_tangents(np.array([[0, 0], [1, 1 + 2j]], complex))
     with pytest.raises(ValueError, match="masked"):
         boundary_tangents(np.ma.array([[0, 0], [1, 1]], mask=[[0, 0], [0, 1]]))
+
+
+def test_round46_guards(tmp_path):
+    from fvcom_mesh_tools.algorithms.perpendicularity import (
+        align_open_boundary_first_ring,
+        open_bdy_perpendicularity,
+        signed_areas,
+    )
+    from fvcom_mesh_tools.algorithms.quality import (
+        alpha_quality,
+        min_interior_angle,
+    )
+    from fvcom_mesh_tools.cli.perpfix import main
+    from fvcom_mesh_tools.quality import check_thresholds, compute_metrics
+
+    # F1: the CLI does not publish a result with more inverted elements
+    xy = np.array([[1000.0 * i, 500.0 * j] for j in range(4) for i in range(4)])
+    tri = []
+    for j in range(3):
+        for i in range(3):
+            a = 4 * j + i
+            tri += [[a, a + 1, a + 5], [a, a + 5, a + 4]]
+    mesh = Fort14Mesh("m", xy, np.full(16, 5.0), np.array(tri), [np.array([0, 1, 2, 3])],
+                      [(0, np.array([3, 7, 11, 15, 14, 13, 12, 8, 4, 0]))])
+    src, dst = tmp_path / "in.14", tmp_path / "out.14"
+    write_fort14(mesh, src)
+    after, _ = align_open_boundary_first_ring(mesh)
+    if (signed_areas(after) <= 0).sum() > (signed_areas(mesh) <= 0).sum():
+        assert main([str(src), str(dst), "--quiet"]) == 1
+        assert not dst.exists()
+    # F2: a narrow dtype does not wrap in the global alignment
+    t1 = np.array([[0, 1, 2]])
+    outs = []
+    for dtype in (np.int16, np.float64):
+        m = Fort14Mesh("t", np.array([[0, 0], [30000, 0], [30000, 30000]], dtype=dtype),
+                       np.ones(3), t1, [np.array([0, 1])], [])
+        outs.append(np.asarray(align_open_boundary_first_ring(m)[0].nodes, float))
+    assert np.allclose(outs[0], outs[1])
+    # F3: masked or negative connectivity
+    base = Fort14Mesh("t", np.array([[0.0, 0], [1, 0], [0, 1]]), np.ones(3), t1, [], [])
+    for bad in (np.ma.array([[0, 1, 2]], mask=[[0, 0, 1]]), np.array([[0, 1, -1]])):
+        m = Fort14Mesh("t", base.nodes, np.ones(3), bad, [], [])
+        for fn in (signed_areas, alpha_quality, min_interior_angle):
+            with pytest.raises(ValueError):
+                fn(m)
+    # F4: coincident boundary nodes have no tangent
+    m = Fort14Mesh("t", np.array([[0.0, 0], [0, 0], [1, 1]]), np.ones(3), t1,
+                   [np.array([0, 1])], [])
+    with pytest.raises(ValueError, match="tangent"):
+        open_bdy_perpendicularity(m)
+    # F5: a collapsed triangle fails the angle gate
+    z = Fort14Mesh("zero", np.zeros((3, 2)), np.full(3, 5.0), t1, [], [])
+    passed, _ = check_thresholds(compute_metrics(z), max_flipped=0, max_frac_lt_20deg=0)
+    assert not passed

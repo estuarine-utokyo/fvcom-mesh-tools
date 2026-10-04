@@ -48,14 +48,38 @@ def boundary_tangents(bdy_xy: np.ndarray) -> np.ndarray:
     return tangents / np.where(norms == 0, 1.0, norms)
 
 
+def _checked_mesh(mesh: Fort14Mesh):
+    """Promoted finite coordinates and whole, in-range connectivity (review round 46 F3)."""
+    from fvcom_mesh_tools._checks import checked_geometry
+
+    xy, els = checked_geometry(mesh.nodes, mesh.elements, "perpendicularity")
+    return xy[:, :2], els
+
+
+def _checked_chain(mesh: Fort14Mesh, segment_index: int) -> np.ndarray:
+    from fvcom_mesh_tools.io.fvcom_native import _indices
+
+    return _indices(mesh.open_boundaries[segment_index], mesh.n_nodes, "an open boundary")
+
+
+def _defined_tangents(bdy_xy: np.ndarray) -> np.ndarray:
+    """Unit tangents; a coincident or doubled-back boundary has no tangent, and a
+    zero one would read as perfectly perpendicular (review round 46 F4)."""
+    t = boundary_tangents(bdy_xy)
+    if not np.allclose(np.linalg.norm(t, axis=1), 1.0):
+        raise ValueError("the open boundary has an undefined tangent (coincident or "
+                         "doubled-back nodes)")
+    return t
+
+
 def signed_areas(mesh: Fort14Mesh) -> np.ndarray:
     """Per-element signed area (negative => triangle is flipped)."""
-    from fvcom_mesh_tools._checks import promoted_nodes
+    from fvcom_mesh_tools._checks import checked_geometry
 
-    xy = promoted_nodes(mesh.nodes)
-    p0 = xy[mesh.elements[:, 0]]
-    p1 = xy[mesh.elements[:, 1]]
-    p2 = xy[mesh.elements[:, 2]]
+    xy, els = checked_geometry(mesh.nodes, mesh.elements, "signed_areas")
+    p0 = xy[els[:, 0]]
+    p1 = xy[els[:, 1]]
+    p2 = xy[els[:, 2]]
     return 0.5 * (
         (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
         - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
@@ -93,17 +117,15 @@ def open_bdy_perpendicularity(
     if not mesh.open_boundaries:
         return np.array([])
 
-    from fvcom_mesh_tools._checks import promoted_nodes
-
-    nodes = promoted_nodes(mesh.nodes)
-    bdy = np.asarray(mesh.open_boundaries[segment_index], dtype=np.int64)
+    nodes, elements = _checked_mesh(mesh)
+    bdy = _checked_chain(mesh, segment_index)
     bdy_xy = nodes[bdy]
-    tangents = boundary_tangents(bdy_xy)
+    tangents = _defined_tangents(bdy_xy)
 
     inv_map = np.full(mesh.n_nodes, -1, dtype=np.int64)
     inv_map[bdy] = np.arange(len(bdy))
 
-    edges = unique_edges(mesh.elements)
+    edges = unique_edges(elements)
     a_in = inv_map[edges[:, 0]] >= 0
     b_in = inv_map[edges[:, 1]] >= 0
     incident = a_in ^ b_in
@@ -114,6 +136,8 @@ def open_bdy_perpendicularity(
 
     edge_vec = nodes[int_node] - nodes[bdy_node]
     big = np.abs(edge_vec).max(axis=1, keepdims=True)          # scaled before the norm
+    if (big == 0).any():
+        raise ValueError("an incident edge has zero length: no perpendicularity")
     edge_vec = edge_vec / np.where(big == 0, 1.0, big)
     edge_norms = np.linalg.norm(edge_vec, axis=1, keepdims=True)
     edge_vec = edge_vec / np.where(edge_norms == 0, 1.0, edge_norms)
@@ -140,18 +164,16 @@ class _IncidenceCache:
 
 
 def _build_incidence(mesh: Fort14Mesh, segment_index: int) -> _IncidenceCache:
-    from fvcom_mesh_tools._checks import promoted_nodes
-
-    nodes = promoted_nodes(mesh.nodes)
-    bdy = np.asarray(mesh.open_boundaries[segment_index], dtype=np.int64)
+    nodes, elements = _checked_mesh(mesh)
+    bdy = _checked_chain(mesh, segment_index)
     bdy_xy = nodes[bdy]
-    tangents = boundary_tangents(bdy_xy)
+    tangents = _defined_tangents(bdy_xy)
     perp = np.column_stack([-tangents[:, 1], tangents[:, 0]])
 
     inv_map = np.full(mesh.n_nodes, -1, dtype=np.int64)
     inv_map[bdy] = np.arange(len(bdy))
 
-    edges = unique_edges(mesh.elements)
+    edges = unique_edges(elements)
     a_in = inv_map[edges[:, 0]] >= 0
     b_in = inv_map[edges[:, 1]] >= 0
     incident = a_in ^ b_in
@@ -310,7 +332,7 @@ def align_open_boundary_first_ring(
     cache = _build_incidence(mesh, segment_index)
     fixed = fixed_node_mask(mesh)
 
-    nodes = mesh.nodes.copy()
+    nodes = _checked_mesh(mesh)[0].copy()          # float64 throughout (review round 46 F2)
     for _ in range(n_iters):
         nodes = _apply_perp_step(nodes, cache, fixed, alpha)
 

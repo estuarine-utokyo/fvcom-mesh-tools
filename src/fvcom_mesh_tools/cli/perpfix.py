@@ -102,6 +102,15 @@ def main(argv: list[str] | None = None) -> int:
     perp_after = open_bdy_perpendicularity(after, segment_index=args.segment_index)
     n_flipped_after = int((signed_areas(after) <= 0).sum())
 
+    # a result with more inverted or collapsed elements than the input is not
+    # published (review round 46 F1)
+    if n_flipped_after > n_flipped_before:
+        print(f"refusing to write {args.output}: the alignment made "
+              f"{n_flipped_after - n_flipped_before} more element(s) inverted or collapsed "
+              f"({n_flipped_before} -> {n_flipped_after}); try a smaller --alpha",
+              file=sys.stderr)
+        return 1
+
     write_fort14(after, args.output)
 
     if not args.quiet:

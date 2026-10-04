@@ -22,12 +22,12 @@ def edge_lengths_planar(mesh: Fort14Mesh) -> np.ndarray:
 
     Column order: ``[l_01, l_12, l_20]`` matching ``elements`` columns.
     """
-    from fvcom_mesh_tools._checks import promoted_nodes
+    from fvcom_mesh_tools._checks import checked_geometry
 
-    xy = promoted_nodes(mesh.nodes)
-    p0 = xy[mesh.elements[:, 0]]
-    p1 = xy[mesh.elements[:, 1]]
-    p2 = xy[mesh.elements[:, 2]]
+    xy, els = checked_geometry(mesh.nodes, mesh.elements, "edge_lengths_planar")
+    p0 = xy[els[:, 0]]
+    p1 = xy[els[:, 1]]
+    p2 = xy[els[:, 2]]
     return np.column_stack([
         np.linalg.norm(p1 - p0, axis=1),
         np.linalg.norm(p2 - p1, axis=1),
@@ -41,12 +41,12 @@ def alpha_quality(mesh: Fort14Mesh) -> np.ndarray:
     1 = equilateral, 0 = degenerate. Scale-free so it works on lon/lat
     meshes without unit conversion.
     """
-    from fvcom_mesh_tools._checks import promoted_nodes
+    from fvcom_mesh_tools._checks import checked_geometry
 
-    xy = promoted_nodes(mesh.nodes)
-    p0 = xy[mesh.elements[:, 0]]
-    p1 = xy[mesh.elements[:, 1]]
-    p2 = xy[mesh.elements[:, 2]]
+    xy, els = checked_geometry(mesh.nodes, mesh.elements, "alpha_quality")
+    p0 = xy[els[:, 0]]
+    p1 = xy[els[:, 1]]
+    p2 = xy[els[:, 2]]
     twice_signed = (
         (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
         - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
@@ -72,7 +72,10 @@ def min_interior_angle(mesh: Fort14Mesh, in_degrees: bool = True) -> np.ndarray:
         cos = (e1 ** 2 + e2 ** 2 - opp ** 2) / np.where(
             e1 * e2 == 0, 1.0, 2.0 * e1 * e2
         )
-        return np.arccos(np.clip(cos, -1.0, 1.0))
+        ang = np.arccos(np.clip(cos, -1.0, 1.0))
+        # an element with a zero edge has no angle: it counts as degenerate (0),
+        # not as a right angle (review round 46 F5)
+        return np.where(e1 * e2 == 0, 0.0, ang)
 
     A = _angle(a, b, c)
     B = _angle(b, c, a)
