@@ -138,7 +138,10 @@ def rfactor_smooth(
     if ei.shape != ej.shape or ei.dtype.kind not in "iu" or ej.dtype.kind not in "iu" \
             or (ei.size and (min(ei.min(), ej.min()) < 0 or max(ei.max(), ej.max()) >= len(h))):
         raise ValueError("ei and ej must be matching whole node indices")
-    if not (0 < rmax < 1 and np.isfinite(hmin) and hmin > 0 and int(max_iter) >= 1):
+    from fvcom_mesh_tools.extend import _real, _whole
+
+    rmax, hmin, max_iter = _real(rmax, "rmax"), _real(hmin, "hmin"), _whole(max_iter, "max_iter")
+    if not (0 < rmax < 1 and hmin > 0):
         raise ValueError(f"bad controls: rmax {rmax}, hmin {hmin}, max_iter {max_iter}")
     deg = np.bincount(np.r_[ei, ej], minlength=len(h)).max(initial=0)
     big = np.finfo(float).max / (4 * (int(deg) + 1))
@@ -187,6 +190,8 @@ def production_depths(
         raise ValueError(f"the depth bounds must be finite with 0 < hmin <= hmax, not "
                          f"[{hmin}, {hmax}]")
     ei, ej = node_edges(elements)           # validates the connectivity
+    if not len(ei) or not np.size(lon):
+        raise ValueError("production depths need coordinates and a non-empty triangulation")
     if len(ei) and max(int(ei.max()), int(ej.max())) >= len(np.ravel(lon)):
         raise ValueError("the elements name a node the coordinates do not have")
     raw, source = interpolate_m7001_tp(lon, lat)

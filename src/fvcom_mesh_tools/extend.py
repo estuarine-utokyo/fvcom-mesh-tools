@@ -65,6 +65,26 @@ def _grade(grade) -> float:
     return g
 
 
+def _real(value, name: str) -> float:
+    """A finite real number (NumPy scalars too; not a bool, not complex) as a
+    float (review round 33 F5)."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value, (int, float, np.integer, np.floating)):
+        raise ValueError(f"{name} must be a real number, not {value!r}")
+    v = float(value)
+    if not np.isfinite(v):
+        raise ValueError(f"{name} must be finite, not {value!r}")
+    return v
+
+
+def _whole(value, name: str) -> int:
+    """A positive whole number, not 1.9 and not a bool (review round 33 F5)."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) \
+            or value < 1:
+        raise ValueError(f"{name} must be a positive whole number, not {value!r}")
+    return int(value)
+
+
 def _lattice(values, x, y):
     """``values``, ``x`` and ``y`` as float arrays of one 2-D shape, with a
     finite lattice (review round 14 F5)."""
@@ -649,7 +669,10 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=500
     if ei.shape != ej.shape:
         raise ValueError(f"ei and ej differ in shape: {ei.shape} and {ej.shape}")
     # finite positive depths and sane controls, or NaN slips through the
-    # r > limit test (review round 2 F15)
+    # r > limit test (review rounds 2 F15, 33 F5)
+    rmax, hmin = _real(rmax, "rmax"), _real(hmin, "hmin")
+    hmax = None if hmax is None else _real(hmax, "hmax")
+    max_iter = _whole(max_iter, "max_iter")
     if not (0 < rmax < 1 and np.isfinite(hmin) and hmin > 0
             and (hmax is None or (np.isfinite(hmax) and hmax >= hmin))
             and int(max_iter) >= 1):

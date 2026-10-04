@@ -315,3 +315,46 @@ def test_corridor_targets_reach_the_last_endpoint_with_its_own_target():
     pts, tgt = corridor_targets(arc, [100.0, 100.0, 1000.0], closure_ll=closure,
                                 h_closure_end_m=300.0, step_m=100.0)
     assert tgt[-1] == pytest.approx(300.0 / 1.2)
+
+
+def test_round33_guards():
+    from fvcom_mesh_tools.dem.m7001 import production_depths, rfactor_smooth
+    from fvcom_mesh_tools.extend import rfactor_smooth_free
+    from fvcom_mesh_tools.obc_band import apply_corridor, build_obc_band, corridor_targets
+
+    # F2: a repeated pair of arc nodes
+    arc = np.c_[139 + 0.01 * np.array([0, 1, 2, 2, 3, 4]), np.full(6, 35.0)]
+    with pytest.raises(ValueError, match="repeated"):
+        build_obc_band(arc, np.full(6, 500.0), taper="local")
+    # F3: a closure shorter than a metre still ends on its exact target
+    arc3 = np.c_[139 + np.arange(3) * 0.0005, np.full(3, 35.0)]
+    short = np.array([[139.001, 35.0], [139.001, 35.0 + 0.5 / 111e3]])
+    _, tgt = corridor_targets(arc3, [100.0, 100.0, 1000.0], closure_ll=short,
+                              h_closure_end_m=300.0)
+    assert tgt[-1] == pytest.approx(250.0)
+    with pytest.raises(ValueError, match="no length"):
+        corridor_targets(arc3, [100.0, 100.0, 1000.0], closure_ll=short[:1].repeat(2, 0),
+                         h_closure_end_m=300.0)
+    # F4: step, factor, masks
+    for kw in ({"step_m": -100.0}, {"step_m": 0.0}, {"mesh_factor": np.nan}):
+        with pytest.raises(ValueError):
+            corridor_targets(arc3, [100.0, 100.0, 1000.0], **kw)
+    with pytest.raises(ValueError, match="masked"):
+        corridor_targets(arc3, np.ma.array([100.0, 100.0, 1000.0], mask=[0, 0, 1]))
+    # F5: scalar controls of both limiters
+    e = np.array([0]), np.array([1])
+    for kw in ({"max_iter": 1.9}, {"hmin": True}, {"rmax": np.complex128(0.2 + 0.1j)}):
+        with pytest.raises(ValueError):
+            rfactor_smooth_free(np.array([100.0, 10.0]), *e, np.array([True, True]),
+                                **{"rmax": 0.2, "hmin": 1.0, **kw})
+        with pytest.raises(ValueError):
+            rfactor_smooth(np.array([100.0, 10.0]), *e, **kw)
+    # F6: nothing to limit
+    with pytest.raises(ValueError, match="non-empty"):
+        production_depths(np.zeros(3), np.zeros(3), np.empty((0, 3), int))
+    # F7: gradation
+    for g in (-0.2, np.nan):
+        with pytest.raises(ValueError, match="gradation"):
+            apply_corridor(np.zeros((1, 2)), np.zeros((1, 2)), np.zeros((1, 2)),
+                           np.array([[0.0, 0.0]]), np.array([100.0]), grade=g,
+                           arc_mean_lat=35.0)

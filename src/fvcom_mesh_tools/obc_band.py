@@ -134,6 +134,8 @@ def build_obc_band(
     xy = _metric(arc_ll, cosw)
     t = np.gradient(xy, axis=0)
     tn = np.linalg.norm(t, axis=1)
+    if not (np.linalg.norm(np.diff(xy, axis=0), axis=1) > 0).all():
+        raise ValueError("the arc has consecutive repeated nodes: a zero-length side")
     if not (tn > 0).all():
         raise ValueError("the arc has repeated nodes: no direction at some point")
     t /= tn[:, None]
@@ -177,8 +179,24 @@ def corridor_targets(
     Returns ``(points_m, targets_m)`` in the local metric frame of
     ``arc_ll`` (same frame ``apply_corridor`` uses).
     """
+    from fvcom_mesh_tools.extend import _real
+
+    # known, finite, positive inputs and real controls, as build_obc_band
+    # (review round 33 F4)
+    for what, a in (("arc_ll", arc_ll), ("h_arc_m", h_arc_m), ("closure_ll", closure_ll)):
+        if a is not None and np.ma.is_masked(a):
+            raise ValueError(f"{what} has masked values")
     arc_ll = np.asarray(arc_ll, dtype=float)
     h_arc_m = np.asarray(h_arc_m, dtype=float)
+    if arc_ll.ndim != 2 or arc_ll.shape[1] != 2 or len(arc_ll) < 2 \
+            or not np.isfinite(arc_ll).all():
+        raise ValueError(f"arc_ll must be finite (N >= 2, 2), not {arc_ll.shape}")
+    if h_arc_m.shape != (len(arc_ll),) or not (np.isfinite(h_arc_m).all()
+                                                and (h_arc_m > 0).all()):
+        raise ValueError("h_arc_m must be finite positive sizes, one per arc node")
+    step_m, mesh_factor = _real(step_m, "step_m"), _real(mesh_factor, "mesh_factor")
+    if step_m <= 0 or mesh_factor <= 0:
+        raise ValueError("step_m and mesh_factor must be positive")
     cosw = float(np.cos(np.deg2rad(arc_ll[:, 1].mean())))
     xy = _metric(arc_ll, cosw)
     pts: list[np.ndarray] = []
@@ -199,10 +217,17 @@ def corridor_targets(
             raise ValueError(
                 "closure_ll given without h_closure_end_m: the "
                 "coastal-end target size must be explicit")
+        if _real(h_closure_end_m, "h_closure_end_m") <= 0:
+            raise ValueError("h_closure_end_m must be positive")
+        if closure_ll.ndim != 2 or closure_ll.shape[1] != 2 or len(closure_ll) < 2 \
+                or not np.isfinite(closure_ll).all():
+            raise ValueError(f"closure_ll must be finite (N >= 2, 2), not {closure_ll.shape}")
         cxy = _metric(closure_ll, cosw)
         seglen = np.r_[0.0, np.cumsum(
             np.linalg.norm(np.diff(cxy, axis=0), axis=1))]
         total = float(seglen[-1])
+        if not total > 0:
+            raise ValueError("the closure line has no length")
         h0 = float(h_arc_m[-1]) / mesh_factor
         h1 = float(h_closure_end_m) / mesh_factor
         for i in range(len(cxy) - 1):
@@ -210,9 +235,10 @@ def corridor_targets(
             length = float(np.linalg.norm(b - a))
             # f = 1 exactly, so the far end carries its exact target
             for f in np.append(np.arange(0.0, 1.0, step_m / max(length, step_m)), 1.0):
-                s = (seglen[i] + f * length) / max(total, 1.0)
+                s = (seglen[i] + f * length) / total
                 pts.append(a * (1 - f) + b * f)
                 tgt.append(h0 * (1 - s) + h1 * s)
+        tgt[-1] = h1                    # the far end carries its exact target
     return np.asarray(pts), np.asarray(tgt)
 
 
@@ -235,6 +261,9 @@ def apply_corridor(
     """
     from scipy.spatial import cKDTree
 
+    from fvcom_mesh_tools.extend import _grade
+
+    grade = _grade(grade)           # finite, non-negative, real (review round 33 F7)
     cosw = float(np.cos(np.deg2rad(arc_mean_lat)))
     q = np.column_stack([lon_g.ravel() * cosw * 111e3,
                          lat_g.ravel() * 111e3])
@@ -243,4 +272,6 @@ def apply_corridor(
     corr = np.maximum(t - grade * np.maximum(0.0, d - t), 0.0)
     corr = corr.reshape(values_deg.shape) * DEG_PER_M
     out = np.maximum(np.asarray(values_deg, dtype=float), corr)
+    if not np.isfinite(corr).all():
+        raise ValueError("the corridor field is not finite")
     return out, int((corr > values_deg).sum())
