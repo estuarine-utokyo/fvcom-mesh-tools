@@ -13230,3 +13230,238 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F1 | minor | test (the reviewer's int16 overlap) | yes, pre-existing | fixed, 573a80d: the promoted coordinates and normalized connectivity returned by `checked_geometry` are the ones used; test |
 | F2 | minor | tests (1.3e308 mesh) | yes, pre-existing | fixed, 573a80d as a **contract** rather than a patch per overflow: `checked_geometry` refuses coordinates beyond 1e100 (metres and degrees are 90 orders below); the repair and QA incident-edge normalizations are also scaled; test |
 | F3 | minor | test (uint16 tangents) | yes, pre-existing | fixed, 573a80d: promotion before the subtraction; test |
+
+## Round 45
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `007caa1`. **Three minor defects are substantiated**, including one regression introduced by `573a80d`. No files were modified.
+
+**Previous finding status**
+
+Grouped ranges cover every recorded finding. Historical statuses use recorded triage, current code and selected regressions; every historical reproduction was not rerun.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R8, all | RESOLVED | Original interpolation, frozen-base, publication, provenance and failure-handling corrections remain. |
+| R9–R16, all | RESOLVED | Ownership, indexing, serialization, recovery and geometry corrections remain. |
+| R17–R24, all | RESOLVED | Input identity, validation, YAML, history, publication and land-check corrections remain. |
+| R25–R30, all | RESOLVED | Limiter, rounding, acceptance, permission and environment corrections remain. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, mask, connectivity, bounds and acceptance cases remain corrected. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains established loader policy. |
+| R32, all | RESOLVED | Boundary, ladder, width, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded historical experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Original repeated-node, corridor, limiter, empty-mesh and gradation cases remain corrected. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original guide, array, overflow and planar-shape cases remain corrected. |
+| R34-F3 | WITHDRAWN | Nearest-target selection remains the approved calibrated method. |
+| R35–R40, all | RESOLVED | Original guard corrections remain; applicable regressions passed. |
+| R41–R42, all | RESOLVED | Seam validation, tangents, controls, precision, planar handling and unchanged statistics are corrected. |
+| R43, all | RESOLVED | Original depth-difference, local-repair and native-area cases passed. |
+| R44-F1 | RESOLVED | Seam arithmetic uses promoted coordinates and normalized connectivity; regression passed. |
+| R44-F2 | PARTIAL | Local repair and QA are corrected, but the public metric’s reported overflow remains: finding 1. |
+| R44-F3 | RESOLVED | Unsigned tangent subtraction is corrected; regression passed. The added conversion introduces finding 3. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and the owner’s resolution policy remain controlling. |
+
+**Findings**
+
+1. **Minor — Public perpendicularity metrics still report false success after incident-edge overflow.**
+
+   **Location:** [perpendicularity.py:107](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/perpendicularity.py:107).
+
+   **Reproduction:**
+
+   ```python
+   mesh = Fort14Mesh(
+       "t",
+       np.array([[0, 0], [200, 0], [200, 200]], dtype=np.float16),
+       np.ones(3), np.array([[0, 1, 2]]),
+       [np.array([0, 1])], [],
+   )
+   open_bdy_perpendicularity(mesh)
+   ```
+
+   This returns **`[0, 0]`**, indicating perfect perpendicularity. Promoting the same coordinates to float64 returns the correct **`[45, 0]`**.
+
+   The tangent now uses float64, but incident-edge subtraction and normalization still use the original coordinate dtype. The diagonal norm overflows in float16. Float64 coordinates scaled to `1e200` also return `[0,0]`; this helper never applies the new geometry contract.
+
+   **Fix:** Validate and promote geometry before subtraction, then normalize incident vectors using component scaling. Reject undefined geometry. Add the 200 m float16 regression alongside the existing large-coordinate case.
+
+   **Origin:** Pre-existing residual explicitly demonstrated in R44-F2; `573a80d` corrected the repair and QA calculations but omitted this public metric.
+
+2. **Minor — Public area and quality helpers still perform wrapping integer arithmetic.**
+
+   **Locations:** [perpendicularity.py:51](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/perpendicularity.py:51), [algorithms/quality.py:41](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/quality.py:41).
+
+   **Reproduction:**
+
+   ```python
+   mesh = Fort14Mesh(
+       "t",
+       np.array([[0, 0], [0, 200], [200, 0]], dtype=np.int16),
+       np.ones(3), np.array([[0, 1, 2]]), [], [],
+   )
+   signed_areas(mesh)
+   compute_metrics(mesh)
+   ```
+
+   The clockwise triangle has actual signed area **−20,000 m²**. The helper returns **+12,768 m²**, so `compute_metrics()` reports **`n_flipped == 0`**, and `check_thresholds(..., max_flipped=0)` passes.
+
+   The same input also produces alpha quality **0.55287062**, versus the correct **0.86602540** after float64 promotion. Both cross-products are computed in int16 before conversion.
+
+   **Fix:** Use validated floating planar coordinates and normalized connectivity in these shared geometry helpers before subtraction or multiplication. Add integer-versus-float equivalence regressions for orientation and quality.
+
+   **Origin:** Pre-existing. The native-writer and seam fixes corrected their separate area implementations; these public helpers remain affected.
+
+3. **Minor — The new tangent conversion discards complex coordinates and accepts masked coordinates as known.**
+
+   **Location:** [perpendicularity.py:35](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/perpendicularity.py:35).
+
+   **Reproduction:**
+
+   ```python
+   boundary_tangents(np.array([[0, 0], [1, 1 + 2j]], complex))
+
+   boundary_tangents(np.ma.array(
+       [[0, 0], [1, 1]],
+       mask=[[False, False], [False, True]],
+   ))
+   ```
+
+   Both calls return ordinary tangents approximately **`[0.707107, 0.707107]`** at both nodes. The first discards the imaginary coordinate with `ComplexWarning`; the second silently uses the hidden masked value.
+
+   Executing the pre-`573a80d` function confirms that the complex input previously retained its imaginary component. The new float64 conversion introduces the lossy conversion.
+
+   **Fix:** Reject masked and complex coordinates before conversion, using the existing shared checks, then validate finite planar coordinates and defined tangents.
+
+   **Origin:** Complex-value loss introduced by `573a80d`; masked-value acceptance is pre-existing.
+
+**Verification**
+
+- Read-only `python -B -c …` harnesses invoked `pytest.main()` with `-q --capture=sys -p no:cacheprovider`, excluding temporary-file fixtures:
+  - Extension, recipe, design, DEM and guard selection: **98 passed, 60 deselected**.
+  - Related QA, perpendicularity, finishing, coast fit, patch, sizing, I/O, namelist, provenance and ownership selection: **265 passed, 88 deselected**.
+- Complete R37–R39 and R43 guard functions passed using nonexistent output paths.
+- In-memory NetCDF probes passed for dimension aliases/order, query shape, priority fallback, datum attribution and warnings. Zero-weight missing-corner interpolation passed.
+- Unset `DATA_DIR`/`WORK_DIR` and default/override `FVCOM_LIBS` shell-fragment probes passed.
+- Scoped `ruff check --no-cache` and `bash -n` on all nine scoped shell files passed.
+- Preliminary probe harnesses failed because of read-only heredoc creation, an incorrect helper import and an omitted synthetic `JOBID`; corrected probes passed. Matplotlib cache initialization was mocked; Fontconfig emitted read-only-cache diagnostics.
+- `git diff --exit-code` passed and `git status --porcelain` remained empty.
+
+Production generation, QA gates, NP/NE, implied timestep and FVCOM integration were **not rerun**. Shared data was not read and no batch jobs were submitted.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 3 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 45: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 44 (your previous answer; 3 minor) was fixed in 573a80d; read it. Per finding:
+- F1 verify_frozen_base: the promoted coordinates and normalized connectivity from
+  `checked_geometry` are the ones used.
+- F2 contract: `checked_geometry` refuses coordinates beyond 1e100 (all helpers that call it);
+  the repair and QA incident-edge normalizations are scaled.
+- F3 boundary_tangents: promoted to float64 before the subtraction.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | test (float16 200 m mesh) | yes, pre-existing | fixed, 4ed24db: `open_bdy_perpendicularity` and the incidence cache use promoted coordinates and scaled edge vectors; test |
+| F2 | minor | test (int16 triangle) | yes, pre-existing | fixed, 4ed24db: `signed_areas` and the quality helpers promote first; test |
+| F3 | minor | tests (complex, masked tangents) | yes, F3 complex loss introduced in 573a80d | fixed, 4ed24db: `promoted_nodes` refuses masks and complex values; test |
