@@ -15,7 +15,7 @@
 # Output: $WORK_DIR/scratch/$FMESH_CHECK (must not exist yet)
 # Log:    logs/$FMESH_CHECK.<jobid>.log
 #============================================================================
-set -uo pipefail
+set -euo pipefail    # the stage failures that are collected carry an explicit `|| rc=1`
 cd "${PJM_O_WORKDIR:?Submit from the repository root}"
 NAME=${FMESH_CHECK:?pjsub -x FMESH_CHECK=<name>}
 . jobs/genkai/common.sh "$NAME" 32
@@ -26,19 +26,44 @@ echo "commit=$(git rev-parse HEAD) dirty=$(git status --porcelain --untracked-fi
 rc=0
 echo "== pytest $(date -Is)"
 python -m pytest -q -p no:cacheprovider tests > "$R/pytest.log" 2>&1 || rc=1
-tail -3 "$R/pytest.log"
+tail -3 "$R/pytest.log" || true
 echo "== 444 $(date -Is)"
+# the later stages build on the boundary it designs, so they cannot go on without it
 python notebooks/444_design_obc.py recipes/extend/tokyo_bay_enshu_obc_design.yaml \
-    "$R/obc/obc.csv" > "$R/444.log" 2>&1 || rc=1
+    "$R/obc/obc.csv" > "$R/444.log" 2>&1 || { tail -5 "$R/444.log"; echo "444 failed"; exit 1; }
 tail -3 "$R/444.log"
+# a run-local recipe: the repository recipe with the base and the boundary
+# just designed named absolutely, so that 445 and 453 consume that boundary
+# and not the checked-in CSV (review round 28 F6)
+python - "$R" recipes/extend/tokyo_bay_enshu.yaml outputs/base_tokyo_bay_tool <<'PY'
+import re, sys
+from pathlib import Path
+run, recipe, base = (Path(a).resolve() for a in sys.argv[1:4])
+text = recipe.read_text()
+for key, value in (("base", base), ("open_boundary", run / "obc" / "obc.csv")):
+    text, n = re.subn(rf"(?m)^{key}:.*$", f"{key}: {value}", text)
+    assert n == 1, f"{recipe}: expected one top-level '{key}:' line, found {n}"
+(run / "recipe.yaml").write_text(text)
+PY
+RECIPE=$R/recipe.yaml
 echo "== 445 $(date -Is)"
-python notebooks/445_extend_mesh.py recipes/extend/tokyo_bay_enshu.yaml "$R/build" \
+python notebooks/445_extend_mesh.py "$RECIPE" "$R/build" \
     > "$R/445.log" 2>&1 || rc=1
-grep -E "ladders|QA|WARNING|NP=|Error|failed" "$R/445.log" | tail -15
+grep -E "ladders|QA|WARNING|NP=|Error|failed" "$R/445.log" | tail -15 || true
+echo "== boundary consumed"
+python - "$R" <<'PY' || rc=1
+import hashlib, json, sys
+from pathlib import Path
+run = Path(sys.argv[1])
+want = hashlib.sha256((run / "obc" / "obc.csv").read_bytes()).hexdigest()
+got = json.loads((run / "build" / "report.json").read_text())["provenance"]["files"]["open_boundary"]["sha256"]
+print("obc.csv sha256", want[:16], "build used", got[:16])
+sys.exit(0 if got == want else "the build did not use the boundary stage 444 designed")
+PY
 echo "== 453 $(date -Is)"
-python notebooks/453_redepth_extended.py recipes/extend/tokyo_bay_enshu.yaml "$R/build" \
+python notebooks/453_redepth_extended.py "$RECIPE" "$R/build" \
     "$R/redepth" --sources cao_shutochokka_2025,m7001,srtm15plus > "$R/453.log" 2>&1 || rc=1
-tail -4 "$R/453.log" | cut -c1-400
+tail -4 "$R/453.log" | cut -c1-400 || true
 echo "== fingerprints"
 find "$R/build" -name '*_grd.dat' -exec sha256sum {} + | sed "s|$R/||"
 echo "== end rc=$rc $(date -Is)"

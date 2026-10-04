@@ -533,6 +533,9 @@ def land_segments(elements, open_chains) -> list[tuple[int, np.ndarray]]:
 
     # whole, unmasked, in-range indices: a truncated or masked chain would
     # invent open edges (review round 27 F3)
+    # an iterator is read once, so it is made a list before it is checked
+    # (review round 28 F3)
+    open_chains = list(open_chains)
     _no_masks(elements=elements, **{f"chain_{k}": c for k, c in enumerate(open_chains)})
     els = np.asarray(elements)
     n = int(els.max()) + 1 if els.size else 0
@@ -577,7 +580,17 @@ def round_depths_inside(h, hmin, hmax=None, decimals: int = 6) -> np.ndarray:
         raise ValueError("depths must be finite")
     if not (np.isfinite(hmin) and (hmax is None or (np.isfinite(hmax) and hmax >= hmin))):
         raise ValueError(f"bounds must be finite and ordered, not [{hmin}, {hmax}]")
-    q = 10.0 ** decimals
+    try:
+        q = 10.0 ** decimals
+    except OverflowError:
+        q = np.inf
+    # scaling by 10**decimals must stay finite, or the rounding returns inf
+    # from finite depths (review round 28 F8)
+    with np.errstate(over="ignore"):
+        scaled = [np.abs(np.asarray(h, float)).max(initial=0.0) * q, abs(hmin) * q,
+                  0.0 if hmax is None else abs(hmax) * q]
+    if not np.isfinite(q) or not np.isfinite(scaled).all():
+        raise ValueError(f"{decimals} decimals overflow for these depths and bounds")
     lo = np.ceil(hmin * q) / q
     hi = np.inf if hmax is None else np.floor(hmax * q) / q
     if lo > hi:
@@ -626,6 +639,11 @@ def rfactor_smooth_free(h0, ei, ej, free, *, rmax, hmin, hmax=None, max_iter=500
     if not (np.isfinite(h[used]).all() and (h[used] > 0).all()):
         raise ValueError("depths on the limited edges and free nodes must be finite and "
                          "positive")
+    # hi + hj and the corrections must not overflow, or r reads 0 for depths
+    # that break the limit (review round 28 F7)
+    if h[used].max(initial=0.0) > np.finfo(float).max / 4 or (hmax is not None
+                                                    and hmax > np.finfo(float).max / 4):
+        raise ValueError("depths beyond 4e307 m cannot be limited without overflow")
     # the bounds hold for every free node, on an edge or not (review round 9
     # F10)
     if hmax is not None:
@@ -681,6 +699,7 @@ def trim_lone_corners(elements, mutable, keep_nodes=(), max_rounds=20):
     # unknown flags are not permissions (review round 26 F4)
     from fvcom_mesh_tools.io.fvcom_native import _indices
 
+    keep_nodes = list(keep_nodes)       # read once, even from an iterator (round 28 F2)
     _no_masks(elements=elements, mutable=mutable, keep_nodes=keep_nodes)
     # whole indices, checked before any cast: immutable input is returned as
     # given, never rewritten (review round 27 F2)
@@ -689,8 +708,8 @@ def trim_lone_corners(elements, mutable, keep_nodes=(), max_rounds=20):
     t = _indices(raw, max(n, 1), "elements", ndim=2)
     if t.size and t.shape[1] != 3:
         raise ValueError(f"elements must be (M, 3), not {t.shape}")
-    keep_nodes = _indices(np.asarray(list(keep_nodes)), max(n, 1), "keep_nodes") \
-        if len(list(keep_nodes)) else np.empty(0, np.int64)
+    keep_nodes = _indices(np.asarray(keep_nodes), max(n, 1), "keep_nodes") \
+        if len(keep_nodes) else np.empty(0, np.int64)
     mut = np.asarray(mutable)
     if mut.dtype != bool or mut.shape != (len(t),):
         raise ValueError(f"mutable must be a boolean ({len(t)},) array, not {mut.dtype} "

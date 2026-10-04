@@ -167,3 +167,10 @@ def test_ray_intersection_does_not_depend_on_direction_length():
     assert np.allclose(ray_intersection([0, 0], [1e-7, 0], [1, 1], [0, -1e-7]), [1, 0])
     with pytest.raises(ValueError, match="not finite"):
         ray_intersection([1.6e308, 0], [1, 1], [1.6e308, 1e308], [1, -1])
+
+
+def test_ray_intersection_does_not_depend_on_the_direction_magnitude():
+    # review round 28 F4: the norm overflowed at 1e200 and underflowed at 1e-200
+    for scale in (1.0, 1e200, 1e-200):
+        pt = ray_intersection([0, 0], [scale, 0], [1, 1], [0, -scale])
+        assert pt.tolist() == pytest.approx([1.0, 0.0])

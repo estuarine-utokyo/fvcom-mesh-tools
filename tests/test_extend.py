@@ -699,3 +699,31 @@ def test_round_27_inputs_are_checked():
     x, y = np.meshgrid([0.0, 1000.0], [0.0, 1000.0])
     with pytest.raises(ValueError, match=r"\(N, 2\)"):
         band_field(x, y, [[0, 0, 0], [1000, 0, 1000]], [100, 200], 1)
+
+
+def test_iterator_inputs_are_read_once_not_consumed_by_their_checks():
+    # review round 28 F2, F3: a check that enumerated an iterator left nothing
+    # for the code that used it
+    from fvcom_mesh_tools.extend import land_segments, trim_lone_corners
+
+    fan = [[0, i, i % 6 + 1] for i in range(1, 7)]
+    t = np.array(fan + [[1, 7, 2]])
+    out, _, _ = trim_lone_corners(t, np.ones(len(t), bool), keep_nodes=iter([7]))
+    assert len(out) == 7
+    tri = [[0, 1, 2]]
+    assert [(k, r.tolist()) for k, r in land_segments(tri, iter([[0, 1]]))] == \
+        [(k, r.tolist()) for k, r in land_segments(tri, [[0, 1]])]
+
+
+def test_extreme_finite_depths_are_refused_not_turned_into_inf_or_a_false_pass():
+    # review round 28 F7, F8
+    from fvcom_mesh_tools.extend import rfactor_smooth_free, round_depths_inside
+
+    with pytest.raises(ValueError, match="overflow"):
+        rfactor_smooth_free([1.7e308, 1e307], [0], [1], [False, True], rmax=0.2, hmin=1,
+                            max_iter=10)
+    with pytest.raises(ValueError, match="overflow"):
+        round_depths_inside([1e308], 3)
+    with pytest.raises(ValueError, match="overflow"):
+        round_depths_inside([4], 1e308)
+    assert round_depths_inside([4.1234567], 1, decimals=3).tolist() == [4.123]

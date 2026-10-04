@@ -74,9 +74,12 @@ def ray_intersection(p, u, q, w) -> np.ndarray:
     p, u, q, w = (np.asarray(v, float) for v in (p, u, q, w))
     if any(v.shape != (2,) or not np.isfinite(v).all() for v in (p, u, q, w)):
         raise ValueError("rays need finite (2,) points and directions")
-    nu, nw = np.linalg.norm(u), np.linalg.norm(w)
-    if nu == 0 or nw == 0:
+    if not (u.any() and w.any()):
         raise ValueError("a ray has no direction")
+    # scaled by the largest component first, so the norm neither overflows
+    # nor underflows (review round 28 F4)
+    u, w = u / np.abs(u).max(), w / np.abs(w).max()
+    nu, nw = np.linalg.norm(u), np.linalg.norm(w)
     # unit directions: whether two sides are parallel does not depend on how
     # long their direction vectors are (review round 27 F5)
     u, w = u / nu, w / nw

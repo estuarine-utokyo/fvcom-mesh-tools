@@ -32,8 +32,13 @@ export DATA_DIR WORK_DIR
 # conda's activate scripts are not `set -u` clean. The conda install is
 # $WORK_DIR/miniforge3 unless the site layer sets FMESH_CONDA_ROOT.
 set +u
-. "${FMESH_CONDA_ROOT:-$WORK_DIR/miniforge3}/etc/profile.d/conda.sh"
-conda activate "${FMESH_ENV:-fvcom-mesh-tools}"
+# A failed set-up stops the job: a script that goes on with the system python
+# checks the wrong software (review round 28 F5).
+_env=${FMESH_ENV:-fvcom-mesh-tools}
+. "${FMESH_CONDA_ROOT:-$WORK_DIR/miniforge3}/etc/profile.d/conda.sh" \
+    || { echo "ERROR: cannot source conda from ${FMESH_CONDA_ROOT:-$WORK_DIR/miniforge3}"; exit 2; }
+conda activate "$_env" || { echo "ERROR: cannot activate conda env $_env"; exit 2; }
+[ "${CONDA_DEFAULT_ENV:-}" = "$_env" ] || { echo "ERROR: conda env is '${CONDA_DEFAULT_ENV:-}', not $_env"; exit 2; }
 set -u
 echo "python=$(command -v python) DATA_DIR=${DATA_DIR} WORK_DIR=${WORK_DIR}"
 

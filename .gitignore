@@ -72,3 +72,6 @@ HANDOVER.md
 
 # OCTOPUS job logs
 logs/
+
+# Per-repository scratch (owner rule 2026-10-04): runs, builds, review logs
+scratch/

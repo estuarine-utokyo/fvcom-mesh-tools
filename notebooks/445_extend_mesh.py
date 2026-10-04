@@ -135,6 +135,32 @@ if not failed:
         if not need.exists():
             failed = {"stage": need.name, "missing": str(need)}
             break
+
+
+def _acceptance_problem():
+    """Why a build whose stages exited 0 is still not "ok", or None (review round 28 F1)."""
+    try:
+        merged = json.loads((OUT / "merge.json").read_text())
+        json.loads((gen / "generate.json").read_text())
+        qa = merged["qa"]
+        total, nfail = int(qa["n_gate_total"]), int(qa["n_gate_failed"])
+        int(merged["n_nodes"]), int(merged["n_elements"])
+        problems = merged["problems"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return f"unreadable stage report ({type(exc).__name__}: {exc})"
+    if total <= 0 or nfail:
+        return f"QA {total - nfail}/{total}"
+    if problems:
+        return f"merge problems: {problems}"
+    for kind in ("grd", "dep", "obc"):
+        f = OUT / f"{recipe['case']}_{kind}.dat"
+        if not f.is_file() or f.stat().st_size == 0:
+            return f"missing or empty product {f.name}"
+    return None
+
+
+if not failed and (why := _acceptance_problem()):
+    failed = {"stage": "acceptance", "problem": why}
 # every input the provenance names, the bathymetry and land data included
 # (review round 6 F8), and the datasets listed again: a file that appeared
 # since is a change too (round 7 F9)
@@ -168,8 +194,8 @@ report = {
 (OUT / "report.json").write_text(json.dumps(report, indent=1, default=str))
 STATE["done"] = True
 if failed:
-    raise SystemExit(f"{failed['stage']} failed "
-                     f"({failed.get('returncode', failed.get('missing', 'inputs changed'))}); "
+    why = failed.get("returncode", failed.get("missing", failed.get("problem", "inputs changed")))
+    raise SystemExit(f"{failed['stage']} failed ({why}); "
                      f"report in {OUT / 'report.json'}")
 qa = report["merge"]["qa"]
 say(f"QA {qa['n_gate_total'] - qa['n_gate_failed']}/{qa['n_gate_total']}; "
