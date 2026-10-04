@@ -14336,3 +14336,204 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F3 | minor | test (singleton OBC) | yes, pre-existing | fixed, 8cea026; test |
 | F4 | minor | tests (inf metrics) | yes, pre-existing | fixed, 8cea026: finite actuals only; test |
 | F5 | nit | code read | yes (98f71ec) | fixed, 8cea026; test |
+
+## Round 49
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Previous-finding statuses refer to their original reproductions. Grouped rows cover every finding in those rounds, except the explicitly listed withdrawals.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R8, all | RESOLVED | Interpolation, frozen-base, serialization, publication, provenance and failure-handling corrections remain. Relicensing resolves the original oceanmesh policy conflict; timestep warnings follow the owner’s decision. |
+| R9–R16, all | RESOLVED | Ownership, indexing, recovery, geometry and land-check corrections remain. Optional backend handling follows the recorded owner decision. |
+| R17–R24, all | RESOLVED | Input identity, validation, YAML, publication and land-check corrections remain. |
+| R25–R30, all | RESOLVED | Limiter, rounding, acceptance, permission and environment corrections remain. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, mask, connectivity, bounds and acceptance cases remain corrected. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains the established loader contract. |
+| R32, all | RESOLVED | Boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded historical experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Original node, corridor, limiter, empty-mesh and gradation corrections remain. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original documentation, array, overflow and planar-shape cases remain corrected. |
+| R34-F3 | WITHDRAWN | Nearest-target selection remains the approved calibrated method. |
+| R35–R45, all | RESOLVED | Original permission, dtype, geometry, tangent and precision corrections remain; applicable in-memory guards passed. The `1e100` contract remains controlling. |
+| R46, all | RESOLVED | Subsequent fixes address the original publication, dtype, connectivity, tangent and collapsed-angle cases. |
+| R47, all | RESOLVED | The subsequent fixes complete normalization, publication protection, control validation and reporting corrections. |
+| R48-F1 | RESOLVED | Both alignment helpers return integer boundary chains. |
+| R48-F2 | RESOLVED | `compute_metrics` uses normalized connectivity. |
+| R48-F3 | RESOLVED | Local alignment rejects singleton chains. |
+| R48-F4 | RESOLVED | Infinite actual metrics fail their checks. Finding 1 below is a separate regression introduced by that fix. |
+| R48-F5 | RESOLVED | The no-OBC result includes `movable_first_ring`. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and the owner’s resolution policy remain controlling. |
+
+1. **Minor — The round 48 finiteness guard crashes on large Python integers.**  
+   **Location:** `src/fvcom_mesh_tools/quality.py:200`, `:213`.
+
+   Reproduced entirely in memory:
+
+   ```python
+   check_thresholds({"n_flipped": 2**64}, max_flipped=0)
+   ```
+
+   Before `8cea026`, this returned a failed check (`False`). Current code raises `TypeError` from `np.isfinite(actual)`. A Python integer outside NumPy’s supported scalar range reaches the new guard because `isinstance(actual, int)` succeeds.
+
+   **Reachability:** Direct helper calls with unusual or injected metrics only; the extension workflow does not produce counts this large.
+
+   **Fix:** Normalize the numeric value safely before testing finiteness, handling conversion failures as failed checks. Apply the same handling in both comparison branches.
+
+2. **Minor — An unchecked GENKAI run name can escape both output locations and truncate an unrelated file.**  
+   **Location:** `jobs/genkai/extend_check.sh:21`, `jobs/common_core.sh:20`.
+
+   `FMESH_CHECK` becomes the log-name argument before any destination reservation. With:
+
+   ```text
+   FMESH_CHECK=../outputs/existing
+   PJM_JOBID=7000725
+   ```
+
+   the log resolves to:
+
+   ```text
+   <repository>/outputs/existing.7000725.log
+   ```
+
+   `exec > "$LOG"` truncates that file if it exists. The run directory also escapes `$WORK_DIR/scratch`, resolving to `$WORK_DIR/outputs/existing`.
+
+   I reproduced the path construction using the actual shell prefix, replacing directory creation and redirection with read-only output.
+
+   **Reachability:** The extension tools’ own GENKAI job input, through an unusual `FMESH_CHECK` value. Pre-existing.
+
+   **Fix:** Validate `FMESH_CHECK` as one safe filename component before sourcing `common.sh`. Defensively validate the log-name argument in `common_core.sh` as well.
+
+3. **Minor — OCTOPUS’s interactive fallback loses its distinguishing process ID.**  
+   **Location:** `jobs/octopus/common.sh:12`.
+
+   Without `PBS_JOBID`, the code constructs `interactive.$$`, then `${JOBID%%.*}` reduces it to `interactive`. Two separate read-only shell reproductions, with different process IDs, both produced that same identifier. Consequently, sourcing the helper twice with the same log name targets the same file, and the later invocation truncates the earlier log.
+
+   **Reachability:** Direct sourcing of the shell helper without `PBS_JOBID`; normally submitted extension jobs supply that variable. Pre-existing.
+
+   **Fix:** Parse the scheduler suffix only when `PBS_JOBID` is present; preserve `interactive.$$` otherwise.
+
+Verification used the available `mambaforge` environment with `PYTHONDONTWRITEBYTECODE=1`, `PYTHONPATH=src`, and pytest options `-q -s -p no:cacheprovider`. The selected extension/design/source/review tests passed **96 tests**, including the complete round 48 guard, with four extreme-input warnings. A broader selection produced **159 passes and 23 failures**, all caused by Matplotlib attempting to create a cache in the read-only sandbox. Initial test-launch attempts were also blocked by temporary-file requirements. `bash -n` passed for all **nine** in-scope shell files.
+
+No files were modified, shared data were not read, and no jobs were submitted. Real-data generation, QA and timestep measurements were **not run**.
+
+## Verdict
+VERDICT: FAIL (0 blocker, 0 major, 3 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 49: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 48 (your previous answer; 4 minor, 1 nit; none reachable from the extension tools'
+own inputs, by your own account) was fixed in 8cea026; read it. Per finding:
+- F1 the perpendicularity alignments return the validated integer chains.
+- F2 compute_metrics: validated once, normalized connectivity used.
+- F3 align_open_boundary_local: a singleton open chain refused.
+- F4 check_thresholds: finite actuals only.
+- F5 no-OBC info carries movable_first_ring.
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | test (`2**64`) | yes, introduced in 8cea026 | fixed, 3655776: `_finite` treats an unconvertible integer as a failed check; test |
+| F2 | minor | shell probe of the name pattern (`../x`, `a/b`, `.hidden` refused) | yes, pre-existing (an unusual `FMESH_CHECK`) | fixed, 3655776: `FMESH_CHECK` and every log name must be one plain file name (all job scripts' names conform) |
+| F3 | minor | code read | yes, pre-existing | fixed, 3655776: the scheduler suffix is parsed only when `PBS_JOBID` is set |
