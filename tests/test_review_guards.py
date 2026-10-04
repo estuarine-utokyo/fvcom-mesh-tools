@@ -1025,3 +1025,23 @@ def test_round51_guards(tmp_path):
     assert check_main([str(run), "--marker", str(nml)]) == 2
     assert nml.exists()
     assert check_main([str(run), "--marker", str(run / "fvcom.log")]) == 2
+
+
+def test_round52_guards(tmp_path):
+    from fvcom_mesh_tools.cli.check_run import main as check_main
+    from fvcom_mesh_tools.quality import check_thresholds
+
+    # F1: infinities of any floating type fail
+    for inf in (np.longdouble("inf"), np.float32("inf"), float("inf")):
+        assert not check_thresholds({"alpha_mean": inf}, min_alpha_mean=0.9)[0]
+    assert not check_thresholds({"n_flipped": np.longdouble("-inf")}, max_flipped=0)[0]
+    # F2: integers are judged and reported as integers, any size
+    ok, checks = check_thresholds({"n_flipped": np.uint64(2**53 + 1)}, max_flipped=2**53)
+    assert not ok and checks[0].actual == 2**53 + 1 and checks[0].threshold == 2**53
+    assert check_thresholds({"n_flipped": 0}, max_flipped=10**400)[0]
+    # F3: a history file is not a marker, in any directory
+    run = tmp_path / "run"
+    (run / "output").mkdir(parents=True)
+    hist = run / "output" / "m2_0001.nc"
+    hist.write_bytes(b"x")
+    assert check_main([str(run), "--marker", str(hist)]) == 2 and hist.exists()

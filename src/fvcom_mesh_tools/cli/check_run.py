@@ -509,10 +509,9 @@ def main(argv: list[str] | None = None) -> int:
         # (review round 51 F3)
         run = args.run_dir.resolve()
         mk = args.marker.resolve()
-        case = args.casename or re.sub(r"_run\.nml$", "", args.nml)
-        if mk in (run / args.log, run / args.nml) or (
-                mk.parent == run and re.fullmatch(re.escape(case) + r"_\d+\.nc", mk.name)) \
-                or mk.is_dir():
+        # (history files live in the namelist's output directory, wherever it is: a
+        # NetCDF name is never a verdict marker; review round 52 F3)
+        if mk in (run / args.log, run / args.nml) or mk.suffix == ".nc" or mk.is_dir():
             print(f"[check-run] --marker {args.marker} names an input of the check or a "
                   "directory; refusing to remove it", file=sys.stderr)
             return 2

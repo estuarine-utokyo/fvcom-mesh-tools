@@ -25,6 +25,7 @@ Public entry points:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -157,8 +158,8 @@ class ThresholdCheck:
 
     metric: str
     op: str            # "≥" or "≤"
-    threshold: float
-    actual: float
+    threshold: int | float     # integers stay integers
+    actual: int | float
     passed: bool
 
     def to_dict(self) -> dict[str, Any]:
@@ -172,29 +173,24 @@ class ThresholdCheck:
 
 
 def _number(value: Any):
-    """``value`` as a Python number, or None when it is not one. Integers stay
-    integers, so that 2**53 + 1 is not judged as 2**53 (review round 51 F2)."""
-    if isinstance(value, (bool, np.bool_)) or not isinstance(
-            value, (int, float, np.integer, np.floating)):
+    """``value`` as a Python int (integers stay exact: 2**53 + 1 is not 2**53) or float,
+    or None when it is not a real number (review rounds 50 F1, 51 F2, 52 F1-F2)."""
+    if isinstance(value, (bool, np.bool_)):
         return None
-    return value.item() if isinstance(value, (np.integer, np.floating)) else value
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        return float(value)       # a longdouble beyond double range becomes inf: no measurement
+    return None
 
 
-def _as_float(value: Any) -> float:
-    """The number as a float for the record; NaN when it has none (an integer beyond
-    float range; r49 F1, r50 F1)."""
-    try:
-        return float(value)
-    except (OverflowError, ValueError, TypeError):
-        return float("nan")
-
-
-def _judge(actual: Any, op: str, threshold: float | int) -> tuple[float, bool]:
-    n = _number(actual)
-    if n is None or (isinstance(n, float) and not np.isfinite(n)):    # inf is no measurement
-        return _as_float(actual) if n is not None else float("nan"), False
-    t = threshold.item() if isinstance(threshold, (np.integer, np.floating)) else threshold
-    return _as_float(n), bool(n >= t if op == "≥" else n <= t)
+def _judge(actual: Any, op: str, threshold: Any) -> tuple[Any, Any, bool]:
+    """``(actual, threshold, passed)`` as the Python numbers compared; an actual that
+    is missing, not a number, NaN or infinite fails."""
+    n, t = _number(actual), _number(threshold)
+    if n is None or t is None or (isinstance(n, float) and not math.isfinite(n)):
+        return (float("nan") if n is None else n), (float("nan") if t is None else t), False
+    return n, t, bool(n >= t if op == "≥" else n <= t)
 
 
 def check_thresholds(
@@ -219,18 +215,18 @@ def check_thresholds(
     def _ge(metric: str, threshold: float) -> None:
         actual = metrics.get(metric)
         if actual is None:           # a requested threshold on a missing metric fails (r47 F8)
-            checks.append(ThresholdCheck(metric, "≥", float(threshold), float("nan"), False))
+            checks.append(ThresholdCheck(metric, "≥", _number(threshold), float("nan"), False))
             return
-        a, passed = _judge(actual, "≥", threshold)
-        checks.append(ThresholdCheck(metric, "≥", float(threshold), a, passed))
+        a, t, passed = _judge(actual, "≥", threshold)
+        checks.append(ThresholdCheck(metric, "≥", t, a, passed))
 
     def _le(metric: str, threshold: float) -> None:
         actual = metrics.get(metric)
         if actual is None:
-            checks.append(ThresholdCheck(metric, "≤", float(threshold), float("nan"), False))
+            checks.append(ThresholdCheck(metric, "≤", _number(threshold), float("nan"), False))
             return
-        a, passed = _judge(actual, "≤", threshold)
-        checks.append(ThresholdCheck(metric, "≤", float(threshold), a, passed))
+        a, t, passed = _judge(actual, "≤", threshold)
+        checks.append(ThresholdCheck(metric, "≤", t, a, passed))
 
     if min_alpha_mean is not None:
         _ge("alpha_mean", min_alpha_mean)
