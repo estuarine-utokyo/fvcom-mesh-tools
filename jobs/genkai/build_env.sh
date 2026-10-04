@@ -4,6 +4,7 @@
 #PJM -L vnode-core=8
 #PJM -L elapse=01:00:00
 #PJM -j
+#PJM -X
 #PJM -N fmesh_build
 #============================================================================
 # GENKAI: compile and install the local repositories into the conda env

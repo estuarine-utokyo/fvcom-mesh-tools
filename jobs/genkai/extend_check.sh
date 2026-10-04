@@ -4,6 +4,7 @@
 #PJM -L vnode-core=32
 #PJM -L elapse=03:00:00
 #PJM -j
+#PJM -X
 #PJM -N fmesh_extcheck
 #============================================================================
 # GENKAI: verify the extension tools end to end on the real Tokyo Bay /
