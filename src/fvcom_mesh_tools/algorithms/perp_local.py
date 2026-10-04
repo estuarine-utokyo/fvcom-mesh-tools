@@ -219,7 +219,13 @@ def align_open_boundary_local(
         if c.size >= 3 and not (np.linalg.norm(xy_chk[c[2:], :2] - xy_chk[c[:-2], :2],
                                                axis=1) > 0).all():
             raise ValueError("an open boundary doubles back on itself: undefined tangent")
-    nodes = mesh.nodes.copy()
+    for c in chains:         # a unit tangent at every node, or the deviations are meaningless
+        if c.size >= 2:
+            norms = np.linalg.norm(boundary_tangents(xy_chk[c, :2]), axis=1)
+            if not np.allclose(norms, 1.0):
+                raise ValueError("an open boundary has an undefined tangent (zero, "
+                                 "non-finite or overflowing coordinates)")
+    nodes = xy_chk.copy()        # promoted float coordinates: what was checked is what is used
     n_nodes = mesh.n_nodes
     rng = np.random.default_rng(seed)
     passes: list[dict[str, int]] = []

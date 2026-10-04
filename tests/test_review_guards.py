@@ -755,3 +755,47 @@ def test_round42_guards():
                                 depths=np.ones(3))
     assert np.isfinite([res.min_angle_after_deg, res.max_angle_after_deg, res.dt_before_s,
                         res.dt_after_s]).all()
+
+
+def test_round43_guards(tmp_path):
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+    from fvcom_mesh_tools.io.fvcom_native import apply_obc_depth_control, write_grd
+
+    tri1 = np.array([[0, 1, 2]])
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+
+    def mesh_with(depths, nodes=xy):
+        return Fort14Mesh(title="t", nodes=nodes, elements=tri1, depths=depths,
+                          open_boundaries=[np.array([0, 1])], land_boundaries=[])
+
+    # F1: object arrays are refused, large unsigned integers differ exactly
+    obj = np.array([np.uint16(6), np.uint16(5), np.uint16(5)], dtype=object)
+    with pytest.raises(ValueError, match="float or integer"):
+        apply_obc_depth_control(mesh_with(obj))
+    big = np.array([2**53 + 1, 2**53, 2**53], dtype=np.uint64)
+    out, change = apply_obc_depth_control(mesh_with(big))
+    assert change.tolist() == [-1.0, 0.0] and out.depths[0] == 2**53
+    # F2: the violation count does not depend on the coordinate scale or dtype
+    counts = []
+    for scale in (1.0, 1e200):
+        _, info = align_open_boundary_local(mesh_with(np.ones(3), xy * scale), max_outer=1,
+                                            n_jitter=1)
+        counts.append(info["remaining"])
+    assert counts[0] == counts[1] and counts[0]
+    lat, tris, n = _lattice_mesh()
+    stored = lat.astype(np.float16)
+    f16 = Fort14Mesh(title="t", nodes=stored, elements=tris, depths=np.full(len(lat), 10.0),
+                     open_boundaries=[np.arange(n)], land_boundaries=[])
+    f64 = Fort14Mesh(title="t", nodes=stored.astype(np.float64), elements=tris,
+                     depths=np.full(len(lat), 10.0), open_boundaries=[np.arange(n)],
+                     land_boundaries=[])
+    kw = {"max_outer": 1, "n_jitter": 1, "movable": np.zeros(len(lat), bool)}
+    rem16 = align_open_boundary_local(f16, **kw)[1]["remaining"]
+    assert rem16 and rem16 == align_open_boundary_local(f64, **kw)[1]["remaining"]
+    # F3: integer coordinates do not wrap in the area
+    ints = Fort14Mesh(title="t", nodes=np.array([[0, 0], [0, 200], [200, 0]], dtype=np.int16),
+                      elements=tri1, depths=np.ones(3), open_boundaries=[],
+                      land_boundaries=[])
+    with pytest.raises(ValueError, match="CCW"):
+        write_grd(ints, tmp_path / "x.dat")
+    assert not list(tmp_path.glob("x.*"))

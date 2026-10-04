@@ -56,9 +56,12 @@ def _num(v) -> str:
 
 
 def _signed_areas(mesh: Fort14Mesh) -> np.ndarray:
-    p0 = mesh.nodes[mesh.elements[:, 0]]
-    p1 = mesh.nodes[mesh.elements[:, 1]]
-    p2 = mesh.nodes[mesh.elements[:, 2]]
+    # in float: integer coordinates would wrap in their own dtype (review round
+    # 43 F3)
+    xy = np.asarray(mesh.nodes, dtype=np.float64)
+    p0 = xy[mesh.elements[:, 0]]
+    p1 = xy[mesh.elements[:, 1]]
+    p2 = xy[mesh.elements[:, 2]]
     return 0.5 * (
         (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
         - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
@@ -334,9 +337,17 @@ def apply_obc_depth_control(mesh: Fort14Mesh) -> tuple[Fort14Mesh, np.ndarray]:
     nxt, _ = fvcom_next_obc(mesh.nodes, mesh.elements, obc)
     # the change in the validated float vector (unsigned depths would wrap), the
     # written depths in the mesh's own dtype (review round 41 F5)
-    wide = np.asarray(mesh.depths, dtype=np.result_type(np.asarray(mesh.depths).dtype,
-                                                        np.float64))
-    change = wide[nxt] - wide[obc]
+    raw = np.asarray(mesh.depths)
+    if raw.dtype.kind in "iu":
+        # exact integer differences, in Python ints: neither the dtype's wrap nor
+        # a float's 53 bits (review round 43 F1)
+        vals = raw.tolist()
+        change = np.array([float(vals[a] - vals[b]) for a, b in zip(nxt, obc)])
+    elif raw.dtype.kind == "f":
+        wide = np.asarray(raw, dtype=np.result_type(raw.dtype, np.float64))
+        change = wide[nxt] - wide[obc]
+    else:
+        raise ValueError(f"depths must be a float or integer array, not {raw.dtype}")
     depths = np.array(mesh.depths, copy=True)
     depths[obc] = depths[nxt]
     return replace(mesh, depths=depths), change

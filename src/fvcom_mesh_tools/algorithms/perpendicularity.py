@@ -36,6 +36,11 @@ def boundary_tangents(bdy_xy: np.ndarray) -> np.ndarray:
     tangents[1:-1] = bdy_xy[2:] - bdy_xy[:-2]
     tangents[0] = bdy_xy[1] - bdy_xy[0]
     tangents[-1] = bdy_xy[-1] - bdy_xy[-2]
+    # scaled by the largest component first: the squared norm of a large but
+    # finite tangent overflows and the division then gives zero (review round
+    # 43 F2)
+    big = np.abs(tangents).max(axis=1, keepdims=True)
+    tangents = tangents / np.where(big == 0, 1.0, big)
     norms = np.linalg.norm(tangents, axis=1, keepdims=True)
     return tangents / np.where(norms == 0, 1.0, norms)
 
