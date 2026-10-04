@@ -9513,3 +9513,338 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 
 Note on F6, F7: `dem.m7001` is the older loader behind notebooks 383 and 422.
 A 383/422 rerun can now stop where it used to return an unconverged result.
+
+## Round 31
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+The review found **10 minor defects**, including two compatibility regressions introduced by `4a55998`. No files were modified.
+
+**Previous findings**
+
+Ranges below cover every numbered finding from rounds 1–30. Statuses assess the original defects and their requested guards; distinct regressions are listed separately.
+
+| Findings | Status | Reason |
+|---|---|---|
+| R1-F27; R2-F22; R3-F14; R4–R15-F1 | RESOLVED | Approved GPL relicensing resolves the former import-policy conflict. |
+| R1-F1–F26, F28–F29 | RESOLVED | Source handling, frozen-base checks, serialization, reservations and boundary validation remain corrected. F4 follows the approved warning policy. |
+| R2-F1–F21 | RESOLVED | Original publication, interpolation, geometry, concurrency and acceptance cases remain corrected. |
+| R3-F1–F13 | RESOLVED | Chord spacing, ladder orientation, serialization, overlap and design guards remain. F1 follows the warning policy. |
+| R4-F2–F14 | RESOLVED | Interpolation, overlap, containment, recovery, provenance and runtime corrections remain. |
+| R5-F2–F10 | RESOLVED | Flip protection, parsed-input identities, segment checks, recovery and depth validation remain. |
+| R6-F2–F11 | RESOLVED | Land-window, completion, failure-exit, inventory, native-input and path corrections remain. |
+| R7-F2–F12 | RESOLVED | Whole-source interpolation, export protection, relocation and identity checks remain. |
+| R8-F2–F13 | RESOLVED | Original rollback, cache, dimension-order, serialization and manifest cases remain corrected. |
+| R9-F2–F14 | RESOLVED | Concurrency, recovery, index/type validation, trimming and library-path corrections remain. |
+| R10-F2–F14 | RESOLVED | Original isolation, history, recovery, parsing and rounding cases remain corrected. |
+| R11-F2–F8 | RESOLVED | Finishing isolation, malformed-input, recovery, island and spaced-path corrections remain. |
+| R12-F2–F7 | RESOLVED | Accepted-product, benchmark, dimension, duration and serialization corrections remain. |
+| R13-F2–F9 | RESOLVED | Locks, paths, acceptance identities, inventories, titles and sizing controls remain. |
+| R14-F2–F9 | RESOLVED | Locks, marker ordering, lattice/scalar checks, scratch creation and backend selection remain. |
+| R15-F2–F7 | RESOLVED | Land checks follow the approved resolution policy; remaining corrections persist. |
+| R16-F1–F6 | RESOLVED | Optional backends follow the owner’s decision; ownership, controls and complete-interface checks remain. |
+| R17-F1–F9 | RESOLVED | Notices, environment paths, product protection, QA controls and geometry checks remain. |
+| R18-F1–F6 | RESOLVED | Boundary types, product aliases, array validation and standalone ownership remain corrected. |
+| R19-F1–F7 | RESOLVED | Erosion, ownership tokens, boundary types, publication protection and record/history identities remain. |
+| R20-F1–F9 | RESOLVED | Generation/history identities, native records, erosion, dates and job headers remain corrected. |
+| R21-F1–F11 | RESOLVED | Original history, consumed-input, native-record, YAML, mask and timing cases remain corrected. |
+| R22-F1–F9 | RESOLVED | Boundary/base/land identities, dates, YAML merges, hole checks and lexical validation remain. |
+| R23-F1–F7 | RESOLVED | Merged duplicates, land requirements, provenance snapshots, masks and output bounds remain corrected. |
+| R24-F1–F6 | RESOLVED | YAML graph checking, merge rejection, element counts, masks and native/timestamp validation remain. |
+| R25-F1–F7 | RESOLVED | Convergence, indices, counts, limiter inputs, `=` keys and recipe-aware QA floors remain corrected. |
+| R26-F1–F7 | RESOLVED | Original base-depth, lattice, index, mutability, rounding, ray and datum-index cases remain corrected. |
+| R27-F1–F6, F8 | RESOLVED | Geometry/index guards, ray normalization, QA coordinate validation and comments remain corrected. |
+| R27-F7; R28-F1; R29-F2 | PARTIAL | Malformed reports and unreadable products are rejected, but inconsistent products still pass; finding 1. |
+| R28-F2–F4 | RESOLVED | Iterator materialization and scaled ray normalization remain corrected. |
+| R28-F5–F6 | RESOLVED | Setup failures stop execution; the run-local recipe consumes the designed boundary. |
+| R28-F7–F8 | RESOLVED | Original overflow reproductions are rejected. |
+| R29-F1 | RESOLVED | Diskless tests confirm masked cells become NaN and masked axes are rejected. |
+| R29-F3–F4 | RESOLVED | Degree-dependent overflow bounds and supported rounding precision remain enforced. |
+| R29-F5–F6 | RESOLVED | Prefix comparison and YAML path emission remain corrected. |
+| R29-F7–F8 | RESOLVED | Original masked-export and decimal-endpoint cases remain corrected. |
+| R30-F1 | PARTIAL | Recipe/boundary identities and product parsing were added; cross-file consistency remains unchecked; finding 1. |
+| R30-F2 | PARTIAL | Precision is isolated, but caller traps and exponent limits remain inherited; finding 2. |
+| R30-F3 | RESOLVED | Both failed-prefix branches exit 2; matching existing prefixes pass. |
+| R30-F4 | RESOLVED | The run-local recipe uses `load_unique`. |
+| R30-F5 | RESOLVED | Declared `(lon, lat)` storage is transposed correctly. Finding 4 is a separate compatibility regression. |
+| R30-F6 | RESOLVED | A valid fine-grid node beside NaN returns depth 10/source 0. Finding 5 is a separate compatibility regression. |
+| R30-F7 | RESOLVED | The original 62-node, 60-triangle strip now raises after 2,000 iterations at approximately `r=0.010003`. |
+| R30-F8 | PARTIAL | Nonfinite depths and overflow are rejected; masked edge indices still bypass validation; finding 3. |
+| R30-F9 | RESOLVED | The depth floor is applied before convergence testing. |
+| Nondeterminism hypothesis; objection to omitting land below mesh resolution | WITHDRAWN | Supplied repeatability measurements and the owner’s resolution policy remain controlling. |
+
+**Findings**
+
+1. **Minor — Driver acceptance still accepts inconsistent case products.**
+
+   **Location:** [notebooks/445_extend_mesh.py:185](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/445_extend_mesh.py:185).
+
+   **Reproduction:** Executing the actual `_acceptance_problem()` with in-memory files returned `None` for a grid containing **3 nodes/1 element**, a separately parseable depth file containing **1 node at `(77,88)`**, and an OBC file containing node **999 twice**. Reports claimed positive counts and QA 23/23. `read_fvcom_case()` rejects this same case immediately.
+
+   The depth and OBC return values are discarded; only grid counts are compared.
+
+   **Fix:** Read the products together with `read_fvcom_case()`, validate positive depths, and compare mesh and boundary counts with the merge report.
+
+   **Origin:** Residual R27-F7/R28-F1/R29-F2/R30-F1; requires an injected stage fault.
+
+2. **Minor — Decimal rounding still depends on the caller’s context.**
+
+   **Location:** [src/fvcom_mesh_tools/extend.py:602](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:602).
+
+   **Reproductions:**
+
+   ```python
+   with decimal.localcontext() as ctx:
+       ctx.traps[decimal.Inexact] = True
+       round_depths_inside([3.0000004], 3.0000004)
+   # decimal.Inexact
+
+   with decimal.localcontext() as ctx:
+       ctx.Emax = 3
+       round_depths_inside([1e25], 1e25)
+   # decimal.InvalidOperation
+   ```
+
+   Both inputs pass the function’s finite-input and scaling checks. `localcontext()` copies traps and exponent limits; setting `prec=400` isolates only precision.
+
+   **Fix:** Use an explicitly configured fresh Decimal context with sufficient exponent limits and intentional traps.
+
+   **Origin:** Residual R30-F2.
+
+3. **Minor — The M7001 limiter silently consumes masked edge indices.**
+
+   **Location:** [src/fvcom_mesh_tools/dem/m7001.py:143](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/dem/m7001.py:143).
+
+   **Reproduction:**
+
+   ```python
+   ei = np.ma.array([0], mask=[True])
+   rfactor_smooth([10., 100.], ei, np.array([1]), rmax=.2)
+   # depth [44., 66.], iterations 1, r 0.2
+   ```
+
+   `np.asarray()` removes the mask before validation, so an unknown edge endpoint becomes node 0 and changes both depths.
+
+   **Fix:** Reject masks on both edge arrays before conversion, preferably using the shared checked-index path already used by `rfactor_smooth_free()`.
+
+   **Origin:** Pre-existing gap left by R30-F8.
+
+4. **Minor — Dimension checking rejects valid coordinate-dimension aliases.**
+
+   **Location:** [src/fvcom_mesh_tools/dem/m7001.py:74](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/dem/m7001.py:74).
+
+   **Reproduction:** A diskless 2×2 NetCDF grid with `lat(y)`, `lon(x)` and `elevation(y,x)` returned depth **10/source 0** before `4a55998`. Current code raises because the storage dimensions are named `('y','x')`.
+
+   Storage order should be determined from the coordinate variables’ dimension metadata, rather than their variable names.
+
+   **Fix:** Read `lat.dimensions` and `lon.dimensions`, then recognize their concatenation in either order, as `dem.sources.Grid` does.
+
+   **Introduced by:** R30-F5’s fix in `4a55998`.
+
+5. **Minor — The interpolation replacement rejects descending grids previously supported.**
+
+   **Location:** [src/fvcom_mesh_tools/dem/m7001.py:103](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/dem/m7001.py:103).
+
+   **Reproduction:** A diskless grid with both axes `[1,0]` and the elevation rows/columns reversed consistently returned depth **10/source 0** before `4a55998`. Current code raises “lat and lon must be strictly increasing.”
+
+   This is the same data stored in reverse coordinate order.
+
+   **Fix:** Normalize strictly descending axes to increasing order and reverse the corresponding elevation axis before interpolation; reject genuinely nonmonotonic axes.
+
+   **Introduced by:** R30-F6’s fix in `4a55998`.
+
+6. **Minor — Infinite M7001 coordinates fabricate valid interpolation coverage.**
+
+   **Location:** [src/fvcom_mesh_tools/dem/m7001.py:70](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/dem/m7001.py:70), consumed at line 107.
+
+   **Reproduction:** A diskless grid with longitude `[0, inf]`, latitude `[0,1]` and elevations `[[-10,-20],[-30,-40]]` returns depth **10/source 0** at `(lon=1,lat=0)`. The monotonicity check passes, and interpolation maps the query onto the first column.
+
+   **Fix:** Validate that coordinate axes are finite, one-dimensional and sufficiently populated before interpolation.
+
+   **Origin:** Pre-existing missing axis validation.
+
+7. **Minor — M7001 query conversion silently accepts unknown or malformed coordinates.**
+
+   **Location:** [src/fvcom_mesh_tools/dem/m7001.py:92](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/dem/m7001.py:92).
+
+   **Reproductions:** On the preceding finite 2×2 grid:
+
+   - A masked longitude `[0]` with latitude `[0]` returns depth **10/source 0**, using the value under the mask.
+   - Matching 2×2 longitude/latitude arrays return only **two depths `[10,40]`**. After `column_stack()`, the interpolation reads only the first two columns, treating a latitude column as longitude.
+
+   **Fix:** Check masks, finiteness and matching `(N,)` query shapes before conversion, or explicitly support general shapes through flattening and reshaping.
+
+   **Origin:** Mask handling is pre-existing; silent two-dimensional query handling is introduced by the R30 interpolation replacement.
+
+8. **Minor — `node_edges()` hides malformed connectivity from downstream guards.**
+
+   **Location:** [src/fvcom_mesh_tools/dem/m7001.py:120](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/dem/m7001.py:120).
+
+   **Reproduction:** Both fractional connectivity `[[0.,1.,2.9]]` and masked connectivity with vertex 2 unknown return the ordinary edges `(0,1)`, `(0,2)`, `(1,2)`. The limiter consequently receives apparently valid indices and cannot detect the original error.
+
+   **Fix:** Validate unmasked `(M,3)` connectivity with whole, nonnegative indices before casting; validate its range against the node count in `production_depths()`.
+
+   **Origin:** Pre-existing; used by both extension depth stages and the production-depth wrapper.
+
+9. **Minor — The production-depth wrapper returns invalid capped depths successfully.**
+
+   **Location:** [src/fvcom_mesh_tools/dem/m7001.py:204](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/dem/m7001.py:204).
+
+   **Reproduction:** With synthetic raw depths `[10,10,10]` and one triangle, `production_depths(..., hmin=3)` returns normally with:
+
+   | `hmax` | Returned depths | Reported `r_after` |
+   |---|---|---|
+   | `NaN` | `[NaN,NaN,NaN]` | `0.0` |
+   | `-1` | `[-1,-1,-1]` | `0.0` |
+   | `2` | `[2,2,2]`, below the floor | `0.0` |
+
+   The cap is neither validated nor covered by the new limiter guards.
+
+   **Fix:** Validate finite, ordered positive depth bounds before sampling, and check the final returned depths after capping.
+
+   **Origin:** Pre-existing.
+
+10. **Minor — Invalid band widths return an apparently valid empty field.**
+
+    **Location:** [src/fvcom_mesh_tools/extend.py:117](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:117).
+
+    **Reproduction:** On a 2×2 lattice, `band_field(..., half_width_m=-1)` and `half_width_m=NaN` both return an all-NaN field without raising. This is indistinguishable from a valid band missing the lattice.
+
+    The recipe validator protects the build path, but direct helper callers receive no invalid-control diagnosis.
+
+    **Fix:** Require a finite, nonnegative scalar half-width before evaluating distances.
+
+    **Origin:** Pre-existing robustness defect.
+
+**Verification**
+
+- Read-only extension/design/guard test selection: **71 passed, 8 deselected**.
+- Additional file-free recipe, source, provenance, native-I/O and namelist selection: **25 passed, 110 deselected**.
+- Scoped `ruff check --no-cache`: passed.
+- Individual `bash -n` checks: all **60 job scripts** passed.
+- Reproductions used in-memory filesystem mocks, tiny diskless NetCDF grids, small arrays and isolated shell conditionals.
+- The initial pytest invocation failed before collection because default capture requires temporary files; rerunning with memory-based capture passed.
+- No files changed, shared-data contents were not read, and no jobs were submitted. Real-data mesh generation, production QA/counts/timesteps and FVCOM integration were **not rerun**.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 10 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 31: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-30 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 30 (your previous answer; 9 minor) was fixed in 4a55998; read it.
+Per finding:
+- F1 445 `_acceptance_problem()`: generation identities checked against this
+  build's recipe/boundary hashes, case products parsed, counts compared.
+- F2 round_depths_inside: quantizes in a local Decimal context (prec 400).
+- F3 jobs/common_core.sh: each conda prefix resolved in its own assignment.
+- F4 extend_check.sh: recipe read with `yaml_strict.load_unique`.
+- F5 dem/m7001.py `_grid`: declared (lat, lon)/(lon, lat) order decides.
+- F6 `interpolate_m7001_tp`: `dem.sources._bilinear_index` (zero-weight NaN safe).
+- F7-F9 `m7001.rfactor_smooth`: validated inputs, overflow bound, floor first,
+  raises when the limit is not reached.
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record, "Verification on GENKAI"; it will
+be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | exec of the check on a grid/dep/obc that disagree | yes | fixed, 0bc5961: `read_fvcom_case` reads the three products together; node, element and open-boundary counts and positive depths are compared with the merge report; test |
+| F2 | minor | test (Inexact trap, Emax 3) | yes | fixed, 0bc5961: a fresh `Context`; test |
+| F3 | minor | test (masked `ei`) | yes, pre-existing | fixed, 0bc5961: masks refused; test |
+| F4 | minor | test (`lat(y)`, `elevation(y, x)`) | yes, introduced in 4a55998 | fixed, 0bc5961: the loader is now `dem.sources.Grid`, which compares the variable's dimensions with those of lat and lon; test |
+| F5 | minor | code read; both real grids ascend | **rebutted** | Descending axes were never part of the contract: `dem.sources.Grid` has refused them ("lon and lat must increase") since round 21, and the module now delegates to it, so there is one policy. Supporting reversed storage would be a new feature; the error names the cause |
+| F6 | minor | test (axis `[0, inf]`) | yes, pre-existing | fixed, 0bc5961: `Grid` checks the axes are finite; test |
+| F7 | minor | test (masked query, 2-D query) | yes | fixed, 0bc5961: masks, non-finite values and non-matching (N,) shapes refused; test |
+| F8 | minor | test (`[0., 1., 2.9]`, masked vertex) | yes, pre-existing | fixed, 0bc5961: connectivity through `_indices` before the cast; test |
+| F9 | minor | test (hmax NaN, -1, 2) | yes, pre-existing | fixed, 0bc5961: finite ordered bounds required, final depths checked; test |
+| F10 | minor | test (half width -1, NaN, inf) | yes, pre-existing | fixed, 0bc5961: finite non-negative scalar required; test |
+
+Check on real data: 4,000 random points over Tokyo Bay through the new
+`interpolate_m7001_tp` against the previous commit: same sources, depth
+difference at most 5e-12 m.
