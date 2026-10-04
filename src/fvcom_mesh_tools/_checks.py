@@ -71,3 +71,13 @@ def checked_flags(flags, n: int, name: str) -> np.ndarray:
     if arr.dtype != bool or arr.shape != (n,):
         raise ValueError(f"{name} must be a boolean ({n},) array, not {arr.dtype} {arr.shape}")
     return arr
+
+
+def promoted_nodes(nodes, what: str = "nodes") -> np.ndarray:
+    """``nodes`` as a float64 array, refusing masks and complex values first, so
+    that differences and cross products are not computed in a narrow dtype and
+    no unknown or imaginary part is dropped (review round 45)."""
+    if np.ma.is_masked(nodes):
+        raise ValueError(f"{what} has masked values")
+    no_complex(**{what: nodes})
+    return np.asarray(nodes, dtype=np.float64)

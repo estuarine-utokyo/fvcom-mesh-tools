@@ -22,9 +22,12 @@ def edge_lengths_planar(mesh: Fort14Mesh) -> np.ndarray:
 
     Column order: ``[l_01, l_12, l_20]`` matching ``elements`` columns.
     """
-    p0 = mesh.nodes[mesh.elements[:, 0]]
-    p1 = mesh.nodes[mesh.elements[:, 1]]
-    p2 = mesh.nodes[mesh.elements[:, 2]]
+    from fvcom_mesh_tools._checks import promoted_nodes
+
+    xy = promoted_nodes(mesh.nodes)
+    p0 = xy[mesh.elements[:, 0]]
+    p1 = xy[mesh.elements[:, 1]]
+    p2 = xy[mesh.elements[:, 2]]
     return np.column_stack([
         np.linalg.norm(p1 - p0, axis=1),
         np.linalg.norm(p2 - p1, axis=1),
@@ -38,9 +41,12 @@ def alpha_quality(mesh: Fort14Mesh) -> np.ndarray:
     1 = equilateral, 0 = degenerate. Scale-free so it works on lon/lat
     meshes without unit conversion.
     """
-    p0 = mesh.nodes[mesh.elements[:, 0]]
-    p1 = mesh.nodes[mesh.elements[:, 1]]
-    p2 = mesh.nodes[mesh.elements[:, 2]]
+    from fvcom_mesh_tools._checks import promoted_nodes
+
+    xy = promoted_nodes(mesh.nodes)
+    p0 = xy[mesh.elements[:, 0]]
+    p1 = xy[mesh.elements[:, 1]]
+    p2 = xy[mesh.elements[:, 2]]
     twice_signed = (
         (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
         - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])

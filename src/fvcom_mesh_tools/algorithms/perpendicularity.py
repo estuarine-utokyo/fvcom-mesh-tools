@@ -32,7 +32,9 @@ def boundary_tangents(bdy_xy: np.ndarray) -> np.ndarray:
 
     Central difference for interior nodes, one-sided at the two ends.
     """
-    bdy_xy = np.asarray(bdy_xy, dtype=np.float64)        # not in a narrow dtype (round 44 F3)
+    from fvcom_mesh_tools._checks import promoted_nodes
+
+    bdy_xy = promoted_nodes(bdy_xy, "boundary coordinates")   # round 44 F3, 45 F3
     tangents = np.empty_like(bdy_xy)
     tangents[1:-1] = bdy_xy[2:] - bdy_xy[:-2]
     tangents[0] = bdy_xy[1] - bdy_xy[0]
@@ -48,9 +50,12 @@ def boundary_tangents(bdy_xy: np.ndarray) -> np.ndarray:
 
 def signed_areas(mesh: Fort14Mesh) -> np.ndarray:
     """Per-element signed area (negative => triangle is flipped)."""
-    p0 = mesh.nodes[mesh.elements[:, 0]]
-    p1 = mesh.nodes[mesh.elements[:, 1]]
-    p2 = mesh.nodes[mesh.elements[:, 2]]
+    from fvcom_mesh_tools._checks import promoted_nodes
+
+    xy = promoted_nodes(mesh.nodes)
+    p0 = xy[mesh.elements[:, 0]]
+    p1 = xy[mesh.elements[:, 1]]
+    p2 = xy[mesh.elements[:, 2]]
     return 0.5 * (
         (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
         - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
@@ -88,8 +93,11 @@ def open_bdy_perpendicularity(
     if not mesh.open_boundaries:
         return np.array([])
 
+    from fvcom_mesh_tools._checks import promoted_nodes
+
+    nodes = promoted_nodes(mesh.nodes)
     bdy = np.asarray(mesh.open_boundaries[segment_index], dtype=np.int64)
-    bdy_xy = mesh.nodes[bdy]
+    bdy_xy = nodes[bdy]
     tangents = boundary_tangents(bdy_xy)
 
     inv_map = np.full(mesh.n_nodes, -1, dtype=np.int64)
@@ -104,7 +112,9 @@ def open_bdy_perpendicularity(
     bdy_node = np.where(inc_a_in, inc[:, 0], inc[:, 1])
     int_node = np.where(inc_a_in, inc[:, 1], inc[:, 0])
 
-    edge_vec = mesh.nodes[int_node] - mesh.nodes[bdy_node]
+    edge_vec = nodes[int_node] - nodes[bdy_node]
+    big = np.abs(edge_vec).max(axis=1, keepdims=True)          # scaled before the norm
+    edge_vec = edge_vec / np.where(big == 0, 1.0, big)
     edge_norms = np.linalg.norm(edge_vec, axis=1, keepdims=True)
     edge_vec = edge_vec / np.where(edge_norms == 0, 1.0, edge_norms)
     edge_tangent = tangents[inv_map[bdy_node]]
@@ -130,8 +140,11 @@ class _IncidenceCache:
 
 
 def _build_incidence(mesh: Fort14Mesh, segment_index: int) -> _IncidenceCache:
+    from fvcom_mesh_tools._checks import promoted_nodes
+
+    nodes = promoted_nodes(mesh.nodes)
     bdy = np.asarray(mesh.open_boundaries[segment_index], dtype=np.int64)
-    bdy_xy = mesh.nodes[bdy]
+    bdy_xy = nodes[bdy]
     tangents = boundary_tangents(bdy_xy)
     perp = np.column_stack([-tangents[:, 1], tangents[:, 0]])
 
@@ -147,7 +160,7 @@ def _build_incidence(mesh: Fort14Mesh, segment_index: int) -> _IncidenceCache:
     bdy_node = np.where(inc_a_in, inc[:, 0], inc[:, 1])
     int_node = np.where(inc_a_in, inc[:, 1], inc[:, 0])
 
-    edge_vec_orig = mesh.nodes[int_node] - mesh.nodes[bdy_node]
+    edge_vec_orig = nodes[int_node] - nodes[bdy_node]
     edge_len_orig = np.linalg.norm(edge_vec_orig, axis=1)
     perp_at_bdy = perp[inv_map[bdy_node]]
     sign_orig = np.sign((edge_vec_orig * perp_at_bdy).sum(axis=1))

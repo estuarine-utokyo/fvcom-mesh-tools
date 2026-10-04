@@ -824,3 +824,30 @@ def test_round44_guards():
     # F3: unsigned coordinates are promoted before the subtraction
     t = boundary_tangents(np.array([[1, 1], [0, 2]], dtype=np.uint16))
     assert np.allclose(t[0], [-1 / np.sqrt(2), 1 / np.sqrt(2)])
+
+
+def test_round45_guards():
+    from fvcom_mesh_tools.algorithms.perpendicularity import (
+        boundary_tangents,
+        open_bdy_perpendicularity,
+        signed_areas,
+    )
+    from fvcom_mesh_tools.algorithms.quality import alpha_quality
+
+    tri1 = np.array([[0, 1, 2]])
+    # F1: a float16 incident edge overflows its own dtype
+    for dtype in (np.float16, np.float64):
+        m = Fort14Mesh("t", np.array([[0, 0], [200, 0], [200, 200]], dtype=dtype), np.ones(3),
+                       tri1, [np.array([0, 1])], [])
+        assert np.allclose(open_bdy_perpendicularity(m), [45, 0])
+    # F2: integer coordinates give the float answers
+    ints = Fort14Mesh("t", np.array([[0, 0], [0, 200], [200, 0]], dtype=np.int16), np.ones(3),
+                      tri1, [], [])
+    floats = Fort14Mesh("t", ints.nodes.astype(float), np.ones(3), tri1, [], [])
+    assert signed_areas(ints).tolist() == signed_areas(floats).tolist() == [-20000.0]
+    assert alpha_quality(ints).tolist() == alpha_quality(floats).tolist()
+    # F3: complex and masked coordinates
+    with pytest.raises(ValueError, match="complex"):
+        boundary_tangents(np.array([[0, 0], [1, 1 + 2j]], complex))
+    with pytest.raises(ValueError, match="masked"):
+        boundary_tangents(np.ma.array([[0, 0], [1, 1]], mask=[[0, 0], [0, 1]]))
