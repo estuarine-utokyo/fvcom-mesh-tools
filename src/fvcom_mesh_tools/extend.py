@@ -348,12 +348,13 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
     # finite (review round 42 F1); new depths may still be NaN
     from fvcom_mesh_tools._checks import checked_geometry
 
-    checked_geometry(merged.nodes, merged.elements, "verify_frozen_base")
-    e = np.sort(np.vstack([merged.elements[:, [0, 1]], merged.elements[:, [1, 2]],
-                           merged.elements[:, [2, 0]]]), axis=1)
+    # the promoted coordinates and normalized connectivity are the ones used (a
+    # narrow integer dtype would wrap in the side test; review round 44 F1)
+    xy, els = checked_geometry(merged.nodes, merged.elements, "verify_frozen_base")
+    xy = xy[:, :2]
+    e = np.sort(np.vstack([els[:, [0, 1]], els[:, [1, 2]], els[:, [2, 0]]]), axis=1)
     owner = np.tile(np.arange(merged.n_elements), 3)
     keys = e[:, 0] * merged.n_nodes + e[:, 1]
-    xy = merged.nodes[:, :2]
     for a, b in zip(ib[:-1], ib[1:]):
         k = min(a, b) * merged.n_nodes + max(a, b)
         who = owner[keys == k]
@@ -364,7 +365,7 @@ def verify_frozen_base(merged: Fort14Mesh, base: Fort14Mesh, interface_base) -> 
         # one overlaps the base (review F10)
         side = []
         for e_ in who:
-            c = [v for v in merged.elements[e_] if v not in (a, b)][0]
+            c = [v for v in els[e_] if v not in (a, b)][0]
             cross = ((xy[b, 0] - xy[a, 0]) * (xy[c, 1] - xy[a, 1])
                      - (xy[b, 1] - xy[a, 1]) * (xy[c, 0] - xy[a, 0]))
             if not np.isfinite(cross) or cross == 0:      # an undefined side (round 41 F1)

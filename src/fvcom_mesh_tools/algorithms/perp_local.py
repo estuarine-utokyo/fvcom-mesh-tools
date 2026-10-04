@@ -116,9 +116,11 @@ def _dev_of(nodes, v, tangent, nbrs, in_seg):
         if in_seg[i]:
             continue
         vec = nodes[i] - nodes[v]
-        nrm = np.hypot(vec[0], vec[1])
-        if nrm == 0:
+        big = max(abs(vec[0]), abs(vec[1]))       # scaled: the norm of a large edge overflows
+        if big == 0:
             continue
+        vec = vec / big
+        nrm = np.hypot(vec[0], vec[1])
         cosang = abs(float(vec @ tangent)) / nrm
         best = min(best, 90.0 - np.degrees(np.arccos(np.clip(cosang, 0.0, 1.0))))
     return best

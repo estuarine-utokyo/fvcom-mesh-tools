@@ -32,6 +32,7 @@ def boundary_tangents(bdy_xy: np.ndarray) -> np.ndarray:
 
     Central difference for interior nodes, one-sided at the two ends.
     """
+    bdy_xy = np.asarray(bdy_xy, dtype=np.float64)        # not in a narrow dtype (round 44 F3)
     tangents = np.empty_like(bdy_xy)
     tangents[1:-1] = bdy_xy[2:] - bdy_xy[:-2]
     tangents[0] = bdy_xy[1] - bdy_xy[0]

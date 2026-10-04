@@ -980,6 +980,8 @@ def run_qa(
             bnode = np.where(inc_a, inc[:, 0], inc[:, 1])
             onode = np.where(inc_a, inc[:, 1], inc[:, 0])
             vec = nodes_m[onode] - nodes_m[bnode]
+            big = np.abs(vec).max(axis=1, keepdims=True)        # scaled before the norm
+            vec = vec / np.where(big == 0, 1.0, big)
             norm = np.linalg.norm(vec, axis=1, keepdims=True)
             vec = vec / np.where(norm == 0, 1.0, norm)
             cos = np.clip(np.abs((vec * tang[inv[bnode]]).sum(axis=1)), 0.0, 1.0)

@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from fvcom_mesh_tools.extend import rfactor_smooth_free, round_depths_inside
+from fvcom_mesh_tools.extend import rfactor_smooth_free, round_depths_inside, verify_frozen_base
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh, write_fort14
 
 
@@ -777,11 +777,13 @@ def test_round43_guards(tmp_path):
     assert change.tolist() == [-1.0, 0.0] and out.depths[0] == 2**53
     # F2: the violation count does not depend on the coordinate scale or dtype
     counts = []
-    for scale in (1.0, 1e200):
+    for scale in (1.0, 1e90):
         _, info = align_open_boundary_local(mesh_with(np.ones(3), xy * scale), max_outer=1,
                                             n_jitter=1)
         counts.append(info["remaining"])
     assert counts[0] == counts[1] and counts[0]
+    with pytest.raises(ValueError, match="1e100"):          # beyond the contract (round 44)
+        align_open_boundary_local(mesh_with(np.ones(3), xy * 1e200), max_outer=1, n_jitter=1)
     lat, tris, n = _lattice_mesh()
     stored = lat.astype(np.float16)
     f16 = Fort14Mesh(title="t", nodes=stored, elements=tris, depths=np.full(len(lat), 10.0),
@@ -799,3 +801,26 @@ def test_round43_guards(tmp_path):
     with pytest.raises(ValueError, match="CCW"):
         write_grd(ints, tmp_path / "x.dat")
     assert not list(tmp_path.glob("x.*"))
+
+
+def test_round44_guards():
+    from fvcom_mesh_tools.algorithms.perp_local import align_open_boundary_local
+    from fvcom_mesh_tools.algorithms.perpendicularity import boundary_tangents
+
+    # F1: a narrow integer dtype does not wrap in the seam test
+    xy = np.array([[0, 0], [200, 0], [0, 200], [0, 100]], dtype=np.int16)
+    tri = np.array([[0, 1, 2], [1, 0, 3]])
+    base = Fort14Mesh("b", xy[:3], np.ones(3), tri[:1], [np.array([0, 1])], [])
+    merged = Fort14Mesh("m", xy, np.ones(4), tri, [], [])
+    with pytest.raises(ValueError, match="same side|overlap"):
+        verify_frozen_base(merged, base, [0, 1])
+    # F2: an incident edge of 1.3e308 is outside the contract, and the QA/repair
+    # normalizations are scaled
+    m = Fort14Mesh(title="t", nodes=np.array([[0.0, 0], [1, 0], [1, 1]]) * 1.3e308,
+                   elements=np.array([[0, 1, 2]]), depths=np.ones(3),
+                   open_boundaries=[np.array([0, 1])], land_boundaries=[])
+    with pytest.raises(ValueError, match="1e100"):
+        align_open_boundary_local(m, max_outer=1, n_jitter=1)
+    # F3: unsigned coordinates are promoted before the subtraction
+    t = boundary_tangents(np.array([[1, 1], [0, 2]], dtype=np.uint16))
+    assert np.allclose(t[0], [-1 / np.sqrt(2), 1 / np.sqrt(2)])

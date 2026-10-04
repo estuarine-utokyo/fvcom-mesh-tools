@@ -52,6 +52,10 @@ def checked_geometry(nodes, elements, what: str = "the mesh") -> tuple[np.ndarra
     xy = np.asarray(nodes, float)
     if xy.ndim != 2 or xy.shape[1] < 2 or not np.isfinite(xy).all():
         raise ValueError(f"{what}: nodes must be finite (N, >= 2), not {xy.shape}")
+    # lengths, areas and cross products of coordinates this large overflow
+    # (review round 44 F2); metres and degrees are many orders below
+    if np.abs(xy).max(initial=0.0) > 1e100:
+        raise ValueError(f"{what}: coordinates beyond 1e100 are not supported")
     tri = _indices(elements, len(xy), f"{what}: elements", ndim=2)
     if tri.shape[1:] != (3,):
         raise ValueError(f"{what}: elements must be (M, 3), not {tri.shape}")
