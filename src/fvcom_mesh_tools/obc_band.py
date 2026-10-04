@@ -15,10 +15,11 @@ local size is ~840 m; deep end ~2100 m where it is ~1680 m, i.e.
 K ~ 1.25), and the artificial-closure spacing tapers from the
 junction value to the local coastal size (1901/1314/912/.../628 m).
 
-This module is intentionally free of any oceanmesh import (license
-policy): callers evaluate their sizing field themselves and pass
-plain arrays.  Distances here are geodesic-approximate (local
-``cos(lat)`` metric), adequate for band construction at bay scale.
+This module is intentionally independent of oceanmesh (it began under
+a licence that forbade the import; the package is GPL-3.0-or-later now):
+callers evaluate their sizing field themselves and pass plain arrays.
+Distances here are geodesic-approximate (local ``cos(lat)`` metric), adequate
+for band construction at bay scale.
 """
 
 from __future__ import annotations
@@ -85,8 +86,23 @@ def build_obc_band(
     ``egfix`` ((K, 2) int indices into pfix), ``inner_ll``
     ((M, 2)), ``offsets_m`` ((N,)).
     """
+    # known, finite inputs and real controls, or NaN and negative values turn
+    # into a different geometry without a word (review round 32 F5, F6)
+    if np.ma.is_masked(arc_ll) or np.ma.is_masked(h_arc_m):
+        raise ValueError("arc_ll or h_arc_m has masked values")
     arc_ll = np.asarray(arc_ll, dtype=float)
     h_arc_m = np.asarray(h_arc_m, dtype=float)
+    if arc_ll.ndim != 2 or arc_ll.shape[1] != 2 or not np.isfinite(arc_ll).all():
+        raise ValueError(f"arc_ll must be finite (N, 2), not {arc_ll.shape}")
+    if not np.isfinite(h_arc_m).all():
+        raise ValueError("h_arc_m must be finite")
+    if isinstance(k_offset, (bool, np.bool_)) or not isinstance(
+            k_offset, (int, float, np.integer, np.floating)) \
+            or not (np.isfinite(k_offset) and k_offset > 0):
+        raise ValueError(f"k_offset must be a finite positive number, not {k_offset!r}")
+    for name, v in (("skip_ends", skip_ends), ("smooth_passes", smooth_passes)):
+        if isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, np.integer)) or v < 0:
+            raise ValueError(f"{name} must be a non-negative whole number, not {v!r}")
     n = len(arc_ll)
     if n < 3:
         raise ValueError(
@@ -99,8 +115,8 @@ def build_obc_band(
         raise ValueError("h_arc_m must be positive")
     if 2 * skip_ends >= n - 1:
         raise ValueError(
-            f"skip_ends={skip_ends} leaves no inner nodes for an "
-            f"arc of {n} nodes")
+            f"skip_ends={skip_ends} leaves fewer than two inner nodes for an "
+            f"arc of {n} nodes (at least two are needed)")
 
     if taper == "linear-ends":
         off = np.linspace(k_offset * float(h_arc_m[0]),
@@ -117,12 +133,17 @@ def build_obc_band(
     cosw = float(np.cos(np.deg2rad(arc_ll[:, 1].mean())))
     xy = _metric(arc_ll, cosw)
     t = np.gradient(xy, axis=0)
-    t /= np.linalg.norm(t, axis=1)[:, None]
+    tn = np.linalg.norm(t, axis=1)
+    if not (tn > 0).all():
+        raise ValueError("the arc has repeated nodes: no direction at some point")
+    t /= tn[:, None]
     # inward = left of the walk direction; the caller orients the
     # arc so the domain lies to its LEFT
     nrm = np.column_stack([-t[:, 1], t[:, 0]])
     inner_xy = xy + nrm * off[:, None]
     inner_ll = _unmetric(inner_xy, cosw)
+    if not np.isfinite(inner_ll).all():
+        raise ValueError("the inner guide line is not finite")
     lo = skip_ends
     hi = n - skip_ends
     inner_ll = inner_ll[lo:hi]
@@ -169,6 +190,9 @@ def corridor_targets(
             pts.append(a * (1 - f) + b * f)
             tgt.append((h_arc_m[i] * (1 - f) + h_arc_m[i + 1] * f)
                        / mesh_factor)
+    # the arc's last node carries its own target (review round 32 F7)
+    pts.append(xy[-1])
+    tgt.append(float(h_arc_m[-1]) / mesh_factor)
     if closure_ll is not None:
         closure_ll = np.asarray(closure_ll, dtype=float)
         if h_closure_end_m is None:
@@ -184,8 +208,8 @@ def corridor_targets(
         for i in range(len(cxy) - 1):
             a, b = cxy[i], cxy[i + 1]
             length = float(np.linalg.norm(b - a))
-            for f in np.arange(0.0, 1.0001,
-                               step_m / max(length, step_m)):
+            # f = 1 exactly, so the far end carries its exact target
+            for f in np.append(np.arange(0.0, 1.0, step_m / max(length, step_m)), 1.0):
                 s = (seglen[i] + f * length) / max(total, 1.0)
                 pts.append(a * (1 - f) + b * f)
                 tgt.append(h0 * (1 - s) + h1 * s)

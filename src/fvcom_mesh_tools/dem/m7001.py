@@ -101,7 +101,7 @@ def node_edges(elements: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     n = int(np.nanmax(raw)) + 1 if raw.size and raw.dtype.kind in "iuf" \
         and np.isfinite(raw).all() else 1
     tri = _indices(elements, n, "elements", ndim=2)
-    if tri.size and tri.shape[1] != 3:
+    if tri.shape[1:] != (3,):
         raise ValueError(f"elements must be (M, 3), not {tri.shape}")
     e = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]), axis=1)
     e = np.unique(e, axis=0)
@@ -186,14 +186,14 @@ def production_depths(
     if not (np.isfinite([hmin, hmax]).all() and 0 < hmin <= hmax):
         raise ValueError(f"the depth bounds must be finite with 0 < hmin <= hmax, not "
                          f"[{hmin}, {hmax}]")
+    ei, ej = node_edges(elements)           # validates the connectivity
+    if len(ei) and max(int(ei.max()), int(ej.max())) >= len(np.ravel(lon)):
+        raise ValueError("the elements name a node the coordinates do not have")
     raw, source = interpolate_m7001_tp(lon, lat)
     floored = np.maximum(raw, hmin)
-    ei, ej = node_edges(elements)
     r_before = float((np.abs(floored[ei] - floored[ej]) / (floored[ei] + floored[ej])).max())
     smoothed, iters, r_after = rfactor_smooth(floored, ei, ej, rmax=rmax, hmin=hmin)
     depth = np.minimum(smoothed, hmax)
-    if len(elements) and int(np.max(elements)) >= len(depth):
-        raise ValueError("the elements name a node the coordinates do not have")
     if not (np.isfinite(depth).all() and (depth >= hmin).all() and (depth <= hmax).all()):
         raise ValueError("the production depths are not finite and within their bounds")
     report = {

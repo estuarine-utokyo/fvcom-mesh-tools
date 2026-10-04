@@ -201,6 +201,18 @@ def _acceptance_problem():
                 f"open-boundary nodes={n_obc}")
     if not (np.asarray(mesh.depths) > 0).all():
         return "the depth file holds a depth that is not positive"
+    # the extension's boundary contract: one open chain, the recipe's own
+    # nodes (UTM 54N, as 446 fixes them), in either direction (round 32 F1)
+    if len(mesh.open_boundaries) != 1:
+        return f"{len(mesh.open_boundaries)} open boundaries, expected exactly one"
+    from pyproj import Transformer
+
+    want = np.column_stack(Transformer.from_crs(4326, 32654, always_xy=True).transform(
+        *np.asarray(recipe["open_boundary_lonlat"], float).T))
+    have = np.asarray(mesh.nodes)[mesh.open_boundaries[0]]
+    if have.shape != want.shape or min(np.abs(have - want).max(),
+                                       np.abs(have[::-1] - want).max()) > 0.01:
+        return "the open boundary is not the recipe's boundary"
     return None
 
 

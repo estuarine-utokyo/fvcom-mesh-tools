@@ -59,7 +59,7 @@ def test_write_fort14_refuses_nonfinite_values(tmp_path):
         write_fort14(mesh, tmp_path / "x.14")
 
 
-def _acceptance(tmp_path, merge, generate, nodes=3, products=True):
+def _acceptance(tmp_path, merge, generate, products=True, boundary=None):
     """Run 445's acceptance check on report files made in tmp_path (rounds 29 F2, 30 F1)."""
     import json
     from pathlib import Path
@@ -71,11 +71,18 @@ def _acceptance(tmp_path, merge, generate, nodes=3, products=True):
     start, end = src.index("def _count("), src.index("if not failed and (why := _acceptance")
     gen = tmp_path / "gen"
     gen.mkdir(exist_ok=True)
-    recipe = {"case": "C", "recipe_sha256": "r" * 64, "open_boundary_sha256": "o" * 64}
+    from pyproj import Transformer
+
+    back = Transformer.from_crs(32654, 4326, always_xy=True)
+    lonlat = np.column_stack(back.transform(np.array([500000.0, 501000.0]),
+                                            np.array([3900000.0, 3900000.0])))
+    recipe = {"case": "C", "recipe_sha256": "r" * 64, "open_boundary_sha256": "o" * 64,
+              "open_boundary_lonlat": lonlat if boundary is None else boundary(lonlat)}
     ns = {"json": json, "np": np, "OUT": tmp_path, "gen": gen, "recipe": recipe}
     exec(src[start:end], ns)
     if products:
-        mesh = Fort14Mesh(title="t", nodes=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+        mesh = Fort14Mesh(title="t", nodes=np.array([[500000.0, 3900000.0], [501000.0, 3900000.0],
+                                          [500000.0, 3901000.0]]),
                           elements=np.array([[0, 1, 2]]), depths=np.array([5.0, 5.0, 5.0]),
                           open_boundaries=[np.array([0, 1])], land_boundaries=[])
         write_grd(mesh, tmp_path / "C_grd.dat")
@@ -107,6 +114,10 @@ def test_445_acceptance_check(tmp_path):
         assert _acceptance(tmp_path, bad_merge, bad_gen) is not None
     (tmp_path / "C_grd.dat").write_text("x")           # an unreadable product
     assert "unreadable product" in _acceptance(tmp_path, good, gen, products=False)
+    # the recipe's boundary, either way round, and nothing else (round 32 F1)
+    assert _acceptance(tmp_path, good, gen, boundary=lambda ll: ll[::-1]) is None
+    assert "recipe's boundary" in _acceptance(tmp_path, good, gen, boundary=lambda ll: ll + 1e-3)
+    assert "recipe's boundary" in _acceptance(tmp_path, good, gen, boundary=lambda ll: ll[:1])
     # a depth file of another mesh beside a good grid (round 31 F1)
     _acceptance(tmp_path, good, gen)
     (tmp_path / "C_dep.dat").write_text("Node Number = 1\n77 88 5\n")
@@ -243,3 +254,64 @@ def test_band_field_refuses_an_invalid_half_width():
     for w in (-1.0, np.nan, np.inf):
         with pytest.raises(ValueError, match="half_width_m"):
             band_field(x, y, line, np.array([10.0, 10.0]), half_width_m=w)
+
+
+def test_node_edges_wants_three_columns_even_when_empty():
+    from fvcom_mesh_tools.dem.m7001 import node_edges
+
+    assert node_edges(np.empty((0, 3), int))[0].size == 0       # (0, 3) is legitimate
+    with pytest.raises(ValueError, match="M, 3"):
+        node_edges(np.empty((0, 4), int))
+
+
+def test_production_depths_names_a_missing_node_before_sampling():
+    from fvcom_mesh_tools.dem.m7001 import production_depths
+
+    with pytest.raises(ValueError, match="name a node"):
+        production_depths(np.zeros(3), np.zeros(3), np.array([[0, 1, 3]]))
+
+
+def test_band_field_wants_a_real_width_and_a_line_with_length():
+    from fvcom_mesh_tools.extend import band_field
+
+    x, y = np.meshgrid([0.0, 1.0], [0.0, 1.0])
+    line = np.array([[0.0, 0.0], [1.0, 0.0]])
+    for w in (np.complex128(1 + 7j), np.complex128(7j), "2", None):
+        with pytest.raises(ValueError, match="half_width_m"):
+            band_field(x, y, line, np.array([10.0, 10.0]), half_width_m=w)
+    with pytest.raises(ValueError, match="zero-length"):
+        band_field(x, y, np.zeros((2, 2)), np.array([10.0, 20.0]), 2.0)
+
+
+def test_obc_band_refuses_unknown_values_and_bad_controls():
+    # round 32 F5, F6, F9
+    from fvcom_mesh_tools.obc_band import build_obc_band
+
+    arc = np.c_[139.0 + np.arange(6) * 0.01, np.full(6, 35.0)]
+    h = np.full(6, 500.0)
+    assert build_obc_band(arc, h, taper="local")["inner_ll"].shape == (4, 2)
+    with pytest.raises(ValueError, match="masked"):
+        build_obc_band(arc, np.ma.array(h, mask=[0, 0, 0, 0, 0, 1]), taper="local")
+    with pytest.raises(ValueError, match="finite"):
+        build_obc_band(arc, np.array([10, 10, np.nan, 10, 10, 10.0]), taper="local")
+    for kw in ({"k_offset": -1.0}, {"k_offset": np.nan}, {"skip_ends": -1},
+               {"smooth_passes": -1}, {"skip_ends": 1.5}):
+        with pytest.raises(ValueError):
+            build_obc_band(arc, h, **kw)
+    with pytest.raises(ValueError, match="fewer than two"):
+        build_obc_band(arc[:3], h[:3])
+    with pytest.raises(ValueError, match="repeated"):
+        build_obc_band(np.repeat(arc[:3], 2, axis=0), np.full(6, 500.0))
+
+
+def test_corridor_targets_reach_the_last_endpoint_with_its_own_target():
+    # round 32 F7
+    from fvcom_mesh_tools.obc_band import corridor_targets
+
+    arc = np.c_[139 + np.arange(3) * 0.0005, np.full(3, 35.0)]
+    pts, tgt = corridor_targets(arc, [100.0, 100.0, 1000.0], step_m=100.0)
+    assert tgt[-1] == pytest.approx(1000.0 / 1.2)
+    closure = np.c_[139.001 + np.arange(3) * 0.0003, np.full(3, 35.001)]
+    pts, tgt = corridor_targets(arc, [100.0, 100.0, 1000.0], closure_ll=closure,
+                                h_closure_end_m=300.0, step_m=100.0)
+    assert tgt[-1] == pytest.approx(300.0 / 1.2)

@@ -111,10 +111,13 @@ def band_field(x, y, line_xy, targets, half_width_m):
         raise ValueError("targets must be finite positive sizes, one target per point")
     if len(line_xy) < 2 or len(targets) != len(line_xy):
         raise ValueError("a band needs a line of two points or more and one target per point")
-    if isinstance(half_width_m, (bool, np.bool_)) or np.ndim(half_width_m) != 0 \
+    if not isinstance(half_width_m, (int, float, np.integer, np.floating)) \
+            or isinstance(half_width_m, (bool, np.bool_)) \
             or not (np.isfinite(half_width_m) and half_width_m >= 0):
         raise ValueError(f"half_width_m must be a finite non-negative number, not "
                          f"{half_width_m!r}")
+    if (np.linalg.norm(np.diff(line_xy, axis=0), axis=1) <= 0).any():
+        raise ValueError("the band line has a zero-length side: repeated vertices")
     line = shapely.LineString(line_xy)
     pts = shapely.points(np.ravel(x), np.ravel(y))
     d = shapely.distance(pts, line)
