@@ -11770,3 +11770,220 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F3 | minor | tests (scalar and callable spacing, corridor arrays) | yes | fixed, 6078ca7; tests |
 | F4 | minor | test (complex sponge record) | yes | fixed, 6078ca7; test |
 | F5 | nit | `__doc__` is None | yes, introduced in 201abb9 | fixed, 6078ca7; test |
+
+## Round 39
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed at `ed5d2b9`. **Four minor defects are substantiated, all pre-existing. No defect introduced by `6078ca7` was found.** No files were modified.
+
+**Previous finding status**
+
+These ranges cover every previous numbered finding. Statuses concern the original reported cases, based on recorded triage, current code and selected regressions; every historical reproduction was not rerun.
+
+| Findings | Status | Reason |
+|---|---|---|
+| R1–R8, all numbered findings | RESOLVED | Masking, interpolation, publication, provenance, frozen-base and failure-handling corrections remain present. The current licensing and timestep-warning decisions apply. |
+| R9–R16, all numbered findings | RESOLVED | Original ownership, indexing, serialization, recovery, geometry and backend-policy cases remain corrected. |
+| R17–R24, all numbered findings | RESOLVED | Original validation, input-identity, YAML, history, publication and land-check cases remain corrected. |
+| R25–R30, all numbered findings | RESOLVED | Original limiter, rounding, geometry, permission, acceptance and environment cases remain corrected. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, mask, connectivity, bound and acceptance cases remain corrected. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal is established loader policy. |
+| R32-F1–F10 | RESOLVED | Original boundary, width, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded historical experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Original repeated-node, corridor, limiter, empty-mesh and gradation cases remain corrected. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original guide, array, overflow and planar-shape cases remain corrected. |
+| R34-F3 | WITHDRAWN | Nearest-target selection remains the approved calibrated method. |
+| R35-F1–F5 | RESOLVED | Original frozen-node, backup, bound, target and count cases remain corrected. |
+| R36-F1–F5 | RESOLVED | Original permission, complex-value, fillet-overflow, tolerance and licensing cases remain corrected. |
+| R37-F1–F4 | RESOLVED | The reported call sites reject complex values; erosion and perpendicularity controls remain corrected. The complete regression passed. |
+| R38-F1 | RESOLVED | Fillet radii are materialized once; iterator regression passed. |
+| R38-F2 | RESOLVED | Object arrays containing complex scalars are rejected; regression passed. |
+| R38-F3 | RESOLVED | Scalar/callable spacing and corridor arrays reject complex values; regressions passed. |
+| R38-F4 | RESOLVED | Complex sponge records are rejected before output access; regression passed. |
+| R38-F5 | RESOLVED | `_check_exportable.__doc__` is restored; regression passed. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Supplied measurements and the owner’s resolution policy remain controlling. |
+
+**Findings**
+
+1. **Minor — Patch repair treats masked permissions as authorization.**
+
+   **Location:** [patch.py:4210](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:4210), also line 4242.
+
+   `improve_patch()` casts `mutable_faces` and `movable` directly to Boolean arrays, discarding masks. This bypasses the ownership protection that other repair helpers now enforce.
+
+   **Reproduction:** On a nine-node, eight-element square grid at 100 m spacing, move its centre to `[170, 90]`. Set only the centre’s underlying movable flag to true, then mask the entire permission array. With all faces immutable and `rounds=1`, the function reports **one move**, relocating the centre to `[100, 100]`. With movement disabled and every face’s underlying mutable flag true but masked, it reports **one flip**, rewriting two elements.
+
+   **Fix:** Reject masked permissions before conversion. Require Boolean arrays of the expected shapes for `movable`, `mutable_faces` and `slidable`, consistent with `align_open_boundary_local()`.
+
+2. **Minor — Coast fitting and patch repair silently alter invalid geometry during conversion.**
+
+   **Locations:** [coast_fit.py:379](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/coast_fit.py:379), [patch.py:4208](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/patch.py:4208).
+
+   Both helpers discard coordinate masks and imaginary components. Patch repair also truncates fractional connectivity, including faces declared immutable.
+
+   **Reproduction:** For the triangle `[[0,0], [1,0], [0,1]]`, pass coordinates either fully masked or offset by `9j`. Calling `fit_boundary_to_coast()` with all three nodes fixed returns ordinary real coordinates successfully. `improve_patch()` does the same with movement and face mutation disabled. Separately:
+
+   ```python
+   improve_patch(
+       nodes, np.array([[0., 1., 2.9]]),
+       np.zeros(3, bool), np.zeros(1, bool), rounds=1,
+   )
+   ```
+
+   succeeds and returns connectivity `[[0, 1, 2]]`.
+
+   **Fix:** Reject masked and complex geometry before conversion; validate finite coordinate shapes and pass connectivity through `_indices()` before casting. Perform validation before early returns.
+
+3. **Minor — OBC depth-control helpers bypass index and geometry validation.**
+
+   **Locations:** [fvcom_native.py:262](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:262), also line 311.
+
+   `fvcom_next_obc()` casts coordinates and indices immediately. `apply_obc_depth_control()` additionally strips boundary masks and truncates boundary indices before calling it.
+
+   **Reproduction:** Using `_mesh()` from `tests/test_fvcom_native.py`, replace its open chain `[3,6]` with either `[3.9,6.9]` or fully masked `[3,6]`. Depth control succeeds in both cases, changes depths at nodes 3 and 6, and reports changes `[1,1]`. Passing fully masked coordinates or `mesh.nodes + 9j` directly to `fvcom_next_obc()` succeeds and selects neighbours `[4,7]`.
+
+   **Fix:** Validate masks, complex values, finite coordinate shape and whole in-range connectivity/boundary indices before conversion. Preserve those checks in the public depth-control wrapper.
+
+4. **Minor — Overflowed area arithmetic bypasses the native writer’s orientation gate.**
+
+   **Location:** [fvcom_native.py:73](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fvcom_native.py:73).
+
+   The validator rejects `sa <= 0`, but does not reject nonfinite computed areas. Finite coordinates can produce `inf - inf = NaN`, which passes that comparison.
+
+   **Reproduction:** Use nodes:
+
+   ```python
+   [[0., 0.], [2e200, 3e200], [1e200, 1e200]]
+   ```
+
+   with connectivity `[[0,1,2]]`. This triangle is mathematically clockwise. `_signed_areas()` returns `[nan]`; `write_grd()`, with its output mocked to an in-memory sink, succeeds and writes unchanged connectivity `1 1 2 3`.
+
+   **Fix:** Reject nonfinite computed signed areas before orientation checks. Use overflow-safe orientation arithmetic if such coordinate magnitudes are intended to be supported.
+
+**Verification**
+
+- Python **3.12.14**, with `PYTHONDONTWRITEBYTECODE=1`, `PYTHONPATH=src` and `NUMBA_DISABLE_JIT=1`.
+- Pytest with `-q --capture=sys -p no:cacheprovider` and an in-memory filter excluding filesystem-writing fixtures:
+  - Extension, recipe, design, DEM-source, review-guard and OBC-band tests: **107 passed, 58 deselected**.
+  - QA and related repair, I/O, run-check, sizing, provenance, ownership and CLI tests: **233 passed, 23 failed, 117 deselected**. All 23 failures were Matplotlib writable-cache errors.
+- Complete round 37 and round 38 regressions passed with file writes forbidden.
+- In-memory NetCDF probes passed for masked fallback, zero-weight missing neighbours, dimension aliases and transposed storage.
+- Scoped Ruff checks and separate `bash -n` checks on all nine in-scope shell files passed.
+- `git status --short` remained empty; `git diff --exit-code` passed.
+- Production generation, QA gates, NP/NE, implied timestep and FVCOM integration were **not rerun**. Shared-data contents were not read; no jobs were submitted.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 4 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 39: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 38 (your previous answer; 4 minor, 1 nit) was fixed in 6078ca7; read it. Per finding:
+- F1 fillet: radii read once.
+- F2 `_checks.no_complex`: object arrays inspected.
+- F3 resample (scalar and callable spacing), apply_corridor: complex refused.
+- F4 sponge records: complex refused.
+- F5 _check_exportable docstring restored.
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | tests (masked and integer permissions) | yes, pre-existing | fixed, 685456c: `checked_flags`; test |
+| F2 | minor | tests (masked, complex, fractional connectivity) | yes, pre-existing | fixed, 685456c: `checked_geometry` in `improve_patch` and `fit_boundary_to_coast`; test |
+| F3 | minor | tests (masked coordinates, fractional boundary index) | yes, pre-existing | fixed, 685456c; test |
+| F4 | minor | test (2e200 triangle) | yes | fixed, 685456c: a non-finite area is refused; test |
