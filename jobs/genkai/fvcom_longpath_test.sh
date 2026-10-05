@@ -31,31 +31,48 @@ rm -rf "$ROOT"; mkdir -p "$ROOT"
 LONGSEG=$(printf 'a_deliberately_long_directory_name_%.0s' 1 2 3 4 5)
 run_case () {   # $1 label  $2 binary  $3 directory
     local d=$3
-    mkdir -p "$d"; cp -r "$SRC/input" "$SRC/output" "$SRC"/*_run.nml "$d/"
+    mkdir -p "$d/output"; cp -r "$SRC/input" "$SRC"/*_run.nml "$d/"
     sed -i "s#^ *INPUT_DIR .*#INPUT_DIR = '$d/input/',#; s#^ *OUTPUT_DIR .*#OUTPUT_DIR = '$d/output/',#" "$d"/*_run.nml
-    # history and restart output, so that the long OUTPUT_DIR is written to as well as read
-    sed -i "s#^ *NC_ON .*#NC_ON = T,#; s#^ *NC_OUT_INTERVAL .*#NC_OUT_INTERVAL = 'seconds=60.0',#; s#^ *RST_ON .*#RST_ON = T,#; s#^ *RST_FIRST_OUT .*#RST_FIRST_OUT = '2020-01-01 00:01:00',#; s#^ *RST_OUT_INTERVAL .*#RST_OUT_INTERVAL = 'seconds=60.0',#" "$d"/*_run.nml
+    # history, average, surface and restart output (their identifiers share the directory prefix), so that the long OUTPUT_DIR is written to as well as read
+    sed -i "s#^ *NC_ON .*#NC_ON = T,#; s#^ *NC_OUT_INTERVAL .*#NC_OUT_INTERVAL = 'seconds=60.0',#; s#^ *NCAV_ON .*#NCAV_ON = T,#; s#^ *NCAV_OUT_INTERVAL .*#NCAV_OUT_INTERVAL = 'seconds=60.0',#; s#^ *NCSF_ON .*#NCSF_ON = T,#; s#^ *NCSF_OUT_INTERVAL .*#NCSF_OUT_INTERVAL = 'seconds=60.0',#; s#^ *RST_ON .*#RST_ON = T,#; s#^ *RST_FIRST_OUT .*#RST_FIRST_OUT = '2020-01-01 00:01:00',#; s#^ *RST_OUT_INTERVAL .*#RST_OUT_INTERVAL = 'seconds=60.0',#" "$d"/*_run.nml
     echo "[$1] dir length $(( ${#d} + 1 )) bytes"
     ( cd "$d" && mpiexec -np 4 "$2" --casename=tokyo_bay_v1_smoke > fvcom.log 2>&1 ) && rc=0 || rc=$?
     echo "[$1] exit=$rc; netcdf files: $(ls "$d/output" | grep -c '\.nc$')"
     echo "[$1] $(grep -c -i 'fatal' "$d/fvcom.log") fatal lines; $(grep -c TADA "$d/fvcom.log") TADA"
+    return $rc
 }
 run_case old_short "$OLD" "$ROOT/o"
 run_case new_short "$NEW" "$ROOT/n"
 run_case new_long  "$NEW" "$ROOT/$LONGSEG/$LONGSEG/case"
-run_case old_long  "$OLD" "$ROOT/$LONGSEG/$LONGSEG/oldcase" || true
+# the old binary is expected to FAIL in the long directory (it cuts the path at 80 bytes)
+if run_case old_long "$OLD" "$ROOT/$LONGSEG/$LONGSEG/oldcase"; then echo "[old_long] UNEXPECTEDLY ran"; exit 1; fi
 module purge; unset LD_LIBRARY_PATH
 . "${FMESH_CONDA_ROOT:?}/etc/profile.d/conda.sh"; set +u; conda activate "${FMESH_ENV:-fvcom-mesh-tools}"; set -u
 python - "$ROOT" "$LONGSEG" <<'PY'
-import sys, glob, numpy as np, netCDF4 as nc
+import sys, glob, os, numpy as np, netCDF4 as nc
 root, seg = sys.argv[1:]
-def first(d):
-    f = sorted(glob.glob(f"{d}/output/*.nc")); return f[0] if f else None
-ref = first(f"{root}/o")
-for lab, d in (("new_short", f"{root}/n"), ("new_long", f"{root}/{seg}/{seg}/case")):
-    f = first(d)
-    if not (ref and f): print(lab, "NO OUTPUT"); continue
-    a, b = nc.Dataset(ref), nc.Dataset(f)
-    diffs = {v: float(np.max(np.abs(a[v][:] - b[v][:]))) for v in ("zeta", "u", "v", "temp", "salinity") if v in a.variables}
-    print(lab, "max |diff| vs old_short:", diffs)
+cases = {"old_short": f"{root}/o", "new_short": f"{root}/n", "new_long": f"{root}/{seg}/{seg}/case"}
+def files(d):
+    return {os.path.basename(f): f for f in glob.glob(f"{d}/output/*.nc")}
+ref = files(cases["old_short"])
+bad = []
+if len(ref) < 3:
+    bad.append(f"reference run wrote {len(ref)} files (expected >= 3: history, restart, ...)")
+for lab in ("new_short", "new_long"):
+    got = files(cases[lab])
+    if set(got) != set(ref):
+        bad.append(f"{lab}: files {sorted(got)} != {sorted(ref)}"); continue
+    worst = 0.0
+    for name, f in ref.items():
+        a, b = nc.Dataset(f), nc.Dataset(got[name])
+        for v in a.variables:
+            if v not in b.variables or a[v].dtype.kind not in "fi" or a[v].ndim == 0:
+                continue
+            x, y = np.ma.filled(a[v][:], np.nan), np.ma.filled(b[v][:], np.nan)
+            worst = max(worst, float(np.nanmax(np.abs(x - y))) if x.size else 0.0)
+    print(lab, "files", sorted(got), "max |diff| over all variables of all files:", worst)
+    if worst != 0.0:
+        bad.append(f"{lab}: differs from old_short by {worst}")
+print("RESULT:", "FAIL " + "; ".join(bad) if bad else "OK")
+sys.exit(1 if bad else 0)
 PY

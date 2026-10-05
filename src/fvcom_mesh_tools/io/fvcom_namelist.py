@@ -1,8 +1,8 @@
 """Writing values into an FVCOM run namelist, and moving a staged case.
 
-FVCOM reads ``INPUT_DIR`` and ``OUTPUT_DIR`` into ``CHARACTER(LEN=80)``
-(``mod_main.F``): a longer path is cut without a word and the run reads or
-writes elsewhere. Strings are Fortran list-directed values: an apostrophe
+FVCOM keeps ``INPUT_DIR`` and ``OUTPUT_DIR`` (``mod_main.F``) and the paths
+joined from them in ``CHARACTER(LEN=1024)``; an older build used 80, and a
+longer path was cut without a word, so the run read or wrote elsewhere. Strings are Fortran list-directed values: an apostrophe
 inside one is doubled, and a path is kept to printable ASCII (review of the
 extend tools, rounds 4-6).
 """
@@ -17,10 +17,12 @@ __all__ = ["FVCOM_DIR_MAX", "check_fvcom_dirs", "end_after", "fortran_string",
            "relocate_case", "set_value"]
 
 # FVCOM (branch uk-fabm/v5.1.0-dev, commit "FVCOM: path variables 1024 characters") keeps
-# INPUT_DIR / OUTPUT_DIR and the paths composed from them in CHARACTER(LEN=1024); a directory
-# plus a file name of up to 24 characters must fit. An older FVCOM binary cut these at 80
-# characters (a longer run directory then failed with "FILE ... NOT FOUND" on a cut path).
-FVCOM_DIR_MAX = 1000
+# INPUT_DIR / OUTPUT_DIR and the paths composed from them in CHARACTER(LEN=1024): the
+# directory plus the longest file name FVCOM writes there (case name + "_restart_0001.nc",
+# the case name itself is limited to 80) must fit, so a directory may use 900 bytes. An older
+# FVCOM binary cut these at 80 characters (a longer run directory then failed with
+# "FILE ... NOT FOUND" on a cut path).
+FVCOM_DIR_MAX = 900
 
 
 def end_after(start: str, days: float) -> str:
