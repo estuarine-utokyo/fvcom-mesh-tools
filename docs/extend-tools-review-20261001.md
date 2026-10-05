@@ -17391,3 +17391,266 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 sha256 `966f8d0566509231...` is **identical** to extcheck28g (commit fbc9019) and extcheck41g
 (commit 87652c7): rounds 29-60, including the new design validation in notebook 444, changed
 nothing in the real build. (The design checks added in round 61 are exercised by the next run.)
+
+## Round 62
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `f168340`. **Five minor defects are substantiated.** All are reachable only through direct helper calls; none is reached by the extension workflow’s current inputs.
+
+**Previous findings**
+
+Historical statuses follow the recorded triage, current code and selected regressions. Every historical reproduction was not rerun.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R30, except withdrawn objections below | RESOLVED | Recorded corrections remain; licensing and timestep decisions remain controlling. |
+| R31-F1–F4, F6–F10 | RESOLVED | Dimension, connectivity, mask and bounds corrections remain. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains the established loader contract. |
+| R32, all | RESOLVED | Recorded boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded historical experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Recorded corrections remain. |
+| R34-F1, F2, F4, F5 | RESOLVED | Documentation, shape, mask and overflow corrections remain. |
+| R34-F3 | WITHDRAWN | The owner-approved calibrated method remains controlling. |
+| R35–R59, all | RESOLVED | Recorded corrections remain; original incomplete reproductions are corrected. |
+| R60-F1–F3 | RESOLVED | Radius/stop validation, angle checks and nested Boolean rejection remain corrected. |
+| R60-F4 | RESOLVED | Fractional values, including extended-precision values, retain their fractions. |
+| R61-F1 | RESOLVED | The actual pre-land validation rejects malformed, Boolean, nonfinite, huge and out-of-range endpoints/bounds. |
+| R61-F2 | RESOLVED | The extended-precision value reproduction now preserves its fraction. |
+| R61-F3 | PARTIAL | `0 → 0.5` prints `+0.5`; subtraction and delta rendering still have defects: findings 1–2. |
+| R61-F4 | RESOLVED | The original self-containing array receives `ValueError`. Separate traversal defects remain below. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and owner decisions remain controlling. |
+
+1. **Minor — Delta subtraction now loses exact changes with mixed numeric types.**
+
+   **Location:** [quality.py:332](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:332).
+
+   ```python
+   import numpy as np
+   from fvcom_mesh_tools.quality import format_comparison_table
+
+   print(format_comparison_table([
+       ("before", {"n_nodes": np.float16(2048)}),
+       ("after", {"n_nodes": 2049}),
+   ], keys=("n_nodes",)))
+   ```
+
+   The row prints **`2,048 → 2,049`, delta `0`**. NumPy converts the Python integer into the narrower operand’s precision before subtraction. The same extracted function from `426f06b^` prints **`+1`**.
+
+   Subtraction can also overflow unnecessarily: two finite `np.float32` operands `-3e38` and `3e38` now produce an overflow warning and an empty delta; the previous implementation produced a finite delta.
+
+   **Reachability:** Direct comparison-helper calls with mixed or narrow numeric types. Extension-generated counts are integers.
+
+   **Origin:** Introduced by `426f06b`.
+
+   **Fix:** Subtract exact numeric representations, using the existing `_number()`/`_exact()` machinery. At minimum, subtract integral count values as Python integers and promote narrow floating operands without narrowing wider operands.
+
+2. **Minor — Fractional delta formatting still narrows extended precision to double.**
+
+   **Location:** [quality.py:342](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:342).
+
+   ```python
+   print(format_comparison_table([
+       ("before", {"n_flipped": 0.0}),
+       ("after", {"n_flipped": np.longdouble("1e-400")}),
+   ], keys=("n_flipped",)))
+   ```
+
+   The values print **`0`** and **`1e-400`**, but the delta prints **`+0`**. Subtraction preserves the nonzero value; NumPy’s `:g` formatting then narrows it to double and underflows.
+
+   **Reachability:** Direct helper calls with unusual extended-precision fractional metrics. Current extension counts do not reach this case.
+
+   **Origin:** Pre-existing precision loss remains after the round 61 fix; its new fractional branch still reports zero.
+
+   **Fix:** Format extended-precision deltas with a precision-preserving NumPy formatter, including their sign, rather than Python’s floating-point `:g` path.
+
+3. **Minor — Cycle detection rejects valid aliases across arguments.**
+
+   **Location:** [_checks.py:107](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/_checks.py:107).
+
+   ```python
+   from fvcom_mesh_tools._checks import no_bool
+
+   x = np.array([2.0])
+   no_bool(first=x, second=x)
+   ```
+
+   This raises **`ValueError: second contains itself`**. Neither argument contains itself or a Boolean. The loop retains the first argument’s identity when checking the second argument. The previous implementation accepts this input.
+
+   **Reachability:** Direct `no_bool()` calls with shared numeric containers. The extension’s calls pass one spacing argument at a time.
+
+   **Origin:** Introduced by `426f06b`.
+
+   **Fix:** Track active ancestors separately for each root argument. A previously visited object is a cycle only when it is an ancestor of the current traversal.
+
+4. **Minor — The new internal parameter silently consumes an array named `_seen`.**
+
+   **Location:** [_checks.py:96](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/_checks.py:96).
+
+   ```python
+   no_bool(**{"_seen": np.array([True])})
+   ```
+
+   This returns normally. Previously it raised **`ValueError: _seen has boolean values, not numbers`**. The new parameter captures this keyword as traversal state, leaving `arrays` empty and bypassing the guard.
+
+   **Reachability:** Direct helper calls using `_seen` as an array label. Extension calls use `spacing`.
+
+   **Origin:** Introduced by `426f06b`.
+
+   **Fix:** Keep `no_bool(**arrays)` as the checking interface and move traversal state into a private helper or local iterative traversal.
+
+5. **Minor — Deep acyclic input still exhausts Python’s recursion limit.**
+
+   **Location:** [_checks.py:118](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/_checks.py:118).
+
+   ```python
+   a = np.array(2.0, dtype=object)
+   for _ in range(1050):
+       b = np.empty(1, dtype=object)
+       b[0] = a
+       a = b
+   no_bool(spacing=a)
+   ```
+
+   This small, acyclic numeric input raises **`RecursionError: maximum recursion depth exceeded`**. Identity tracking fixes cycles but leaves recursive traversal, despite the documented “any depth” behavior.
+
+   **Reachability:** Direct helper calls with deeply nested containers. Notebook 444 returns ordinary numeric spacing arrays.
+
+   **Origin:** Pre-existing since `c9dc25d`; unchanged by the cycle fix.
+
+   **Fix:** Use an explicit traversal stack with ancestor tracking. Alternatively, define and enforce a nesting limit with a named `ValueError`.
+
+**Verification**
+
+- Bytecode-disabled, cache-disabled `pytest.main()` with `--capture=sys`: **183 passed, 97 deselected**, four warnings from existing extreme-input probes. Filesystem-dependent tests were excluded.
+- Scoped `ruff check --no-cache`: passed.
+- `bash -n`: all nine scoped shell files passed.
+- In-memory probes verified endpoint rejection, cycle rejection, source priority, masked queries and non-T.P. attribution/warnings.
+- Baseline comparisons confirmed findings 1, 3 and 4 were introduced by `426f06b`.
+- An initial here-document probe required unavailable temporary storage; an extracted-function probe initially lacked `Any`. Both were corrected and rerun successfully.
+- `git diff --exit-code` passed; working-tree status remained empty.
+
+No files were modified, shared-data contents read or batch jobs submitted. Real-data generation, FVCOM integration, QA totals, NP/NE and timestep measurements were **not rerun**.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 5 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 62: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 61 (your previous answer; 4 minor) was fixed in 426f06b; read it. Per finding:
+- F1 notebook 444: start, end and land_bbox validated before any land is read.
+- F2, F3 comparison table: integrality in the value's own precision; fractional deltas printed.
+- F4 no_bool: a container that holds itself is refused.
+Real-data run after round 60 (job 7001533, commit c9dc25d): pytest 1299 passed 0 failed, QA 23/23,
+NP=14,673, NE=27,011, grd sha256 identical to the runs before rounds 29-60 (record,
+"Verification on GENKAI after round 60").
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | tests (float16 2048 to int 2049; float32 extremes) | yes, introduced in 426f06b | fixed, 6e0ab4e: deltas in double precision from both operands; test |
+| F2 | minor | probe (longdouble 1e-400 delta) | **rebutted** | The comparison table is a display, and its contract is double precision: a delta below double range prints as 0. The exact values are in the `ThresholdCheck` records, which keep the number's own text. Chasing extended-precision deltas in a table is what made F1 |
+| F3 | minor | test (an array passed as two arguments) | yes, introduced in 426f06b | fixed, 6e0ab4e: per-root visited set |
+| F4 | minor | test (a keyword named `_seen`) | yes, introduced in 426f06b | fixed, 6e0ab4e: no traversal state in the interface |
+| F5 | minor | test (1500 nested levels) | yes, pre-existing | fixed, 6e0ab4e: iterative walk, no recursion; test |
