@@ -711,8 +711,10 @@ The first Tokyo Bay extension (`tokyo_bay_enshu`): on OCTOPUS (2026-09-29)
 grids, and a two-day FVCOM smoke run finite (max |zeta| 0.47 m, max speed
 0.56 m/s at the Uraga strait). The current build (23 QA gates; GENKAI,
 2026-10-05, reproduced bit for bit by three jobs) has 14,673 nodes, 27,011
-elements and QA 23/23; the smoke run has not been repeated on it. Its real
-forcing will come from JCOPE-T DA re-extracted over the wider domain.
+elements and QA 23/23, and the two-day smoke run on it, with the FVCOM rebuilt
+on 2026-10-05 (120 ranks, external step 5.625 s, 26 s wall), is finite again
+(max |zeta| 0.469 m, max depth-mean speed 0.563 m/s). Its real forcing will
+come from JCOPE-T DA re-extracted over the wider domain.
 
 ## 14. Astronomical tide on the open boundary
 
