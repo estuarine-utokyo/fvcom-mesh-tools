@@ -108,18 +108,20 @@ def no_bool(**arrays) -> None:
             if id(obj) in visited:
                 continue
             visited.add(id(obj))
-            # a list is inspected element by element: dtype inference would turn
-            # [True, 2.0] into floats before we look
-            arr = (np.asarray(obj, dtype=object) if isinstance(obj, (list, tuple))
-                   else np.asarray(obj))
-            if arr.dtype.kind == "b":
-                raise ValueError(f"{name} has boolean values, not numbers")
-            if arr.dtype.kind == "O":
-                for v in arr.ravel():
-                    if isinstance(v, (bool, np.bool_)):
-                        raise ValueError(f"{name} has boolean values, not numbers")
-                    if isinstance(v, (np.ndarray, list, tuple)):
-                        stack.append(v)
+            if isinstance(obj, (list, tuple)):
+                items = obj                  # the elements themselves: no array is built, so a
+            else:                            # shared nested list is not expanded (round 63 F2)
+                arr = np.asarray(obj)
+                if arr.dtype.kind == "b":
+                    raise ValueError(f"{name} has boolean values, not numbers")
+                if arr.dtype.kind != "O":
+                    continue
+                items = arr.ravel()
+            for v in items:
+                if isinstance(v, (bool, np.bool_)):
+                    raise ValueError(f"{name} has boolean values, not numbers")
+                if isinstance(v, (np.ndarray, list, tuple)):
+                    stack.append(v)
 
 
 def is_finite_real(v) -> bool:

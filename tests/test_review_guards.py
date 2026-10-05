@@ -1273,7 +1273,9 @@ def test_round62_guards():
     table = format_comparison_table([("before", {"alpha_mean": np.float32(-3e38)}),
                                      ("after", {"alpha_mean": np.float32(3e38)})],
                                     keys=("alpha_mean",))
-    assert "e+" in table or "+6" in table or "inf" not in table
+    delta = table.splitlines()[-1].split()[-1]
+    assert float(delta) == pytest.approx(float(np.float32(3e38)) - float(np.float32(-3e38)),
+                                         rel=1e-4)
     # F3: an array shared by two arguments is no cycle
     x = np.array([2.0])
     no_bool(first=x, second=x)
@@ -1290,3 +1292,20 @@ def test_round62_guards():
     c = np.empty(1, dtype=object)
     c[0] = c
     no_bool(spacing=c)                      # a cycle is simply visited once
+
+
+def test_round63_guards():
+    from fvcom_mesh_tools._checks import no_bool
+    from fvcom_mesh_tools.quality import format_comparison_table
+
+    # F1: operands finite, difference not: an empty delta, no crash
+    table = format_comparison_table([("before", {"n_nodes": -1e308}),
+                                     ("after", {"n_nodes": 1e308})], keys=("n_nodes",))
+    assert "inf" not in table
+    # F2: a shared nested list is not expanded
+    a = 2.0
+    for _ in range(40):
+        a = [a] * 4              # 4**40 entries if expanded
+    no_bool(spacing=a)
+    with pytest.raises(ValueError, match="boolean"):
+        no_bool(spacing=[[[np.bool_(True)]]])

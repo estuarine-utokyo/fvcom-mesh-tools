@@ -338,6 +338,8 @@ def _fmt_delta(metric: str, before: Any, after: Any) -> str:
     if not (np.isfinite(b) and np.isfinite(a)):
         return ""
     diff = a - b
+    if not np.isfinite(diff):               # finite operands can still overflow (r63 F1)
+        return ""
     if metric in _INT_KEYS:
         if diff == 0:
             return "0"
