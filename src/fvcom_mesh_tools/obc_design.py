@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from fvcom_mesh_tools._checks import no_bool, no_complex
+from fvcom_mesh_tools._checks import no_bool, no_complex, no_masked
 
 __all__ = [
     "bearing_vector",
@@ -182,8 +182,7 @@ def resample(line, spacing) -> np.ndarray:
     non-finite spacing or coordinates, and a step that does not advance are
     refused (review F19, round 2 F12).
     """
-    if np.ma.is_masked(line):                   # unknown, not its fill (round 25 F4)
-        raise ValueError("the line has masked coordinates")
+    no_masked(line=line)                        # unknown, not its fill (round 25 F4, 65 F3)
     no_complex(line=line)
     xy = np.asarray(line, float)
     if xy.ndim != 2 or xy.shape[1] != 2 or len(xy) < 2:

@@ -67,6 +67,8 @@ def parse_open_boundary(text: str, path="<text>") -> list[tuple[float, float]]:
         header_ok = False
         parts = [v.strip() for v in s.split(",")]
         try:
+            if len(parts) != 2:                  # exactly lon,lat (review round 65 F2)
+                raise ValueError("not two fields")
             lon, lat = float(parts[0]), float(parts[1])
         except (IndexError, ValueError) as exc:
             raise ValueError(f"{path}:{n}: expected 'lon,lat', got {line!r}") from exc

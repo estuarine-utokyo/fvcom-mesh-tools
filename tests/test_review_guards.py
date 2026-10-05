@@ -1344,3 +1344,24 @@ def test_round64_percentages():
                                      ("after", {"frac_lt_20deg": 1e308})],
                                     keys=("frac_lt_20deg",))
     assert "inf" not in table and "invalid" in table
+
+
+def test_round65_guards():
+    from fvcom_mesh_tools._checks import checked_planar, promoted_nodes
+    from fvcom_mesh_tools.base_recipe import parse_open_boundary
+    from fvcom_mesh_tools.obc_design import resample
+
+    # F1: array-likes are seen through
+    with pytest.raises(ValueError, match="complex"):
+        promoted_nodes(memoryview(np.array([[1 + 9j, 2]], dtype=complex)))
+    with pytest.raises(ValueError, match="boolean"):
+        resample([[0, 0], [3, 0]], lambda p: memoryview(np.array([True])))
+    # F2: exactly two fields per boundary record
+    with pytest.raises(ValueError, match="expected 'lon,lat'"):
+        parse_open_boundary("139,35,7\n140,36\n")
+    # F3: a masked array inside an ordinary list
+    nodes = [np.ma.array([999.0, 0.0], mask=[True, False]), [1000.0, 0.0], [999.0, 1.0]]
+    with pytest.raises(ValueError, match="masked"):
+        checked_planar(nodes, [[0, 1, 2]])
+    with pytest.raises(ValueError, match="masked"):
+        resample(nodes[:2], 1.0)

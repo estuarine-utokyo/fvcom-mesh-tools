@@ -2,27 +2,33 @@
 
 from __future__ import annotations
 
+import numbers
+
 import numpy as np
+
+_SCALARS = (numbers.Number, str, bytes, type(None), np.generic)
 
 
 def _leaves(root):
-    """Yield the leaves of ``root``: arrays of a plain dtype whole, and the elements of
-    lists, tuples and object arrays one by one, to any depth. Iterative, each container
-    visited once, and no array is built from a nested list, so shared or self-holding
-    nesting costs nothing (review rounds 62-64)."""
+    """Yield the leaves of ``root``: arrays of a plain dtype whole (a masked array as
+    itself, so its mask can be seen), and the elements of lists, tuples and object arrays
+    one by one, to any depth. Anything array-like (a memoryview, a pandas object) is
+    brought to an array first. Iterative, each container visited once, and no array is
+    built from a nested list, so shared or self-holding nesting costs nothing (review
+    rounds 62-65)."""
     stack, visited = [root], set()
     while stack:
         obj = stack.pop()
+        if isinstance(obj, _SCALARS):
+            yield obj
+            continue
         if isinstance(obj, (list, tuple)):
             if id(obj) in visited:
                 continue
             visited.add(id(obj))
             items = obj
         else:
-            arr = np.asarray(obj) if isinstance(obj, np.ndarray) else None
-            if arr is None:
-                yield obj
-                continue
+            arr = obj if isinstance(obj, np.ndarray) else np.asarray(obj)
             if arr.dtype.kind != "O":
                 yield arr
                 continue
@@ -31,10 +37,22 @@ def _leaves(root):
             visited.add(id(obj))
             items = arr.ravel()
         for v in items:
-            if isinstance(v, (list, tuple, np.ndarray)):
-                stack.append(v)
-            else:
+            if isinstance(v, _SCALARS):
                 yield v
+            else:
+                stack.append(v)
+
+
+def no_masked(**arrays) -> None:
+    """Refuse masked values wherever they sit, also in a masked array inside a list:
+    a float conversion would use the data under the mask (review round 65 F3)."""
+    for name, a in arrays.items():
+        if a is None:
+            continue
+        for leaf in _leaves(a):
+            if isinstance(leaf, np.ndarray) and np.ma.is_masked(leaf) \
+                    or leaf is np.ma.masked:
+                raise ValueError(f"{name} has masked values")
 
 
 def no_complex(**arrays) -> None:
@@ -78,8 +96,7 @@ def checked_geometry(nodes, elements, what: str = "the mesh") -> tuple[np.ndarra
     from fvcom_mesh_tools.io.fvcom_native import _indices
 
     for name, a in (("nodes", nodes), ("elements", elements)):
-        if np.ma.is_masked(a):
-            raise ValueError(f"{what}: {name} has masked values")
+        no_masked(**{f"{what}: {name}": a})
     no_complex(nodes=nodes, elements=elements)
     xy = np.asarray(nodes, float)
     if xy.ndim != 2 or xy.shape[1] < 2 or not np.isfinite(xy).all():
@@ -109,8 +126,7 @@ def promoted_nodes(nodes, what: str = "nodes") -> np.ndarray:
     """``nodes`` as a float64 array, refusing masks and complex values first, so
     that differences and cross products are not computed in a narrow dtype and
     no unknown or imaginary part is dropped (review round 45)."""
-    if np.ma.is_masked(nodes):
-        raise ValueError(f"{what} has masked values")
+    no_masked(**{what: nodes})
     no_complex(**{what: nodes})
     return np.asarray(nodes, dtype=np.float64)
 

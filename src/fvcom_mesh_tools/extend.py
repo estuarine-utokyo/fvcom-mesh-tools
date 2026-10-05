@@ -28,7 +28,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from fvcom_mesh_tools._checks import no_complex, positive_whole, real_scalar
+from fvcom_mesh_tools._checks import no_complex, no_masked, positive_whole, real_scalar
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh
 from fvcom_mesh_tools.sizing import _limit
 
@@ -207,8 +207,7 @@ def _no_masks(**arrays) -> None:
     """Refuse masked and complex values: a conversion would turn them into the
     data under the mask, or into their real part (review rounds 24 F4, 36 F2)."""
     for name, a in arrays.items():
-        if np.ma.is_masked(a):
-            raise ValueError(f"{name} has masked values")
+        no_masked(**{name: a})
         no_complex(**{name: a})
 
 
