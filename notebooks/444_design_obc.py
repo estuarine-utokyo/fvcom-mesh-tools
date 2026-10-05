@@ -135,6 +135,13 @@ for _i, _g in enumerate(_legs):
                                   or not abs(_bg) <= 36000):
         raise SystemExit(f"leg {_i}: bearing must be a number of at most 36000 degrees in "
                          f"size, or 'start_normal', not {_bg!r}")
+    for _kk, _lim in (("until_lon", 360), ("until_lat", 90)):       # review round 60 F1
+        if _kk in _g and not (is_finite_real(_g[_kk]) and -_lim <= _g[_kk] <= _lim):
+            raise SystemExit(f"leg {_i}: {_kk} must be a number within +-{_lim}, "
+                             f"not {_g[_kk]!r}")
+_radii = cfg["radii_m"]
+if not isinstance(_radii, list) or not all(is_finite_real(_r) and _r > 0 for _r in _radii):
+    raise SystemExit(f"radii_m must be a list of finite positive numbers, not {_radii!r}")
 _ends = [i for i, g in enumerate(_legs) if g.get("until") == "end_normal"]
 if _ends and _ends != [len(_legs) - 1]:
     raise SystemExit(f"'until: end_normal' must be on the final leg only; found on leg(s) "
@@ -210,7 +217,13 @@ def end_angle(first, second):
     c = (np.array(ring.interpolate((s + chord) % ring.length).coords[0])
          - np.array(ring.interpolate((s - chord) % ring.length).coords[0]))
     e = np.asarray(second) - np.asarray(first)
-    return float(np.degrees(np.arccos(abs(c @ e) / np.linalg.norm(c) / np.linalg.norm(e))))
+    nc, ne = np.linalg.norm(c), np.linalg.norm(e)
+    if not (np.isfinite(nc) and np.isfinite(ne) and nc > 0 and ne > 0):
+        raise SystemExit("the end edge or the coast chord has no direction")
+    # round-off may put the cosine just above 1: clamp, never let NaN read as "fine"
+    # (review round 60 F2)
+    cosine = min(abs(float(c @ e)) / nc / ne, 1.0)
+    return float(np.degrees(np.arccos(cosine)))
 
 
 # the whole line, end edges included: the ends only touch the coast (review F7)

@@ -302,6 +302,8 @@ def _fmt_value(metric: str, value: Any) -> str:
     if isinstance(value, (float, np.floating)) and not np.isfinite(value):
         return "invalid"          # the FAIL verdict stays; an infinity has no integer form
     if metric in _INT_KEYS:
+        if isinstance(value, (float, np.floating)) and not float(value).is_integer():
+            return str(value)     # a fractional "count" is shown as it is, not truncated (r60 F4)
         return f"{int(value):,}"
     if metric in _PCT_KEYS:
         return f"{float(value) * 100:.4f}%"

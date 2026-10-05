@@ -124,9 +124,9 @@ def fillet(vertices, radii, n_arc: int = 60) -> np.ndarray:
     # finite positive radii, real sides, a real arc (review r2 F20)
     if not np.isfinite(x).all() or np.any(np.linalg.norm(np.diff(x, axis=0), axis=1) <= 0):
         raise ValueError("the vertices must be finite and distinct")
-    if not all(isinstance(r, (int, float, np.integer, np.floating))
-               and not isinstance(r, (bool, np.bool_)) and np.isfinite(float(r)) and float(r) > 0
-               for r in radii):
+    from fvcom_mesh_tools._checks import is_finite_real
+
+    if not all(is_finite_real(r) and r > 0 for r in radii):
         raise ValueError(f"radii must be finite and positive numbers (not booleans): {radii}")
     if int(n_arc) < 2:
         raise ValueError("n_arc must be 2 or more")

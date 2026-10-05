@@ -102,12 +102,16 @@ def no_bool(**arrays) -> None:
         # a list is inspected element by element: dtype inference would turn
         # [True, 2.0] into floats before we look (review round 58 F4)
         arr = np.asarray(a, dtype=object) if isinstance(a, (list, tuple)) else np.asarray(a)
-        # (an object element may itself be a boolean array: look at what it holds)
-        if arr.dtype.kind == "b" or (arr.dtype.kind == "O" and any(
-                isinstance(v, (bool, np.bool_)) or (
-                    isinstance(v, (np.ndarray, list, tuple)) and np.asarray(v).dtype.kind == "b")
-                for v in arr.ravel())):
+        if arr.dtype.kind == "b":
             raise ValueError(f"{name} has boolean values, not numbers")
+        if arr.dtype.kind == "O":
+            # an object element may be a bool, or a container of them: look inside, to
+            # any depth (review rounds 57-60)
+            for v in arr.ravel():
+                if isinstance(v, (bool, np.bool_)):
+                    raise ValueError(f"{name} has boolean values, not numbers")
+                if isinstance(v, (np.ndarray, list, tuple)):
+                    no_bool(**{name: v})
 
 
 def is_finite_real(v) -> bool:

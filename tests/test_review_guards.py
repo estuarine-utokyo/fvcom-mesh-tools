@@ -1227,3 +1227,18 @@ def test_round59_guards():
     # F2: a boolean array inside the callable's result
     with pytest.raises(ValueError, match="boolean"):
         resample([[0, 0], [3, 0]], lambda p: [np.array(True)])
+
+
+def test_round60_guards():
+    from fvcom_mesh_tools._checks import no_bool
+    from fvcom_mesh_tools.quality import check_thresholds, format_threshold_table
+
+    # F3: a boolean at any depth
+    with pytest.raises(ValueError, match="boolean"):
+        no_bool(spacing=[np.array(True, dtype=object)])
+    no_bool(spacing=[np.array(2.0, dtype=object)])
+    # F4: a fractional count is shown as it is
+    _, checks = check_thresholds({"n_flipped": 0.5}, max_flipped=0)
+    assert "0.5" in format_threshold_table(checks)
+    _, checks = check_thresholds({"n_flipped": -0.5}, max_flipped=0)
+    assert "-0.5" in format_threshold_table(checks)
