@@ -706,11 +706,13 @@ authority (the Cabinet Office grids miss or misplace them).
    `bathymetry.depths`, floored, optionally capped, and r-factor limited
    with the base depths held fixed; the FVCOM case and QA.
 
-The first Tokyo Bay extension (`tokyo_bay_enshu`, 2026-09-29): 14,740 nodes,
-27,135 elements, QA 22/22, all new depths from the Cabinet Office grids,
-and a two-day FVCOM smoke run finite (max |zeta| 0.47 m, max speed
-0.56 m/s at the Uraga strait). Its real forcing will come from JCOPE-T DA
-re-extracted over the wider domain.
+The first Tokyo Bay extension (`tokyo_bay_enshu`): on OCTOPUS (2026-09-29)
+14,740 nodes, 27,135 elements, QA 22/22, all new depths from the Cabinet Office
+grids, and a two-day FVCOM smoke run finite (max |zeta| 0.47 m, max speed
+0.56 m/s at the Uraga strait). The current build (23 QA gates; GENKAI,
+2026-10-05, reproduced bit for bit by three jobs) has 14,673 nodes, 27,011
+elements and QA 23/23; the smoke run has not been repeated on it. Its real
+forcing will come from JCOPE-T DA re-extracted over the wider domain.
 
 ## 14. Astronomical tide on the open boundary
 

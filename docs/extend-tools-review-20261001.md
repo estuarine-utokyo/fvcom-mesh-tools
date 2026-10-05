@@ -18403,3 +18403,13 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F1 | minor | tests (memoryview of complex and of bool) | yes, introduced in c269ead | fixed, e3c4cc2: array-likes go through `np.asarray` first; tests |
 | F2 | minor | test (`139,35,7`); the real CSVs read as before | yes, reachable from a hand-made boundary CSV | fixed, e3c4cc2: exactly two fields per record; test |
 | F3 | minor | tests (a masked array inside a list, in `checked_planar` and `resample`) | yes, pre-existing | fixed, e3c4cc2: `no_masked` on the shared leaf walk replaces the shallow checks; tests |
+
+## Closure (owner, 2026-10-05)
+
+The review loop is closed at round 66, whose answer was not triaged. Rounds 41-66
+found nothing reachable from the extension tools' own recipes, CLIs or jobs except
+the 444 design-file validation (fixed), while the real build stayed bit-identical
+(grd sha256 `966f8d0566509231...`, extcheck28g/41g/60g). The owner's decision: no more
+fixes for exceptional or malformed inputs that do not bear on making the mesh; they are
+fixed when they actually occur. Remaining work is on the mesh itself (see the status
+report of the same date). Rebutted and standing: round 33 F1/F8, 34 F3, 62 F2, 64 F2.
