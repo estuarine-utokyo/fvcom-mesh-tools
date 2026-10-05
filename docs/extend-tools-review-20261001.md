@@ -17129,3 +17129,265 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F2 | minor | code read of `end_angle` (cosine above 1 gives NaN, and `abs(NaN - 90) > 1` is False); reachable from the design YAML | yes | fixed, c9dc25d: clamped, and an undefined direction stops the run. Exercised by the next real-data run |
 | F3 | minor | test (`[np.array(True, dtype=object)]`) | yes | fixed, c9dc25d: `no_bool` recurses; test |
 | F4 | minor | test (0.5 and -0.5 counts in the table) | yes | fixed, c9dc25d: a fractional count is printed as it is; test |
+
+## Round 61
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `09f1ea4`. **Four minor findings are substantiated.** No files were changed.
+
+**Previous findings**
+
+Historical statuses follow the recorded triage and current code, supported by selected regressions. Every historical reproduction was not rerun.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R30, except withdrawn objections below | RESOLVED | Recorded corrections remain; licensing and timestep decisions remain controlling. |
+| R31-F1–F4, F6–F10 | RESOLVED | Dimension, connectivity, mask and bounds corrections remain. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains the established loader contract. |
+| R32, all | RESOLVED | Boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Recorded node, corridor, limiter and sizing corrections remain. |
+| R34-F1, F2, F4, F5 | RESOLVED | Recorded documentation, shape, mask and overflow corrections remain. |
+| R34-F3 | WITHDRAWN | The owner-approved calibrated method remains controlling. |
+| R35–R54, all | RESOLVED | Recorded corrections remain; the `1e100` geometry contract applies. |
+| R55–R59, all | RESOLVED | The formerly incomplete Boolean, fractional-record, radius, stop-coordinate and angle reproductions are now corrected. |
+| R60-F1 | RESOLVED | Huge radii and stopping coordinates now receive field-specific rejection before arithmetic. |
+| R60-F2 | RESOLVED | The original tangent probe returns `0°`; a zero direction stops the run. |
+| R60-F3 | RESOLVED | Nested scalar object arrays containing Booleans are rejected. The new traversal has a separate regression below. |
+| R60-F4 | PARTIAL | Ordinary fractional counts render correctly; raw extended-precision values still truncate: finding 2. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and owner decisions remain controlling. |
+
+1. **Minor — Design endpoint coordinates and land bounds bypass numeric validation.**
+
+   **Locations:** [444_design_obc.py:101](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:101), [444_design_obc.py:111](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:111).
+
+   Executing the notebook’s actual pre-land validation in memory accepted each of these modifications to the shipped design:
+
+   ```python
+   start = [10**400, 34.6]
+   end = [140.5]
+   land_bbox = [137.4, 36.1, 141.8, 33.0]
+   ```
+
+   Executing its actual start-coordinate assignment against a small synthetic land polygon then raised:
+
+   ```text
+   OverflowError: int too large to convert to float
+   ```
+
+   These fields reach land loading or projection without checking their shape, numeric type, finiteness, geographic range or bounds ordering.
+
+   **Reachability:** Design YAML through notebook/job 444. The probe exercised validation and endpoint consumption, not complete publication.
+
+   **Origin:** Pre-existing; distinct from the repaired radius and leg-stop checks.
+
+   **Fix:** Before reading land, validate `start`/`end` as two finite, non-Boolean geographic coordinates and `land_bbox` as four finite, ordered geographic bounds. Name the offending field in rejection messages.
+
+2. **Minor — The fractional-count fix narrows NumPy values before checking integrality.**
+
+   **Location:** [quality.py:305](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:305).
+
+   ```python
+   x = np.nextafter(np.longdouble(2), np.longdouble(3))
+   print(format_comparison_table(
+       [("mesh", {"n_flipped": x})], keys=("n_flipped",)))
+   ```
+
+   Here `x` is `2.0000000000000000002`, and `x != np.floor(x)` is true. The table nevertheless prints **`2`**. Converting to `float` rounds away the fraction; `.is_integer()` then selects `int(value)`.
+
+   **Reachability:** Direct helper calls with extended-precision metrics. Extension-generated counts are integers. Threshold records preserve this value as text and avoid this path.
+
+   **Origin:** Pre-existing truncation left open by `c9dc25d`’s new guard.
+
+   **Fix:** Check integrality in the value’s own precision, for example `value == np.floor(value)`, and retain its textual value when fractional.
+
+3. **Minor — Comparison tables still truncate fractional count deltas.**
+
+   **Location:** [quality.py:336](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:336).
+
+   ```python
+   print(format_comparison_table([
+       ("before", {"n_flipped": 0.0}),
+       ("after", {"n_flipped": 0.5}),
+   ], keys=("n_flipped",)))
+   ```
+
+   The resulting row is:
+
+   ```text
+   n_flipped             0           0.5            +0
+   ```
+
+   Values now display their fractions, but `_fmt_delta()` still applies `int(diff)`, reporting a different change.
+
+   **Reachability:** Direct helper calls with unusual fractional count metrics; extension-generated counts are integers.
+
+   **Origin:** Pre-existing; unchanged by the value-formatting fix.
+
+   **Fix:** Render integer deltas only when integral. Preserve fractional deltas and avoid narrowing extended-precision operands before subtraction.
+
+4. **Minor — The new recursive Boolean guard crashes on cyclic containers.**
+
+   **Location:** [_checks.py:114](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/_checks.py:114).
+
+   ```python
+   a = np.empty(1, dtype=object)
+   a[0] = a
+   no_bool(spacing=a)
+   ```
+
+   This raises **`RecursionError: maximum recursion depth exceeded`**. The same failure occurs through:
+
+   ```python
+   resample([[0, 0], [3, 0]], lambda p: a)
+   ```
+
+   Executing the previous commit’s `no_bool()` against the same array returned normally. The new traversal repeatedly visits the same container without detecting the cycle.
+
+   **Reachability:** Direct helper calls only; notebook 444’s spacing function returns ordinary numeric arrays.
+
+   **Origin:** Introduced by `c9dc25d`.
+
+   **Fix:** Use an iterative traversal with container-identity tracking. Reject cyclic numerical input with a named `ValueError`, or skip already visited containers while completing the Boolean scan.
+
+**Verification**
+
+- Bytecode-disabled, cache-disabled in-memory `pytest.main()` using `-q --capture=sys -p no:cacheprovider`: **182 passed, 97 deselected** across the scoped tests and related quality, QA, coast-fit, namelist and provenance tests. Filesystem-dependent cases were deselected.
+- Earlier attempts encountered unavailable temporary storage during pytest capture and in `test_round56_guards`; these were read-only-environment failures.
+- Scoped `ruff check --no-cache`: passed. `bash -n`: **9/9 in-scope scripts passed**.
+- In-memory probes verified the round-60 fixes, reproduced all four findings, and checked source priority, masked-query handling, datum attribution and warnings.
+- `git diff --exit-code` passed; working-tree status remained empty.
+
+No shared-data contents were read or batch jobs submitted. Real-data generation, FVCOM integration, QA totals, NP/NE and timestep measurements were **not rerun**.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 4 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 61: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 60 (your previous answer; 4 minor) was fixed in c9dc25d; read it. Per finding:
+- F1 notebook 444: radii and until_lon/until_lat validated before use.
+- F2 notebook 444 end_angle: cosine clamped; an undefined direction stops the run.
+- F3 no_bool recurses into nested object arrays.
+- F4 fractional counts printed as they are.
+Real-data run after round 60 (job 7001533, commit c9dc25d) is in progress; its result will be in the
+record, "Verification on GENKAI after round 60".
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | code read; reachable from the design YAML | yes, pre-existing | fixed, 426f06b: `start`, `end` and `land_bbox` validated before any land is read; the shipped design passes. Exercised by the next real-data run |
+| F2 | minor | test (longdouble `2 + eps` in the table) | yes | fixed, 426f06b: integrality in the value's own precision; test |
+| F3 | minor | test (delta 0 to 0.5) | yes | fixed, 426f06b: a fractional delta is printed, and the subtraction is in the operands' own precision; test |
+| F4 | minor | test (a self-containing object array) | yes, introduced in c9dc25d | fixed, 426f06b: visited containers are tracked; test |
+
+### Verification on GENKAI after round 60 (2026-10-05)
+
+`jobs/genkai/extend_check.sh`, job 7001533, commit c9dc25d, scratch
+`$WORK_DIR/scratch/extcheck60g`, 16 cores: pytest **1299 passed, 9 skipped, 0 failed**; 445 QA
+**23/23**, NP=14,673, NE=27,011; the build's boundary hash equals 444's CSV; 453 ran. The grd
+sha256 `966f8d0566509231...` is **identical** to extcheck28g (commit fbc9019) and extcheck41g
+(commit 87652c7): rounds 29-60, including the new design validation in notebook 444, changed
+nothing in the real build. (The design checks added in round 61 are exercised by the next run.)
