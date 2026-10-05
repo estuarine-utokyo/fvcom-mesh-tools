@@ -16358,3 +16358,284 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F2 | minor | test (float32 and longdouble thresholds, JSON) | yes, introduced in 4fdc9cc | fixed, 501fc4c: a missing metric goes through the same judgment and record; test |
 | F3 | minor | tests (object arrays holding `True`) | yes | fixed, 501fc4c: `_checks.no_bool`; test |
 | F4 | minor | code read (`isfinite` on a huge int) | yes, introduced in 4fdc9cc; reachable from the design YAML | fixed, 501fc4c: `abs(bearing) <= 36000` (also rejects NaN) |
+
+## Round 58
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `eb4e392`. **Five minor findings are substantiated.** No files were modified.
+
+Previous statuses below concern the original findings. They rely on recorded triage, current code and selected regressions; every historical reproduction was not rerun.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R30, except withdrawals below | RESOLVED | Original interpolation, freezing, publication, provenance, validation and environment corrections remain. Current licensing and timestep decisions apply. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, mask, connectivity and bounds corrections remain. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains the established loader contract. |
+| R32, all | RESOLVED | Boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Owner-rebutted historical experiments were excluded. |
+| R33-F2–F7 | RESOLVED | Original node, corridor, limiter, empty-mesh and gradation corrections remain. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original documentation, array, overflow and planar-shape corrections remain. |
+| R34-F3 | WITHDRAWN | The approved calibrated nearest-point method remains controlling. |
+| R35–R54, all | RESOLVED | Original permission, dtype, geometry, publication, reporting, marker and validation corrections remain. The `1e100` geometry contract applies. |
+| R55-F1, F2, F4 | RESOLVED | Schema diagnostics, count-limit integrality and scoped lint remain corrected. |
+| R55-F3; R56-F2 | PARTIAL | Original boolean cases are rejected; mixed-sequence spacing still bypasses rejection: finding 4. |
+| R56-F1 | RESOLVED | Original extended-precision comparison decisions remain correct. |
+| R56-F3 | RESOLVED | Exactly fitting fillets succeed; oversized radii are refused. |
+| R56-F4 | RESOLVED | Original mixed-key, bbox and source-name diagnostics remain corrected. |
+| R57-F1 | PARTIAL | Original integral and extended-range cases pass, but caller Decimal settings can still alter records: finding 1. |
+| R57-F2 | RESOLVED | Missing-metric records with the reported `float32` and `longdouble` thresholds serialize successfully. Finding 3 exposes another magnitude-dependent failure. |
+| R57-F3 | PARTIAL | Both reported object-array cases now fail correctly; mixed-sequence booleans remain accepted: finding 4. |
+| R57-F4 | RESOLVED | Bearing `10**20` now produces the intended leg-specific rejection. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Supplied repeatability measurements and the owner’s resolution policy remain controlling. |
+
+1. **Minor — Decimal record conversion inherits settings that can corrupt records or raise exceptions.**
+
+   **Location:** [quality.py:216](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:216)
+
+   `localcontext()` copies the caller’s context; changing only `prec` retains its exponent limits and traps.
+
+   Reproduced:
+
+   ```python
+   with decimal.localcontext() as ctx:
+       ctx.Emin = -9
+       ctx.Emax = 9
+       _, checks = check_thresholds(
+           {"alpha_mean": np.longdouble("1e-400")},
+           min_alpha_mean=np.longdouble("1e-401"),
+       )
+   ```
+
+   The comparison correctly passes, but **both recorded values become `"0E-68"`**.
+
+   With `ctx.traps[decimal.Inexact] = True`, comparing `np.longdouble("0.1")` against zero raises **`decimal.Inexact`** while constructing the record.
+
+   **Reachability:** Direct helper calls only; the extension workflow uses ordinary numeric metrics.
+
+   **Fix:** Construct a fresh Decimal context with explicit exponent limits and traps appropriate to supported NumPy values, or encode the exact rational without context-dependent division.
+
+   **Origin:** Introduced by `501fc4c`; the parent completes the trap reproduction.
+
+2. **Minor — The threshold formatter cannot consume decimal-text count records.**
+
+   **Location:** [quality.py:299](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:299)
+
+   Reproduced:
+
+   ```python
+   _, checks = check_thresholds(
+       {"n_flipped": np.longdouble("0.1")},
+       max_flipped=1,
+   )
+   format_threshold_table(checks)
+   ```
+
+   `_record()` produces decimal text, but the integer-metric formatter calls `int()` on that fractional text. It raises **`ValueError: invalid literal for int()`**.
+
+   **Reachability:** Direct helper calls with unusual fractional count metrics. Extension counts are integers.
+
+   **Fix:** Either reject fractional count actuals explicitly and render them as invalid, or make the formatter handle the new record representation without integer coercion. Update `ThresholdCheck`’s `int | float` annotations to include its supported textual representation.
+
+   **Origin:** Introduced by `501fc4c`; the parent formatter completes this reproduction.
+
+3. **Minor — Extended-range integral records exceed Python’s decimal-conversion limit.**
+
+   **Location:** [quality.py:206](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:206)
+
+   On the reviewed environment, `np.longdouble("1e4900")` is finite. Reproduced:
+
+   ```python
+   _, checks = check_thresholds(
+       {"alpha_mean": np.longdouble("1e4900")},
+       min_alpha_mean=1,
+   )
+   json.dumps(checks[0].to_dict())
+   ```
+
+   Converting the value into an exact Python integer makes serialization raise:
+
+   ```text
+   ValueError: Exceeds the limit (4300 digits) for integer string conversion
+   ```
+
+   Formatting the same record also fails. The same issue occurs when this value is a threshold on a missing metric.
+
+   **Reachability:** Direct helper calls only, with extreme magnitudes.
+
+   **Fix:** Serialize oversized integral values using an exact textual representation generated without Python’s integer-string limit, and make formatting consume it. Avoid changing the process-wide conversion limit.
+
+   **Origin:** Introduced for these NumPy inputs by `501fc4c`; the parent serializes the reproduction.
+
+4. **Minor — Mixed sequences still hide boolean spacing values.**
+
+   **Location:** [_checks.py:102](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/_checks.py:102), used by [obc_design.py:210](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/obc_design.py:210)
+
+   `np.asarray([True, 2.0])` infers a floating dtype, erasing the boolean’s identity before `no_bool()` inspects it.
+
+   Both calls succeed:
+
+   ```python
+   no_bool(spacing=[True, 2.0])
+
+   resample([[0, 0], [3, 0]], lambda p: [True, 2.0])
+   ```
+
+   The latter returns nodes at **0, 1, 2 and 3 metres**, consuming `True` as spacing 1 and ignoring the extra result.
+
+   **Reachability:** Direct helper calls only, including a malformed spacing callable. Notebook 444 returns correctly shaped numeric arrays.
+
+   **Fix:** Inspect sequence values before dtype inference, and validate callable-result shape against the query before consuming its first value.
+
+   **Origin:** Pre-existing boolean bypass; `501fc4c` closes object-array cases but leaves this case.
+
+5. **Minor — Other recipe numeric checks still crash on large YAML integers.**
+
+   **Locations:** [444_design_obc.py:107](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:107), [444_design_obc.py:176](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:176), [extend_recipe.py:139](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend_recipe.py:139); also bbox and depth validation.
+
+   Executing notebook 444’s actual validation blocks with either `chord_m: 100000000000000000000` or that value for a spacing control raises NumPy **`TypeError: ufunc 'isfinite' not supported`**, bypassing the intended field-specific diagnostic.
+
+   An in-memory recipe probe independently reproduced **`OverflowError: int too large to convert to float`** for `10**400` in `settings.gen_seed`, `depths.min_m` and a bbox coordinate.
+
+   **Reachability:** Yes—through design/extension YAML, notebooks 444–447/453 and their jobs. These require unusual inputs; shipped recipes are unaffected.
+
+   **Fix:** Apply integer-safe bounds checks before floating operations, then perform checked conversion with field-specific handling of unsupported magnitudes. Validate these controls before reading land data.
+
+   **Origin:** Pre-existing validation gaps; the round 57 bearing fix does not cover them.
+
+Verification used Python 3.12.14 and NumPy 2.5.3 from the local `fvcom-mesh-tools` environment:
+
+- Bytecode-disabled, in-memory `pytest.main()` with `-q -s -p no:cacheprovider`: core extension/design/DEM/guard/quality/sizing selection **129 passed, 80 deselected**.
+- Supporting geometry/QA/I/O/provenance/patch/run-check selection: initially **202 passed, 23 failed, 93 deselected**; all 23 failures concerned Matplotlib cache setup. With that setup mocked in memory, the patch suite finished **154 passed**.
+- An initial core selection also encountered one guard’s explicit `TemporaryDirectory`; excluding write-dependent test bodies resolved it.
+- Scoped `ruff check --no-cache` and `bash -n` on all nine scoped shell files passed.
+- Parent-commit probes confirmed findings 1–3 introduce exceptions absent before `501fc4c`.
+- `git diff --exit-code` passed; `git status --porcelain` remained empty.
+
+No shared datasets were read, no jobs were submitted, and no real-data generation, FVCOM integration, QA-gate, NP/NE or timestep measurements were rerun.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 5 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 58: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 57 (your previous answer; 4 minor) was fixed in 501fc4c; read it. Per finding:
+- F1, F2 check_thresholds records say what was compared; a missing metric's record is built
+  the same way.
+- F3 booleans inside object arrays are refused as spacing.
+- F4 notebook 444: abs(bearing) <= 36000.
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | test (Emin/Emax and Inexact trap in the caller's context) | yes, introduced in 501fc4c | fixed, d7e1400: no Decimal in the record; test |
+| F2 | minor | test (fractional count in the table) | yes, introduced in 501fc4c | fixed, d7e1400: the formatter prints a text record; test |
+| F3 | minor | test (longdouble 1e4900 to JSON and table) | yes, introduced in 501fc4c | fixed, d7e1400: integers below 10**1000 stay ints, anything larger is the number's own text; test |
+| F4 | minor | tests (`[True, 2.0]` and a callable returning it) | yes | fixed, d7e1400: lists inspected element-wise; shape (1,) required of the callable; test |
+| F5 | minor | probes (`chord_m` and settings beyond float range) | yes; reachable from the design and extension recipes | fixed, d7e1400: `is_finite_real` in 444 and the recipe loader; test. Exercised by the next real-data run |
+
+Rounds 48-58 have changed the threshold gate and its table in every round. The review
+is exercising inputs (extended-precision metrics, integers beyond float range) that
+no extension run can produce; the gate's behaviour for ordinary metrics is unchanged
+since round 47.
