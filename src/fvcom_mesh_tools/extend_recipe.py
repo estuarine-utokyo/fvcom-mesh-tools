@@ -58,7 +58,7 @@ def load_extend_recipe(path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: an extension recipe is a mapping")
     missing = [k for k in _KEYS if k not in raw]
-    unknown = sorted(set(raw) - set(_KEYS))
+    unknown = sorted(str(k) for k in set(raw) - set(_KEYS))     # keys may be numbers (r56 F4)
     if missing or unknown:
         raise ValueError(f"{path}: missing {missing}, unknown {unknown}")
     out = dict(raw)
@@ -104,7 +104,8 @@ def load_extend_recipe(path) -> dict[str, Any]:
             raise ValueError(f"{path}: {Path(out['open_boundary']).name} is not the boundary "
                              f"its report {side.name} describes (hash mismatch)")
     land = raw["land"]
-    if not (isinstance(land, dict) and set(land) == {"bbox"} and len(land["bbox"]) == 4):
+    if not (isinstance(land, dict) and set(land) == {"bbox"}
+            and isinstance(land["bbox"], (list, tuple)) and len(land["bbox"]) == 4):
         raise ValueError(f"{path}: land is {{bbox: [lon_min, lat_min, lon_max, lat_max]}}")
     bb = land["bbox"]
     # finite, on the globe, and ordered (review round 2 F11)
@@ -119,6 +120,8 @@ def load_extend_recipe(path) -> dict[str, Any]:
     for use, names in bathy.items():
         if not (isinstance(names, list) and names):
             raise ValueError(f"{path}: bathymetry.{use} is a non-empty list")
+        if not all(isinstance(n, str) for n in names):
+            raise ValueError(f"{path}: bathymetry.{use} names must be text, not {names!r}")
         bad = [n for n in names if n not in SOURCES]
         if bad or len(set(names)) != len(names):
             raise ValueError(f"{path}: bathymetry.{use}: unknown or repeated {bad or names}; "
@@ -127,7 +130,7 @@ def load_extend_recipe(path) -> dict[str, Any]:
     if not isinstance(s, dict):
         raise ValueError(f"{path}: settings is a mapping")
     absent = [k for k in REQUIRED_SETTINGS if k not in s]
-    extra = sorted(set(s) - set(REQUIRED_SETTINGS))
+    extra = sorted(str(k) for k in set(s) - set(REQUIRED_SETTINGS))
     if absent or extra:
         raise ValueError(f"{path}: settings must write out {absent}; unknown {extra}")
     for k in REQUIRED_SETTINGS:

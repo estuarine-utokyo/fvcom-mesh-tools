@@ -25,7 +25,6 @@ Public entry points:
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -173,24 +172,49 @@ class ThresholdCheck:
 
 
 def _number(value: Any):
-    """``value`` as a Python int (integers stay exact: 2**53 + 1 is not 2**53) or float,
-    or None when it is not a real number (review rounds 50 F1, 51 F2, 52 F1-F2)."""
+    """``value`` as a Python int (exact) or a float / NumPy floating scalar (kept in its own
+    precision), or None when it is not a real number (review rounds 50-56)."""
     if isinstance(value, (bool, np.bool_)):
         return None
     if isinstance(value, (int, np.integer)):
         return int(value)
     if isinstance(value, (float, np.floating)):
-        return float(value)       # a longdouble beyond double range becomes inf: no measurement
+        return value
     return None
 
 
+def _exact(n: Any):
+    """The exact rational value of a finite number, or None for NaN and infinity."""
+    from fractions import Fraction
+
+    if isinstance(n, int):
+        return Fraction(n)
+    if not bool(np.isfinite(n)):
+        return None
+    return Fraction(*n.as_integer_ratio())
+
+
+def _record(n: Any):
+    """A number for the record: an int stays an int, a float is a float (NaN if it has none)."""
+    if isinstance(n, int):
+        return n
+    try:
+        return float(n)
+    except (OverflowError, ValueError, TypeError):
+        return float("nan")
+
+
 def _judge(actual: Any, op: str, threshold: Any) -> tuple[Any, Any, bool]:
-    """``(actual, threshold, passed)`` as the Python numbers compared; an actual that
-    is missing, not a number, NaN or infinite fails."""
+    """``(actual, threshold, passed)``: the comparison is exact (no number is narrowed to a
+    double first); a missing, non-numeric, NaN or infinite value fails."""
     n, t = _number(actual), _number(threshold)
-    if n is None or t is None or (isinstance(n, float) and not math.isfinite(n)):
-        return (float("nan") if n is None else n), (float("nan") if t is None else t), False
-    return n, t, bool(n >= t if op == "≥" else n <= t)
+    if n is None or t is None:
+        return (float("nan") if n is None else _record(n)), (
+            float("nan") if t is None else _record(t)), False
+    en, et = _exact(n), _exact(t)
+    if en is None or et is None:
+        return _record(n), _record(t), False
+    return _record(n), _record(t), bool(en >= et if op == "≥" else en <= et)
 
 
 def check_thresholds(

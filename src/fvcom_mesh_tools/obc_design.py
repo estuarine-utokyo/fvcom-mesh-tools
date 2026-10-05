@@ -46,6 +46,10 @@ def coast_normal(land, x: float, y: float, chord_m: float = 3000.0):
     """
     import shapely
 
+    from fvcom_mesh_tools._checks import real_scalar
+
+    if real_scalar(chord_m, "chord_m") <= 0:         # not a bool, finite, positive (round 56 F2)
+        raise ValueError(f"chord_m must be positive, not {chord_m!r}")
     p = shapely.Point(x, y)
     polys = list(getattr(land, "geoms", [land]))
     ring = min((g.exterior for g in polys), key=lambda r: r.distance(p))
@@ -143,8 +147,12 @@ def fillet(vertices, radii, n_arc: int = 60) -> np.ndarray:
             continue
         r = float(radii[i - 1])
         k = r / np.tan(th / 2)               # tangent length on each side
-        if k + last_tangent > np.linalg.norm(a - b) or k > np.linalg.norm(c - b):
+        la, lc = np.linalg.norm(a - b), np.linalg.norm(c - b)
+        # a radius that fits exactly may miss by round-off (10 / tan(pi/4) is
+        # 10.000000000000002): a relative tolerance, the excess clamped (round 56 F3)
+        if k + last_tangent > la * (1 + 1e-9) or k > lc * (1 + 1e-9):
             raise ValueError(f"radius {r:.0f} m does not fit at corner {i}")
+        k = max(min(k, lc, la - last_tangent), 0.0)
         p1, p2 = b + u * k, b + w * k
         bis = (u + w) / np.linalg.norm(u + w)
         cen = b + bis * r / np.sin(th / 2)
@@ -193,13 +201,15 @@ def resample(line, spacing) -> np.ndarray:
 
     if not callable(spacing):
         no_complex(spacing=spacing)
-        if isinstance(spacing, (bool, np.bool_)):
+        if np.asarray(spacing).dtype.kind == "b":
             raise ValueError("spacing must be a number, not a boolean")
     f = spacing if callable(spacing) else (lambda p, h=float(spacing): np.full(len(p), h))
 
     def h_at(t):
         got = f(at([min(t, total)]))
         no_complex(spacing=got)            # a callable's result too (review round 38 F3)
+        if np.asarray(got).dtype.kind == "b":
+            raise ValueError("spacing must be numbers, not booleans")
         h = float(got[0])
         if not np.isfinite(h) or h <= 0:
             raise ValueError(f"spacing must be positive and finite (got {h} at {t:.1f} m)")

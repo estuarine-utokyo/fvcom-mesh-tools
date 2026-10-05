@@ -122,12 +122,17 @@ if not isinstance(_legs, list) or not _legs:
 for _i, _g in enumerate(_legs):
     if not isinstance(_g, dict) or "bearing" not in _g:
         raise SystemExit(f"leg {_i}: needs a bearing")
-    _extra = set(_g) - {"bearing", "until", "until_lon", "until_lat"}
+    _extra = {str(kk) for kk in _g} - {"bearing", "until", "until_lon", "until_lat"}
     _stops = [kk for kk in ("until_lon", "until_lat") if kk in _g]
     _end = _g.get("until")
     if _extra or _end not in (None, "end_normal") or (len(_stops) + (_end is not None)) != 1:
         raise SystemExit(f"leg {_i}: needs a bearing and exactly one of 'until: end_normal', "
-                         f"'until_lon', 'until_lat' (found {sorted(_g)})")
+                         f"'until_lon', 'until_lat' (found {sorted(str(kk) for kk in _g)})")
+    _bg = _g["bearing"]          # a number, or the symbolic start_normal; never a bool
+    if _bg != "start_normal" and (isinstance(_bg, bool) or not isinstance(_bg, (int, float))
+                                  or not np.isfinite(_bg)):
+        raise SystemExit(f"leg {_i}: bearing must be a finite number or 'start_normal', "
+                         f"not {_bg!r}")
 _ends = [i for i, g in enumerate(_legs) if g.get("until") == "end_normal"]
 if _ends and _ends != [len(_legs) - 1]:
     raise SystemExit(f"'until: end_normal' must be on the final leg only; found on leg(s) "

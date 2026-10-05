@@ -1113,3 +1113,35 @@ def test_round55_guards():
         fillet([[0, 0], [10, 0], [10, 10]], [True])
     with pytest.raises(ValueError, match="boolean"):
         resample([[0, 0], [10, 0]], True)
+
+
+def test_round56_guards():
+    from fvcom_mesh_tools.extend_recipe import load_extend_recipe
+    from fvcom_mesh_tools.obc_design import coast_normal, fillet, resample
+    from fvcom_mesh_tools.quality import check_thresholds
+
+    # F1: comparisons are exact in the value's own precision
+    assert not check_thresholds({"n_flipped": np.longdouble("9007199254740993")},
+                                max_flipped=9007199254740992)[0]
+    half = np.nextafter(np.longdouble(0.5), np.longdouble(1))
+    assert not check_thresholds({"frac_lt_20deg": half}, max_frac_lt_20deg=0.5)[0]
+    assert check_thresholds({"frac_lt_20deg": 0.5}, max_frac_lt_20deg=0.5)[0]
+    assert not check_thresholds({"alpha_mean": float("nan")}, min_alpha_mean=0.1)[0]
+    # F2: a callable's boolean spacing, a bool chord
+    with pytest.raises(ValueError, match="boolean"):
+        resample([[0, 0], [10, 0]], lambda p: np.ones(len(p), dtype=bool))
+    with pytest.raises(ValueError, match="chord_m"):
+        coast_normal(None, 0.0, 0.0, chord_m=True)
+    # F3: an exactly fitting radius
+    assert fillet([[0, 0], [10, 0], [10, 10]], [10.0]).shape[1] == 2
+    with pytest.raises(ValueError, match="does not fit"):
+        fillet([[0, 0], [10, 0], [10, 10]], [10.1])
+    # F4: mixed-type keys give the intended diagnostic, not a TypeError
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "r.yaml"
+        f.write_text("1: a\nx: b\n")
+        with pytest.raises(ValueError, match="unknown"):
+            load_extend_recipe(f)
