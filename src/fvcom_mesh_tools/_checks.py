@@ -93,25 +93,29 @@ def checked_planar(nodes, elements, what: str = "the mesh") -> tuple[np.ndarray,
     return xy, tri
 
 
-def no_bool(**arrays) -> None:
-    """Refuse booleans, also inside object arrays: ``True`` would become the number 1
-    in a float conversion (review rounds 55-57)."""
+def no_bool(_seen: set | None = None, **arrays) -> None:
+    """Refuse booleans, also inside object arrays and nested containers to any depth:
+    ``True`` would become the number 1 in a float conversion (review rounds 55-61).
+    A container that holds itself is refused rather than followed forever."""
+    seen = set() if _seen is None else _seen
     for name, a in arrays.items():
         if a is None:
             continue
         # a list is inspected element by element: dtype inference would turn
-        # [True, 2.0] into floats before we look (review round 58 F4)
+        # [True, 2.0] into floats before we look
+        if isinstance(a, (list, tuple, np.ndarray)):
+            if id(a) in seen:
+                raise ValueError(f"{name} contains itself")
+            seen = seen | {id(a)}
         arr = np.asarray(a, dtype=object) if isinstance(a, (list, tuple)) else np.asarray(a)
         if arr.dtype.kind == "b":
             raise ValueError(f"{name} has boolean values, not numbers")
         if arr.dtype.kind == "O":
-            # an object element may be a bool, or a container of them: look inside, to
-            # any depth (review rounds 57-60)
             for v in arr.ravel():
                 if isinstance(v, (bool, np.bool_)):
                     raise ValueError(f"{name} has boolean values, not numbers")
                 if isinstance(v, (np.ndarray, list, tuple)):
-                    no_bool(**{name: v})
+                    no_bool(seen, **{name: v})
 
 
 def is_finite_real(v) -> bool:

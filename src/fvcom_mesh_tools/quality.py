@@ -302,8 +302,10 @@ def _fmt_value(metric: str, value: Any) -> str:
     if isinstance(value, (float, np.floating)) and not np.isfinite(value):
         return "invalid"          # the FAIL verdict stays; an infinity has no integer form
     if metric in _INT_KEYS:
-        if isinstance(value, (float, np.floating)) and not float(value).is_integer():
-            return str(value)     # a fractional "count" is shown as it is, not truncated (r60 F4)
+        # integrality in the value's own precision (a longdouble keeps its fraction); a
+        # fractional "count" is shown as it is, not truncated (review rounds 60 F4, 61 F2)
+        if isinstance(value, (float, np.floating)) and not bool(value == np.floor(value)):
+            return str(value)
         return f"{int(value):,}"
     if metric in _PCT_KEYS:
         return f"{float(value) * 100:.4f}%"
@@ -322,17 +324,22 @@ def _fmt_delta(metric: str, before: Any, after: Any) -> str:
             and not isinstance(before, bool) and not isinstance(after, bool):
         d = int(after) - int(before)           # exact: 2**53 + 1 - 2**53 is 1 (review round 53 F3)
         return "0" if d == 0 else f"{d:+,}"
+    nums = (int, float, np.integer, np.floating)
+    if isinstance(before, (bool, np.bool_)) or isinstance(after, (bool, np.bool_)) \
+            or not isinstance(before, nums) or not isinstance(after, nums):
+        return ""
     try:
-        b = float(before)
-        a = float(after)
+        diff = after - before              # in the operands' own precision, not narrowed first
+        if not bool(np.isfinite(diff)) or not (bool(np.isfinite(before))
+                                              and bool(np.isfinite(after))):
+            return ""
     except (TypeError, ValueError, OverflowError):
         return ""
-    if not (np.isfinite(b) and np.isfinite(a)):
-        return ""
-    diff = a - b
     if metric in _INT_KEYS:
         if diff == 0:
             return "0"
+        if diff != np.floor(diff):          # a fractional change is not an integer one (r61 F3)
+            return f"{diff:+g}"
         return f"{int(diff):+,}"
     if metric in _PCT_KEYS:
         return f"{diff * 100:+.4f} pp"

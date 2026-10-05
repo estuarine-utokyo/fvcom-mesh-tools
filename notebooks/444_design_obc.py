@@ -98,6 +98,18 @@ def ll(p):
 import geopandas as gpd  # noqa: E402
 import shapely  # noqa: E402
 
+# the endpoints and the land window, before any land is read (review round 61 F1)
+for _name in ("start", "end"):
+    _pt = cfg[_name]
+    if not (isinstance(_pt, list) and len(_pt) == 2 and all(is_finite_real(v) for v in _pt)
+            and -180 <= _pt[0] <= 360 and -90 <= _pt[1] <= 90):
+        raise SystemExit(f"{_name} must be [lon, lat] of two finite numbers on the globe, "
+                         f"not {_pt!r}")
+_bb = cfg["land_bbox"]
+if not (isinstance(_bb, list) and len(_bb) == 4 and all(is_finite_real(v) for v in _bb)
+        and -180 <= _bb[0] < _bb[2] <= 360 and -90 <= _bb[1] < _bb[3] <= 90):
+    raise SystemExit(f"land_bbox must be [lon_min, lat_min, lon_max, lat_max], finite and "
+                     f"ordered on the globe, not {_bb!r}")
 bb = tuple(cfg["land_bbox"])
 land_ll = gpd.read_file(DATA / "geodata/OSM/land-polygons-split-4326/land_polygons.shp",
                         bbox=bb).clip(bb)

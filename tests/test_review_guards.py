@@ -1242,3 +1242,22 @@ def test_round60_guards():
     assert "0.5" in format_threshold_table(checks)
     _, checks = check_thresholds({"n_flipped": -0.5}, max_flipped=0)
     assert "-0.5" in format_threshold_table(checks)
+
+
+def test_round61_guards():
+    from fvcom_mesh_tools._checks import no_bool
+    from fvcom_mesh_tools.quality import format_comparison_table
+
+    # F2: a longdouble keeps its fraction in the table
+    x = np.nextafter(np.longdouble(2), np.longdouble(3))
+    assert "2.0000000000000000" in format_comparison_table([("m", {"n_flipped": x})],
+                                                           keys=("n_flipped",))
+    # F3: a fractional delta is not truncated
+    table = format_comparison_table([("before", {"n_flipped": 0.0}),
+                                     ("after", {"n_flipped": 0.5})], keys=("n_flipped",))
+    assert "+0.5" in table
+    # F4: a container that holds itself is refused, not followed forever
+    a = np.empty(1, dtype=object)
+    a[0] = a
+    with pytest.raises(ValueError, match="itself"):
+        no_bool(spacing=a)
