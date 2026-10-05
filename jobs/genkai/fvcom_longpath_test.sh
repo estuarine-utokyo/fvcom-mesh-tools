@@ -36,9 +36,9 @@ run_case () {   # $1 label  $2 binary  $3 directory
     # history, average, surface and restart output (their identifiers share the directory prefix), so that the long OUTPUT_DIR is written to as well as read
     sed -i "s#^ *NC_ON .*#NC_ON = T,#; s#^ *NC_OUT_INTERVAL .*#NC_OUT_INTERVAL = 'seconds=60.0',#; s#^ *NCAV_ON .*#NCAV_ON = T,#; s#^ *NCAV_OUT_INTERVAL .*#NCAV_OUT_INTERVAL = 'seconds=60.0',#; s#^ *NCSF_ON .*#NCSF_ON = T,#; s#^ *NCSF_OUT_INTERVAL .*#NCSF_OUT_INTERVAL = 'seconds=60.0',#; s#^ *RST_ON .*#RST_ON = T,#; s#^ *RST_FIRST_OUT .*#RST_FIRST_OUT = '2020-01-01 00:01:00',#; s#^ *RST_OUT_INTERVAL .*#RST_OUT_INTERVAL = 'seconds=60.0',#" "$d"/*_run.nml
     echo "[$1] dir length $(( ${#d} + 1 )) bytes"
-    local extra=""
-    case "$1" in new_*) extra="--logfile=$d/fvcom_own.log";; esac   # an absolute log file name is read from the command line
-    ( cd "$d" && mpiexec -np 4 "$2" --casename=tokyo_bay_v1_smoke $extra > fvcom.log 2>&1 ) && rc=0 || rc=$?
+    local extra=()
+    case "$1" in new_*) extra=("--logfile=$d/fvcom_own.log");; esac   # an absolute log file name is read from the command line
+    ( cd "$d" && mpiexec -np 4 "$2" --casename=tokyo_bay_v1_smoke "${extra[@]}" > fvcom.log 2>&1 ) && rc=0 || rc=$?
     case "$1" in new_*) [ -s "$d/fvcom_own.log" ] || { echo "[$1] --logfile was not written to $d"; return 1; };; esac
     echo "[$1] exit=$rc; netcdf files: $(ls "$d/output" | grep -c '\.nc$')"
     echo "[$1] $(grep -c -i 'fatal' "$d/fvcom.log") fatal lines; $(grep -c TADA "$d/fvcom.log") TADA"
