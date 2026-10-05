@@ -187,9 +187,12 @@ def _exact(n: Any):
     """The exact rational value of a finite number, or None for NaN and infinity."""
     from fractions import Fraction
 
+    # a metric is a count or a fraction: magnitudes from 1e300 up are no measurement,
+    # which keeps every record and table within what Python can print (review
+    # round 59 F1)
     if isinstance(n, int):
-        return Fraction(n)
-    if not bool(np.isfinite(n)):
+        return Fraction(n) if abs(n) < 10 ** 300 else None
+    if not bool(np.isfinite(n)) or abs(n) >= np.longdouble("1e300"):
         return None
     return Fraction(*n.as_integer_ratio())
 
@@ -200,8 +203,12 @@ def _record(n: Any):
     not; NaN and infinity stay floats (review rounds 52-57)."""
     ex = _exact(n)
     if ex is None:
-        return float(n)
-    if ex.denominator == 1 and abs(ex) < 10 ** 1000:      # below Python's digit limit
+        try:
+            f = float(n)
+        except OverflowError:
+            return float("inf")
+        return f if not np.isfinite(f) else float("inf")      # unsupported magnitude: no value
+    if ex.denominator == 1:
         return int(ex)
     try:
         f = float(ex)

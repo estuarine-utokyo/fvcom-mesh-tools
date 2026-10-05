@@ -1040,7 +1040,7 @@ def test_round52_guards(tmp_path):
     # F2: integers are judged and reported as integers, any size
     ok, checks = check_thresholds({"n_flipped": np.uint64(2**53 + 1)}, max_flipped=2**53)
     assert not ok and checks[0].actual == 2**53 + 1 and checks[0].threshold == 2**53
-    assert check_thresholds({"n_flipped": 0}, max_flipped=10**400)[0]
+    assert check_thresholds({"n_flipped": 0}, max_flipped=10**200)[0]
     # F3: a history file is not a marker, in any directory
     run = tmp_path / "run"
     (run / "output").mkdir(parents=True)
@@ -1157,9 +1157,14 @@ def test_round57_guards():
     ok, checks = check_thresholds({"n_flipped": np.longdouble("9007199254740993")},
                                   max_flipped=9007199254740992)
     assert not ok and checks[0].actual == 9007199254740993
+    ok, checks = check_thresholds({"alpha_mean": np.longdouble("1e200")},
+                                  min_alpha_mean=np.longdouble("1e199"))
+    assert ok and "invalid" not in format_threshold_table(checks)
+    # magnitudes from 1e300 up are no measurement (round 59): they fail, and print
     ok, checks = check_thresholds({"alpha_mean": np.longdouble("1e400")},
                                   min_alpha_mean=np.longdouble("1e399"))
-    assert ok and "invalid" not in format_threshold_table(checks)
+    assert not ok
+    format_threshold_table(checks)
     # F2: a missing metric's record is serializable
     for thr in (np.float32(0.1), np.longdouble("0.1")):
         _, checks = check_thresholds({}, min_alpha_mean=thr)
@@ -1204,3 +1209,21 @@ def test_round58_guards(tmp_path):
     f.write_text("name: x\n")
     with pytest.raises(ValueError):
         load_extend_recipe(f)
+
+
+def test_round59_guards():
+    import json
+
+    from fvcom_mesh_tools.obc_design import resample
+    from fvcom_mesh_tools.quality import check_thresholds, format_threshold_table
+
+    # F1: huge integers fail and serialize, whichever side they are on
+    for args in (({"alpha_mean": 10**4900}, {"min_alpha_mean": 1}),
+                 ({"n_flipped": 0}, {"max_flipped": np.longdouble("1e4900")})):
+        ok, checks = check_thresholds(args[0], **args[1])
+        assert not ok
+        json.dumps(checks[0].to_dict())
+        format_threshold_table(checks)
+    # F2: a boolean array inside the callable's result
+    with pytest.raises(ValueError, match="boolean"):
+        resample([[0, 0], [3, 0]], lambda p: [np.array(True)])
