@@ -15867,3 +15867,250 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F2 | minor | test (longdouble limit, `nextafter(1, 2)`) | yes, introduced in 7931f19 | fixed, d2848b2: integrality judged in the value's own precision; test |
 | F3 | minor | code read; tests (`fillet` with `[True]`, `resample` with `True`) | yes, pre-existing; `chord_m` and radii are reachable from the design YAML | fixed, d2848b2: finite positive real numbers, never a bool; test |
 | F4 | nit | `ruff check --no-cache` | yes | fixed, d2848b2 |
+
+## Round 56
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `841551e`. **Four minor findings are substantiated.** No files were modified.
+
+Previous statuses concern the original reproductions, based on the recorded triage, current code and selected regression checks. Every historical reproduction was not rerun.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R30, except recorded withdrawals | RESOLVED | Original interpolation, freezing, serialization, publication, provenance, validation and environment corrections remain. Current licensing and timestep decisions apply. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, mask, connectivity and bounds cases remain corrected. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains the established loader contract. |
+| R32, all | RESOLVED | Boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Original node, corridor, limiter, empty-mesh and gradation cases remain corrected. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original documentation, array, overflow and planar-shape cases remain corrected. |
+| R34-F3 | WITHDRAWN | The approved calibrated nearest-point method remains controlling. |
+| R35–R47, all | RESOLVED | Original permission, dtype, geometry, tangent, publication and reporting corrections remain. The `1e100` contract applies. |
+| R48–R50, all | RESOLVED | Original normalization, singleton, comparison, logging, leg-ordering and export-name cases remain corrected. |
+| R51-F1, F2 | RESOLVED | Original leg-schema and exact-integer comparison cases remain corrected. Finding 4 concerns another diagnostic path. |
+| R51-F3, R52-F3, R53-F1 | RESOLVED | Original marker/input protection cases remain corrected. |
+| R52-F1, F2 | RESOLVED | Infinite actuals fail; Python integer comparisons and records remain exact. Finding 1 concerns finite extended-precision values. |
+| R53-F2, F3 | RESOLVED | Infinite-count failures render; integer comparison deltas remain exact. |
+| R54, all | RESOLVED | Bounded regular-file marker inspection, design key checks and integral count-limit validation remain. |
+| R55-F1 | RESOLVED | Non-mapping designs and mixed unknown keys now produce the intended rejection messages. |
+| R55-F2 | RESOLVED | Count-limit integrality and conversion preserve the limit’s original precision. |
+| R55-F3 | PARTIAL | Literal chord lengths, radii and scalar spacings reject booleans. Callable spacing still accepts boolean results: finding 2. |
+| R55-F4 | RESOLVED | Scoped Ruff passes. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and owner decisions remain controlling. |
+
+No additional regression introduced by `d2848b2` was substantiated. Finding 1 was introduced by an earlier fix; finding 4 includes a diagnostic introduced by another earlier fix.
+
+1. **Minor — Threshold comparisons still discard finite extended precision and can falsely pass.**
+
+   **Location:** [quality.py:183](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:183), comparison at line 190.
+
+   **Reproduction:**
+
+   ```python
+   check_thresholds(
+       {"n_flipped": np.longdouble("9007199254740993")},
+       max_flipped=9007199254740992,
+   )
+   ```
+
+   Returns **True** and records actual **9007199254740992.0**. The actual count exceeds the limit. Executing the comparison helpers from `dd49ce5^` returns **False** for the same input.
+
+   Likewise, an actual fraction of `np.nextafter(np.longdouble(0.5), np.longdouble(1))` passes `max_frac_lt_20deg=0.5`, although it exceeds that limit. `_number()` narrows both supported NumPy floating values to Python floats before comparison.
+
+   **Reachability:** Direct helper calls only; the extension workflow does not produce these extended-precision metrics.
+
+   **Fix:** Compare supported floating values without narrowing their precision, while explicitly checking finiteness. Preserve exact whole floating counts as integers, or reject lossy conversions rather than issuing a passing verdict.
+
+   **Introduced by:** `dd49ce5`, the round 52 fixes. Round 55 corrected count **limits**, but this actual-value path remains.
+
+2. **Minor — Unguarded numeric inputs still interpret booleans as physical controls.**
+
+   **Locations:** [obc_design.py:203](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/obc_design.py:203), [444_design_obc.py:139](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:139); public `coast_normal()` also lacks chord-type validation.
+
+   **Reproduction:**
+
+   ```python
+   resample(
+       [[0, 0], [10, 0]],
+       lambda p: np.ones(len(p), dtype=bool),
+   )
+   ```
+
+   Returns **11 nodes at one-metre intervals**. The new boolean guard covers scalar arguments, but `h_at()` converts a callable’s `True` result to `1.0`. A zero-dimensional boolean array also bypasses the scalar guard.
+
+   Executing notebook 444’s actual side-construction block with `bearing: true` produces vertices identical to `bearing: 1.0`: the boolean becomes **one degree**. Direct `coast_normal(..., chord_m=True)` similarly treats the chord as one metre.
+
+   **Reachability:** Boolean leg bearings are reachable through design YAML and notebook/job 444. Boolean callable spacing, boolean-array spacing and the public coast-normal chord bypass are direct-helper-only; notebook 444’s own spacing function returns numeric sizes and its chord guard rejects booleans.
+
+   **Fix:** Validate leg bearings as finite real numbers or the permitted symbolic bearing before conversion. Validate callable spacing results and scalar-array values by numeric type before `float()`. Apply finite-positive, non-boolean chord validation inside `coast_normal()` too.
+
+   **Pre-existing paths;** the round 55 guard closes only the literal scalar-spacing case. No complete design publication was run for these malformed controls.
+
+3. **Minor — Filleting rejects an exactly fitting radius because of round-off.**
+
+   **Location:** [obc_design.py:146](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/obc_design.py:146).
+
+   **Reproduction:**
+
+   ```python
+   fillet([[0, 0], [10, 0], [10, 10]], [10.0])
+   ```
+
+   Raises `ValueError: radius 10 m does not fit at corner 1`.
+
+   A radius of 10 fits this right-angle corner exactly. Numerically, `10 / tan(pi/4)` becomes **10.000000000000002**, and the strict comparison rejects it. Radius **9.999999999999998** succeeds and returns 62 points.
+
+   **Reachability:** Reachable through design YAML in notebook/job 444 when a radius exhausts an available straight side. The reproduction uses a direct helper call; the shipped design was not shown to be affected.
+
+   **Fix:** Use a side-length-scaled round-off tolerance for the fit comparison and clamp accepted round-off excess at tangent endpoints. Continue rejecting materially oversized or overlapping arcs.
+
+   **Pre-existing:** Present since `b0584f9`.
+
+4. **Minor — Remaining recipe/schema diagnostics crash on malformed YAML values.**
+
+   **Locations:** [extend_recipe.py:61](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend_recipe.py:61), also lines 107, 122 and 130; [444_design_obc.py:130](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:130).
+
+   **Evidence:** In-memory execution of the actual loader and notebook validation blocks reproduced:
+
+   | Input | Result |
+   |---|---|
+   | Mixed integer/string unknown recipe keys | `TypeError` while sorting |
+   | Mixed integer/string unknown settings keys | `TypeError` while sorting |
+   | `land: {bbox: 42}` | `TypeError: object of type 'int' has no len()` |
+   | `bathymetry.depths: [{}]` | `TypeError: unhashable type: 'dict'` |
+   | Leg `{bearing: 85, until_lon: 141, 1: x}` | `TypeError` while formatting `sorted(_g)` |
+
+   These fail, but replace the intended schema diagnostics with tracebacks. The round 55 repair protects the top-level design and spacing mappings only.
+
+   **Reachability:** Malformed extension recipes through 445–447/453 and their jobs; malformed design legs through 444. File reads and existence checks were mocked for the loader probes; no data files were consumed.
+
+   **Fix:** Check mapping-key types before sorting, require an appropriate sequence for `bbox` before calling `len()`, and require string source names before membership/set operations. Format unexpected keys without ordering unlike types.
+
+   **Origin:** Recipe cases are pre-existing. The leg diagnostic was introduced by `7d0a627`, the round 51 fixes.
+
+Verification: bytecode-disabled `pytest.main` with `-q -s -p no:cacheprovider` and an in-memory read-only selection plugin produced **190 passed, 149 deselected, four expected numerical warnings** across the scoped extension, design, DEM, review-guard and supporting tests. Tests needing writable fixtures or optional backends were deselected. Scoped `ruff check --no-cache` passed; individual `bash -n` checks passed for the scoped OCTOPUS, GENKAI and common scripts. `git diff --exit-code` and working-tree checks were clean.
+
+The initial heredoc test command failed because the sandbox could not create its shell temporary file; the corrected `python -c` invocation passed. Large combined inspection calls also encountered tool stdout failures and were split into smaller calls.
+
+No real-data build, FVCOM integration or batch submission was performed. No `$DATA_DIR` contents were read, and no new real-mesh QA, NP/NE or timestep measurements were taken.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 4 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 56: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 55 (your previous answer; 3 minor, 1 nit) was fixed in d2848b2; read it. Per finding:
+- F1 notebook 444: a non-mapping design and non-string keys are handled.
+- F2 check_thresholds: count limits judged in their own precision.
+- F3 chord_m, fillet radii and resample spacing refuse a bool.
+- F4 lint.
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | tests (longdouble count and fraction) | yes, introduced in dd49ce5 | fixed, 4fdc9cc: exact rational comparison, no narrowing; test |
+| F2 | minor | tests (callable bool spacing, bool chord); code read (`bearing: true`) | yes; the bearing is reachable from the design YAML | fixed, 4fdc9cc: bearings validated, chord and callable results refuse a bool; test |
+| F3 | minor | test (`fillet` radius 10 at a 10 m corner) | yes, pre-existing, reachable from the design YAML | fixed, 4fdc9cc: relative tolerance, excess clamped; a radius of 10.1 still fails; test |
+| F4 | minor | test (mixed int/str keys) | yes (the leg diagnostic from 7d0a627) | fixed, 4fdc9cc: keys formatted as text, bbox and source names type-checked; test. Exercised by the next real-data run |
