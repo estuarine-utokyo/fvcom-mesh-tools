@@ -26,7 +26,11 @@ from scipy.sparse.csgraph import dijkstra
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case  # noqa: E402
-from fvcom_mesh_tools.io.fvcom_namelist import check_fvcom_dirs  # noqa: E402
+from fvcom_mesh_tools.io.fvcom_namelist import (  # noqa: E402
+    check_fvcom_dirs,
+    fortran_string,
+    set_value,
+)
 from fvcom_mesh_tools.walls import split_along_walls, wall_edges_from_path  # noqa: E402
 
 CENTRE = np.array([393010.0, 3909480.0])      # the port region, UTM 54N
@@ -147,7 +151,9 @@ def prep(case: Path, out: Path):
     lat = np.array([float(ln.split()[-1]) for ln in cor_lines[1:] if ln.strip()])
     (oi / "m2_cor.dat").write_text(f"Node Number = {len(sxy)}\n" + "".join(
         f"{x:.8f} {y:.8f} {la:.6f}\n" for (x, y), la in zip(sxy, lat[copy_of])))
-    nml = (out / "m2_run.nml").read_text().replace(str(case), str(out))
+    nml = (out / "m2_run.nml").read_text()
+    for key, sub_dir in (("INPUT_DIR", "input"), ("OUTPUT_DIR", "output")):
+        nml = set_value(nml, key, fortran_string(f"{out.resolve()}/{sub_dir}/"))
     (out / "m2_run.nml").write_text(nml)
     (out / "walls.json").write_text(json.dumps({
         "walls": walls, "split": {k: v for k, v in rep.items() if k != "pairs"},
