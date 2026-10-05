@@ -17654,3 +17654,227 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F3 | minor | test (an array passed as two arguments) | yes, introduced in 426f06b | fixed, 6e0ab4e: per-root visited set |
 | F4 | minor | test (a keyword named `_seen`) | yes, introduced in 426f06b | fixed, 6e0ab4e: no traversal state in the interface |
 | F5 | minor | test (1500 nested levels) | yes, pre-existing | fixed, 6e0ab4e: iterative walk, no recursion; test |
+
+## Round 63
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+**Previous findings**
+
+Ranges cover every previous numbered finding; statuses refer to the original reproductions.
+
+| Findings | Status | Reason |
+|---|---|---|
+| R1–R30, except withdrawn objections below | RESOLVED | Recorded corrections remain. Approved licensing, resolution and timestep-warning policies remain controlling. |
+| R31-F1–F4, F6–F10 | RESOLVED | Dimension, connectivity, mask and bounds corrections remain. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal is the established loader contract. |
+| R32, all | RESOLVED | Boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Owner-excluded historical experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Recorded corrections remain. |
+| R34-F1, F2, F4, F5 | RESOLVED | Recorded corrections remain. |
+| R34-F3 | WITHDRAWN | Owner-approved calibrated method remains controlling. |
+| R35–R60, all | RESOLVED | Original geometry, validation, threshold-record and Boolean-guard cases remain corrected. |
+| R61-F1, F2 | RESOLVED | Endpoint validation and precision-preserving value rendering remain. |
+| R61-F3 | RESOLVED | Fractional deltas render correctly; the original mixed-type subtraction cases now work. |
+| R61-F4 | RESOLVED | Cyclic containers terminate under the revised traversal contract. |
+| R62-F1 | RESOLVED | Float16/integer subtraction produces `+1`; float32 extremes produce a finite delta. |
+| R62-F2 | WITHDRAWN | Accepted double-precision display contract permits extended-precision underflow. |
+| R62-F3 | RESOLVED | Shared arrays across arguments are accepted. |
+| R62-F4 | RESOLVED | An argument named `_seen` is checked and Boolean values rejected. |
+| R62-F5 | RESOLVED | The 1,500-level array reproduction completes without recursion failure. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and owner decisions remain controlling. |
+
+1. **Minor — Finite operands can now crash comparison-table rendering after subtraction overflows.**
+
+   **Location:** [quality.py:340](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:340).
+
+   ```python
+   from fvcom_mesh_tools.quality import format_comparison_table
+
+   format_comparison_table([
+       ("before", {"n_nodes": -1e308}),
+       ("after", {"n_nodes": 1e308}),
+   ], keys=("n_nodes",))
+   ```
+
+   Both operands pass the finiteness check, but their difference is infinity. The integer-formatting branch raises **`OverflowError: cannot convert float infinity to integer`**. For a floating metric, the same subtraction displays `+inf`.
+
+   Extracting `_fmt_delta()` from both revisions confirmed that `6e0ab4e^` returns an empty delta for this reproduction, whereas `6e0ab4e` raises. The fix removed the check on the subtraction result.
+
+   **Reachability:** Direct comparison-helper calls with extreme numeric values only; extension-generated counts do not reach this case.
+
+   **Origin:** Introduced by `6e0ab4e`.
+
+   **Fix:** Keep double-precision subtraction, then check `np.isfinite(diff)` before formatting or integer conversion. Render an unavailable/overflow delta consistently.
+
+2. **Minor — Boolean checking still expands shared nested lists exponentially.**
+
+   **Location:** [_checks.py:113](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/_checks.py:113).
+
+   ```python
+   from fvcom_mesh_tools._checks import no_bool
+
+   a = 2.0
+   for _ in range(8):
+       a = [a] * 4
+   no_bool(spacing=a)
+   ```
+
+   This input contains only **eight distinct lists**, each referencing the preceding object four times. Instrumenting `np.asarray()` showed that `no_bool()` materializes **65,536 object-array entries** before its explicit traversal can check child identities. Four and six levels materialized 256 and 4,096 entries respectively.
+
+   Thus, the visited set does not prevent NumPy’s recursive expansion of shared lists. Sixteen levels would request approximately **32 GiB of object-pointer storage** on a 64-bit system; that larger case was not executed.
+
+   **Reachability:** Direct helper calls with shared nested lists or tuples only. Notebook 444 supplies ordinary numeric arrays.
+
+   **Origin:** Pre-existing conversion behavior retained by `6e0ab4e`; distinct from the resolved recursion-limit reproduction.
+
+   **Fix:** Traverse lists and tuples directly with the explicit stack and visited set. Convert only other input types to arrays, and traverse object arrays through their stored entries.
+
+3. **Nit — The new float32-overflow regression assertion accepts missing and infinite deltas.**
+
+   **Location:** [test_review_guards.py:1276](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/tests/test_review_guards.py:1276).
+
+   The assertion is:
+
+   ```python
+   assert "e+" in table or "+6" in table or "inf" not in table
+   ```
+
+   The operand cells already contain scientific notation with `e+`, so the first branch succeeds regardless of the delta. In-memory fault injection replacing only the `alpha_mean` delta with either `""` or `"+inf"` allowed **the complete `test_round62_guards()` to pass**.
+
+   **Reachability:** Test-only defect; reproduced through fault injection, not extension inputs.
+
+   **Origin:** Introduced by `6e0ab4e`.
+
+   **Fix:** Extract the delta cell, require a finite numeric value, and compare it against the expected double-precision difference.
+
+**Verification**
+
+- Bytecode-disabled, cache-disabled, read-only pytest selections: **203 passed, 139 deselected** across extension tests and supporting QA, quality, perpendicularity, coast-fit, boundary-band, provenance and native-I/O tests. Four warnings came from existing extreme-input probes.
+- Initial selection: **107 passed, one failed** because a test used `TemporaryDirectory` without a filesystem fixture and temporary storage was unavailable. Excluding that filesystem-dependent test produced a passing rerun.
+- Scoped `ruff check --no-cache` passed. Individual `bash -n` checks passed for all nine scoped shell files.
+- In-memory recipe probes accepted a valid recipe and rejected NaN, fractional iterations, Boolean depths, oversized integers and duplicate sources.
+- Baseline comparison and fault injections substantiated the findings above.
+- `git diff --exit-code` passed; working-tree status remained empty.
+
+No files were modified, large shared-data contents read, or jobs submitted. Real-data generation, FVCOM integration, QA totals, NP/NE and timestep measurements were **not rerun**.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 2 minor, 1 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 63: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 62 (your previous answer; 5 minor) was fixed in 6e0ab4e; read it. Per finding:
+- F1 comparison-table deltas: double precision from both operands.
+- F2 REBUTTED: the comparison table is a display with a double-precision contract; the exact
+  values are in the ThresholdCheck records (text of the number itself).
+- F3-F5 no_bool is an iterative walk visiting each container once (shared and self-holding
+  containers, any depth, a keyword named _seen).
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | test (-1e308 to 1e308) | yes, introduced in 6e0ab4e | fixed, d80f060: the difference is checked for finiteness; test |
+| F2 | minor | test (40 levels of a shared list, 4**40 entries if expanded) | yes | fixed, d80f060: lists and tuples are walked element by element, no array is built; test |
+| F3 | nit | fault injection (a delta replaced by "" or "+inf") | yes, introduced in 6e0ab4e | fixed, d80f060: the test reads the delta cell and compares it with the expected value |
