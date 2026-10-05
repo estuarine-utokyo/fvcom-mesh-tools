@@ -17878,3 +17878,287 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F1 | minor | test (-1e308 to 1e308) | yes, introduced in 6e0ab4e | fixed, d80f060: the difference is checked for finiteness; test |
 | F2 | minor | test (40 levels of a shared list, 4**40 entries if expanded) | yes | fixed, d80f060: lists and tuples are walked element by element, no array is built; test |
 | F3 | nit | fault injection (a delta replaced by "" or "+inf") | yes, introduced in 6e0ab4e | fixed, d80f060: the test reads the delta cell and compares it with the expected value |
+
+## Round 64
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Round 63’s three findings are **RESOLVED**. Five pre-existing minor defects remain. I substantiated no defect introduced by `d80f060`.
+
+Historical statuses below follow the recorded triage, retained corrections and selected regressions; every historical reproduction was not rerun.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R30, all numbered findings | RESOLVED | Recorded corrections remain, subject to the approved licensing, resolution and timestep-warning policies. |
+| R31-F1–F4, F6–F10 | RESOLVED | Dimension, connectivity, mask and bounds corrections remain. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal remains the established loader contract. |
+| R32, all | RESOLVED | Boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Owner-excluded experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Recorded corrections remain. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original documentation, shape, mask and overflow cases remain corrected. |
+| R34-F3 | WITHDRAWN | The owner-approved calibrated method remains controlling. |
+| R35–R61, all | RESOLVED | Original reproductions remain corrected. The findings below concern separate cases. |
+| R62-F1, F3–F5 | RESOLVED | Mixed-type deltas, shared arguments, `_seen` arguments and deep traversal work. |
+| R62-F2 | WITHDRAWN | The accepted double-precision display contract permits extended-precision underflow. |
+| R63-F1 | RESOLVED | Finite operands whose difference overflows produce an empty delta. |
+| R63-F2 | RESOLVED | `no_bool()` traverses shared lists without expanding them into arrays. |
+| R63-F3 | RESOLVED | The revised test rejects injected empty and infinite deltas. |
+
+The earlier nondeterminism and sub-resolution-land objections remain **WITHDRAWN**.
+
+1. **Minor — The overlap guard can accept complete overlap when areas overflow.**
+
+   **Location:** [extend.py:412](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/extend.py:412); its separate geometry validator omits the coordinate bound at line 227.
+
+   **Reproduction:**
+
+   ```python
+   import numpy as np
+   from fvcom_mesh_tools.extend import check_no_overlap
+   from fvcom_mesh_tools.io.fort14 import Fort14Mesh
+
+   xy = np.array([[0., 0.], [1., 0.], [0., 1.]]) * 1e155
+   mesh = Fort14Mesh(
+       "t", xy, np.ones(3),
+       np.array([[0, 1, 2], [0, 1, 2]]), [], [],
+   )
+   check_no_overlap(mesh, 1)
+   # {'n_outer_touching_base': 1}
+   ```
+
+   The outer triangle exactly duplicates the base triangle. Both intersection and triangle areas become infinity, so `inf > rel_tol * inf` is false. At unit scale, the same call correctly raises an overlap error.
+
+   **Reachability:** Direct helper calls with extreme coordinates only. The extension pipeline’s preceding frozen-base verification rejects these coordinates through `checked_geometry()`.
+
+   **Fix:** Reuse the common geometry validator, including its `1e100` bound, and reject nonfinite measured areas before comparison.
+
+   **Origin:** Pre-existing; unchanged by `d80f060`.
+
+2. **Minor — Scale-free quality calculations turn tiny equilateral triangles into degenerate ones.**
+
+   **Location:** [algorithms/quality.py:32](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/algorithms/quality.py:32), particularly the calculations at lines 50–57 and 72–78.
+
+   **Evidence:** For an equilateral triangle with vertices:
+
+   ```python
+   np.array([[0., 0.], [1., 0.], [.5, np.sqrt(3) / 2]]) * scale
+   ```
+
+   actual calls produced:
+
+   | Scale | `alpha_quality()` | `min_interior_angle()` |
+   |---|---:|---:|
+   | `1` | `1` | `60°` |
+   | `1e-100` | `1` | `60°` |
+   | `1e-170` | `0` | `0°` |
+
+   Squared lengths and cross-products underflow. The zero-denominator fallbacks then report degeneration despite distinct, finite coordinates. These coordinates satisfy the stated upper-bound contract.
+
+   **Reachability:** Direct quality-helper calls only; extension meshes use metric coordinates at ordinary scales.
+
+   **Fix:** Normalize each triangle’s edge vectors before computing dimensionless quality and angles, and use overflow/underflow-safe length calculations. Alternatively, explicitly reject unsupported edge scales.
+
+   **Origin:** Pre-existing; unchanged by `d80f060`.
+
+3. **Minor — Boundary parsing silently discards malformed rows beginning with `lon`.**
+
+   **Location:** [base_recipe.py:60](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/base_recipe.py:60), called by `load_extend_recipe()`.
+
+   **Reproduction:**
+
+   ```python
+   from fvcom_mesh_tools.base_recipe import parse_open_boundary
+
+   parse_open_boundary(
+       "lon,lat\n"
+       "139,35\n"
+       "longitude=139.5,35.5\n"
+       "140,36\n"
+   )
+   # [(139.0, 35.0), (140.0, 36.0)]
+   ```
+
+   The malformed coordinate row is treated as a header and disappears without a diagnostic. An in-memory execution of the actual recipe loader likewise accepted a modified CSV containing **192 nodes instead of 193** after one coordinate row acquired that prefix.
+
+   **Reachability:** Yes—through a recipe pointing to a manually supplied CSV without a 444 report sidecar. An altered 444-published CSV is protected by the existing hash check. Full generation from this malformed input was not run.
+
+   **Fix:** Recognize complete supported header fields explicitly, preferably only before coordinate records; reject every other non-comment row with its line number.
+
+   **Origin:** Pre-existing; unchanged by `d80f060`.
+
+4. **Minor — Complex-value validation still expands shared nested lists exponentially.**
+
+   **Location:** [_checks.py:14](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/_checks.py:14).
+
+   **Reproduction:**
+
+   ```python
+   from fvcom_mesh_tools._checks import no_complex
+
+   a = 2.0
+   for _ in range(8):
+       a = [a] * 4
+   no_complex(spacing=a)
+   ```
+
+   Instrumenting `np.asarray()` measured **256, 4,096 and 65,536 entries** for four, six and eight layers respectively, although each input contains only that many distinct lists.
+
+   `resample()` calls `no_complex()` before the repaired `no_bool()` check, so the latter’s efficient traversal does not protect that entry point from this allocation.
+
+   **Reachability:** Direct helper calls with shared nested containers only. The extension notebooks supply ordinary numeric arrays.
+
+   **Fix:** Traverse lists, tuples and stored object-array entries iteratively with a visited-container set, as `no_bool()` now does.
+
+   **Origin:** Pre-existing. R63-F2’s original `no_bool()` reproduction is resolved.
+
+5. **Minor — Percentage formatting can overflow after the new delta finiteness check.**
+
+   **Location:** [quality.py:350](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:350); value formatting has the same issue at line 311.
+
+   **Reproduction:**
+
+   ```python
+   from fvcom_mesh_tools.quality import format_comparison_table
+
+   format_comparison_table(
+       [("before", {"frac_lt_20deg": 0.0}),
+        ("after", {"frac_lt_20deg": 1e308})],
+       keys=("frac_lt_20deg",),
+   )
+   ```
+
+   The resulting row contains **`inf%`** and **`+inf pp`**. Both operands and their difference are finite; multiplying by 100 creates the infinity after the new check.
+
+   **Reachability:** Direct formatting-helper calls with extreme, invalid fraction values only. Extension-generated fractions do not reach this case.
+
+   **Fix:** Check the scaled percentage for finiteness and render it unavailable/invalid, or reject fraction values outside their supported domain before formatting.
+
+   **Origin:** Pre-existing percentage branches; not introduced by `d80f060`.
+
+Verification used bytecode-disabled Python and `pytest.main()` with `-q -s -p no:cacheprovider` and an in-memory selection plugin: **204 passed, 136 deselected**, with four existing extreme-input warnings. The isolated round 62/63 selection also passed **2 tests**. Empty and `+inf` delta fault injections were rejected by the revised regression test.
+
+Initial broader selections had **23 failures / 207 passes** from Matplotlib cache restrictions and **1 failure / 36 passes** from unavailable temporary storage. Other initial launches encountered temporary-file capture restrictions or an incorrect test filename; the corrected read-only selection passed. Scoped `ruff check --no-cache`, `bash -n` on all nine scoped shell files, required-path/FVCOM-library fragment probes and `git diff --exit-code` passed.
+
+No files were modified, shared-data contents read or jobs submitted. Real-data generation, QA totals, NP/NE, timestep measurements and FVCOM integration were **not rerun**.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 5 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 64: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 63 (your previous answer; 2 minor, 1 nit) was fixed in d80f060; read it. Per finding:
+- F1 comparison-table delta: finiteness of the difference checked.
+- F2 no_bool walks lists and tuples element by element (no array built).
+- F3 the float32 delta test reads the delta.
+Round 62 F2 stands REBUTTED (the table is a double-precision display; exact values are in the
+ThresholdCheck records).
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | test (1e155 duplicate triangles) | yes, pre-existing | fixed, c269ead: the 1e100 coordinate contract in the overlap check's geometry; test |
+| F2 | minor | probe (equilateral triangle at scale 1e-170) | **rebutted** | The quality helpers' contract is coordinates in metres or degrees, validated by `checked_planar` up to 1e100; edge lengths below 1e-100 are not a mesh (a metre is 1e0, a degree-scale element 1e-5). Normalizing every triangle for lengths 70 orders below any real one would add code for no input |
+| F3 | minor | test (`longitude=139.5,35.5` row after a header); real CSVs read as before (193, 13, 191 nodes) | yes, reachable from a hand-made boundary CSV | fixed, c269ead: a header is skipped only if it is exactly `lon,lat` or `longitude,latitude` and first; test |
+| F4 | minor | test (40 levels of a shared list through `no_complex`) | yes | fixed, c269ead: one iterative leaf walk shared by `no_complex` and `no_bool`; test |
+| F5 | minor | test (fraction 1e308 in the table) | yes, pre-existing | fixed in the next commit: a scaled percentage that overflows prints as "invalid" (value) or is left empty (delta); test |

@@ -308,7 +308,8 @@ def _fmt_value(metric: str, value: Any) -> str:
             return str(value)
         return f"{int(value):,}"
     if metric in _PCT_KEYS:
-        return f"{float(value) * 100:.4f}%"
+        pct = float(value) * 100
+        return f"{pct:.4f}%" if np.isfinite(pct) else "invalid"   # 1e308 * 100 overflows (r64 F5)
     if isinstance(value, float):
         return f"{value:.4f}"
     return str(value)
@@ -347,7 +348,8 @@ def _fmt_delta(metric: str, before: Any, after: Any) -> str:
             return f"{diff:+g}"
         return f"{int(diff):+,}"
     if metric in _PCT_KEYS:
-        return f"{diff * 100:+.4f} pp"
+        pp = diff * 100
+        return f"{pp:+.4f} pp" if np.isfinite(pp) else ""
     return f"{diff:+.4f}"
 
 

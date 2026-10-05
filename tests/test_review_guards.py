@@ -1335,3 +1335,12 @@ def test_round64_guards():
     no_bool(spacing=a)
     with pytest.raises(ValueError, match="complex"):
         no_complex(spacing=[[1.0, [2.0 + 1j]]])
+
+
+def test_round64_percentages():
+    from fvcom_mesh_tools.quality import format_comparison_table
+
+    table = format_comparison_table([("before", {"frac_lt_20deg": 0.0}),
+                                     ("after", {"frac_lt_20deg": 1e308})],
+                                    keys=("frac_lt_20deg",))
+    assert "inf" not in table and "invalid" in table
