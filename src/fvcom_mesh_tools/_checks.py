@@ -5,18 +5,50 @@ from __future__ import annotations
 import numpy as np
 
 
+def _leaves(root):
+    """Yield the leaves of ``root``: arrays of a plain dtype whole, and the elements of
+    lists, tuples and object arrays one by one, to any depth. Iterative, each container
+    visited once, and no array is built from a nested list, so shared or self-holding
+    nesting costs nothing (review rounds 62-64)."""
+    stack, visited = [root], set()
+    while stack:
+        obj = stack.pop()
+        if isinstance(obj, (list, tuple)):
+            if id(obj) in visited:
+                continue
+            visited.add(id(obj))
+            items = obj
+        else:
+            arr = np.asarray(obj) if isinstance(obj, np.ndarray) else None
+            if arr is None:
+                yield obj
+                continue
+            if arr.dtype.kind != "O":
+                yield arr
+                continue
+            if id(obj) in visited:
+                continue
+            visited.add(id(obj))
+            items = arr.ravel()
+        for v in items:
+            if isinstance(v, (list, tuple, np.ndarray)):
+                stack.append(v)
+            else:
+                yield v
+
+
 def no_complex(**arrays) -> None:
-    """Refuse complex values: a float conversion would keep only the real
-    part and go on with altered data (review rounds 36 F2, 37 F1-F2)."""
+    """Refuse complex values, wherever they sit: a float conversion would keep only the
+    real part and go on with altered data (review rounds 36 F2, 37-38, 64 F4)."""
     for name, a in arrays.items():
         if a is None:
             continue
-        arr = np.asarray(a)
-        # an object array can hold complex numbers under a dtype that says
-        # nothing about them (review round 38 F2)
-        if arr.dtype.kind == "c" or (arr.dtype.kind == "O" and any(
-                isinstance(v, (complex, np.complexfloating)) for v in arr.ravel())):
-            raise ValueError(f"{name} has complex values")
+        for leaf in _leaves(a):
+            if isinstance(leaf, np.ndarray):
+                if leaf.dtype.kind == "c":
+                    raise ValueError(f"{name} has complex values")
+            elif isinstance(leaf, (complex, np.complexfloating)):
+                raise ValueError(f"{name} has complex values")
 
 
 def real_scalar(value, name: str) -> float:
@@ -95,33 +127,16 @@ def checked_planar(nodes, elements, what: str = "the mesh") -> tuple[np.ndarray,
 
 def no_bool(**arrays) -> None:
     """Refuse booleans, also inside object arrays and nested lists/arrays to any depth:
-    ``True`` would become the number 1 in a float conversion (review rounds 55-62).
-
-    The walk is iterative (no recursion limit) and visits each container once, so a
-    container that holds itself, or one shared by two arguments, is no problem."""
-    for name, root in arrays.items():
-        if root is None:
+    ``True`` would become the number 1 in a float conversion (review rounds 55-64)."""
+    for name, a in arrays.items():
+        if a is None:
             continue
-        stack, visited = [root], set()
-        while stack:
-            obj = stack.pop()
-            if id(obj) in visited:
-                continue
-            visited.add(id(obj))
-            if isinstance(obj, (list, tuple)):
-                items = obj                  # the elements themselves: no array is built, so a
-            else:                            # shared nested list is not expanded (round 63 F2)
-                arr = np.asarray(obj)
-                if arr.dtype.kind == "b":
+        for leaf in _leaves(a):
+            if isinstance(leaf, np.ndarray):
+                if leaf.dtype.kind == "b":
                     raise ValueError(f"{name} has boolean values, not numbers")
-                if arr.dtype.kind != "O":
-                    continue
-                items = arr.ravel()
-            for v in items:
-                if isinstance(v, (bool, np.bool_)):
-                    raise ValueError(f"{name} has boolean values, not numbers")
-                if isinstance(v, (np.ndarray, list, tuple)):
-                    stack.append(v)
+            elif isinstance(leaf, (bool, np.bool_)):
+                raise ValueError(f"{name} has boolean values, not numbers")
 
 
 def is_finite_real(v) -> bool:

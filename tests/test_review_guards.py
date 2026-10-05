@@ -1309,3 +1309,29 @@ def test_round63_guards():
     no_bool(spacing=a)
     with pytest.raises(ValueError, match="boolean"):
         no_bool(spacing=[[[np.bool_(True)]]])
+
+
+def test_round64_guards():
+    from fvcom_mesh_tools._checks import no_bool, no_complex
+    from fvcom_mesh_tools.base_recipe import parse_open_boundary
+    from fvcom_mesh_tools.extend import check_no_overlap
+
+    # F1: the overlap check shares the coordinate contract
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]) * 1e155
+    mesh = Fort14Mesh("t", xy, np.ones(3), np.array([[0, 1, 2], [0, 1, 2]]), [], [])
+    with pytest.raises(ValueError, match="1e100"):
+        check_no_overlap(mesh, 1)
+    # F3: only a true header is skipped, and only first
+    assert parse_open_boundary("lon,lat\n139,35\n140,36\n") == [(139.0, 35.0), (140.0, 36.0)]
+    with pytest.raises(ValueError, match="expected 'lon,lat'"):
+        parse_open_boundary("lon,lat\n139,35\nlongitude=139.5,35.5\n140,36\n")
+    with pytest.raises(ValueError, match="expected 'lon,lat'"):
+        parse_open_boundary("139,35\nlon,lat\n140,36\n")
+    # F4: complex checks do not expand shared nested lists
+    a = 2.0
+    for _ in range(40):
+        a = [a] * 4
+    no_complex(spacing=a)
+    no_bool(spacing=a)
+    with pytest.raises(ValueError, match="complex"):
+        no_complex(spacing=[[1.0, [2.0 + 1j]]])

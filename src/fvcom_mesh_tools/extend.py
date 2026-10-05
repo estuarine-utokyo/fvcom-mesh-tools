@@ -226,6 +226,8 @@ def _checked_geometry(mesh: Fort14Mesh):
     xy = nodes[:, :2].astype(float)
     if not np.isfinite(xy).all():
         raise ValueError("node coordinates must be finite")
+    if np.abs(xy).max(initial=0.0) > 1e100:       # areas overflow beyond it (review round 64 F1)
+        raise ValueError("node coordinates beyond 1e100 are not supported")
     els = _indices(mesh.elements, len(xy), "elements", ndim=2)
     if els.size and els.shape[1] != 3:
         raise ValueError(f"elements must be (M, 3), not {els.shape}")

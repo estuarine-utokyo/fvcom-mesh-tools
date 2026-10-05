@@ -55,10 +55,16 @@ def parse_open_boundary(text: str, path="<text>") -> list[tuple[float, float]]:
     import math
 
     pts = []
+    header_ok = True            # a header may only be the first record
     for n, line in enumerate(text.splitlines(), 1):
         s = line.strip()
-        if not s or s.startswith("#") or s.lower().startswith("lon"):
+        if not s or s.startswith("#"):
             continue
+        if header_ok and [v.strip().lower() for v in s.split(",")] in (
+                ["lon", "lat"], ["longitude", "latitude"]):
+            header_ok = False
+            continue
+        header_ok = False
         parts = [v.strip() for v in s.split(",")]
         try:
             lon, lat = float(parts[0]), float(parts[1])
