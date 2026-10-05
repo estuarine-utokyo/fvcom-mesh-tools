@@ -18162,3 +18162,244 @@ evidence, and a concrete fix. Then `## Verdict` with exactly one line:
 | F3 | minor | test (`longitude=139.5,35.5` row after a header); real CSVs read as before (193, 13, 191 nodes) | yes, reachable from a hand-made boundary CSV | fixed, c269ead: a header is skipped only if it is exactly `lon,lat` or `longitude,latitude` and first; test |
 | F4 | minor | test (40 levels of a shared list through `no_complex`) | yes | fixed, c269ead: one iterative leaf walk shared by `no_complex` and `no_bool`; test |
 | F5 | minor | test (fraction 1e308 in the table) | yes, pre-existing | fixed in the next commit: a scaled percentage that overflows prints as "invalid" (value) or is left empty (delta); test |
+
+## Round 65
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `607cb27`. Three minor defects are substantiated: one introduced by `c269ead`, two pre-existing.
+
+**Previous finding status**
+
+| Finding | Status | Reason |
+|---|---|---|
+| R64-F1 | RESOLVED | Overlap checking rejects coordinates beyond `1e100`. |
+| R64-F2 | WITHDRAWN | Standing coordinate/edge-length contract accepted. |
+| R64-F3 | RESOLVED | Only an exact, first-record header is skipped. Finding 2 below concerns a separate parsing gap. |
+| R64-F4 | RESOLVED | Shared nested lists are traversed without expansion. Finding 1 is a regression introduced by that fix. |
+| R64-F5 | RESOLVED | Overflowing percentages render as invalid; overflowing percentage deltas remain empty. |
+| R36-F2, R37-F1–F2, R45-F3, R56-F2 | PARTIAL | Original reproductions are corrected, but compatible array containers bypass rejection again: finding 1. R45-F3 also has the mask gap in finding 3. |
+| R25-F4, R26-F2, R39-F2 | PARTIAL | Top-level masks are rejected; nested masked coordinate rows still lose their masks: finding 3. |
+| R31-F5; R33-F1/F8; R34-F3; R62-F2 | WITHDRAWN | Established axis policy, explicit scope exclusions, calibrated corridor method, and double-precision display contract respectively. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Supplied measurements and the owner’s resolution policy remain controlling. |
+| All other accepted findings in R1–R63 | RESOLVED | Their reported reproductions remain covered by the recorded follow-up fixes. Licensing decisions and warning-only timestep policy are preserved. |
+
+**Findings**
+
+1. **Minor — The new leaf walker bypasses complex and Boolean validation for compatible array containers.**
+
+   **Location:** [_checks.py:22](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/_checks.py:22).
+
+   `_leaves()` normalizes only `np.ndarray` instances. A `memoryview`, pandas Series, or DataFrame is yielded unchanged; neither validator recognizes its stored values.
+
+   **Reproduction:**
+
+   ```python
+   import numpy as np
+   from fvcom_mesh_tools._checks import promoted_nodes
+   from fvcom_mesh_tools.obc_design import resample
+
+   promoted_nodes(memoryview(np.array([[1 + 9j, 2]], dtype=complex)))
+   # array([[1., 2.]]) — imaginary component discarded, with ComplexWarning
+
+   resample([[0, 0], [3, 0]],
+            lambda p: memoryview(np.array([True])))
+   # array([[0., 0.], [1., 0.], [2., 0.], [3., 0.]])
+   ```
+
+   Both corresponding raw-container checks reject these inputs before `c269ead`; the current checks accept them. Pandas containers reproduced the same bypass.
+
+   **Reachability:** Direct helper calls only; the extension notebooks supply ordinary NumPy arrays.
+
+   **Fix:** Normalize compatible non-list/tuple leaves before checking their dtype, or explicitly reject unsupported containers. Preserve the iterative traversal without materializing nested lists. Add regressions through the consuming helpers.
+
+   **Origin:** Introduced by `c269ead`.
+
+2. **Minor — Boundary CSV parsing silently discards extra fields.**
+
+   **Location:** [base_recipe.py:68](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/base_recipe.py:68).
+
+   The header now requires exactly two fields, but coordinate records consume only `parts[0]` and `parts[1]`. Every remaining field is ignored.
+
+   **Reproduction:**
+
+   ```python
+   from fvcom_mesh_tools.base_recipe import parse_open_boundary
+
+   parse_open_boundary(
+       "lon,lat\n139,35,garbage\n140,36,35\n"
+   )
+   # [(139.0, 35.0), (140.0, 36.0)]
+   ```
+
+   Malformed records therefore become accepted boundary inputs without a diagnostic.
+
+   **Reachability:** Reachable through an extension recipe’s hand-written boundary CSV. The shipped CSV has two fields and is unaffected.
+
+   **Fix:** Require exactly two fields on every coordinate record; otherwise raise the existing line-numbered diagnostic.
+
+   **Origin:** Pre-existing; unchanged by the header fix.
+
+3. **Minor — Mask validation misses masked coordinate rows inside ordinary containers.**
+
+   **Locations:** [_checks.py:81](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/_checks.py:81), [obc_design.py:185](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/../src/fvcom_mesh_tools/obc_design.py:185).
+
+   `np.ma.is_masked()` checks the outer list without discovering masks on its contained arrays. Subsequent float conversion discards those masks and uses the hidden coordinates.
+
+   **Reproduction:**
+
+   ```python
+   import numpy as np
+   from fvcom_mesh_tools._checks import checked_planar
+
+   nodes = [
+       np.ma.array([999., 0.], mask=[True, False]),
+       [1000., 0.],
+       [999., 1.],
+   ]
+   checked_planar(nodes, [[0, 1, 2]])[0]
+   # array([[999., 0.], [1000., 0.], [999., 1.]])
+   ```
+
+   The unknown first coordinate becomes the accepted value `999`. `resample()` likewise accepts a masked first row inside a list and generates nodes using its hidden coordinate.
+
+   **Reachability:** Direct helper calls with nested masked inputs only; the extension workflow’s geometry readers produce ordinary arrays.
+
+   **Fix:** Check original nested containers and array leaves for active masks before conversion. Use iterative traversal with cycle protection, and share it across the mask-rejecting interfaces.
+
+   **Origin:** Pre-existing.
+
+**Verification**
+
+- Bytecode-disabled `pytest.main()` with `-q --capture=sys -p no:cacheprovider` and an in-memory selection plugin: **218 passed, 140 deselected, 1 environmental failure**. `test_round56_guards` attempted temporary-directory creation; the read-only sandbox rejected it. Its mixed-key diagnostic was separately verified with an in-memory mock.
+- Isolated round 62–64 guard selection: **4 passed**.
+- Scoped `ruff check --no-cache`: passed.
+- `bash -n`: **9/9 scoped shell files passed**.
+- Missing-path and `FVCOM_LIBS` shell-fragment probes: passed.
+- `git diff --exit-code` and working-tree checks: clean.
+
+No files were modified, shared-data contents read, or jobs submitted. Real-data generation, QA totals, NP/NE and timestep measurements were **not rerun**.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 3 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 65: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 64 (your previous answer; 5 minor) was fixed in c269ead and the commit after it; read it.
+- F1 check_no_overlap shares the 1e100 coordinate contract.
+- F2 REBUTTED: the quality helpers' contract is metric or degree coordinates (validated up to
+  1e100); edge lengths of 1e-170 are not a mesh.
+- F3 the open-boundary CSV skips a header only if it is exactly lon,lat (or longitude,latitude) and first.
+- F4 no_complex and no_bool share one iterative leaf walk.
+- F5 a scaled percentage that overflows prints as invalid / is left empty.
+Standing: round 62 F2 and round 64 F2 REBUTTED (display precision; sub-1e-100 edge lengths).
+Round 62 F2 stands REBUTTED (the table is a double-precision display; exact values are in the
+ThresholdCheck records).
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | tests (memoryview of complex and of bool) | yes, introduced in c269ead | fixed, e3c4cc2: array-likes go through `np.asarray` first; tests |
+| F2 | minor | test (`139,35,7`); the real CSVs read as before | yes, reachable from a hand-made boundary CSV | fixed, e3c4cc2: exactly two fields per record; test |
+| F3 | minor | tests (a masked array inside a list, in `checked_planar` and `resample`) | yes, pre-existing | fixed, e3c4cc2: `no_masked` on the shared leaf walk replaces the shallow checks; tests |
