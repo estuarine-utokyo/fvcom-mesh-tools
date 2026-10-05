@@ -1168,3 +1168,39 @@ def test_round57_guards():
     for sp in (np.array(True, dtype=object), lambda p: np.full(len(p), True, dtype=object)):
         with pytest.raises(ValueError, match="boolean"):
             resample([[0, 0], [3, 0]], sp)
+
+
+def test_round58_guards(tmp_path):
+    import decimal
+    import json
+
+    from fvcom_mesh_tools._checks import is_finite_real, no_bool
+    from fvcom_mesh_tools.extend_recipe import load_extend_recipe
+    from fvcom_mesh_tools.obc_design import resample
+    from fvcom_mesh_tools.quality import check_thresholds, format_threshold_table
+
+    # F1: no Decimal context involved in a record
+    with decimal.localcontext() as ctx:
+        ctx.Emin, ctx.Emax = -9, 9
+        ctx.traps[decimal.Inexact] = True
+        _, checks = check_thresholds({"alpha_mean": np.longdouble("1e-400")},
+                                     min_alpha_mean=np.longdouble("1e-401"))
+    assert "0E" not in str(checks[0].actual) and checks[0].actual != checks[0].threshold
+    # F2: a fractional count is rendered
+    _, checks = check_thresholds({"n_flipped": np.longdouble("0.1")}, max_flipped=1)
+    assert "0.1" in format_threshold_table(checks)
+    # F3: an extended-range magnitude serializes
+    _, checks = check_thresholds({"alpha_mean": np.longdouble("1e4900")}, min_alpha_mean=1)
+    json.dumps(checks[0].to_dict())
+    format_threshold_table(checks)
+    # F4: a mixed sequence cannot hide a boolean; the callable returns one value per point
+    with pytest.raises(ValueError, match="boolean"):
+        no_bool(spacing=[True, 2.0])
+    with pytest.raises(ValueError):
+        resample([[0, 0], [3, 0]], lambda p: [True, 2.0])
+    # F5: huge YAML integers get the intended diagnostic
+    assert not is_finite_real(10**400) and is_finite_real(10**20) and not is_finite_real(True)
+    f = tmp_path / "r.yaml"
+    f.write_text("name: x\n")
+    with pytest.raises(ValueError):
+        load_extend_recipe(f)

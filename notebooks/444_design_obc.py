@@ -59,6 +59,7 @@ def _umask() -> int:
     m = os.umask(0)
     os.umask(m)
     return m
+from fvcom_mesh_tools._checks import is_finite_real  # noqa: E402
 from fvcom_mesh_tools.yaml_strict import load_unique  # noqa: E402
 
 cfg = load_unique(design_path.read_text())      # no repeated keys (round 21 F7)
@@ -104,7 +105,7 @@ land = shapely.ops.transform(lambda x, y, z=None: to_m.transform(x, y),
                              shapely.unary_union(land_ll.geometry.values))
 _chord = cfg.get("chord_m", 3000)
 if isinstance(_chord, bool) or not isinstance(_chord, (int, float)) or not (
-        np.isfinite(_chord) and _chord > 0):
+        is_finite_real(_chord) and _chord > 0):
     raise SystemExit(f"chord_m must be a finite positive number, not {_chord!r}")
 chord = float(_chord)
 bs, S0 = coast_normal(land, *to_m.transform(*cfg["start"]), chord_m=chord)
@@ -173,7 +174,7 @@ names = sp["bathymetry"]
 # finite positive controls, or the floor silently vanishes (review round 3 F11)
 for key in ("min_m", "cfl_dt_s", "cfl_cr"):
     v = sp.get(key)
-    if not (isinstance(v, (int, float)) and not isinstance(v, bool) and np.isfinite(v) and v > 0):
+    if not (isinstance(v, (int, float)) and is_finite_real(v) and v > 0):
         raise SystemExit(f"spacing.{key} must be a finite positive number, not {v!r}")
 
 

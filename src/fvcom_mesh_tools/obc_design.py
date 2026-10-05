@@ -208,6 +208,9 @@ def resample(line, spacing) -> np.ndarray:
         got = f(at([min(t, total)]))
         no_complex(spacing=got)            # a callable's result too (review round 38 F3)
         no_bool(spacing=got)
+        if np.shape(got) != (1,):          # one value for the one point asked (round 58 F4)
+            raise ValueError(f"the spacing callable must return one value per point, "
+                             f"not shape {np.shape(got)}")
         h = float(got[0])
         if not np.isfinite(h) or h <= 0:
             raise ValueError(f"spacing must be positive and finite (got {h} at {t:.1f} m)")

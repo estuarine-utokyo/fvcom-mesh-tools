@@ -10,11 +10,11 @@ and checks the recipe.
 from __future__ import annotations
 
 import hashlib
-import math
 import re
 from pathlib import Path
 from typing import Any
 
+from fvcom_mesh_tools._checks import is_finite_real
 from fvcom_mesh_tools.base_recipe import parse_open_boundary
 
 __all__ = ["EXPECT_ENV", "REQUIRED_SETTINGS", "check_case_name", "check_expected",
@@ -109,7 +109,7 @@ def load_extend_recipe(path) -> dict[str, Any]:
         raise ValueError(f"{path}: land is {{bbox: [lon_min, lat_min, lon_max, lat_max]}}")
     bb = land["bbox"]
     # finite, on the globe, and ordered (review round 2 F11)
-    if not (all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    if not (all(isinstance(v, (int, float)) and is_finite_real(v)
                 for v in bb)
             and -180 <= bb[0] < bb[2] <= 360 and -90 <= bb[1] < bb[3] <= 90):
         raise ValueError(f"{path}: land.bbox {bb} must be finite lon_min < lon_max, "
@@ -136,7 +136,7 @@ def load_extend_recipe(path) -> dict[str, Any]:
     for k in REQUIRED_SETTINGS:
         if not (isinstance(s[k], (int, float)) and not isinstance(s[k], bool)):
             raise ValueError(f"{path}: settings.{k} must be a number")
-        if not math.isfinite(s[k]):
+        if not is_finite_real(s[k]):
             raise ValueError(f"{path}: settings.{k} must be finite")
         if k in _INTEGRAL and s[k] != int(s[k]):
             raise ValueError(f"{path}: settings.{k} must be an integer")
@@ -153,7 +153,7 @@ def load_extend_recipe(path) -> dict[str, Any]:
         v = d[k]
         if k == "max_m" and v is None:
             continue
-        if not (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)):
+        if not (isinstance(v, (int, float)) and is_finite_real(v)):
             raise ValueError(f"{path}: depths.{k} must be a finite number")
     if not d["min_m"] > 0 or (d["max_m"] is not None and not d["max_m"] > d["min_m"]):
         raise ValueError(f"{path}: depths need 0 < min_m < max_m (max_m may be null)")

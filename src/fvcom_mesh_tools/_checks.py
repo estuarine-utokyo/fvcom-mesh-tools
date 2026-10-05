@@ -99,7 +99,23 @@ def no_bool(**arrays) -> None:
     for name, a in arrays.items():
         if a is None:
             continue
-        arr = np.asarray(a)
+        # a list is inspected element by element: dtype inference would turn
+        # [True, 2.0] into floats before we look (review round 58 F4)
+        arr = np.asarray(a, dtype=object) if isinstance(a, (list, tuple)) else np.asarray(a)
         if arr.dtype.kind == "b" or (arr.dtype.kind == "O" and any(
                 isinstance(v, (bool, np.bool_)) for v in arr.ravel())):
             raise ValueError(f"{name} has boolean values, not numbers")
+
+
+def is_finite_real(v) -> bool:
+    """A finite real number, also an integer too large for a float (which is refused
+    rather than crashing the check; review round 58 F5). Not a bool."""
+    import math
+
+    if isinstance(v, (bool, np.bool_)):
+        return False
+    if isinstance(v, (int, np.integer)):
+        return abs(int(v)) < 10 ** 300
+    if isinstance(v, (float, np.floating)):
+        return math.isfinite(v)
+    return False

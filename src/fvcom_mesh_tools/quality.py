@@ -157,8 +157,8 @@ class ThresholdCheck:
 
     metric: str
     op: str            # "≥" or "≤"
-    threshold: int | float     # integers stay integers
-    actual: int | float
+    threshold: int | float | str     # integers stay integers; text when nothing else is exact
+    actual: int | float | str
     passed: bool
 
     def to_dict(self) -> dict[str, Any]:
@@ -198,12 +198,10 @@ def _record(n: Any):
     """A number for the record that says what was compared: an integral value is an exact
     Python int, any other finite one a float when that is exact and its decimal text when
     not; NaN and infinity stay floats (review rounds 52-57)."""
-    if isinstance(n, int):
-        return n
     ex = _exact(n)
     if ex is None:
         return float(n)
-    if ex.denominator == 1:
+    if ex.denominator == 1 and abs(ex) < 10 ** 1000:      # below Python's digit limit
         return int(ex)
     try:
         f = float(ex)
@@ -211,11 +209,9 @@ def _record(n: Any):
             return f
     except OverflowError:
         pass
-    from decimal import Decimal, localcontext
-
-    with localcontext() as ctx:
-        ctx.prec = 60
-        return str(Decimal(ex.numerator) / Decimal(ex.denominator))
+    # anything else as the text of the number itself (no Decimal context, no big-int
+    # conversion): exact in the value's own precision (review round 58 F1, F3)
+    return str(n)
 
 
 def _judge(actual: Any, op: str, threshold: Any) -> tuple[Any, Any, bool]:
@@ -294,6 +290,8 @@ def _fmt_value(metric: str, value: Any) -> str:
         return "n/a"
     if isinstance(value, float) and np.isnan(value):
         return "n/a"
+    if isinstance(value, str):
+        return value              # the text of a number that no int or float holds exactly
     if isinstance(value, (float, np.floating)) and not np.isfinite(value):
         return "invalid"          # the FAIL verdict stays; an infinity has no integer form
     if metric in _INT_KEYS:
