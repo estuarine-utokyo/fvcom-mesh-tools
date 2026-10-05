@@ -129,10 +129,11 @@ for _i, _g in enumerate(_legs):
         raise SystemExit(f"leg {_i}: needs a bearing and exactly one of 'until: end_normal', "
                          f"'until_lon', 'until_lat' (found {sorted(str(kk) for kk in _g)})")
     _bg = _g["bearing"]          # a number, or the symbolic start_normal; never a bool
+    # (the bound also keeps a huge YAML integer out of float arithmetic)
     if _bg != "start_normal" and (isinstance(_bg, bool) or not isinstance(_bg, (int, float))
-                                  or not np.isfinite(_bg)):
-        raise SystemExit(f"leg {_i}: bearing must be a finite number or 'start_normal', "
-                         f"not {_bg!r}")
+                                  or not abs(_bg) <= 36000):
+        raise SystemExit(f"leg {_i}: bearing must be a number of at most 36000 degrees in "
+                         f"size, or 'start_normal', not {_bg!r}")
 _ends = [i for i, g in enumerate(_legs) if g.get("until") == "end_normal"]
 if _ends and _ends != [len(_legs) - 1]:
     raise SystemExit(f"'until: end_normal' must be on the final leg only; found on leg(s) "

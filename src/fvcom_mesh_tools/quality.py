@@ -195,13 +195,27 @@ def _exact(n: Any):
 
 
 def _record(n: Any):
-    """A number for the record: an int stays an int, a float is a float (NaN if it has none)."""
+    """A number for the record that says what was compared: an integral value is an exact
+    Python int, any other finite one a float when that is exact and its decimal text when
+    not; NaN and infinity stay floats (review rounds 52-57)."""
     if isinstance(n, int):
         return n
-    try:
+    ex = _exact(n)
+    if ex is None:
         return float(n)
-    except (OverflowError, ValueError, TypeError):
-        return float("nan")
+    if ex.denominator == 1:
+        return int(ex)
+    try:
+        f = float(ex)
+        if np.isfinite(f) and _exact(f) == ex:
+            return f
+    except OverflowError:
+        pass
+    from decimal import Decimal, localcontext
+
+    with localcontext() as ctx:
+        ctx.prec = 60
+        return str(Decimal(ex.numerator) / Decimal(ex.denominator))
 
 
 def _judge(actual: Any, op: str, threshold: Any) -> tuple[Any, Any, bool]:
@@ -238,17 +252,13 @@ def check_thresholds(
 
     def _ge(metric: str, threshold: float) -> None:
         actual = metrics.get(metric)
-        if actual is None:           # a requested threshold on a missing metric fails (r47 F8)
-            checks.append(ThresholdCheck(metric, "≥", _number(threshold), float("nan"), False))
-            return
+        # a requested threshold on a missing metric fails (r47 F8): the same path as a
+        # present actual, so its record is built the same way (r57 F2)
         a, t, passed = _judge(actual, "≥", threshold)
         checks.append(ThresholdCheck(metric, "≥", t, a, passed))
 
     def _le(metric: str, threshold: float) -> None:
         actual = metrics.get(metric)
-        if actual is None:
-            checks.append(ThresholdCheck(metric, "≤", _number(threshold), float("nan"), False))
-            return
         a, t, passed = _judge(actual, "≤", threshold)
         checks.append(ThresholdCheck(metric, "≤", t, a, passed))
 

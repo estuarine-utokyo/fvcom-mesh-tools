@@ -1145,3 +1145,26 @@ def test_round56_guards():
         f.write_text("1: a\nx: b\n")
         with pytest.raises(ValueError, match="unknown"):
             load_extend_recipe(f)
+
+
+def test_round57_guards():
+    import json
+
+    from fvcom_mesh_tools.obc_design import resample
+    from fvcom_mesh_tools.quality import check_thresholds, format_threshold_table
+
+    # F1: the record says what was compared
+    ok, checks = check_thresholds({"n_flipped": np.longdouble("9007199254740993")},
+                                  max_flipped=9007199254740992)
+    assert not ok and checks[0].actual == 9007199254740993
+    ok, checks = check_thresholds({"alpha_mean": np.longdouble("1e400")},
+                                  min_alpha_mean=np.longdouble("1e399"))
+    assert ok and "invalid" not in format_threshold_table(checks)
+    # F2: a missing metric's record is serializable
+    for thr in (np.float32(0.1), np.longdouble("0.1")):
+        _, checks = check_thresholds({}, min_alpha_mean=thr)
+        json.dumps(checks[0].to_dict())
+    # F3: booleans inside object arrays
+    for sp in (np.array(True, dtype=object), lambda p: np.full(len(p), True, dtype=object)):
+        with pytest.raises(ValueError, match="boolean"):
+            resample([[0, 0], [3, 0]], sp)

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from fvcom_mesh_tools._checks import no_complex
+from fvcom_mesh_tools._checks import no_bool, no_complex
 
 __all__ = [
     "bearing_vector",
@@ -201,15 +201,13 @@ def resample(line, spacing) -> np.ndarray:
 
     if not callable(spacing):
         no_complex(spacing=spacing)
-        if np.asarray(spacing).dtype.kind == "b":
-            raise ValueError("spacing must be a number, not a boolean")
+        no_bool(spacing=spacing)
     f = spacing if callable(spacing) else (lambda p, h=float(spacing): np.full(len(p), h))
 
     def h_at(t):
         got = f(at([min(t, total)]))
         no_complex(spacing=got)            # a callable's result too (review round 38 F3)
-        if np.asarray(got).dtype.kind == "b":
-            raise ValueError("spacing must be numbers, not booleans")
+        no_bool(spacing=got)
         h = float(got[0])
         if not np.isfinite(h) or h <= 0:
             raise ValueError(f"spacing must be positive and finite (got {h} at {t:.1f} m)")

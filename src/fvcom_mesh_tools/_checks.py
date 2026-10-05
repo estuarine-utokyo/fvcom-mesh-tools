@@ -91,3 +91,15 @@ def checked_planar(nodes, elements, what: str = "the mesh") -> tuple[np.ndarray,
     if xy.shape[1] != 2:
         raise ValueError(f"{what}: nodes must be (N, 2), not {xy.shape}")
     return xy, tri
+
+
+def no_bool(**arrays) -> None:
+    """Refuse booleans, also inside object arrays: ``True`` would become the number 1
+    in a float conversion (review rounds 55-57)."""
+    for name, a in arrays.items():
+        if a is None:
+            continue
+        arr = np.asarray(a)
+        if arr.dtype.kind == "b" or (arr.dtype.kind == "O" and any(
+                isinstance(v, (bool, np.bool_)) for v in arr.ravel())):
+            raise ValueError(f"{name} has boolean values, not numbers")
