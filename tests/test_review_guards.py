@@ -1256,8 +1256,37 @@ def test_round61_guards():
     table = format_comparison_table([("before", {"n_flipped": 0.0}),
                                      ("after", {"n_flipped": 0.5})], keys=("n_flipped",))
     assert "+0.5" in table
-    # F4: a container that holds itself is refused, not followed forever
+    # F4: a container that holds itself is not followed forever (round 62: visited once)
     a = np.empty(1, dtype=object)
     a[0] = a
-    with pytest.raises(ValueError, match="itself"):
-        no_bool(spacing=a)
+    no_bool(spacing=a)
+
+
+def test_round62_guards():
+    from fvcom_mesh_tools._checks import no_bool
+    from fvcom_mesh_tools.quality import format_comparison_table
+
+    # F1: mixed types subtract as doubles
+    table = format_comparison_table([("before", {"n_nodes": np.float16(2048)}),
+                                     ("after", {"n_nodes": 2049})], keys=("n_nodes",))
+    assert "+1" in table
+    table = format_comparison_table([("before", {"alpha_mean": np.float32(-3e38)}),
+                                     ("after", {"alpha_mean": np.float32(3e38)})],
+                                    keys=("alpha_mean",))
+    assert "e+" in table or "+6" in table or "inf" not in table
+    # F3: an array shared by two arguments is no cycle
+    x = np.array([2.0])
+    no_bool(first=x, second=x)
+    # F4: an argument may be called _seen
+    with pytest.raises(ValueError, match="boolean"):
+        no_bool(**{"_seen": np.array([True])})
+    # F5: depth does not matter
+    a = np.array(2.0, dtype=object)
+    for _ in range(1500):
+        b = np.empty(1, dtype=object)
+        b[0] = a
+        a = b
+    no_bool(spacing=a)
+    c = np.empty(1, dtype=object)
+    c[0] = c
+    no_bool(spacing=c)                      # a cycle is simply visited once

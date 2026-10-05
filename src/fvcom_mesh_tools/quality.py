@@ -324,17 +324,20 @@ def _fmt_delta(metric: str, before: Any, after: Any) -> str:
             and not isinstance(before, bool) and not isinstance(after, bool):
         d = int(after) - int(before)           # exact: 2**53 + 1 - 2**53 is 1 (review round 53 F3)
         return "0" if d == 0 else f"{d:+,}"
+    # the table is a display: deltas are computed in double precision from both operands
+    # (a float16 and an int subtract as doubles, so 2048 -> 2049 is +1); the exact values
+    # are in the ThresholdCheck records (review round 62 F1)
     nums = (int, float, np.integer, np.floating)
     if isinstance(before, (bool, np.bool_)) or isinstance(after, (bool, np.bool_)) \
             or not isinstance(before, nums) or not isinstance(after, nums):
         return ""
     try:
-        diff = after - before              # in the operands' own precision, not narrowed first
-        if not bool(np.isfinite(diff)) or not (bool(np.isfinite(before))
-                                              and bool(np.isfinite(after))):
-            return ""
+        b, a = float(before), float(after)
     except (TypeError, ValueError, OverflowError):
         return ""
+    if not (np.isfinite(b) and np.isfinite(a)):
+        return ""
+    diff = a - b
     if metric in _INT_KEYS:
         if diff == 0:
             return "0"
