@@ -49,7 +49,7 @@ for case in ("base", "refined"):
     nml = (root / case / "m2_run.nml").read_text()
     start = re.search(r"START_DATE\s*=\s*'([^']+)'", nml).group(1)
     end = end_after(start, days)           # finite, positive (review round 12 F5)
-    # the moved directories are checked against FVCOM's 80 bytes before
+    # the moved directories are checked against FVCOM's directory limit (FVCOM_DIR_MAX) before
     # anything is written (review round 6 F11)
     relocate_case(root / case, smoke / case, end_date=end)
     print(f"[423] {case}: end -> {end}")

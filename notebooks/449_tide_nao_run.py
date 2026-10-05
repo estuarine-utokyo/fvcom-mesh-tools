@@ -40,6 +40,7 @@ from pyproj import Transformer
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from fvcom_mesh_tools.io.fvcom_namelist import check_fvcom_dirs  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import (  # noqa: E402
     apply_obc_depth_control,
     export_fvcom_case,
@@ -130,11 +131,7 @@ if a.no_obc_depth_control:
 else:
     mesh, change = apply_obc_depth_control(mesh)
 case = a.root
-# FVCOM keeps INPUT_DIR / OUTPUT_DIR in CHARACTER(LEN=80): a longer path is cut
-# and the output lands beside the directory (a 81-character root, 2026-09-30)
-for d in (case / "input", case / "output"):
-    if len(f"{d.resolve()}/") > 80:
-        raise SystemExit(f"{d.resolve()}/ exceeds FVCOM's 80 characters; use a shorter --root")
+check_fvcom_dirs(case / "input", case / "output")
 if (case / "STAGED").exists() or any((case / "output").glob("*.nc")):
     raise SystemExit(f"{case} already holds a run; give a new --root")
 inp, out = case / "input", case / "output"

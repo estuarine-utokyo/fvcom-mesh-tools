@@ -16,7 +16,11 @@ from pathlib import Path
 __all__ = ["FVCOM_DIR_MAX", "check_fvcom_dirs", "end_after", "fortran_string",
            "relocate_case", "set_value"]
 
-FVCOM_DIR_MAX = 80
+# FVCOM (branch uk-fabm/v5.1.0-dev, commit "FVCOM: path variables 1024 characters") keeps
+# INPUT_DIR / OUTPUT_DIR and the paths composed from them in CHARACTER(LEN=1024); a directory
+# plus a file name of up to 24 characters must fit. An older FVCOM binary cut these at 80
+# characters (a longer run directory then failed with "FILE ... NOT FOUND" on a cut path).
+FVCOM_DIR_MAX = 1000
 
 
 def end_after(start: str, days: float) -> str:

@@ -50,7 +50,7 @@ done
 # A shortened copy of each case, so the staged twenty-day run is untouched.
 # One working directory per invocation, taken atomically (review round 12
 # F3), short and directly under scratch: under the run root it pushed the
-# FVCOM paths past 80 bytes (round 13 F3). relocate_case checks them.
+# FVCOM paths past FVCOM_DIR_MAX (round 13 F3). relocate_case checks them.
 mkdir -p "${WORK_DIR:?set WORK_DIR}/scratch"           # round 14 F6
 BENCH=$(mktemp -d "$WORK_DIR/scratch/b416_XXXX")
 echo "bench = $BENCH"
@@ -66,7 +66,7 @@ for case in ("base", "refined"):
     nml = (root / case / "m2_run.nml").read_text()
     start = re.search(r"START_DATE\s*=\s*'([^']+)'", nml).group(1)
     end = end_after(start, days)           # finite, positive (review round 12 F5)
-    # the moved directories are checked against FVCOM's 80 bytes before
+    # the moved directories are checked against FVCOM's directory limit (FVCOM_DIR_MAX) before
     # anything is written (review round 6 F11)
     relocate_case(root / case, bench / case, end_date=end)
     print(f"[416] {case}: end -> {end}")

@@ -151,7 +151,7 @@ def spectral_text(period, amp, phase):
 
 def check_fvcom_dirs(*dirs):
     """Refuse a run directory FVCOM would truncate or misread (printable
-    ASCII, at most 80 bytes; review of the extend tools, rounds 4-5)."""
+    ASCII, at most FVCOM_DIR_MAX bytes; review of the extend tools, rounds 4-5)."""
     try:
         _check_fvcom_dirs(*dirs)
     except ValueError as err:

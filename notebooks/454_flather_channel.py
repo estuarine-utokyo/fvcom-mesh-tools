@@ -43,6 +43,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from fvcom_mesh_tools.io.fort14 import Fort14Mesh  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_native import export_fvcom_case  # noqa: E402
+from fvcom_mesh_tools.io.fvcom_namelist import check_fvcom_dirs  # noqa: E402
 from fvcom_mesh_tools.tide_models import astronomy, spectral_text  # noqa: E402
 
 G = 9.81
@@ -95,8 +96,7 @@ def stage(a):
         raise SystemExit(f"{root} already holds a run")
     inp, out = root / "input", root / "output"
     for d in (inp, out):
-        if len(f"{d}/") > 80:
-            raise SystemExit(f"{d}/ exceeds FVCOM's 80 characters")
+        check_fvcom_dirs(d)
         d.mkdir(parents=True, exist_ok=True)
     export_fvcom_case(mesh, inp, "m2", cor=np.zeros(mesh.n_nodes), twodm=False,
                       obc_depth_control=False)
