@@ -16639,3 +16639,249 @@ Rounds 48-58 have changed the threshold gate and its table in every round. The r
 is exercising inputs (extended-precision metrics, integers beyond float range) that
 no extension run can produce; the gate's behaviour for ordinary metrics is unchanged
 since round 47.
+
+## Round 59
+
+Run and triaged on GENKAI, 2026-10-05 (gpt-6.1-sol).
+
+Reviewed HEAD `6cc99d2`. **Four minor defects are substantiated.** No files were modified.
+
+**Previous findings**
+
+These statuses cover every previous numbered finding and refer to the original reproductions. They use recorded triage, current code and selected regressions; every historical reproduction was not rerun.
+
+| Previous findings | Status | Reason |
+|---|---|---|
+| R1–R30, all | RESOLVED | Original data handling, freezing, publication, provenance, validation and portability corrections remain. Licensing and timestep decisions remain controlling. |
+| R31-F1–F4, F6–F10 | RESOLVED | Original dimension, connectivity, mask and bounds corrections remain. |
+| R31-F5 | WITHDRAWN | Descending-axis refusal is the established loader contract. |
+| R32, all | RESOLVED | Original boundary, ladder, endpoint and documentation corrections remain. |
+| R33-F1, F8 | WITHDRAWN | Explicitly excluded historical experiments were not audited again. |
+| R33-F2–F7 | RESOLVED | Original node, corridor, limiter, empty-mesh and gradation corrections remain. |
+| R34-F1, F2, F4, F5 | RESOLVED | Original documentation, shape, mask and overflow corrections remain. |
+| R34-F3 | WITHDRAWN | The owner-approved calibrated method remains controlling. |
+| R35–R54, all | RESOLVED | Original geometry, permission, publication, reporting, marker and validation corrections remain. The `1e100` geometry contract applies. |
+| R55-F1, F2, F4; R56-F1, F3, F4 | RESOLVED | Original schema, integrality, comparison, fillet-fit and diagnostic cases remain corrected. |
+| R55-F3; R56-F2; R57-F3 | PARTIAL | Original boolean cases are rejected; nested Boolean arrays still bypass rejection: finding 2. |
+| R57-F1 | PARTIAL | Original record cases work; extreme integer records still fail: finding 1. |
+| R57-F2, F4 | RESOLVED | Original missing-metric serialization and bearing diagnostics work. |
+| R58-F1 | RESOLVED | Record construction no longer depends on the caller’s Decimal context. |
+| R58-F2 | RESOLVED | Fractional textual count records render successfully. |
+| R58-F3 | PARTIAL | The reported longdouble metric serializes, but huge integers and count limits still fail: finding 1. |
+| R58-F4 | PARTIAL | Mixed literal booleans and excess callable results are rejected; nested Boolean arrays remain accepted: finding 2. |
+| R58-F5 | RESOLVED | All extension-recipe numeric fields and the reported design chord/spacing cases now give field-specific diagnostics. Finding 3 concerns additional design fields. |
+| Earlier nondeterminism and sub-resolution-land objections | WITHDRAWN | Recorded measurements and owner decisions remain controlling. |
+
+1. **Minor — Huge integer records still hit Python’s decimal-conversion limit.**
+
+   **Location:** [quality.py:214](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/quality.py:214)
+
+   Both calls raise `ValueError: Exceeds the limit (4300 digits) for integer string conversion` during record construction:
+
+   ```python
+   check_thresholds({"alpha_mean": 10**4900}, min_alpha_mean=1)
+
+   check_thresholds(
+       {"n_flipped": 0},
+       max_flipped=np.longdouble("1e4900"),
+   )
+   ```
+
+   The count-limit path converts the longdouble to a Python integer before `_record()`. Its fallback then calls `str(n)`, recreating the failure that the fix intended to avoid.
+
+   **Origin:** The immediate helper exception is introduced by `d7e1400`. Its parent completes both comparisons, although serializing those parent records still encounters the older digit-limit problem.
+
+   **Reachability:** Direct helper calls only; extension metrics cannot reach these magnitudes.
+
+   **Fix:** Encode oversized integers without one unrestricted decimal `str(int)` conversion—for example, using bounded decimal chunks—and retain textual records for serialization.
+
+2. **Minor — A spacing callable can still conceal a boolean inside a scalar array.**
+
+   **Location:** [_checks.py:105](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/_checks.py:105), consumed by [obc_design.py:214](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/obc_design.py:214)
+
+   Reproduced:
+
+   ```python
+   resample([[0, 0], [3, 0]], lambda p: [np.array(True)])
+   ```
+
+   It returns nodes at **0, 1, 2 and 3 metres**. The object-array element is an `ndarray`, so the `isinstance(..., bool)` check misses it. The result has the required `(1,)` shape, and `float(got[0])` converts the Boolean array to spacing `1`.
+
+   An object-array result containing the same scalar Boolean array also succeeds.
+
+   **Origin:** Pre-existing bypass, left open by the round 58 fix.
+
+   **Reachability:** Direct helper calls only. Notebook 444’s spacing function returns ordinary numeric arrays.
+
+   **Fix:** Inspect or unwrap zero-dimensional array elements before boolean detection and numeric conversion. Reject nonnumeric container elements explicitly.
+
+3. **Minor — Design radii and leg-stop values still bypass checked numeric validation.**
+
+   **Locations:** [444_design_obc.py:154](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:154), [444_design_obc.py:168](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:168), [obc_design.py:128](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/obc_design.py:128)
+
+   I executed notebook 444’s actual code through fillet construction using an in-memory YAML and a small mocked land polygon. The ordinary design completed that stage. Replacing either its first radius or its first `until_lat` value with `10**400` produced:
+
+   ```text
+   OverflowError: int too large to convert to float
+   ```
+
+   Radius validation itself performs unchecked `float(r)`. Leg validation checks the stopping condition’s presence but does not validate its numeric value before subtraction. Neither failure identifies the offending design field.
+
+   **Origin:** Pre-existing; `d7e1400` fixes chord and spacing controls but leaves these fields unchecked.
+
+   **Reachability:** Yes—design YAML through notebook/job 444.
+
+   **Fix:** Validate radii and stop coordinates before conversion, with indexed field diagnostics and geographic bounds for stop coordinates. Perform design validation before reading land.
+
+4. **Minor — The orthogonality gate accepts NaN angles from nearly tangent departures.**
+
+   **Locations:** [444_design_obc.py:213](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:213), [444_design_obc.py:241](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/444_design_obc.py:241)
+
+   Using the notebook’s actual `end_angle()` and acceptance condition, I constructed a small rotated rectangular coast:
+
+   ```python
+   theta = 0.03255276381909548
+   t = np.array([np.cos(theta), np.sin(theta)])
+   n = np.array([-t[1], t[0]])
+   land = shapely.Polygon([
+       -10000*t, 10000*t, 10000*(t+n), 10000*(-t+n),
+   ])
+   first = [0, 0]
+   second = 3000*t - 3000e-10*n
+   ```
+
+   This departure is almost parallel to the coast and crosses **0 m of land**. Round-off makes the computed cosine **`1.0000000000000002`**, so `arccos()` returns NaN. With angles `[NaN, 90]`, the actual orthogonality gate adds **no problem**, because `abs(NaN - 90) > 1` is false.
+
+   **Origin:** Pre-existing.
+
+   **Reachability:** Notebook 444’s own gate; numeric leg bearings permit almost tangent departures. Verification exercised synthetic geometry through the actual function and gate, not a complete publication run.
+
+   **Fix:** Validate nonzero finite vectors, clamp the cosine to `[0, 1]`, and explicitly reject every nonfinite angle before testing its deviation from 90 degrees.
+
+**Verification**
+
+- Bytecode-disabled `pytest.main()` with `-q -s -p no:cacheprovider` and an in-memory read-only selection plugin: **129 passed, 81 deselected** for extension/design/DEM/guards/quality/sizing; **89 passed, 109 deselected** for supporting QA, I/O, geometry, provenance and run checks.
+- In-memory probes verified the round 58 fixes and reproduced all four findings. Parent-commit probes confirmed finding 1’s new immediate exception.
+- Scoped `ruff check --no-cache`: passed. `bash -n`: **9/9 passed**.
+- Initial probe harnesses encountered a read-only heredoc failure and an overly broad filesystem mock; corrected reruns completed.
+- `git diff --exit-code` passed; working-tree status remained empty.
+
+No shared-data contents were read or jobs submitted. Real-data generation, FVCOM integration, QA-gate totals, NP/NE and timestep measurements were **not rerun**.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 0 major, 4 minor, 0 nit)
+
+### Prompt
+
+```markdown
+# Review request, round 59: extending a base mesh outward (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT
+modify files. You may run read-only commands, python in memory, mocks and
+fault injections (small synthetic inputs only; do not read the large data
+under $DATA_DIR beyond listing it, and do not submit batch jobs). Answer in
+English as Markdown.
+
+## Goal
+World-class correctness and robustness. Report every defect you can
+substantiate, of any severity, in or outside the change, including
+pre-existing ones.
+
+## What was done
+A tool that keeps a finished FVCOM base mesh exactly as it is and adds the
+sea out to a new, designed open boundary (USER_GUIDE section 13). Read:
+
+- `git show b0584f9 8e2739b 450ad44 d6d2a72 7044b6b 0f52d5b 69b50a4 d9e92fd b6d2ed8 765423c`
+  (the extension tool and its documentation), and the current files:
+  - `src/fvcom_mesh_tools/extend.py`, `extend_recipe.py`, `obc_design.py`,
+    `dem/sources.py` (named bathymetry sources, priority stack, and the new
+    `DATUM` registry / `non_tp_count` warning);
+  - `notebooks/444_design_obc.py`, `445_extend_mesh.py`, `446_extend_generate.py`,
+    `447_extend_merge.py`, `448_extend_smoke.py`, `453_redepth_extended.py`;
+  - `recipes/extend/tokyo_bay_enshu.yaml`, `tokyo_bay_enshu_obc_design.yaml`;
+  - `jobs/octopus/444_design_obc.sh`, `445_extend_mesh.sh`, `448_extend_smoke.sh`,
+    `453_redepth_extended.sh`, `common.sh`;
+  - tests: `tests/test_extend*.py`, `tests/test_obc_design*.py`,
+    `tests/test_dem_sources.py` (whatever exists).
+- Also in scope, just committed: the portability change --
+  every job script and `common.sh` now take paths only from `$DATA_DIR` and
+  `$WORK_DIR` (login profile), stop when they are unset, and derive the
+  OCTOPUS FVCOM library directory as `FVCOM_LIBS` in `common.sh`; notebooks
+  383/384/414 and `cli/refine_run.py` no longer fall back to `/octfs/...`.
+  See commits 6d8b9a7 and 6c068d2 (`git log -5`).
+
+Design intent:
+- the base mesh's nodes, elements and depths are carried bit for bit
+  (`verify_frozen_base`);
+- the new part is generated with oceanmesh (run by 445 as a subprocess
+  stage; the package may import oceanmesh since the relicensing), with
+  fixed points/edges and ladders on
+  both constrained lines, `cleanup="none"`, a constrained-Delaunay repair,
+  flat-element removal; then finishing, coast fit, merge, a repair limited
+  to the new part and kept off the open boundary, depths from the recipe's
+  source stack, an r-factor limit with base depths held, export and QA;
+- the open boundary is designed orthogonal to the coast at both ends, with
+  straight legs and filleted corners, spacing never below the CFL floor.
+
+Out of scope: the oceanmesh fork itself; the tide tools (notebooks 449-454,
+`tide_models.py`), reviewed separately.
+
+## Previous rounds
+Rounds 1-34 and their triage are in docs/extend-tools-review-20261001.md.
+The package is GPL-3.0-or-later (e37a433); OCSMesh/Triangle/JIGSAW are
+optional private-use backends outside the default environment (c76c0c6;
+owner's decision) -- do not re-report their existence, only inconsistencies.
+
+Round 33 F1/F8 stand REBUTTED as out of scope: jobs/octopus/380-427 and notebook 325
+are one-shot sample-reproduction experiments, not part of the extension tools;
+do not audit them again. The extension tools' own job scripts (444, 445, 448,
+453, common.sh, jobs/genkai) stay in scope.
+
+Round 34 F3 stands REBUTTED (apply_corridor's nearest-point selection is the ported,
+calibrated method of notebook 325; the extension uses compose_sizing).
+
+Round 58 (your previous answer; 5 minor) was fixed in d7e1400; read it. Per finding:
+- F1-F3 check_thresholds records: no Decimal context; text for a number no int or float holds
+  exactly; the formatter prints it; huge integral values are text, not ints.
+- F4 mixed lists cannot hide a boolean spacing; the spacing callable must return one value.
+- F5 recipe and design numbers beyond float range get their field diagnostic.
+Standing contract: `checked_geometry` refuses coordinates beyond 1e100 and promotes to float64.
+Please say, for each finding, whether it is reachable from the extension tools' own inputs
+(recipes, notebooks 444-448/453, jobs) or only from a direct call of a helper.
+Real-data check after round 41 (job 7000725, commit 87652c7): pytest 1280 passed 0 failed,
+QA 23/23, NP=14,673, NE=27,011, grd sha256 identical to the run before rounds 29-41
+(record, "Verification on GENKAI after round 41").
+Tests: tests/test_review_guards.py. Owner decision (2026-10-01), unchanged:
+meshes are made from the real depths; the band-floor check (446) and the
+new-element time-step comparison (447, 453) REPORT warnings and do not fail the
+build. Not a defect. The GENKAI real-data rebuild (QA 23/23, NP=14,673,
+NE=27,011, commit fbc9019) is in the record; it will be rerun once after this loop ends.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED /
+   WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh, unrestricted audit of the scope and everything it touches.
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a
+  realistic path
+- minor: needs unusual input or an injected fault, or is a clear
+  robustness/clarity defect
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or
+evidence, and a concrete fix. Then `## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| F1 | minor | tests (10**4900 as actual and as limit) | yes, introduced in d7e1400 | fixed, 4e8ea55 by bounding the contract rather than encoding the extreme: a metric or limit of 1e300 or more is no measurement, the check fails and prints; test |
+| F2 | minor | test (`[np.array(True)]`) | yes | fixed, 4e8ea55: `no_bool` looks inside nested arrays; test |
