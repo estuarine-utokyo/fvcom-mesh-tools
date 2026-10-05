@@ -11,7 +11,7 @@
 # The idealised channel of notebooks/454_flather_channel.py: stage one mode
 # (clamped | flather | flather0), run FVCOM, check the run.
 #
-# Required: FMESH_MODE, FMESH_RUN_ROOT (FVCOM paths <= 1000 chars with a current FVCOM; 80 with an old one),
+# Required: FMESH_MODE, FMESH_RUN_ROOT (FVCOM_DIR_MAX bytes (800) with a current FVCOM; 80 with an old one),
 #           FMESH_FVCOM (an FVCOM with the Flather boundary), WORK_DIR.
 set -euo pipefail
 cd "${PBS_O_WORKDIR:?Submit from the repository root}"

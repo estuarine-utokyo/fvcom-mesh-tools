@@ -95,8 +95,8 @@ def stage(a):
     if (root / "STAGED").exists():
         raise SystemExit(f"{root} already holds a run")
     inp, out = root / "input", root / "output"
+    check_fvcom_dirs(inp, out)
     for d in (inp, out):
-        check_fvcom_dirs(d)
         d.mkdir(parents=True, exist_ok=True)
     export_fvcom_case(mesh, inp, "m2", cor=np.zeros(mesh.n_nodes), twodm=False,
                       obc_depth_control=False)

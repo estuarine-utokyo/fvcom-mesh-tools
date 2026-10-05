@@ -18,11 +18,12 @@ __all__ = ["FVCOM_DIR_MAX", "check_fvcom_dirs", "end_after", "fortran_string",
 
 # FVCOM (branch uk-fabm/v5.1.0-dev, commit "FVCOM: path variables 1024 characters") keeps
 # INPUT_DIR / OUTPUT_DIR and the paths composed from them in CHARACTER(LEN=1024): the
-# directory plus the longest file name FVCOM writes there (case name + "_restart_0001.nc",
-# the case name itself is limited to 80) must fit, so a directory may use 900 bytes. An older
+# directory plus the longest file name joined to it (a configurable *_FILE entry of up to
+# 160 characters, or the case name + "_restart_0001.nc") must fit, so a directory may use
+# 800 bytes. An older
 # FVCOM binary cut these at 80 characters (a longer run directory then failed with
 # "FILE ... NOT FOUND" on a cut path).
-FVCOM_DIR_MAX = 900
+FVCOM_DIR_MAX = 800
 
 
 def end_after(start: str, days: float) -> str:

@@ -56,8 +56,9 @@ def files(d):
     return {os.path.basename(f): f for f in glob.glob(f"{d}/output/*.nc")}
 ref = files(cases["old_short"])
 bad = []
-if len(ref) < 3:
-    bad.append(f"reference run wrote {len(ref)} files (expected >= 3: history, restart, ...)")
+expected = {"tokyo_bay_v1_smoke_0001.nc", "tokyo_bay_v1_smoke_avg_0001.nc", "tokyo_bay_v1_smoke_surface_0001.nc", "tokyo_bay_v1_smoke_restart_0001.nc"}
+if not expected <= set(ref):
+    bad.append(f"reference run lacks {sorted(expected - set(ref))}")
 for lab in ("new_short", "new_long"):
     got = files(cases[lab])
     if set(got) != set(ref):
@@ -65,11 +66,30 @@ for lab in ("new_short", "new_long"):
     worst = 0.0
     for name, f in ref.items():
         a, b = nc.Dataset(f), nc.Dataset(got[name])
+        if set(a.variables) != set(b.variables) or set(a.dimensions) != set(b.dimensions):
+            bad.append(f"{lab}/{name}: variables or dimensions differ"); continue
+        for d in a.dimensions:
+            if len(a.dimensions[d]) != len(b.dimensions[d]):
+                bad.append(f"{lab}/{name}: dimension {d} has {len(a.dimensions[d])} vs {len(b.dimensions[d])}")
         for v in a.variables:
-            if v not in b.variables or a[v].dtype.kind not in "fi" or a[v].ndim == 0:
+            if v == "file_date":     # the creation time of the file: differs by design
                 continue
-            x, y = np.ma.filled(a[v][:], np.nan), np.ma.filled(b[v][:], np.nan)
-            worst = max(worst, float(np.nanmax(np.abs(x - y))) if x.size else 0.0)
+            x, y = a[v][:], b[v][:]
+            if np.shape(x) != np.shape(y) or a[v].dtype != b[v].dtype:
+                bad.append(f"{lab}/{name}/{v}: shape or type differs"); continue
+            if np.ma.getmaskarray(x).tolist() != np.ma.getmaskarray(y).tolist():
+                bad.append(f"{lab}/{name}/{v}: masks differ"); continue
+            x, y = np.ma.getdata(x), np.ma.getdata(y)
+            if x.dtype.kind in "fc":
+                same = np.array_equal(x, y, equal_nan=True)   # NaN in one file only is a difference
+                if same and not np.all(np.isfinite(x)) and name.endswith("_0001.nc"):
+                    bad.append(f"{lab}/{name}/{v}: non-finite values in both files")
+                diff = 0.0 if same else float(np.nanmax(np.abs(x - y))) if np.isfinite(x - y).any() else float("inf")
+            else:
+                diff = 0.0 if np.array_equal(x, y) else float("inf")
+            worst = max(worst, diff)
+            if diff != 0.0:
+                bad.append(f"{lab}/{name}/{v}: differs ({diff})")
     print(lab, "files", sorted(got), "max |diff| over all variables of all files:", worst)
     if worst != 0.0:
         bad.append(f"{lab}: differs from old_short by {worst}")
