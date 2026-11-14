@@ -22,10 +22,16 @@ base_obc: ../../../TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
 dt_expected_s: 4.5            # advisory: an alert, not a veto
 gradation: 0.165
 
-coastline: preserve
-coastline_tolerance_m: 50
-
-rfactor_limit: base
+# The licence reaches the shore, beyond the water the base mesh draws: with
+# the default branch (`coastline: preserve`, base depths) the preflight
+# refuses the region, because core samples that are wet by OSM have no base
+# depth (job 137765). So the hole is rebuilt against the OSM coastline with
+# depths from the Tokyo Bay ladder, which the 5 m target needs in any case.
+hires:
+  coastline: resolve
+  bathymetry: tokyo_bay
+  scope: hole
+  blend: ramp
 
 refine:
   - name: futtsu_nori_right
