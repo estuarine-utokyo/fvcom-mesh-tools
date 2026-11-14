@@ -1,0 +1,36 @@
+# The Futtsu nori ground (north of Cape Futtsu) at 50 m: the first step of the
+# nori-ground refinement for the fertiliser dye runs
+# (docs/directions/20261109_tokyo_bay_nori_grounds_refinement.md).
+#
+# The region is the licensed area itself, demarcated fishery right 区第9号
+# (1063 ha), read from the xfrc repository, which keeps the Chiba nori-ground
+# polygons with their provenance (xfrc/chiba/nori_grounds/README.md). The
+# outline is the licence, not the area where nets are laid.
+#
+# 50 m is the starting scale chosen by the owner (2026-11-14); the final
+# target is about 5 m. Each ground gets its own mesh and its own runs.
+#
+# Paths are relative to this file, so the recipe runs wherever the
+# repositories sit side by side under $WORK_DIR/Github.
+#
+# The base is the production case of the `current` hydro baseline: its grid
+# and its m7001tp_rfac0p2_cap300 depths, inherited node for node.
+base_mesh: ../../../TB-FVCOM/input/goto2023/grid/TokyoBay_grd.dat
+base_depth: ../../../TB-FVCOM/input/goto2023/grid/TokyoBay_dep_m7001tp_rfac0p2_cap300.dat
+base_obc: ../../../TB-FVCOM/input/goto2023/grid/TokyoBay_obc.dat
+
+dt_expected_s: 4.5            # advisory: an alert, not a veto
+gradation: 0.165
+
+coastline: preserve
+coastline_tolerance_m: 50
+
+rfactor_limit: base
+
+refine:
+  - name: futtsu_nori_right
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {ground: futtsu}
+    target_h_m: 50
+    priority: 0
