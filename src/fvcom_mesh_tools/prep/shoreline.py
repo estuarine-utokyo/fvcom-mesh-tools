@@ -65,8 +65,21 @@ def merge_water_files(paths, bbox, out_path: Path) -> Path:
         p = Path(p)
         if not p.exists():
             raise FileNotFoundError(f"water file {p} does not exist")
-        g = gpd.read_file(p, bbox=tuple(bbox))
+        # jsasaki 2026-11-16: review newregion r1 #9: the lon/lat bbox is transformed into the
+        # source CRS before filtering (a projected file read with lon/lat numbers came back empty)
+        import pyogrio
+        from pyproj import CRS, Transformer
+        from shapely.geometry import box
+
+        src_crs = pyogrio.read_info(p).get("crs")
+        if src_crs and CRS.from_user_input(src_crs).to_epsg() != 4326:
+            fb = Transformer.from_crs(4326, CRS.from_user_input(src_crs),
+                                      always_xy=True).transform_bounds(*bbox)
+        else:
+            fb = tuple(bbox)
+        g = gpd.read_file(p, bbox=tuple(fb))
         g = (g.set_crs(4326) if g.crs is None else g).to_crs(4326)
+        g = g[g.intersects(box(*bbox))]
         keep = [c for c in ("osm_id", "fclass", "name") if c in g.columns]
         parts.append(g[keep + ["geometry"]])
     if not parts:

@@ -157,9 +157,14 @@ def _check_recipe(recipe):
     has_line = bool((recipe.get("prep") or {}).get("obc_line")
                     or (recipe.get("domain") or {}).get("obc_line"))
     edits = [k for k in ("finish", "siteops", "polish") if k in recipe]
+    # jsasaki 2026-11-16: review newregion r1 #3: the polygon build may trim the open string at
+    # R4 corners (its ends become land): it needs a stage that re-derives the open boundary too
+    if has_line and (recipe.get("build") or {}).get("engine") == "oceanmesh-polygon":
+        edits = ["build (oceanmesh-polygon)"] + edits
     if has_line and edits and not ("obc" in recipe or "obcfinal" in recipe):
         raise SystemExit(f"the recipe has an open-boundary line and {edits}, which may "
-                         "drop or move open-boundary nodes: add the obc and/or obcfinal stage")
+                         "drop, move or trim open-boundary nodes: add the obc and/or obcfinal "
+                         "stage")
 #<--- jsasaki 2026-11-16
 
 
@@ -210,6 +215,10 @@ def _stage_prep(recipe, out_dir, log):
     # jsasaki 2026-11-16: region water polygons (list) instead of the Kanto default
     for w in cfg.get("water_shp") or []:
         argv += ["--water-shp", str(_path(w))]
+    # jsasaki 2026-11-16: review newregion r1 #10: an explicit recipe crs reaches prep too (a
+    # recipe without one keeps prep's own UTM zone, the measured Tokyo behaviour)
+    if recipe.get("crs") is not None:
+        argv += ["--utm-epsg", str(_recipe_epsg(recipe))]
     rc = prepshoreline.main(argv)
     if rc:
         raise SystemExit(f"prep stage failed (rc={rc})")
@@ -259,8 +268,11 @@ def _stage_prep(recipe, out_dir, log):
         outer_pre_cut = outer_gdf.copy()
         eff = None
         if cfg.get("obc_line"):
+            # jsasaki 2026-11-16: review newregion r1 #10: explicit recipe crs (None = UTM zone of
+            # the line, as before)
             eff = extend_obc_ends_perpendicular(
                 [tuple(q) for q in cfg["obc_line"]], outer_gdf,
+                utm_epsg=_recipe_epsg(recipe) if recipe.get("crs") is not None else None,
             )
             bbox = tuple(cfg["bbox"])
             land = cut_domain_at_obc_line(land, eff, bbox)
@@ -457,7 +469,10 @@ def _stage_build_polygon(recipe, out_dir, artifacts, log):
     (out_dir / "build_components.json").write_text(json.dumps(res["components"], indent=1))
     (out_dir / "build_size.json").write_text(json.dumps(size["report"], indent=1))
     log(f"[pipeline] polygon raw -> {raw14} (EPSG:{epsg} metres)")
-    return {"raw_mesh": str(raw14), "raw_mesh_crs": f"EPSG:{epsg}"}
+    # jsasaki 2026-11-16: review newregion r1 #3: record the open-line coverage of the raw mesh
+    return {"raw_mesh": str(raw14), "raw_mesh_crs": f"EPSG:{epsg}",
+            "raw_open_cover": res["open_cover"],
+            "raw_protected_repair_m2": res["protected_repair_area_m2"]}
 #<--- jsasaki 2026-11-16
 
 
@@ -518,7 +533,8 @@ def _stage_build(recipe, out_dir, artifacts, log):
         )
         write_fort14(mesh, raw14)
         log(f"[pipeline] multiscale raw -> {raw14}")
-        return {"raw_mesh": str(raw14)}
+        # jsasaki 2026-11-16: review newregion r1 #11: every build records its CRS
+        return {"raw_mesh": str(raw14), "raw_mesh_crs": "EPSG:4326"}
     argv = [
         dem, str(raw14),
         "--engine", cfg.get("engine", "oceanmesh"),
@@ -572,7 +588,8 @@ def _stage_build(recipe, out_dir, artifacts, log):
     rc = buildmesh.main(argv)
     if rc:
         raise SystemExit(f"build stage failed (rc={rc})")
-    return {"raw_mesh": str(raw14)}
+    # jsasaki 2026-11-16: review newregion r1 #11: every build records its CRS
+    return {"raw_mesh": str(raw14), "raw_mesh_crs": "EPSG:4326"}
 
 
 def _stage_finish(recipe, out_dir, artifacts, log):
@@ -587,8 +604,11 @@ def _stage_finish(recipe, out_dir, artifacts, log):
     utm = _recipe_epsg(recipe)
     mesh = read_fort14(Path(artifacts["raw_mesh"]))
     # jsasaki 2026-11-16: a raw mesh already in the recipe CRS (polygon engine) is not reprojected
-    if artifacts.get("raw_mesh_crs") != f"EPSG:{utm}":
-        tr = Transformer.from_crs("EPSG:4326", f"EPSG:{utm}", always_xy=True)
+    # jsasaki 2026-11-16: review newregion r1 #11: transform FROM the CRS the build recorded
+    # (legacy provenance without it: lon/lat)
+    src_crs = artifacts.get("raw_mesh_crs") or "EPSG:4326"
+    if src_crs != f"EPSG:{utm}":
+        tr = Transformer.from_crs(src_crs, f"EPSG:{utm}", always_xy=True)
         x, y = tr.transform(mesh.nodes[:, 0], mesh.nodes[:, 1])
         mesh.nodes = np.column_stack([x, y])
     # jsasaki 2026-11-16: shoreline lookup includes the region-supplied domain
@@ -826,29 +846,9 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
     log(f"[finishing] {len(patches)} patches planned")
     ledger = []
     if patches and obc_lock == "none":
-        import numpy as np
-
-        from fvcom_mesh_tools.finishing import obc_perpendicularity
-
-        pmax = float(cfg.get("obc_perp_max_deg", 20.0))
-        dev0 = obc_perpendicularity(mesh)
-        for q in patches:
-            nodes_try, led = execute_patches(
-                mesh.nodes, mesh.elements, [q], obc_nodes=obc, log=log)
-            mesh_try_nodes = mesh.nodes
-            mesh.nodes = nodes_try
-            dev1 = obc_perpendicularity(mesh)
-            worse = (dev1 > np.maximum(dev0, pmax) + 1e-9).any()
-            if worse:
-                mesh.nodes = mesh_try_nodes
-                for r in led:
-                    if "outcome" in r and r["outcome"].startswith("fixed"):
-                        r["outcome"] = "reverted (open-boundary perpendicularity)"
-                log(f"[finishing] patch {q.get('id')} reverted: open-boundary "
-                    f"perpendicularity over {pmax:g} deg")
-            else:
-                dev0 = dev1
-            ledger.extend(led)
+        # jsasaki 2026-11-16: review newregion r1 #7: shared with the site fallback
+        mesh, ledger = _execute_patches_guarded(
+            mesh, patches, obc, float(cfg.get("obc_perp_max_deg", 20.0)), log)
     elif patches:
     #<--- jsasaki 2026-11-16
         mesh.nodes, ledger = execute_patches(
@@ -877,6 +877,38 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
 
 
 #---> jsasaki 2026-11-16: site-operator fallback of the finishing stage
+# jsasaki 2026-11-16: review newregion r1 #7: guarded patch execution, shared with the fallback
+def _execute_patches_guarded(mesh, patches, obc, pmax, log):
+    """Execute autofinish patches one at a time; a patch that pushes an
+    open-boundary node over ``pmax`` deg (or a violating one further) is
+    reverted. Returns ``(mesh, ledger)``."""
+    import numpy as np
+
+    from fvcom_mesh_tools.autofinish import execute_patches
+    from fvcom_mesh_tools.finishing import obc_perpendicularity
+
+    ledger = []
+    dev0 = obc_perpendicularity(mesh)
+    for q in patches:
+        nodes_try, led = execute_patches(mesh.nodes, mesh.elements, [q], obc_nodes=obc,
+                                         log=log)
+        keep_nodes = mesh.nodes
+        mesh.nodes = nodes_try
+        dev1 = obc_perpendicularity(mesh)
+        if (dev1 > np.maximum(dev0, pmax) + 1e-9).any():
+            mesh.nodes = keep_nodes
+            for r in led:
+                if "outcome" in r and r["outcome"].startswith("fixed"):
+                    r["outcome"] = "reverted (open-boundary perpendicularity)"
+            log(f"[finishing] patch {q.get('id')} reverted: open-boundary "
+                f"perpendicularity over {pmax:g} deg")
+        else:
+            dev0 = dev1
+        ledger.extend(led)
+    return mesh, ledger
+
+
+
 def _gate_violations(mesh) -> tuple[int, dict[str, int]]:
     """Total offender count over the failed QA gates (metric coordinates,
     no channel check) and the per-check counts."""
@@ -885,11 +917,12 @@ def _gate_violations(mesh) -> tuple[int, dict[str, int]]:
     rep = run_qa(mesh, coords="metric", channel_check=False, max_offenders=1)
     bad = {c.check_id: int(c.n_violations) for c in rep.checks
            if c.gate and not c.skipped and not c.passed}
-    return sum(bad.values()) + 1000 * sum(1 for k in bad if k not in _SITE_FALLBACK_GATES), bad
+    # jsasaki 2026-11-16: review newregion r1 #7: no finite penalty; new failures refuse instead
+    return sum(bad.values()), bad
 
 
-# gates the fallback may trade against each other; any other gate newly failing
-# counts 1000 (the fallback is then refused)
+# gates the fallback may trade against each other; any other gate newly failing (or failing
+# with more offenders) refuses the fallback (review newregion r1 #7)
 _SITE_FALLBACK_GATES = ("c1_min_angle", "c2_max_angle", "c4_area_change")
 
 
@@ -904,7 +937,6 @@ def _finishing_site_fallback(recipe, mesh, artifacts, log):
     from fvcom_mesh_tools.algorithms.boundary_snap import load_polylines
     from fvcom_mesh_tools.autofinish import (
         detect_violations,
-        execute_patches,
         plan_patches,
     )
     from fvcom_mesh_tools.mesh_clean import compact_nodes
@@ -923,13 +955,20 @@ def _finishing_site_fallback(recipe, mesh, artifacts, log):
     obc = [int(v) for b in trial.open_boundaries for v in b]
     det = detect_violations(trial.nodes, trial.elements)
     pts = plan_patches(trial.nodes, trial.elements, det, obc_nodes=None)
+    # jsasaki 2026-11-16: review newregion r1 #7: fallback patches get the perpendicularity guard
     if pts:
-        trial.nodes, _led = execute_patches(trial.nodes, trial.elements, pts,
-                                            obc_nodes=obc, log=lambda *a: None)
+        trial, _led = _execute_patches_guarded(
+            trial, pts, obc, float((recipe.get("finishing") or {}).get("auto", {})
+                                   .get("obc_perp_max_deg", 20.0)), lambda *a: None)
     s1, bad1 = _gate_violations(trial)
-    ok = s1 < s0
+    # jsasaki 2026-11-16: review newregion r1 #7: no gate outside C1/C2/C4 may start failing or get
+    # worse; only then the offender totals are compared
+    other_worse = [k for k in bad1 if k not in _SITE_FALLBACK_GATES
+                   and bad1[k] > bad0.get(k, 0)]
+    ok = not other_worse and s1 < s0
+    # jsasaki 2026-11-16: review newregion r1 #7: name the gates that got worse
     log(f"[finishing] site fallback: {bad0} -> {bad1} "
-        f"({'kept' if ok else 'refused'})")
+        f"({'kept' if ok else 'refused'}{'; worse: ' + str(other_worse) if other_worse else ''})")
     rec = {"op": "site_fallback", "outcome": "kept" if ok else "refused",
            "before": bad0, "after": bad1,
            "ops": sorted({r.get("op") for r in elog if isinstance(r, dict)})}
@@ -999,6 +1038,9 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
 
 #---> jsasaki 2026-11-16: pluggable depth products (new regions bring their own)
 DEPTH_PRODUCTS = ("m7001_production", "external_dep_file", "none")
+# jsasaki 2026-11-16: review newregion r1 #8: artifact keys of the meshes a stage writes
+_MESH_KEYS = ("depths_mesh", "finishing_mesh", "final_mesh", "polish_mesh", "siteops_mesh",
+              "obc_mesh", "finished_mesh", "raw_mesh")
 
 
 def _read_dep_file(path):
@@ -1033,11 +1075,13 @@ def _stage_depths(recipe, out_dir, artifacts, log):
     product = str(cfg.get("product", "none"))
     if product not in DEPTH_PRODUCTS:
         raise SystemExit(f"depths.product must be one of {DEPTH_PRODUCTS}, not {product!r}")
-    src = Path(artifacts.get("final_mesh") or artifacts.get("obc_mesh")
-               or artifacts["raw_mesh"])
+    # jsasaki 2026-11-16: review newregion r1 #8: the mesh the LAST mesh stage wrote, and it is
+    # propagated as final_mesh (also for product none)
+    src = Path(artifacts.get("latest_mesh") or artifacts.get("final_mesh")
+               or artifacts.get("obc_mesh") or artifacts["raw_mesh"])
     if product == "none":
         log(f"[depths] product none: {src.name} keeps its depths")
-        return {"depths_product": "none"}
+        return {"depths_product": "none", "final_mesh": str(src)}
     mesh = read_fort14(src)
     if product == "external_dep_file":
         xy, h = _read_dep_file(_path(cfg["path"]))
@@ -1212,6 +1256,11 @@ def main(argv: list[str] | None = None) -> int:
         out = fn(recipe, out_dir, artifacts, log) if name != "prep" \
             else fn(recipe, out_dir, log)
         artifacts.update(out or {})
+        # jsasaki 2026-11-16: review newregion r1 #8: remember the mesh the last mesh stage wrote
+        for key in _MESH_KEYS:
+            if (out or {}).get(key):
+                artifacts["latest_mesh"] = out[key]
+                break
         results[name] = {"wall_s": round(time.perf_counter() - t1, 1),
                          **{k: v for k, v in (out or {}).items()
                             if not isinstance(v, list)}}

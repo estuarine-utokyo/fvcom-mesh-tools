@@ -38,8 +38,9 @@ from fvcom_mesh_tools.mesh_clean_phase_h import (
 )
 
 # jsasaki 2026-11-16: new helpers for channel protection, OBC carry-over and lone nodes
+# jsasaki 2026-11-16: review newregion r1 #1: protected_node_mask exported
 __all__ = ["finish_constrained_mesh", "keep_components_protected", "obc_perpendicularity",
-           "quality_counts",
+           "protected_node_mask", "quality_counts",
            "rebuild_land_boundaries", "remove_elements_keep_boundaries",
            "remove_lone_nodes"]
 
@@ -212,8 +213,9 @@ def finish_constrained_mesh(
                            "swaps": int(vinfo.get("total_swaps", vinfo.get("n_swaps", 0)))}
         log(f"[finish] valence <= {max_valence}: max {v0} -> {v1} {info['valence']}")
     if remove_lone:
+        # jsasaki 2026-11-16: review newregion r1 #2: protection policy applies here too
         mesh, linfo = remove_lone_nodes(mesh, protect_polygons=protect_polygons,
-                                        log=log)
+                                        policy=on_dropped_protected, log=log)
         info["lone_nodes"] = linfo
     if guarded or remove_lone:
         mesh = rebuild_land_boundaries(mesh)
@@ -270,8 +272,9 @@ def _tag_obc_band(mesh: Fort14Mesh):
         obc[np.asarray(s, int)] = True
     band = np.zeros(mesh.n_nodes, bool)
     band[np.unique(mesh.elements[obc[mesh.elements].any(axis=1)])] = True
+    # jsasaki 2026-11-16: review newregion r1 #4: triangulation kept for new-node depths
     state = {"tags": tags, "depths": mesh.depths.copy(), "xy": mesh.nodes.copy(),
-             "band": band}
+             "elements": mesh.elements.copy(), "band": band}
     mesh.depths = tags.copy()
     return state
 
@@ -279,8 +282,9 @@ def _tag_obc_band(mesh: Fort14Mesh):
 def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
                       max_area_change: float = 0.5,
                       log: Callable[[str], None] = print):
-    """Undo :func:`_tag_obc_band`: depths back (new nodes take the depth of
-    the nearest original node) and band nodes back to their positions where
+    """Undo :func:`_tag_obc_band`: depths back (a new node takes the depth
+    interpolated linearly on the original triangulation, the nearest original
+    node's depth only outside it) and band nodes back to their positions where
     no incident element flips, the incident minimum angle stays >= the
     smaller of its current value and ``min_angle``, and the adjacent-area
     change around the node stays <= the larger of its current value and
@@ -293,8 +297,19 @@ def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
     dep = np.empty(mesh.n_nodes)
     dep[known] = state["depths"][orig[known]]
     if (~known).any():
-        _d, j = cKDTree(state["xy"]).query(mesh.nodes[~known])
-        dep[~known] = state["depths"][j]
+        # jsasaki 2026-11-16: review newregion r1 #4: interpolate (a split midpoint keeps the
+        # optimizer's mean depth) instead of copying the nearest node
+        from matplotlib.tri import LinearTriInterpolator, Triangulation
+
+        tri = Triangulation(state["xy"][:, 0], state["xy"][:, 1], state["elements"])
+        q = mesh.nodes[~known]
+        val = np.ma.filled(LinearTriInterpolator(tri, state["depths"])(q[:, 0], q[:, 1]),
+                           np.nan)
+        miss = ~np.isfinite(val)
+        if miss.any():
+            _d, j = cKDTree(state["xy"]).query(q[miss])
+            val[miss] = state["depths"][j]
+        dep[~known] = val
     mesh.depths = dep
     n2e: dict[int, list[int]] = {}
     for e, tri in enumerate(mesh.elements):
@@ -344,13 +359,32 @@ def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
     return mesh, info
 
 
-def _protected_node_mask(mesh: Fort14Mesh, protect_polygons):
-    """Nodes inside ``protect_polygons`` (None when there is no protection)."""
-    if protect_polygons is None:
-        return None
+# jsasaki 2026-11-16: review newregion r1 #1: nodes ON the protected outline (channel banks)
+# are protected too: strict containment left a bank-to-bank channel unprotected
+PROTECT_TOL_M = 1.0
+
+
+def protected_node_mask(nodes: np.ndarray, protect_polygons, tol_m: float = PROTECT_TOL_M):
+    """Nodes inside ``protect_polygons`` or within ``tol_m`` of its outline
+    (a channel meshed bank to bank has every node ON the outline)."""
     import shapely
 
-    return shapely.contains_xy(protect_polygons, mesh.nodes[:, 0], mesh.nodes[:, 1])
+    shapely.prepare(protect_polygons)
+    nodes = np.asarray(nodes, float)
+    inside = shapely.contains_xy(protect_polygons, nodes[:, 0], nodes[:, 1])
+    out = ~inside
+    if out.any():
+        pts = shapely.points(nodes[out, 0], nodes[out, 1])
+        inside[out] = shapely.dwithin(protect_polygons, pts, tol_m)
+    return inside
+
+
+def _protected_node_mask(mesh: Fort14Mesh, protect_polygons):
+    """Nodes in ``protect_polygons`` (None when there is no protection)."""
+    if protect_polygons is None:
+        return None
+    # jsasaki 2026-11-16: review newregion r1 #1: boundary-inclusive
+    return protected_node_mask(mesh.nodes, protect_polygons)
 
 
 def _element_neighbour_count(elements: np.ndarray) -> np.ndarray:
@@ -367,10 +401,10 @@ def _cap_deletion_allowed(mesh: Fort14Mesh, prot_mask) -> np.ndarray:
     """Per element: may a cap triangle be deleted here?
 
     Never when it holds two or more open-boundary nodes (it would break
-    the open string). Inside protected polygons only an ear (at most one
-    neighbouring element) may go: deleting an ear cannot disconnect the
-    element graph, deleting a bridge can (the two-element-wide channel
-    corridor that VR v2 lost).
+    the open string). Never inside protected water: deleting a bridge can
+    disconnect the element graph (the two-element-wide channel corridor that
+    VR v2 lost), and deleting ears round after round eats a channel from its
+    end (review newregion r1 #2); the optimizer fixes the angles there.
     """
     ok = np.ones(mesh.n_elements, bool)
     if any(len(s) for s in mesh.open_boundaries):
@@ -378,9 +412,8 @@ def _cap_deletion_allowed(mesh: Fort14Mesh, prot_mask) -> np.ndarray:
         obc[np.concatenate([np.asarray(s, int) for s in mesh.open_boundaries])] = True
         ok &= obc[mesh.elements].sum(axis=1) < 2
     if prot_mask is not None:
-        in_prot = prot_mask[mesh.elements].any(axis=1)
-        ear = _element_neighbour_count(mesh.elements) <= 1
-        ok &= ~in_prot | ear
+        # jsasaki 2026-11-16: review newregion r1 #2: no cap deletion at all in protected water
+        ok &= ~prot_mask[mesh.elements].any(axis=1)
     return ok
 
 
@@ -463,28 +496,53 @@ def keep_components_protected(mesh: Fort14Mesh, node_tag=None, *, policy: str = 
     return out, info, tag
 
 
+#---> jsasaki 2026-11-16: review newregion r1 #2: protected water and open-boundary elements are
+# never deleted; lone nodes left there fail (policy "fail") or are reported
 def remove_lone_nodes(mesh: Fort14Mesh, *, protect_polygons=None, max_rounds: int = 10,
-                      log: Callable[[str], None] = print):
+                      policy: str = "fail", log: Callable[[str], None] = print):
     """Delete the elements of nodes used by one element only (off the open
     boundary), until none is left. Such an element is an ear (it has at most
-    one neighbour), so its deletion never disconnects the mesh. Returns
-    ``(mesh, info)`` with the deleted count and area."""
+    one neighbour), so its deletion never disconnects the mesh. An element
+    holding a protected node (``protect_polygons``, outline included) or an
+    open-boundary node is never deleted; single-element nodes left for that
+    reason raise (``policy="fail"``) or are reported (``"report"``). Returns
+    ``(mesh, info)`` with the deleted count and area and the nodes kept."""
+    if policy not in ("fail", "report"):
+        raise ValueError(f"policy must be 'fail' or 'report', not {policy!r}")
     n_del, area = 0, 0.0
     for _ in range(max_rounds):
         cnt = np.bincount(mesh.elements.ravel(), minlength=mesh.n_nodes)
         lone = cnt == 1
+        obc = np.zeros(mesh.n_nodes, bool)
         for s in mesh.open_boundaries:
-            lone[np.asarray(s, int)] = False
-        kill = lone[mesh.elements].any(axis=1)
+            obc[np.asarray(s, int)] = True
+        lone &= ~obc
+        fixed = obc.copy()
+        if protect_polygons is not None:
+            fixed |= protected_node_mask(mesh.nodes, protect_polygons)
+        kill = lone[mesh.elements].any(axis=1) & ~fixed[mesh.elements].any(axis=1)
         if not kill.any():
             break
         _mn, _mx, tw = _tri_quality(mesh.nodes[mesh.elements[kill]])
         area += float(0.5 * np.abs(tw).sum())
         n_del += int(kill.sum())
         mesh, _ = remove_elements_keep_boundaries(mesh, ~kill)
-    info = {"elements_deleted": n_del, "area_m2": area}
-    log(f"[finish] single-element nodes: {n_del} elements deleted ({area:.0f} m2)")
+    cnt = np.bincount(mesh.elements.ravel(), minlength=mesh.n_nodes)
+    left = cnt == 1
+    for s in mesh.open_boundaries:
+        left[np.asarray(s, int)] = False
+    info = {"elements_deleted": n_del, "area_m2": area, "lone_kept": int(left.sum())}
+    log(f"[finish] single-element nodes: {n_del} elements deleted ({area:.0f} m2), "
+        f"{int(left.sum())} kept (protected water / open boundary)")
+    if left.any():
+        where = "; ".join(f"({x:.0f}, {y:.0f})" for x, y in mesh.nodes[left][:5])
+        msg = (f"{int(left.sum())} single-element node(s) in protected water or at the open "
+               f"boundary were not removed: {where}")
+        if policy == "fail":
+            raise RuntimeError(msg)
+        log(f"[finish] WARNING {msg}")
     return mesh, info
+#<--- jsasaki 2026-11-16
 
 
 def rebuild_land_boundaries(mesh: Fort14Mesh, *, land_ibtype: int = 20,

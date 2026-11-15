@@ -223,14 +223,14 @@ def apply_site_operators(
                                          float(o["area_change"])})
     #---> jsasaki 2026-11-16: protected component step (new regions); legacy path unchanged
     if protect_polygons is not None:
-        import shapely
-
         from fvcom_mesh_tools.finishing import (
             keep_components_protected,
+            protected_node_mask,
             rebuild_land_boundaries,
         )
 
-        tag = shapely.contains_xy(protect_polygons, mesh.nodes[:, 0], mesh.nodes[:, 1])
+        # jsasaki 2026-11-16: review newregion r1 #1: boundary-inclusive protection
+        tag = protected_node_mask(mesh.nodes, protect_polygons)
         mesh, kinfo, _ = keep_components_protected(mesh, tag, policy="fail", log=log)
         mesh = rebuild_land_boundaries(mesh)
         if kinfo["dropped"]:

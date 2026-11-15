@@ -234,7 +234,7 @@ def test_cap_deletion_guard_and_component_policy():
     pm = shapely.contains_xy(box(-10, -10, 2000, 200), P[:, 0], P[:, 1])
     ok = _cap_deletion_allowed(m, pm)
     assert not ok[mid]                               # protected bridge: kept
-    assert ok[-1]                                    # the east-end ear may go
+    assert not ok[-1]                                # review r1 #2: no ear in protection either
     assert not ok[0]                                 # two open-boundary nodes: kept
     assert _cap_deletion_allowed(m, None)[mid]       # unprotected: legacy behaviour
     m2, tag = remove_elements_keep_boundaries(m, np.arange(len(T)) != mid, pm)
@@ -324,7 +324,8 @@ def test_depths_stage_products(tmp_path):
                                                   "path": str(bad)}},
                          tmp_path, {"final_mesh": str(f14)}, lambda *a: None)
     assert pl._stage_depths({"name": "x", "depths": {"product": "none"}}, tmp_path,
-                            {"final_mesh": str(f14)}, lambda *a: None) == {"depths_product": "none"}
+                            {"final_mesh": str(f14)}, lambda *a: None) == {
+        "depths_product": "none", "final_mesh": str(f14)}
     with pytest.raises(SystemExit):
         pl._stage_depths({"name": "x", "depths": {"product": "gebco"}}, tmp_path,
                          {"final_mesh": str(f14)}, lambda *a: None)
@@ -346,6 +347,7 @@ def test_pipeline_domain_build_qa(tmp_path):
            "protect_polygons": [{"path": str(gp), "layer": "channel"}],
            "build": {"engine": "oceanmesh-polygon", "max_iter": 30,
                      "size": {"background_m": 400.0, "raster_m": 50.0}},
+           "obc": {"trim": 1, "snap": False},
            "depths": {"product": "none"},
            "qa": {"lang": "en"}}
     f = tmp_path / "r.yaml"
@@ -407,3 +409,238 @@ def test_site_fallback_not_needed_on_clean_mesh():
     assert out is m and rec["outcome"] == "not needed"
     score, bad = pl._gate_violations(m)
     assert not any(k in bad for k in pl._SITE_FALLBACK_GATES)
+
+
+# ------------------------------------------- review newregion r1 (regressions)
+def _thin_strip(n=19, width=30.0):
+    """One-element-wide strip 100 m per cell, ``width`` m across: every node is
+    ON the outline and every element a sliver cap (min angle < 20 deg)."""
+    P = np.array([(100.0 * i, 0.0) for i in range(n)] + [(100.0 * i, width) for i in range(n)])
+    T = []
+    for i in range(n - 1):
+        T.append([i, i + 1, n + i])
+        T.append([i + 1, n + i + 1, n + i])
+    return P, np.asarray(T, np.int64)
+
+
+def test_r1_1_protection_includes_outline(tmp_path, monkeypatch):
+    """#1: a channel meshed bank to bank is protected although no node is
+    strictly inside the polygon; finish deletes none of its elements."""
+    from shapely.geometry import box
+
+    import fvcom_mesh_tools.finishing as fin
+
+    P, T = _thin_strip()
+    water = box(0, 0, 1800, 30)
+    assert fin.protected_node_mask(P, water).all()
+    monkeypatch.setattr(fin, "phase_h_optimize", lambda m, **k: (m, {}))
+    monkeypatch.setattr(fin, "build_coastline_projector", lambda *a, **k: None)
+    import geopandas as gpd
+
+    shp = tmp_path / "s.shp"
+    from shapely.geometry import LineString
+
+    gpd.GeoDataFrame(geometry=[LineString(water.exterior.coords)], crs=EPSG
+                     ).to_crs(4326).to_file(shp)
+    m = _mesh(P, T, opens=[[0, 19]])
+    out, info = fin.finish_constrained_mesh(m, shp, tmp_path / "w", utm_epsg=EPSG,
+                                            protect_polygons=water, log=lambda *a: None)
+    assert out.n_elements == len(T) and info["caps_removed"] == 0
+
+
+def test_r1_2_lone_nodes_respect_protection_and_obc():
+    """#2: a fully protected strip loses nothing to lone-node removal (it was
+    eaten from the far end); the leftover lone node fails or is reported."""
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.finishing import remove_lone_nodes
+
+    P, T = _strip_mesh(10)                           # 900 x 100 m, OBC at the west end
+    m = _mesh(P, T, opens=[[0, 10]])
+    prot = box(0, 0, 900, 100)
+    out, info = remove_lone_nodes(m, protect_polygons=prot, policy="report",
+                                  log=lambda *a: None)
+    assert info["elements_deleted"] == 0 and info["lone_kept"] == 1
+    assert out.n_elements == m.n_elements
+    with pytest.raises(RuntimeError, match="single-element"):
+        remove_lone_nodes(m, protect_polygons=prot, policy="fail", log=lambda *a: None)
+    # unprotected: elements holding open-boundary nodes are never deleted
+    P3, T3 = _strip_mesh(4)                          # 300 x 100 m, OBC on the west column
+    m3 = _mesh(P3, T3, opens=[[0, 4]])
+    out3, _ = remove_lone_nodes(m3, policy="report", log=lambda *a: None)
+    assert out3.n_elements >= 1 and len(out3.open_boundaries[0]) == 2
+
+
+def test_r1_3_polygon_build_requires_obc_restoration():
+    """#3: a polygon build with an open-boundary line may trim the open string;
+    a recipe without obc/obcfinal is refused."""
+    rec = {"domain": {"obc_line": [[0.1, 5.7], [1.2, 6.0]]},
+           "build": {"engine": "oceanmesh-polygon"}, "qa": {}}
+    with pytest.raises(SystemExit, match="trim"):
+        pl._check_recipe(rec)
+    pl._check_recipe(dict(rec, obc={}))
+
+
+def test_r1_3_polygon_engine_reports_open_cover():
+    from fvcom_mesh_tools.mesh_engine.polygon import build_size_field, generate_polygon_mesh
+
+    water, obc, _chan = _domain()
+    sz = build_size_field(water, crs_epsg=EPSG, background_m=400.0, raster_m=50.0,
+                          log=lambda *a: None)
+    res = generate_polygon_mesh(water, sz, obc_line=obc, max_iter=20, log=lambda *a: None)
+    cov = res["open_cover"]
+    assert cov["line_m"] == pytest.approx(6000.0)
+    assert 0.0 <= cov["uncovered_m"] <= 6000.0 and "protected_repair_area_m2" in res
+
+
+def test_r1_4_band_restore_interpolates_new_node_depths():
+    """#4: a node created by a split keeps the interpolated depth (51 m between
+    1 m and 101 m), not the nearest original node's depth."""
+    from fvcom_mesh_tools.finishing import _restore_obc_band, _tag_obc_band
+
+    P = np.array([[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]])
+    T = np.array([[0, 1, 2], [0, 2, 3]])
+    m = _mesh(P, T, opens=[[0, 1]])
+    m.depths = np.array([1.0, 101.0, 101.0, 1.0])
+    state = _tag_obc_band(m)
+    tags = m.depths.copy()
+    # an optimizer split of edge 0-1: new node 4 at the midpoint, tag = mean of the tags
+    m2 = Fort14Mesh(title="t", nodes=np.vstack([P, [[50.0, 0.0]]]),
+                    depths=np.append(tags, 0.5 * (tags[0] + tags[1])),
+                    elements=np.array([[0, 4, 2], [4, 1, 2], [0, 2, 3]]),
+                    open_boundaries=[np.array([0, 4, 1])], land_boundaries=[])
+    out, _ = _restore_obc_band(m2, state, log=lambda *a: None)
+    assert out.depths[4] == pytest.approx(51.0)
+    assert np.allclose(out.depths[:4], [1.0, 101.0, 101.0, 1.0])
+
+
+def test_r1_5_expected_drop_is_an_area_fraction():
+    """#5: a 2.25 km2 pond finely meshed in a small corner is NOT an expected
+    drop when expected_drop covers only that corner (4 % of its area)."""
+    from pyproj import Transformer
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.mesh_engine.polygon import build_size_field, generate_polygon_mesh
+
+    water, obc, _chan = _domain()
+    pond = box(X0 + 8000, Y0, X0 + 9500, Y0 + 1500)
+    corner = box(X0 + 8000, Y0, X0 + 8300, Y0 + 300)
+    w2 = water.union(pond)
+    inv = Transformer.from_crs(f"EPSG:{EPSG}", "EPSG:4326", always_xy=True)
+    lo0, la0 = inv.transform(*corner.bounds[:2])
+    lo1, la1 = inv.transform(*corner.bounds[2:])
+    reg = [{"name": "corner", "geometry": {"bbox": [lo0, la0, lo1, la1]}, "target_h_m": 40.0}]
+    sz = build_size_field(w2, crs_epsg=EPSG, background_m=700.0, raster_m=20.0, regions=reg,
+                          log=lambda *a: None)
+    with pytest.raises(RuntimeError, match="dropped"):
+        generate_polygon_mesh(w2, sz, obc_line=obc, max_iter=15, expected_drop=corner,
+                              log=lambda *a: None)
+
+
+def test_r1_6_raster_edge_half_cell_keeps_edge_values():
+    """#6: inside the raster footprint but outside the outermost centres the
+    size is the edge value, not the global maximum."""
+    from fvcom_mesh_tools.mesh_engine.polygon import size_interpolator
+
+    xs = ys = np.arange(50.0, 1000.0, 100.0)
+    h = np.full((len(ys), len(xs)), 400.0)
+    h[:, 0] = 100.0
+    hat = size_interpolator({"xs": xs, "ys": ys, "h": h})
+    assert hat([[50.0, 500.0]])[0] == pytest.approx(100.0)
+    assert hat([[0.0, 500.0]])[0] == pytest.approx(100.0)
+    assert hat([[1000.0, 1000.0]])[0] == pytest.approx(400.0)
+
+
+def test_r1_7_site_fallback_refuses_a_new_failing_gate(monkeypatch):
+    """#7: fewer C1 offenders never pay for a newly failing other gate."""
+    import fvcom_mesh_tools.algorithms.boundary_snap as bs
+    import fvcom_mesh_tools.site_session as ss
+
+    P, T = _lattice(5, 4)
+    m = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    seq = iter([(1002, {"c1_min_angle": 1002}),
+                (1001, {"c1_min_angle": 1000, "obc_perpendicularity": 1})])
+    monkeypatch.setattr(pl, "_gate_violations", lambda mesh: next(seq))
+    monkeypatch.setattr(ss, "apply_site_operators", lambda mesh, lines, **k: (mesh, []))
+    monkeypatch.setattr(bs, "load_polylines", lambda *a, **k: [])
+    monkeypatch.setattr(pl, "_shoreline", lambda *a: "x")
+    out, rec = pl._finishing_site_fallback({"crs": EPSG}, m, {}, lambda *a: None)
+    assert rec["outcome"] == "refused" and out is m
+
+
+def test_r1_8_depths_use_the_latest_mesh(tmp_path):
+    """#8: the depth stage takes the mesh the last mesh stage wrote (a polished
+    mesh after obc), and product none propagates it."""
+    P, T = _lattice(3, 3)
+    old = _mesh(P[:6], np.array([[0, 1, 3], [1, 4, 3], [1, 2, 4], [2, 5, 4]]), opens=[[0, 1, 2]])
+    new = _mesh(P, T, opens=[[0, 1, 2]])
+    fo, fn = tmp_path / "obc.14", tmp_path / "polished.14"
+    write_fort14(old, fo)
+    write_fort14(new, fn)
+    dep = tmp_path / "d_dep.dat"
+    dep.write_text(f"Node Number = {len(P)}\n" + "".join(f"{x} {y} 3.0\n" for x, y in P))
+    art = {"obc_mesh": str(fo), "polish_mesh": str(fn), "latest_mesh": str(fn)}
+    out = pl._stage_depths({"name": "x", "depths": {"product": "external_dep_file",
+                                                    "path": str(dep)}}, tmp_path, art,
+                           lambda *a: None)
+    assert read_fort14(out["final_mesh"]).n_nodes == len(P)
+    out2 = pl._stage_depths({"name": "x", "depths": {"product": "none"}}, tmp_path, art,
+                            lambda *a: None)
+    assert out2["final_mesh"] == str(fn)
+
+
+def test_r1_9_merge_water_files_projected_source(tmp_path):
+    """#9: a projected (UTM) water file is filtered with the bbox in ITS CRS."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.prep.shoreline import merge_water_files
+
+    a = tmp_path / "utm.gpkg"
+    gpd.GeoDataFrame({"fclass": ["water"]}, geometry=[box(250_000, 640_000, 251_000, 641_000)],
+                     crs=EPSG).to_file(a)
+    out = merge_water_files([a], (0.0, 5.0, 2.0, 7.0), tmp_path / "m.gpkg")
+    assert len(gpd.read_file(out)) == 1
+    out2 = merge_water_files([a], (3.0, 5.0, 4.0, 7.0), tmp_path / "m2.gpkg")
+    assert len(gpd.read_file(out2)) == 0
+
+
+def test_r1_10_prep_receives_the_recipe_crs(tmp_path, monkeypatch):
+    """#10: an explicit recipe crs reaches fmesh-prep-shoreline; none, none."""
+    from fvcom_mesh_tools.cli import prepshoreline
+
+    seen = []
+    monkeypatch.setattr(prepshoreline, "main", lambda argv: seen.append(list(argv)) or 0)
+    base = {"prep": {"bbox": [-1.5, 5.0, 0.5, 6.5]}}
+    pl._stage_prep(dict(base, crs=32630), tmp_path, lambda *a: None)
+    pl._stage_prep(base, tmp_path, lambda *a: None)
+    i = seen[0].index("--utm-epsg")
+    assert seen[0][i + 1] == "32630" and "--utm-epsg" not in seen[1]
+
+
+def test_r1_11_build_records_its_crs(tmp_path, monkeypatch):
+    """#11: every build records the CRS of the raw mesh, so a stale projected
+    marker from an earlier polygon build cannot skip the projection."""
+    import fvcom_mesh_tools.finishing as fin
+    from fvcom_mesh_tools.cli import buildmesh
+
+    ll = _mesh(np.array([[0.5, 5.8], [0.51, 5.8], [0.5, 5.81]]), np.array([[0, 1, 2]]))
+
+    def fake_build(argv):
+        write_fort14(ll, argv[1])
+        return 0
+
+    monkeypatch.setattr(buildmesh, "main", fake_build)
+    rec = {"name": "x", "crs": EPSG, "build": {"engine": "oceanmesh", "dem": str(tmp_path),
+                                                "coastline": "c.shp", "hmin_m": 100}}
+    out = pl._stage_build(rec, tmp_path, {"raw_mesh_crs": f"EPSG:{EPSG}"}, lambda *a: None)
+    assert out["raw_mesh_crs"] == "EPSG:4326"
+    got = {}
+
+    def fake_finish(mesh, *a, **k):
+        got["x"] = mesh.nodes[:, 0].copy()
+        return mesh, {}
+
+    monkeypatch.setattr(fin, "finish_constrained_mesh", fake_finish)
+    pl._stage_finish(rec, tmp_path, dict(out), lambda *a: None)
+    assert got["x"].min() > 1e5                                    # projected to metres

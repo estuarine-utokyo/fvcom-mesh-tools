@@ -40,7 +40,8 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["build_size_field", "generate_polygon_mesh", "limgrad"]
+# jsasaki 2026-11-16: review newregion r1 #6: size_interpolator exported
+__all__ = ["build_size_field", "generate_polygon_mesh", "limgrad", "size_interpolator"]
 
 
 def limgrad(h: np.ndarray, grade: float, dx: float, itmax: int = 5000):
@@ -177,6 +178,25 @@ def build_size_field(
     return {"xs": xs, "ys": ys, "h": h, "dx": float(dx), "report": report}
 
 
+# jsasaki 2026-11-16: review newregion r1 #6: the outer half cell of the raster footprint takes the
+# edge values (coordinates clamped to the centre lattice) instead of falling back to hmax
+def size_interpolator(size: dict[str, Any], x0: float = 0.0, y0: float = 0.0):
+    """h(q) for points q (N x 2) in coordinates shifted by (x0, y0): bilinear
+    on the size lattice, edge values held beyond the outermost cell centres."""
+    from scipy.interpolate import RegularGridInterpolator
+
+    xs, ys, h = size["xs"], size["ys"], size["h"]
+    hreal = RegularGridInterpolator((ys - y0, xs - x0), h, bounds_error=False,
+                                    fill_value=None)
+    xlo, xhi, ylo, yhi = xs[0] - x0, xs[-1] - x0, ys[0] - y0, ys[-1] - y0
+
+    def hat(q):
+        q = np.atleast_2d(np.asarray(q, float))
+        return hreal(np.column_stack([np.clip(q[:, 1], ylo, yhi), np.clip(q[:, 0], xlo, xhi)]))
+
+    return hat
+
+
 def _face_components(t):
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
@@ -213,6 +233,8 @@ def generate_polygon_mesh(
     keep_polygons=None,
     expected_drop=None,
     end_trim_nodes: int = 6,
+    # jsasaki 2026-11-16: review newregion r1 #2: limit on ear deletions in protected water
+    max_protected_ear_area_km2: float | None = None,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
     """Mesh the shapely (Multi)Polygon ``water`` (CRS metres).
@@ -231,11 +253,11 @@ def generate_polygon_mesh(
     import oceanmesh as om
     import shapely
     from oceanmesh.clean import om2d_default_clean
-    from scipy.interpolate import RegularGridInterpolator
     from scipy.spatial import cKDTree
     from shapely.affinity import translate
 
-    xs, ys, h = size["xs"], size["ys"], size["h"]
+    # jsasaki 2026-11-16: review newregion r1 #6: lattice read by size_interpolator
+    h = size["h"]
     x0, y0 = np.floor(np.array(water.bounds[:2]) / 1000.0) * 1000.0 - 5000.0
 
     def sh(g):
@@ -247,13 +269,8 @@ def generate_polygon_mesh(
         else None
     exp_l = sh(expected_drop) if expected_drop is not None and not expected_drop.is_empty \
         else None
-    hmax = float(h.max())
-    hreal = RegularGridInterpolator((ys - y0, xs - x0), h, bounds_error=False,
-                                    fill_value=hmax)
-
-    def hat(q):
-        q = np.atleast_2d(q)
-        return hreal(np.column_stack([q[:, 1], q[:, 0]]))
+    # jsasaki 2026-11-16: review newregion r1 #6: clamped interpolator (size_interpolator)
+    hat = size_interpolator(size, x0, y0)
 
     def fh(q):
         return hat(q) / dm_scale
@@ -341,8 +358,13 @@ def generate_polygon_mesh(
             cxy = cen[sel].mean(axis=0) + [x0, y0]
             in_keep = bool(keep_l is not None and shapely.contains_xy(
                 keep_l, cen[sel, 0], cen[sel, 1]).any())
-            expected = bool(exp_l is not None and shapely.contains_xy(
-                exp_l, cen[sel, 0], cen[sel, 1]).mean() > 0.5)
+            # jsasaki 2026-11-16: review newregion r1 #5: the AREA fraction inside expected_drop
+            # (element counts let a finely meshed corner excuse a large coarse body)
+            expected = False
+            if exp_l is not None:
+                tris = shapely.polygons(p[t[sel]])
+                a_in = shapely.area(shapely.intersection(tris, exp_l)).sum()
+                expected = bool(a_in > 0.5 * shapely.area(tris).sum())
             rows.append(dict(stage=stage, comp=c, n_elem=int(sel.sum()),
                              area_km2=float(ar[sel].sum() / 1e6),
                              x=float(cxy[0]), y=float(cxy[1]), in_keep=in_keep,
@@ -417,6 +439,7 @@ def generate_polygon_mesh(
                                f"{np.nonzero(d_arc > 1e-6)[0].tolist()[:10]}")
         ends = [int(arc_idx[0]), int(arc_idx[-1])]
     n_ears = n_fake = n_trim = 0
+    prot_area = 0.0  # jsasaki 2026-11-16: review newregion r1 #2: protected area deleted by repair
     for it in range(50):
         cnt = np.bincount(t.ravel(), minlength=len(p))
         loops = om.boundary_loops(t)
@@ -487,11 +510,26 @@ def generate_polygon_mesh(
                                    + "; ".join(f"({a:.0f}, {b:.0f})" for a, b in where))
         n_ears += int(ear.sum())
         n_fake += int((fake & ~ear).sum())
+        # jsasaki 2026-11-16: review newregion r1 #2: account for deletions in protected water
+        if keep_l is not None:
+            gone = ear | fake
+            cg = p[t[gone]].mean(axis=1)
+            inp = shapely.contains_xy(keep_l, cg[:, 0], cg[:, 1])
+            prot_area += float(np.abs(_tri_area(p, t[gone][inp])).sum())
         t = t[~(ear | fake)]
     else:
         raise RuntimeError("boundary repair did not converge in 50 passes")
     log(f"[polygon] boundary repair ({it} passes): {n_ears} ear / flat elements and {n_fake} "
         f"{{1,2,1}} elements deleted; open-string ends moved inward {n_trim} time(s)")
+    # jsasaki 2026-11-16: review newregion r1 #2: protected water lost by the repair is reported,
+    # and fails above max_protected_ear_area_km2
+    if keep_l is not None:
+        log(f"[polygon] boundary repair inside keep_polygons: {prot_area / 1e6:.4f} km2 deleted")
+        if max_protected_ear_area_km2 is not None \
+                and prot_area / 1e6 > float(max_protected_ear_area_km2):
+            raise RuntimeError(
+                f"boundary repair deleted {prot_area / 1e6:.4f} km2 of protected water "
+                f"(> max_protected_ear_area_km2 {max_protected_ear_area_km2})")
     used = np.unique(t)
     remap = -np.ones(len(p), int)
     remap[used] = np.arange(len(used))
@@ -515,6 +553,17 @@ def generate_polygon_mesh(
         raise RuntimeError(f"{int((np.abs(ta) < 1.0).sum())} degenerate elements (|area| < 1 m2)")
     log(f"[polygon] FINAL NP={len(p)} NE={len(t)}; open {len(open_str)} nodes, "
         f"{len(islands)} islands")
+    # jsasaki 2026-11-16: review newregion r1 #3: how much of the supplied line the open string
+    # covers (R4 trimming turns its ends into land; the pipeline then requires obc/obcfinal)
+    open_cover = None
+    if arc is not None and len(open_str) >= 2:
+        s_ends = sorted(obc_l.project(shapely.Point(p[v])) for v in (open_str[0], open_str[-1]))
+        open_cover = {"line_m": float(obc_l.length), "from_m": float(s_ends[0]),
+                      "to_m": float(s_ends[1]),
+                      "uncovered_m": float(obc_l.length - (s_ends[1] - s_ends[0]))}
+        log(f"[polygon] open string covers {s_ends[0]:.0f}-{s_ends[1]:.0f} m of the "
+            f"{obc_l.length:.0f} m line ({open_cover['uncovered_m']:.0f} m are land)")
     return {"points": p + [x0, y0], "cells": t, "open_string": open_str,
             "land_string": land_str, "islands": islands, "components": rows,
-            "n_ladder": int(n_inner)}
+            "n_ladder": int(n_inner), "open_cover": open_cover,
+            "protected_repair_area_m2": prot_area}
