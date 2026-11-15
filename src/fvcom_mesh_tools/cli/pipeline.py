@@ -507,6 +507,11 @@ def _stage_build_polygon(recipe, out_dir, artifacts, log):
         protected_drop_policy=str(cfg.get("protected_drop_policy", "fail")),
         protected_drop_tol_m2=float(cfg.get("protected_drop_tol_m2", 1.0)),
         protected_drop_tol_frac=float(cfg.get("protected_drop_tol_frac", 0.01)),
+        # jsasaki 2026-11-16: review newregion r5 #1: represented protected coverage (strict)
+        protected_coverage_tol_m2=float(cfg.get("protected_coverage_tol_m2", 0.0)),
+        protected_coverage_tol_frac=float(cfg.get("protected_coverage_tol_frac", 0.0)),
+        protected_clean_loss_tol_m2=float(cfg.get("protected_clean_loss_tol_m2", 0.0)),
+        protected_coverage_policy=str(cfg.get("protected_coverage_policy", "fail")),
         log=log)
     pts, cls = res["points"], res["cells"]
     mesh = Fort14Mesh(
@@ -528,7 +533,10 @@ def _stage_build_polygon(recipe, out_dir, artifacts, log):
             "raw_open_cover": res["open_cover"],
             "raw_protected_repair_m2": res["protected_repair_area_m2"],
             # jsasaki 2026-11-16: review newregion r2 #5: repair loss outside expected_drop
-            "raw_protected_repair_unexpected_m2": res["protected_repair_unexpected_m2"]}
+            "raw_protected_repair_unexpected_m2": res["protected_repair_unexpected_m2"],
+            # jsasaki 2026-11-16: review newregion r5 #1: represented protected coverage (persisted)
+            **({"raw_protected_coverage": res["protected_coverage"]}
+               if res.get("protected_coverage") else {})}
 #<--- jsasaki 2026-11-16
 
 
@@ -708,6 +716,26 @@ def _obc_line_from(recipe, out_dir):
 
 
 #---> jsasaki 2026-11-16: review newregion r3 #2: the obc stages must give back the open line
+# jsasaki 2026-11-16: review newregion r5 #3: which recipes keep the legacy siteops component step
+def _legacy_siteops(recipe) -> bool:
+    """``siteops.legacy_component_path`` when given; otherwise a recipe is
+    legacy (Tokyo) when it names no ``crs``, resolves to EPSG:32654 through the
+    legacy ``finish.utm_epsg`` or its bbox, uses no polygon build and no
+    protected water. Legacy siteops keep the largest component and reset the
+    boundary lists (the measured Tokyo behaviour); all others keep and
+    validate the open boundary."""
+    flag = (recipe.get("siteops") or {}).get("legacy_component_path")
+    if flag is not None:
+        return bool(flag)
+    try:
+        epsg = _recipe_epsg(recipe)
+    except SystemExit:
+        return False
+    return (recipe.get("crs") is None and epsg == 32654
+            and (recipe.get("build") or {}).get("engine") != "oceanmesh-polygon"
+            and not recipe.get("protect_polygons"))
+
+
 def _region_obc(recipe) -> bool:
     """A region recipe whose open boundary comes from a supplied line through
     the polygon build (the path the open-line checks apply to)."""
@@ -769,9 +797,15 @@ def _check_open_cover(recipe, out_dir, artifacts, mesh, cfg, log, stage="obc"):
                    f"(end_tol_m {tol:g})")
     if off > lim:
         bad.append(f"an open node is {off:.0f} m off the line (max_move_m {lim:g})")
-    if isinstance(prev, dict) and rec["uncovered_m"] > float(prev.get("uncovered_m", 0)) + 1.0:
-        bad.append(f"coverage retreated from {prev['uncovered_m']:.0f} m uncovered "
-                   f"({prev.get('stage')}) to {rec['uncovered_m']:.0f} m")
+    # jsasaki 2026-11-16: review newregion r5 #2: each END separately (a sum let one end retreat
+    # while the other extended)
+    if isinstance(prev, dict) and "from_m" in prev and "to_m" in prev:
+        if rec["from_m"] > float(prev["from_m"]) + 1.0:
+            bad.append(f"the lower end retreated from {prev['from_m']:.0f} m ({prev.get('stage')}) "
+                       f"to {rec['from_m']:.0f} m")
+        if rec["to_m"] < float(prev["to_m"]) - 1.0:
+            bad.append(f"the upper end retreated from {prev['to_m']:.0f} m ({prev.get('stage')}) "
+                       f"to {rec['to_m']:.0f} m")
     if bad:
         raise SystemExit(f"{stage}: open boundary no longer matches the line: " + "; ".join(bad))
     return rec
@@ -847,7 +881,9 @@ def _stage_siteops(recipe, out_dir, artifacts, log):
     # jsasaki 2026-11-16: review newregion r4 #4: a region recipe keeps (and validates) its open
     # boundary through siteops with or without protection; Tokyo-style recipes (no polygon build,
     # no protect_polygons) keep the legacy component step
-    region = _region_obc(recipe) or bool(recipe.get("protect_polygons"))
+    # jsasaki 2026-11-16: review newregion r5 #3: the legacy component step only for genuine legacy
+    # (Tokyo) recipes (_legacy_siteops); every other recipe keeps and validates its open boundary
+    region = not _legacy_siteops(recipe)
     from fvcom_mesh_tools.finishing import _snapshot, validate_open_boundary
 
     before = _snapshot(mesh) if region else None
@@ -1256,7 +1292,8 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
 #---> jsasaki 2026-11-16: pluggable depth products (new regions bring their own)
 DEPTH_PRODUCTS = ("m7001_production", "external_dep_file", "none")
 # jsasaki 2026-11-16: review newregion r4 #2: dict-valued artifacts that are persisted and reloaded
-_STRUCTURED_ARTIFACTS = ("open_cover", "raw_open_cover")
+# jsasaki 2026-11-16: review newregion r5 #1: raw_protected_coverage persisted too
+_STRUCTURED_ARTIFACTS = ("open_cover", "raw_open_cover", "raw_protected_coverage")
 # jsasaki 2026-11-16: review newregion r1 #8: artifact keys of the meshes a stage writes
 _MESH_KEYS = ("depths_mesh", "finishing_mesh", "final_mesh", "polish_mesh", "siteops_mesh",
               "obc_mesh", "finished_mesh", "raw_mesh")

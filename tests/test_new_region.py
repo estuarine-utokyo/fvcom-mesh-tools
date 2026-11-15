@@ -5,6 +5,7 @@ lone nodes / land boundaries, depth products, recipe rules."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -191,8 +192,10 @@ def test_polygon_engine_open_string_and_components():
     water, obc, chan = _domain()
     sz = build_size_field(water, crs_epsg=EPSG, background_m=400.0, raster_m=50.0,
                           log=lambda *a: None)
+    # r5 #1: the 300 m channel is not resolved at 400 m: reported, not failed, here
     res = generate_polygon_mesh(water, sz, obc_line=obc, ladder_k=1.0, max_iter=30,
-                                keep_polygons=chan, log=lambda *a: None)
+                                keep_polygons=chan, protected_coverage_policy="report",
+                                log=lambda *a: None)
     p, t, o = res["points"], res["cells"], res["open_string"]
     assert len(o) >= 10
     assert np.abs(p[o, 1] - Y0).max() < 1e-6                  # the open string is on the line
@@ -346,6 +349,7 @@ def test_pipeline_domain_build_qa(tmp_path):
                       "obc_line": {"path": str(gp), "layer": "obc"}},
            "protect_polygons": [{"path": str(gp), "layer": "channel"}],
            "build": {"engine": "oceanmesh-polygon", "max_iter": 30,
+                     "protected_coverage_policy": "report",      # r5 #1: coarse on purpose
                      "size": {"background_m": 400.0, "raster_m": 50.0}},
            "obc": {"trim": 1, "snap": False},
            "depths": {"product": "none"},
@@ -720,13 +724,15 @@ def test_r2_3_small_protected_component_is_not_dropped_silently():
                           log=lambda *a: None)
     with pytest.raises(RuntimeError, match="protected water"):
         generate_polygon_mesh(w2, sz, obc_line=obc, max_iter=15, keep_polygons=pond,
-                              log=lambda *a: None)
+                              protected_coverage_policy="report", log=lambda *a: None)
     res = generate_polygon_mesh(w2, sz, obc_line=obc, max_iter=15, keep_polygons=pond,
-                                expected_drop=pond.buffer(50.0), log=lambda *a: None)
+                                expected_drop=pond.buffer(50.0),
+                                protected_coverage_policy="report", log=lambda *a: None)
     assert res["points"][:, 0].max() < X0 + 7000
     # the relative tolerance: all of its protected water may go only with frac >= 1
     res = generate_polygon_mesh(w2, sz, obc_line=obc, max_iter=15, keep_polygons=pond,
-                                protected_drop_tol_frac=1.0, log=lambda *a: None)
+                                protected_drop_tol_frac=1.0, protected_coverage_policy="report",
+                                log=lambda *a: None)
     assert res["points"][:, 0].max() < X0 + 7000                  # dropped, with consent
     assert any(r["in_keep"] for r in res["components"] if r["stage"] == "pre-clean")
 
@@ -765,11 +771,12 @@ def test_r2_5_repair_loss_by_intersection_area(monkeypatch):
     strip = box(-150, 0, 150, 60)
     sz = build_size_field(water, crs_epsg=EPSG, background_m=300.0, raster_m=100.0,
                           log=lambda *a: None)
-    res = generate_polygon_mesh(water, sz, keep_polygons=strip, log=lambda *a: None)
+    res = generate_polygon_mesh(water, sz, keep_polygons=strip,
+                                protected_coverage_policy="report", log=lambda *a: None)
     assert res["protected_repair_area_m2"] > 1000.0
     with pytest.raises(RuntimeError, match="max_protected_ear_area_km2"):
         generate_polygon_mesh(water, sz, keep_polygons=strip, max_protected_ear_area_km2=0.0,
-                              log=lambda *a: None)
+                              protected_coverage_policy="report", log=lambda *a: None)
 
 
 def test_r2_4_pipeline_forwards_build_guards(tmp_path, monkeypatch):
@@ -786,6 +793,7 @@ def test_r2_4_pipeline_forwards_build_guards(tmp_path, monkeypatch):
     rec = {"name": "x", "crs": EPSG, "domain": {"water": {"path": str(gp), "layer": "water"}},
            "protect_polygons": [{"path": str(gp), "layer": "strip"}],
            "build": {"engine": "oceanmesh-polygon", "max_protected_ear_area_km2": 0.0,
+                     "protected_coverage_policy": "report",
                      "size": {"background_m": 300.0, "raster_m": 100.0}}}
     art = pl._stage_domain(rec, tmp_path, {}, lambda *a: None)
     with pytest.raises(RuntimeError, match="max_protected_ear_area_km2"):
@@ -1139,7 +1147,7 @@ def test_r4_3_a_shortened_open_string_fails_and_coverage_may_not_retreat(tmp_pat
         pl._check_open_cover(rec, tmp_path, art, short, {"end_tol_m": 50.0}, lambda *a: None)
     ok = pl._check_open_cover(rec, tmp_path, art, short, {"end_tol_m": 150.0}, lambda *a: None)
     assert ok["uncovered_m"] == pytest.approx(100.0)
-    art2 = dict(art, open_cover={"stage": "obc", "uncovered_m": 0.0})
+    art2 = dict(art, open_cover={"stage": "obc", "uncovered_m": 0.0, "from_m": 0.0, "to_m": 400.0})
     with pytest.raises(SystemExit, match="retreated"):
         pl._check_open_cover(rec, tmp_path, art2, short, {"end_tol_m": 150.0}, lambda *a: None)
 
@@ -1171,3 +1179,66 @@ def test_r4_4_validation_accepts_a_coincident_open_boundary_pair():
     T[0] = [0, 9, 3]
     m = _mesh(P, T, opens=[[0, 9, 1, 2]])
     assert validate_open_boundary(m, m, same_positions=True) == []
+
+
+# ------------------------------------------- review newregion r5 (regressions)
+def test_r5_1_unrepresented_protected_water_fails():
+    """#1: a 60 m channel at a 100 m background is barely represented (the
+    reviewer measured 2,979 of 60,000 m2); the build now fails (strict
+    default) instead of returning."""
+    from shapely.geometry import LineString, box
+
+    from fvcom_mesh_tools.mesh_engine.polygon import build_size_field, generate_polygon_mesh
+
+    sea = box(300000, 640000, 301000, 640500)
+    channel = box(300470, 640500, 300530, 641500)
+    water = sea.union(channel)
+    obc = LineString([(300000, 640000), (301000, 640000)])
+    sz = build_size_field(water, crs_epsg=EPSG, background_m=100.0, raster_m=25.0,
+                          log=lambda *a: None)
+    with pytest.raises(RuntimeError, match="not represented"):
+        generate_polygon_mesh(water, sz, obc_line=obc, keep_polygons=channel, max_iter=30,
+                              seed=0, max_protected_ear_area_km2=0.0, log=lambda *a: None)
+    res = generate_polygon_mesh(water, sz, obc_line=obc, keep_polygons=channel, max_iter=30,
+                                seed=0, protected_coverage_tol_frac=0.99,
+                                protected_clean_loss_tol_m2=1000.0, log=lambda *a: None)
+    cov = res["protected_coverage"]
+    assert cov["target_m2"] == pytest.approx(60000.0)
+    assert cov["unrepresented_m2"] > 0.5 * cov["target_m2"]
+    assert cov["clean_loss_m2"] > 100.0                             # the reviewer: 426 m2
+
+
+def test_r5_2_open_line_ends_are_compared_separately(tmp_path):
+    """#2: obc covering 100-400 m, then obcfinal 0-300 m: the same total, but
+    the upper end retreated 100 m; that fails now."""
+    rec, art, P, T = _region_line_case(tmp_path)
+    first = _mesh(P, T, opens=[[1, 2, 3, 4]])
+    r1 = pl._check_open_cover(rec, tmp_path, art, first, {}, lambda *a: None, stage="obc")
+    second = _mesh(P, T, opens=[[0, 1, 2, 3]])
+    with pytest.raises(SystemExit, match="upper end retreated"):
+        pl._check_open_cover(rec, tmp_path, dict(art, open_cover=r1), second, {},
+                             lambda *a: None, stage="obcfinal")
+
+
+def test_r5_3_only_legacy_recipes_take_the_legacy_siteops_path(tmp_path):
+    """#3: a prep-based new-region recipe (Ghana bbox, crs 32631, no protection)
+    keeps its open boundary through siteops; Tokyo stays legacy."""
+    import yaml
+
+    tokyo = yaml.safe_load((Path(__file__).resolve().parents[1] / "recipes"
+                            / "tokyo_bay_v6.yaml").read_text())
+    assert pl._legacy_siteops(tokyo)
+    assert not pl._legacy_siteops(dict(tokyo, siteops={"legacy_component_path": False}))
+    P, T = _r3_lattice()
+    m = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    f = tmp_path / "obc.14"
+    write_fort14(m, f)
+    rec, art = _fallback_setup(tmp_path, protect=False)
+    rec.update(name="x", crs=32631, prep={"bbox": [-0.15, 5.0, 1.45, 6.5],
+                                         "obc_line": [[0.1, 5.7], [1.2, 5.9]]},
+               build={"engine": "oceanmesh"}, obc={}, siteops={"passes": 1})
+    assert not pl._legacy_siteops(rec)
+    out = pl._stage_siteops(rec, tmp_path, dict(art, obc_mesh=str(f)), lambda *a: None)
+    m2 = read_fort14(out["siteops_mesh"])
+    assert len(m2.open_boundaries) == 1
+    assert np.allclose(m2.nodes[m2.open_boundaries[0]], P[[0, 1, 2, 3, 4]])

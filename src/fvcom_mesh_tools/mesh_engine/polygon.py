@@ -243,6 +243,11 @@ def generate_polygon_mesh(
     # jsasaki 2026-11-16: review newregion r2 #3: relative part of the tolerance (VR v3 job 7591568:
     # a 4-element fragment in a neck with 20 m2 of its protected water just outside expected_drop)
     protected_drop_tol_frac: float = 0.01,
+    # jsasaki 2026-11-16: review newregion r5 #1: represented protected coverage (strict defaults)
+    protected_coverage_tol_m2: float = 0.0,
+    protected_coverage_tol_frac: float = 0.0,
+    protected_clean_loss_tol_m2: float = 0.0,
+    protected_coverage_policy: str = "fail",
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
     """Mesh the shapely (Multi)Polygon ``water`` (CRS metres).
@@ -442,6 +447,12 @@ def generate_polygon_mesh(
             f"{max_dropped_component_km2} km2: "
             + "; ".join(f"{r['n_elem']} el / {r['area_km2']:.2f} km2 at "
                         f"({r['x']:.0f}, {r['y']:.0f})" for r in lost))
+    # jsasaki 2026-11-16: review newregion r5 #1: the retained components before the clean, for its
+    # geometric protected loss
+    if protected_coverage_policy not in ("fail", "report"):
+        raise ValueError(f"protected_coverage_policy must be 'fail' or 'report', "
+                         f"not {protected_coverage_policy!r}")
+    pre_clean = (p.copy(), t[np.isin(lab, list(keep_c))].copy())
     if PFIX is not None:
         pairs = np.stack([PFIX[SEGS[:, 0]], PFIX[SEGS[:, 1]]], axis=1)
         p, t = om2d_default_clean(p, t, pfix=PFIX, egfix_pairs=pairs,
@@ -449,7 +460,9 @@ def generate_polygon_mesh(
     else:
         p, t = om2d_default_clean(p, t, dj_cutoff=float(clean_dj_cutoff))
     log(f"[polygon] after OM2D default clean NP={len(p)} NE={len(t)}")
+    # jsasaki 2026-11-16: review newregion r5 #1: the cleaned mesh (retained part follows below)
     _n, lab, rows2, keep_c = comp_rows("post-clean", p, t)
+    p_clean, t_clean = p.copy(), t[np.isin(lab, list(keep_c))].copy()  # review newregion r5 #1
     for r in rows2:
         r["kept"] = r["comp"] in keep_c
     # jsasaki 2026-11-16: review newregion r2 #3: protected-water check after the clean
@@ -611,6 +624,40 @@ def generate_polygon_mesh(
         raise RuntimeError(f"{int((np.abs(ta) < 1.0).sum())} degenerate elements (|area| < 1 m2)")
     log(f"[polygon] FINAL NP={len(p)} NE={len(t)}; open {len(open_str)} nodes, "
         f"{len(islands)} islands")
+    #---> jsasaki 2026-11-16: review newregion r5 #1: represented protected coverage: the protected
+    # water to carry (water and keep_polygons, minus expected_drop) against what the final mesh
+    # covers, and the geometric protected loss of the OM2D clean inside the retained components
+    cover = None
+    if keep_l is not None:
+        from types import SimpleNamespace
+
+        from fvcom_mesh_tools.finishing import _tri_overlap, protected_loss_m2
+
+        target = water_l.intersection(keep_l)
+        if exp_l is not None:
+            target = target.difference(exp_l)
+        rep_m2 = float(_tri_overlap(p, t, target).sum()) if not target.is_empty else 0.0
+        miss = max(0.0, float(target.area) - rep_m2)
+        pre_mesh = SimpleNamespace(nodes=pre_clean[0], elements=pre_clean[1])
+        post_mesh = SimpleNamespace(nodes=p_clean, elements=t_clean)
+        clean_loss = protected_loss_m2(pre_mesh, post_mesh, target) if not target.is_empty \
+            else 0.0
+        cover = {"target_m2": float(target.area), "represented_m2": rep_m2,
+                 "unrepresented_m2": miss, "clean_loss_m2": clean_loss}
+        log(f"[polygon] protected coverage: {rep_m2 / 1e6:.4f} of {target.area / 1e6:.4f} km2 "
+            f"represented ({miss / 1e6:.4f} km2 missing); OM2D clean lost {clean_loss:.1f} m2")
+        bad = []
+        allow = max(protected_coverage_tol_m2, protected_coverage_tol_frac * float(target.area))
+        if miss > allow:
+            bad.append(f"{miss:.0f} m2 of protected water is not represented (allowed {allow:.0f})")
+        if clean_loss > protected_clean_loss_tol_m2:
+            bad.append(f"the OM2D clean lost {clean_loss:.0f} m2 of protected water "
+                       f"(allowed {protected_clean_loss_tol_m2:g})")
+        if bad:
+            if protected_coverage_policy == "fail":
+                raise RuntimeError("protected coverage: " + "; ".join(bad))
+            log("[polygon] WARNING protected coverage: " + "; ".join(bad))
+    #<--- jsasaki 2026-11-16
     # jsasaki 2026-11-16: review newregion r1 #3: how much of the supplied line the open string
     # covers (R4 trimming turns its ends into land; the pipeline then requires obc/obcfinal)
     open_cover = None
@@ -626,4 +673,6 @@ def generate_polygon_mesh(
             "n_ladder": int(n_inner), "open_cover": open_cover,
             "protected_repair_area_m2": prot_area,
             # jsasaki 2026-11-16: review newregion r2 #5: loss outside expected_drop
-            "protected_repair_unexpected_m2": prot_area_out}
+            "protected_repair_unexpected_m2": prot_area_out,
+            # jsasaki 2026-11-16: review newregion r5 #1: represented protected coverage
+            "protected_coverage": cover}
