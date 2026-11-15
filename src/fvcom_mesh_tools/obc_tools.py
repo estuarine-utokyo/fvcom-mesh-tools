@@ -32,7 +32,8 @@ __all__ = ["assign_west_south_obc"]
 def assign_west_south_obc(
     mesh: Fort14Mesh,
     *,
-    utm_epsg: int = 32654,
+    # jsasaki 2026-11-16: no Tokyo default (was 32654): the caller names the CRS
+    utm_epsg: int | None = None,
     band_deg: float = 0.012,
     shoreline_shp=None,
     coast_tol_m: float = 500.0,
@@ -43,6 +44,8 @@ def assign_west_south_obc(
     min_depth_m: float | None = None,
     snap: bool = True,
     obc_line_lonlat=None,
+    # jsasaki 2026-11-16: protected water (shapely, mesh coords): aftercare never drops it silently
+    protect_polygons=None,
     log=print,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Detect the west+south open-sea edges of the outer ring, snap
@@ -58,6 +61,9 @@ def assign_west_south_obc(
     product). When set, it clamps VALUES only — node positions and
     the coastline are untouched.
     """
+    # jsasaki 2026-11-16: a silent Tokyo CRS default is a wrong answer elsewhere
+    if utm_epsg is None:
+        raise ValueError("assign_west_south_obc: utm_epsg is required (EPSG of the mesh)")
     to_ll = Transformer.from_crs(f"EPSG:{utm_epsg}", "EPSG:4326",
                                  always_xy=True)
     lon, lat = to_ll.transform(mesh.nodes[:, 0], mesh.nodes[:, 1])
@@ -452,7 +458,18 @@ def assign_west_south_obc(
             break
         n_deleted += int(bad.sum())
         mesh = _rm(mesh, ~bad)
-        mesh, _ = keep_components(mesh)
+        #---> jsasaki 2026-11-16: with protected water, a dropped protected component fails
+        if protect_polygons is not None:
+            import shapely
+
+            from fvcom_mesh_tools.finishing import keep_components_protected
+
+            _tag = shapely.contains_xy(protect_polygons, mesh.nodes[:, 0], mesh.nodes[:, 1])
+            mesh, _kinfo, _ = keep_components_protected(mesh, _tag, policy="fail", log=log)
+            info.setdefault("components_dropped", []).extend(_kinfo["dropped"])
+        else:
+            mesh, _ = keep_components(mesh)
+        #<--- jsasaki 2026-11-16
         mesh = _rebuild(mesh)
     info["n_structural_deleted"] = n_deleted
     info["n_obc"] = int(mesh.open_boundaries[0].size)

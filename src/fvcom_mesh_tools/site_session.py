@@ -89,11 +89,18 @@ def apply_site_operators(
     lines,
     *,
     passes: int = 2,
+    # jsasaki 2026-11-16: protected water (shapely, mesh coords) for the final component step
+    protect_polygons=None,
     log=print,
 ) -> tuple[Fort14Mesh, list[dict[str, Any]]]:
     """Run ``passes`` worst-first operator passes. ``lines`` are the
     engineered-shoreline polylines in mesh coordinates (survivor
-    positions of boundary collapses are projected onto them)."""
+    positions of boundary collapses are projected onto them).
+
+    With ``protect_polygons`` the final component step keeps the
+    components touching the open boundary (which it keeps), and stops
+    if one holding protected water would be dropped; without it the
+    largest component is kept and the boundaries are reset (legacy)."""
     protected = [int(v) for s in mesh.open_boundaries for v in s]
     edit_log: list[dict[str, Any]] = []
 
@@ -214,6 +221,22 @@ def apply_site_operators(
                                      "op": "unresolved",
                                      "area_change":
                                          float(o["area_change"])})
+    #---> jsasaki 2026-11-16: protected component step (new regions); legacy path unchanged
+    if protect_polygons is not None:
+        import shapely
+
+        from fvcom_mesh_tools.finishing import (
+            keep_components_protected,
+            rebuild_land_boundaries,
+        )
+
+        tag = shapely.contains_xy(protect_polygons, mesh.nodes[:, 0], mesh.nodes[:, 1])
+        mesh, kinfo, _ = keep_components_protected(mesh, tag, policy="fail", log=log)
+        mesh = rebuild_land_boundaries(mesh)
+        if kinfo["dropped"]:
+            edit_log.append({"op": "keep_components", "dropped": kinfo["dropped"]})
+        return mesh, edit_log
+    #<--- jsasaki 2026-11-16
     from fvcom_mesh_tools.mesh_clean import keep_components
 
     mesh, kinfo = keep_components(mesh)
