@@ -11,6 +11,7 @@ Small synthetic inputs only: no meshing, scheduler submission or FVCOM run.
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 from pathlib import Path
 
@@ -201,8 +202,11 @@ def test_f11_the_land_filter_does_not_wait_for_a_base_coastline():
 def test_f14_the_workflow_refuses_a_comma_before_submitting(tmp_path):
     recipe = tmp_path / "a,b.yaml"
     recipe.write_text("refine: []\n")
+    # jsasaki 2026-11-15: the script makes directories under WORK_DIR before the check;
+    # give it writable roots so the test does not depend on the caller's profile (CI)
+    env = {**os.environ, "WORK_DIR": str(tmp_path), "DATA_DIR": str(tmp_path)}
     r = subprocess.run(["bash", str(ROOT / "jobs/octopus/refine_workflow.sh"), str(recipe)],
-                       text=True, capture_output=True, check=False)
+                       text=True, capture_output=True, check=False, env=env)
     assert r.returncode == 2 and "comma" in r.stdout
 
 

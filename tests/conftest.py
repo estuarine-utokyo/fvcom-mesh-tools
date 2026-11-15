@@ -9,6 +9,7 @@ tests are skipped with that reason instead of failing on the import.
 from __future__ import annotations
 
 import importlib
+import os
 
 import pytest
 
@@ -22,6 +23,14 @@ def _importable(name: str) -> bool:
 
 
 def pytest_configure(config):
+    # jsasaki 2026-11-15: GitHub's CI sets neither WORK_DIR nor DATA_DIR, and scripts that
+    # stop when they are unset (notebook 383 at import, dem.sources, the refine workflow)
+    # kept tests of their pure parts from running. Where unset, point them at a path that
+    # does not exist: nothing is read from it, and tests that need the real data still
+    # skip on its absence (test_dem_tokyo_bay).
+    for name in ("WORK_DIR", "DATA_DIR"):
+        if not os.environ.get(name):
+            os.environ[name] = f"/nonexistent/{name.lower()}"
     config.addinivalue_line(
         "markers", "needs_oceanmesh: needs the laboratory's oceanmesh fork installed")
     config.addinivalue_line(
