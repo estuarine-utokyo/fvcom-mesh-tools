@@ -811,14 +811,46 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
                                          utm_epsg=utm, log=log)
     obc = [int(v) for b in mesh.open_boundaries for v in b]
     det = detect_violations(mesh.nodes, mesh.elements)
+    #---> jsasaki 2026-11-16: obc_lock "none": patches near the open boundary are
+    # worked too (open-boundary nodes never move); a patch that pushes an open-boundary
+    # node over obc_perp_max_deg (or a violating one further) is reverted
+    obc_lock = str(cfg.get("obc_lock", "kring"))
+    if obc_lock not in ("kring", "none"):
+        raise SystemExit(f"finishing.auto.obc_lock must be 'kring' or 'none', not {obc_lock!r}")
     patches = plan_patches(
-        mesh.nodes, mesh.elements, det, obc_nodes=obc,
+        mesh.nodes, mesh.elements, det,
+        obc_nodes=obc if obc_lock == "kring" else None,
         kring=int(cfg.get("patch_kring", 2)),
         max_patches=int(cfg.get("max_patches", 50)),
     )
     log(f"[finishing] {len(patches)} patches planned")
     ledger = []
-    if patches:
+    if patches and obc_lock == "none":
+        import numpy as np
+
+        from fvcom_mesh_tools.finishing import obc_perpendicularity
+
+        pmax = float(cfg.get("obc_perp_max_deg", 20.0))
+        dev0 = obc_perpendicularity(mesh)
+        for q in patches:
+            nodes_try, led = execute_patches(
+                mesh.nodes, mesh.elements, [q], obc_nodes=obc, log=log)
+            mesh_try_nodes = mesh.nodes
+            mesh.nodes = nodes_try
+            dev1 = obc_perpendicularity(mesh)
+            worse = (dev1 > np.maximum(dev0, pmax) + 1e-9).any()
+            if worse:
+                mesh.nodes = mesh_try_nodes
+                for r in led:
+                    if "outcome" in r and r["outcome"].startswith("fixed"):
+                        r["outcome"] = "reverted (open-boundary perpendicularity)"
+                log(f"[finishing] patch {q.get('id')} reverted: open-boundary "
+                    f"perpendicularity over {pmax:g} deg")
+            else:
+                dev0 = dev1
+            ledger.extend(led)
+    elif patches:
+    #<--- jsasaki 2026-11-16
         mesh.nodes, ledger = execute_patches(
             mesh.nodes, mesh.elements, patches, obc_nodes=obc,
             log=log,

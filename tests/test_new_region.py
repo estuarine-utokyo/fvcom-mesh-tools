@@ -378,3 +378,23 @@ def test_polygon_engine_lost_component_and_expected_drop():
                                 expected_drop=pond.buffer(100.0), log=lambda *a: None)
     assert any(r["expected_drop"] and not r["kept"] for r in res["components"])
     assert res["points"][:, 0].max() < X0 + 7000                  # the pond is not meshed
+
+
+def test_obc_perpendicularity_and_obc_lock_key(tmp_path):
+    from fvcom_mesh_tools.finishing import obc_perpendicularity
+
+    P, T = _lattice(5, 4)
+    m = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    dev = obc_perpendicularity(m)
+    assert dev.shape == (5,) and np.allclose(dev, 0.0)          # vertical edges exist
+    m.nodes = m.nodes.copy()
+    m.nodes[5:10, 0] += 60.0                                     # shear the first ring
+    assert obc_perpendicularity(m).max() > 20.0
+    f14 = tmp_path / "f.14"
+    write_fort14(_mesh(P, T, opens=[[0, 1, 2, 3, 4]]), f14)
+    with pytest.raises(SystemExit, match="obc_lock"):
+        pl._stage_finishing({"name": "x", "finishing": {"auto": {"obc_lock": "free"}}},
+                            tmp_path, {"final_mesh": str(f14)}, lambda *a: None)
+    out = pl._stage_finishing({"name": "x", "finishing": {"auto": {"obc_lock": "none"}}},
+                              tmp_path, {"final_mesh": str(f14)}, lambda *a: None)
+    assert np.allclose(read_fort14(out["final_mesh"]).nodes, P)  # clean lattice: no patch

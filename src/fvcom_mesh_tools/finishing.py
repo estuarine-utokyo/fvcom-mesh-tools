@@ -38,7 +38,8 @@ from fvcom_mesh_tools.mesh_clean_phase_h import (
 )
 
 # jsasaki 2026-11-16: new helpers for channel protection, OBC carry-over and lone nodes
-__all__ = ["finish_constrained_mesh", "keep_components_protected", "quality_counts",
+__all__ = ["finish_constrained_mesh", "keep_components_protected", "obc_perpendicularity",
+           "quality_counts",
            "rebuild_land_boundaries", "remove_elements_keep_boundaries",
            "remove_lone_nodes"]
 
@@ -229,6 +230,35 @@ def finish_constrained_mesh(
 # ---------------------------------------------------------------------------
 
 
+def obc_perpendicularity(mesh: Fort14Mesh) -> np.ndarray:
+    """Best-edge deviation from perpendicular (deg) of every open-boundary
+    node, in the order of the concatenated open strings (the QA gate's
+    metric, :func:`fvcom_mesh_tools.qa.run_qa` ``obc_perpendicularity``)."""
+    from fvcom_mesh_tools.algorithms.perpendicularity import boundary_tangents
+
+    out = []
+    els = mesh.elements
+    e = np.unique(np.sort(np.vstack([els[:, [0, 1]], els[:, [1, 2]], els[:, [2, 0]]]),
+                          axis=1), axis=0)
+    for seg in mesh.open_boundaries:
+        seg = np.asarray(seg, np.int64)
+        dev = np.full(seg.size, np.inf)
+        if seg.size >= 2:
+            tang = boundary_tangents(mesh.nodes[seg])
+            inv = np.full(mesh.n_nodes, -1, np.int64)
+            inv[seg] = np.arange(seg.size)
+            a_in, b_in = inv[e[:, 0]] >= 0, inv[e[:, 1]] >= 0
+            inc = e[a_in ^ b_in]
+            bnode = np.where(inv[inc[:, 0]] >= 0, inc[:, 0], inc[:, 1])
+            onode = np.where(inv[inc[:, 0]] >= 0, inc[:, 1], inc[:, 0])
+            vec = mesh.nodes[onode] - mesh.nodes[bnode]
+            vec = vec / np.linalg.norm(vec, axis=1, keepdims=True)
+            cos = np.clip(np.abs((vec * tang[inv[bnode]]).sum(axis=1)), 0.0, 1.0)
+            np.minimum.at(dev, inv[bnode], 90.0 - np.degrees(np.arccos(cos)))
+        out.append(dev)
+    return np.concatenate(out) if out else np.empty(0)
+
+
 def _tag_obc_band(mesh: Fort14Mesh):
     """Replace the depths by random node tags (carried through the optimizer:
     kept per node, averaged for split nodes) and record the open-boundary
@@ -247,11 +277,14 @@ def _tag_obc_band(mesh: Fort14Mesh):
 
 
 def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
+                      max_area_change: float = 0.5,
                       log: Callable[[str], None] = print):
     """Undo :func:`_tag_obc_band`: depths back (new nodes take the depth of
     the nearest original node) and band nodes back to their positions where
-    no incident element flips and the incident minimum angle stays >= the
-    smaller of its current value and ``min_angle``."""
+    no incident element flips, the incident minimum angle stays >= the
+    smaller of its current value and ``min_angle``, and the adjacent-area
+    change around the node stays <= the larger of its current value and
+    ``max_area_change``."""
     from scipy.spatial import cKDTree
 
     idx = {float(t): i for i, t in enumerate(state["tags"])}
@@ -267,17 +300,41 @@ def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
     for e, tri in enumerate(mesh.elements):
         for v in tri:
             n2e.setdefault(int(v), []).append(e)
+    # element pairs across each interior edge (for the area-change check)
+    raw = np.sort(np.stack([mesh.elements[:, [0, 1]], mesh.elements[:, [1, 2]],
+                            mesh.elements[:, [2, 0]]], axis=1), axis=2).reshape(-1, 2)
+    code = raw[:, 0].astype(np.int64) * mesh.n_nodes + raw[:, 1]
+    eid = np.repeat(np.arange(mesh.n_elements), 3)
+    order = np.argsort(code, kind="stable")
+    cs, es = code[order], eid[order]
+    same = np.nonzero(cs[1:] == cs[:-1])[0]
+    pairs = np.column_stack([es[same], es[same + 1]])
+    e2p: dict[int, list[int]] = {}
+    for k, (a, b) in enumerate(pairs):
+        e2p.setdefault(int(a), []).append(k)
+        e2p.setdefault(int(b), []).append(k)
+
+    def area_change(pk):
+        _mn, _mx, tw = _tri_quality(mesh.nodes[mesh.elements[pairs[pk].ravel()]])
+        ar = 0.5 * np.abs(tw).reshape(-1, 2)
+        return float(((ar.max(axis=1) - ar.min(axis=1)) / ar.max(axis=1)).max())
+
     restored = refused = 0
     for v in np.nonzero(known)[0]:
         o = orig[v]
         if not state["band"][o] or np.array_equal(mesh.nodes[v], state["xy"][o]):
             continue
-        els = mesh.elements[n2e.get(int(v), [])]
+        inc = n2e.get(int(v), [])
+        els = mesh.elements[inc]
+        pk = sorted({k for e in inc for k in e2p.get(e, [])})
         mn0, _mx0, _tw0 = _tri_quality(mesh.nodes[els])
+        c40 = area_change(pk) if pk else 0.0
         old = mesh.nodes[v].copy()
         mesh.nodes[v] = state["xy"][o]
         mn1, _mx1, tw1 = _tri_quality(mesh.nodes[els])
-        if (tw1 <= 0).any() or mn1.min() < min(mn0.min(), min_angle):
+        c41 = area_change(pk) if pk else 0.0
+        if (tw1 <= 0).any() or mn1.min() < min(mn0.min(), min_angle) \
+                or c41 > max(c40, max_area_change):
             mesh.nodes[v] = old
             refused += 1
         else:
