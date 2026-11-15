@@ -232,7 +232,7 @@ def test_cap_deletion_guard_and_component_policy():
     m = _mesh(P, T, opens=[[0, 10]])                 # the west end is the open boundary
     mid = len(T) // 2
     pm = shapely.contains_xy(box(-10, -10, 2000, 200), P[:, 0], P[:, 1])
-    ok = _cap_deletion_allowed(m, pm)
+    ok = _cap_deletion_allowed(m, pm[T].any(axis=1))   # r2 #1: an element mask
     assert not ok[mid]                               # protected bridge: kept
     assert not ok[-1]                                # review r1 #2: no ear in protection either
     assert not ok[0]                                 # two open-boundary nodes: kept
@@ -644,3 +644,200 @@ def test_r1_11_build_records_its_crs(tmp_path, monkeypatch):
     monkeypatch.setattr(fin, "finish_constrained_mesh", fake_finish)
     pl._stage_finish(rec, tmp_path, dict(out), lambda *a: None)
     assert got["x"].min() > 1e5                                    # projected to metres
+
+
+# ------------------------------------------- review newregion r2 (regressions)
+def _rect_lattice(nx, ny, dx, dy):
+    xs, ys = np.meshgrid(dx * np.arange(nx), dy * np.arange(ny))
+    P = np.column_stack([xs.ravel(), ys.ravel()]).astype(float)
+    T = []
+    for j in range(ny - 1):
+        for i in range(nx - 1):
+            a = j * nx + i
+            T.append([a, a + 1, a + nx])
+            T.append([a + 1, a + nx + 1, a + nx])
+    return P, np.asarray(T, np.int64)
+
+
+def test_r2_1_protection_by_element_overlap(tmp_path, monkeypatch):
+    """#1: a protected strip narrower than the mesh spacing has no vertex in it;
+    its elements are still protected and finish deletes none of them."""
+    import geopandas as gpd
+    from shapely.geometry import LineString, box
+
+    import fvcom_mesh_tools.finishing as fin
+
+    P, T = _rect_lattice(4, 4, 300.0, 100.0)
+    strip = box(0, 20, 900, 80)
+    assert not fin.protected_node_mask(P, strip).any()
+    assert fin.protected_element_mask(P, T, strip).sum() == 6
+    monkeypatch.setattr(fin, "phase_h_optimize", lambda m, **k: (m, {}))
+    monkeypatch.setattr(fin, "build_coastline_projector", lambda *a, **k: None)
+    shp = tmp_path / "s.shp"
+    gpd.GeoDataFrame(geometry=[LineString(box(0, 0, 900, 300).exterior.coords)], crs=EPSG
+                     ).to_crs(4326).to_file(shp)
+    m = _mesh(P, T, opens=[[12, 13, 14, 15]])
+    out, info = fin.finish_constrained_mesh(m, shp, tmp_path / "w", utm_epsg=EPSG,
+                                            protect_polygons=strip, log=lambda *a: None)
+    assert fin.protected_overlap_m2(out.nodes, out.elements, strip) == pytest.approx(strip.area)
+
+
+def test_r2_2_siteops_cannot_erode_protected_water():
+    """#2: the site operators (collapse at a protected bank) keep the protected
+    coverage; the reviewed code lost 5,000 m2 here."""
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.finishing import protected_overlap_m2
+    from fvcom_mesh_tools.site_session import apply_site_operators
+
+    P, T = _rect_lattice(4, 4, 100.0, 100.0)
+    P[0] = (80.0, 30.0)
+    water = box(0, 0, 300, 300)
+    m = _mesh(P, T, opens=[[12, 13, 14, 15]])
+    before = protected_overlap_m2(m.nodes, m.elements, water)
+    from shapely.geometry import LineString
+
+    lines = [LineString(water.exterior.coords)]
+    out, _log = apply_site_operators(m, lines, passes=1, protect_polygons=water,
+                                     log=lambda *a: None)
+    assert protected_overlap_m2(out.nodes, out.elements, water) >= before - 1.0
+
+
+def test_r2_3_small_protected_component_is_not_dropped_silently():
+    """#3: a protected pond below max_dropped_component_km2 fails unless it is
+    an expected drop."""
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.mesh_engine.polygon import build_size_field, generate_polygon_mesh
+
+    water, obc, _chan = _domain()
+    pond = box(X0 + 8000, Y0, X0 + 8600, Y0 + 600)                # 0.36 km2 < 0.5
+    w2 = water.union(pond)
+    sz = build_size_field(w2, crs_epsg=EPSG, background_m=200.0, raster_m=50.0,
+                          log=lambda *a: None)
+    with pytest.raises(RuntimeError, match="protected water"):
+        generate_polygon_mesh(w2, sz, obc_line=obc, max_iter=15, keep_polygons=pond,
+                              log=lambda *a: None)
+    res = generate_polygon_mesh(w2, sz, obc_line=obc, max_iter=15, keep_polygons=pond,
+                                expected_drop=pond.buffer(50.0), log=lambda *a: None)
+    assert res["points"][:, 0].max() < X0 + 7000
+
+
+def _mock_generator(monkeypatch, P, T, water_bounds=(-150.0, 0.0)):
+    """The generator returns (P, T) in the engine's local frame (shifted by the
+    origin it derives from the water bounds)."""
+    import oceanmesh
+    import oceanmesh.clean
+
+    o = np.floor(np.asarray(water_bounds) / 1000.0) * 1000.0 - 5000.0
+    monkeypatch.setattr(oceanmesh, "generate_mesh", lambda *a, **k: (P - o, T.copy()))
+    monkeypatch.setattr(oceanmesh.clean, "om2d_default_clean",
+                        lambda p, t, **k: (p, t))
+
+
+def _ear_lattice():
+    """5 x 5 lattice at 300 m plus one ear element at the west side whose
+    centroid lies outside a thin protected strip it overlaps."""
+    P, T = _rect_lattice(5, 5, 300.0, 300.0)
+    P = np.vstack([P, [[-150.0, 150.0]]])
+    T = np.vstack([T, [[0, 25, 5]]])
+    return P, T
+
+
+def test_r2_5_repair_loss_by_intersection_area(monkeypatch):
+    """#5: the ear's overlap with the protected strip counts although its
+    centroid is outside; with a zero threshold the build fails."""
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.mesh_engine.polygon import build_size_field, generate_polygon_mesh
+
+    P, T = _ear_lattice()
+    _mock_generator(monkeypatch, P, T)
+    water = box(-150, 0, 1200, 1200)
+    strip = box(-150, 0, 150, 60)
+    sz = build_size_field(water, crs_epsg=EPSG, background_m=300.0, raster_m=100.0,
+                          log=lambda *a: None)
+    res = generate_polygon_mesh(water, sz, keep_polygons=strip, log=lambda *a: None)
+    assert res["protected_repair_area_m2"] > 1000.0
+    with pytest.raises(RuntimeError, match="max_protected_ear_area_km2"):
+        generate_polygon_mesh(water, sz, keep_polygons=strip, max_protected_ear_area_km2=0.0,
+                              log=lambda *a: None)
+
+
+def test_r2_4_pipeline_forwards_build_guards(tmp_path, monkeypatch):
+    """#4: build.max_protected_ear_area_km2 (and the drop policy) reach the
+    engine; an excessive repair loss fails the pipeline build."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    P, T = _ear_lattice()
+    _mock_generator(monkeypatch, P, T)
+    gp = tmp_path / "d.gpkg"
+    gpd.GeoDataFrame(geometry=[box(-150, 0, 1200, 1200)], crs=EPSG).to_file(gp, layer="water")
+    gpd.GeoDataFrame(geometry=[box(-150, 0, 150, 60)], crs=EPSG).to_file(gp, layer="strip")
+    rec = {"name": "x", "crs": EPSG, "domain": {"water": {"path": str(gp), "layer": "water"}},
+           "protect_polygons": [{"path": str(gp), "layer": "strip"}],
+           "build": {"engine": "oceanmesh-polygon", "max_protected_ear_area_km2": 0.0,
+                     "size": {"background_m": 300.0, "raster_m": 100.0}}}
+    art = pl._stage_domain(rec, tmp_path, {}, lambda *a: None)
+    with pytest.raises(RuntimeError, match="max_protected_ear_area_km2"):
+        pl._stage_build_polygon(rec, tmp_path, art, lambda *a: None)
+    rec["build"]["max_protected_ear_area_km2"] = 1.0
+    out = pl._stage_build_polygon(rec, tmp_path, art, lambda *a: None)
+    assert out["raw_protected_repair_m2"] > 1000.0
+
+
+def test_r2_6_band_restore_checks_every_c4_pair():
+    """#6: restoring a band node may not turn passing pairs into C4 failures
+    hidden behind an existing worse pair."""
+    from fvcom_mesh_tools.finishing import _restore_obc_band, _tag_obc_band
+    from fvcom_mesh_tools.qa import run_qa
+
+    P, T = _rect_lattice(4, 4, 100.0, 100.0)
+    P0 = P.copy()
+    P0[[5, 6]] += (-40.0, -40.0)
+    m0 = _mesh(P0, T, opens=[[0, 1, 2, 3]])
+    state = _tag_obc_band(m0)
+    P1 = P0.copy()
+    P1[5] = P[5]                                     # the optimizer moved node 5 back
+    m1 = _mesh(P1, T, opens=[[0, 1, 2, 3]])
+    m1.depths = m0.depths.copy()
+
+    def c4(m):
+        r = run_qa(m, coords="metric", channel_check=False)
+        return [c.n_violations for c in r.checks if c.check_id == "c4_area_change"][0]
+
+    n_before = c4(m1)
+    out, info = _restore_obc_band(m1, state, log=lambda *a: None)
+    assert c4(out) <= n_before
+
+
+def test_r2_7_figures_do_not_reproject_a_lonlat_raw_mesh(tmp_path, monkeypatch):
+    """#7: a lon/lat raw mesh (recorded EPSG:4326) is plotted where it is."""
+    import fvcom_mesh_tools.plotting as plotting
+
+    ll = _mesh(np.array([[139.75, 35.45], [139.76, 35.45], [139.75, 35.46]]),
+               np.array([[0, 1, 2]]))
+    f = tmp_path / "raw.14"
+    write_fort14(ll, f)
+    seen = []
+    monkeypatch.setattr(plotting, "plot_mesh_overview",
+                        lambda mesh, out, **k: seen.append(mesh.nodes.copy()))
+    pl._stage_figures({"crs": 32654, "figures": {}}, tmp_path,
+                      {"raw_mesh": str(f), "raw_mesh_crs": "EPSG:4326"}, lambda *a: None)
+    assert seen and np.allclose(seen[0][0], [139.75, 35.45])
+
+
+def test_r2_8_prep_receives_a_legacy_crs_override(tmp_path, monkeypatch):
+    """#8: finish.utm_epsg different from prep's automatic zone reaches prep;
+    when they agree (Tokyo) the prep arguments are unchanged."""
+    from fvcom_mesh_tools.cli import prepshoreline
+
+    seen = []
+    monkeypatch.setattr(prepshoreline, "main", lambda argv: seen.append(list(argv)) or 0)
+    pl._stage_prep({"prep": {"bbox": [-0.15, 5.0, 1.45, 6.5]}, "finish": {"utm_epsg": 32630}},
+                   tmp_path, lambda *a: None)
+    pl._stage_prep({"prep": {"bbox": [139.4, 34.9, 140.3, 35.9]},
+                    "finish": {"utm_epsg": 32654}}, tmp_path, lambda *a: None)
+    i = seen[0].index("--utm-epsg")
+    assert seen[0][i + 1] == "32630" and "--utm-epsg" not in seen[1]

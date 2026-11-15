@@ -39,8 +39,10 @@ from fvcom_mesh_tools.mesh_clean_phase_h import (
 
 # jsasaki 2026-11-16: new helpers for channel protection, OBC carry-over and lone nodes
 # jsasaki 2026-11-16: review newregion r1 #1: protected_node_mask exported
+# jsasaki 2026-11-16: review newregion r2 #1: protected_element_mask, protected_overlap_m2 exported
 __all__ = ["finish_constrained_mesh", "keep_components_protected", "obc_perpendicularity",
-           "protected_node_mask", "quality_counts",
+           "protected_element_mask", "protected_node_mask", "protected_overlap_m2",
+           "quality_counts",
            "rebuild_land_boundaries", "remove_elements_keep_boundaries",
            "remove_lone_nodes"]
 
@@ -129,8 +131,6 @@ def finish_constrained_mesh(
     #---> jsasaki 2026-11-16: guarded path when an OBC or protected polygons are present
     has_obc = any(len(s) for s in mesh.open_boundaries)
     guarded = has_obc or protect_polygons is not None
-    if guarded:
-        prot_mask = _protected_node_mask(mesh, protect_polygons)
     #<--- jsasaki 2026-11-16
     # 1. cap-triangle deletion (bounded rounds, monotone).
     removed = 0
@@ -142,16 +142,19 @@ def finish_constrained_mesh(
         kill = bad & allb
         #---> jsasaki 2026-11-16: never cut a protected channel or the open boundary
         if guarded:
-            kill &= _cap_deletion_allowed(mesh, prot_mask)
+            # jsasaki 2026-11-16: review newregion r2 #1: element overlap, recomputed per round
+            prot_el = (None if protect_polygons is None else
+                       protected_element_mask(mesh.nodes, mesh.elements, protect_polygons))
+            kill &= _cap_deletion_allowed(mesh, prot_el)
         #<--- jsasaki 2026-11-16
         if not kill.any():
             break
         #---> jsasaki 2026-11-16: the guarded path keeps boundaries and reports drops
         if guarded:
-            keep_tag = np.zeros(mesh.n_nodes, bool) if prot_mask is None else prot_mask
-            mesh, prot_mask = remove_elements_keep_boundaries(mesh, ~kill, keep_tag)
-            mesh, kinfo, prot_mask = keep_components_protected(
-                mesh, prot_mask, policy=on_dropped_protected, log=log)
+            # jsasaki 2026-11-16: review newregion r2 #1: drops judged by element overlap
+            mesh, _ = remove_elements_keep_boundaries(mesh, ~kill)
+            mesh, kinfo, _ = keep_components_protected(
+                mesh, protect_polygons=protect_polygons, policy=on_dropped_protected, log=log)
             info.setdefault("components_dropped", []).extend(kinfo["dropped"])
         else:
             mesh = remove_elements(mesh, ~kill)
@@ -287,8 +290,8 @@ def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
     node's depth only outside it) and band nodes back to their positions where
     no incident element flips, the incident minimum angle stays >= the
     smaller of its current value and ``min_angle``, and the adjacent-area
-    change around the node stays <= the larger of its current value and
-    ``max_area_change``."""
+    change of EVERY pair around the node stays <= the larger of its current
+    value and ``max_area_change``."""
     from scipy.spatial import cKDTree
 
     idx = {float(t): i for i, t in enumerate(state["tags"])}
@@ -329,10 +332,11 @@ def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
         e2p.setdefault(int(a), []).append(k)
         e2p.setdefault(int(b), []).append(k)
 
+    # jsasaki 2026-11-16: review newregion r2 #6: per pair (the maximum hid newly failing pairs)
     def area_change(pk):
         _mn, _mx, tw = _tri_quality(mesh.nodes[mesh.elements[pairs[pk].ravel()]])
         ar = 0.5 * np.abs(tw).reshape(-1, 2)
-        return float(((ar.max(axis=1) - ar.min(axis=1)) / ar.max(axis=1)).max())
+        return (ar.max(axis=1) - ar.min(axis=1)) / ar.max(axis=1)
 
     restored = refused = 0
     for v in np.nonzero(known)[0]:
@@ -343,13 +347,13 @@ def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
         els = mesh.elements[inc]
         pk = sorted({k for e in inc for k in e2p.get(e, [])})
         mn0, _mx0, _tw0 = _tri_quality(mesh.nodes[els])
-        c40 = area_change(pk) if pk else 0.0
+        c40 = area_change(pk) if pk else np.zeros(0)
         old = mesh.nodes[v].copy()
         mesh.nodes[v] = state["xy"][o]
         mn1, _mx1, tw1 = _tri_quality(mesh.nodes[els])
-        c41 = area_change(pk) if pk else 0.0
+        c41 = area_change(pk) if pk else np.zeros(0)
         if (tw1 <= 0).any() or mn1.min() < min(mn0.min(), min_angle) \
-                or c41 > max(c40, max_area_change):
+                or (c41 > np.maximum(c40, max_area_change) + 1e-12).any():
             mesh.nodes[v] = old
             refused += 1
         else:
@@ -379,6 +383,66 @@ def protected_node_mask(nodes: np.ndarray, protect_polygons, tol_m: float = PROT
     return inside
 
 
+# jsasaki 2026-11-16: review newregion r2 #1: elements are protected by positive overlap with the
+# protected water (a corridor narrower than the mesh spacing has no vertex in it)
+def protected_element_mask(nodes: np.ndarray, elements: np.ndarray, protect_polygons,
+                           tol_m: float = PROTECT_TOL_M, min_overlap_m2: float = 1e-6):
+    """Elements with a protected vertex (:func:`protected_node_mask`) or a
+    positive overlap area (> ``min_overlap_m2``) with ``protect_polygons``."""
+
+    nodes = np.asarray(nodes, float)
+    elements = np.asarray(elements, np.int64)
+    out = protected_node_mask(nodes, protect_polygons, tol_m)[elements].any(axis=1)
+    rest = np.nonzero(~out)[0]
+    if rest.size:
+        out[rest[_tri_overlap(nodes, elements[rest], protect_polygons) > min_overlap_m2]] = True
+    return out
+
+
+_TILE_CACHE: dict = {}
+
+
+def _protect_tiles(protect_polygons, tile_m: float = 2000.0):
+    """The protected geometry cut into ``tile_m`` squares (intersections with a
+    large many-vertex polygon are slow; a 49k-element mesh took 67 s untiled)."""
+    import shapely
+    from shapely.geometry import box
+
+    key = id(protect_polygons)
+    hit = _TILE_CACHE.get(key)
+    if hit is not None and hit[0] is protect_polygons:
+        return hit[1], hit[2]
+    x0, y0, x1, y1 = protect_polygons.bounds
+    cells = [box(x, y, x + tile_m, y + tile_m)
+             for x in np.arange(x0, x1, tile_m) for y in np.arange(y0, y1, tile_m)]
+    pieces = shapely.intersection(np.array(cells, dtype=object), protect_polygons)
+    pieces = pieces[~shapely.is_empty(pieces)]
+    tree = shapely.STRtree(pieces)
+    _TILE_CACHE.clear()
+    _TILE_CACHE[key] = (protect_polygons, pieces, tree)
+    return pieces, tree
+
+
+def _tri_overlap(nodes, elements, protect_polygons) -> np.ndarray:
+    """Per-element intersection area with ``protect_polygons`` (tiled)."""
+    import shapely
+
+    tris = shapely.polygons(np.asarray(nodes, float)[np.asarray(elements, np.int64)])
+    pieces, tree = _protect_tiles(protect_polygons)
+    ti, pj = tree.query(tris, predicate="intersects")
+    out = np.zeros(len(tris))
+    if ti.size:
+        np.add.at(out, ti, shapely.area(shapely.intersection(tris[ti], pieces[pj])))
+    return out
+
+
+def protected_overlap_m2(nodes: np.ndarray, elements: np.ndarray, protect_polygons) -> float:
+    """Total intersection area of the elements with ``protect_polygons``."""
+    if len(elements) == 0:
+        return 0.0
+    return float(_tri_overlap(nodes, elements, protect_polygons).sum())
+
+
 def _protected_node_mask(mesh: Fort14Mesh, protect_polygons):
     """Nodes in ``protect_polygons`` (None when there is no protection)."""
     if protect_polygons is None:
@@ -397,7 +461,8 @@ def _element_neighbour_count(elements: np.ndarray) -> np.ndarray:
     return shared.sum(axis=1)
 
 
-def _cap_deletion_allowed(mesh: Fort14Mesh, prot_mask) -> np.ndarray:
+# jsasaki 2026-11-16: review newregion r2 #1: takes the protected ELEMENT mask
+def _cap_deletion_allowed(mesh: Fort14Mesh, prot_elem) -> np.ndarray:
     """Per element: may a cap triangle be deleted here?
 
     Never when it holds two or more open-boundary nodes (it would break
@@ -411,9 +476,10 @@ def _cap_deletion_allowed(mesh: Fort14Mesh, prot_mask) -> np.ndarray:
         obc = np.zeros(mesh.n_nodes, bool)
         obc[np.concatenate([np.asarray(s, int) for s in mesh.open_boundaries])] = True
         ok &= obc[mesh.elements].sum(axis=1) < 2
-    if prot_mask is not None:
+    if prot_elem is not None:
         # jsasaki 2026-11-16: review newregion r1 #2: no cap deletion at all in protected water
-        ok &= ~prot_mask[mesh.elements].any(axis=1)
+        # jsasaki 2026-11-16: review newregion r2 #1: per element (overlap), not per vertex
+        ok &= ~np.asarray(prot_elem, bool)
     return ok
 
 
@@ -441,14 +507,16 @@ def remove_elements_keep_boundaries(mesh: Fort14Mesh, keep_elem_mask, node_tag=N
     return out, tag
 
 
-def keep_components_protected(mesh: Fort14Mesh, node_tag=None, *, policy: str = "fail",
-                              log: Callable[[str], None] = print):
+# jsasaki 2026-11-16: review newregion r2 #1: protect_polygons (element overlap) next to node_tag
+def keep_components_protected(mesh: Fort14Mesh, node_tag=None, *, protect_polygons=None,
+                              policy: str = "fail", log: Callable[[str], None] = print):
     """Keep the element components that touch the open boundary (the
-    largest one when there is none); a dropped component holding a node
-    tagged in ``node_tag`` (protected water) raises (``policy="fail"``)
-    or is logged (``"report"``). Every dropped component is listed in
-    ``info["dropped"]`` (elements, area, centroid). Open boundaries are
-    remapped, not cleared. Returns ``(mesh, info, node_tag)``."""
+    largest one when there is none); a dropped component holding protected
+    water raises (``policy="fail"``) or is logged (``"report"``). Protected
+    water: elements overlapping ``protect_polygons`` (outline included), or
+    nodes tagged in ``node_tag``. Every dropped component is listed in
+    ``info["dropped"]`` (elements, area, centroid, protected overlap). Open
+    boundaries are remapped, not cleared. Returns ``(mesh, info, node_tag)``."""
     from scipy.sparse.csgraph import connected_components
 
     from fvcom_mesh_tools.diagnostics import face_face_adjacency
@@ -472,6 +540,9 @@ def keep_components_protected(mesh: Fort14Mesh, node_tag=None, *, policy: str = 
     _mn, _mx, tw = _tri_quality(mesh.nodes[mesh.elements])
     area = 0.5 * np.abs(tw)
     cen = mesh.nodes[mesh.elements].mean(axis=1)
+    # jsasaki 2026-11-16: review newregion r2 #1: element overlap with the protected water
+    prot_el = (protected_element_mask(mesh.nodes, mesh.elements, protect_polygons)
+               if protect_polygons is not None else np.zeros(mesh.n_elements, bool))
     bad = []
     for c in range(n_comp):
         if c in keep:
@@ -479,8 +550,9 @@ def keep_components_protected(mesh: Fort14Mesh, node_tag=None, *, policy: str = 
         sel = lab == c
         rec = {"n_elements": int(sel.sum()), "area_m2": float(area[sel].sum()),
                "x": float(cen[sel, 0].mean()), "y": float(cen[sel, 1].mean()),
-               "protected": bool(node_tag is not None
-                                 and node_tag[np.unique(mesh.elements[sel])].any())}
+               # jsasaki 2026-11-16: review newregion r2 #1: element overlap or node tag
+               "protected": bool(prot_el[sel].any() or (
+                   node_tag is not None and node_tag[np.unique(mesh.elements[sel])].any()))}
         info["dropped"].append(rec)
         if rec["protected"]:
             bad.append(rec)
@@ -517,10 +589,10 @@ def remove_lone_nodes(mesh: Fort14Mesh, *, protect_polygons=None, max_rounds: in
         for s in mesh.open_boundaries:
             obc[np.asarray(s, int)] = True
         lone &= ~obc
-        fixed = obc.copy()
+        kill = lone[mesh.elements].any(axis=1) & ~obc[mesh.elements].any(axis=1)
+        # jsasaki 2026-11-16: review newregion r2 #1: protected by element overlap
         if protect_polygons is not None:
-            fixed |= protected_node_mask(mesh.nodes, protect_polygons)
-        kill = lone[mesh.elements].any(axis=1) & ~fixed[mesh.elements].any(axis=1)
+            kill &= ~protected_element_mask(mesh.nodes, mesh.elements, protect_polygons)
         if not kill.any():
             break
         _mn, _mx, tw = _tri_quality(mesh.nodes[mesh.elements[kill]])

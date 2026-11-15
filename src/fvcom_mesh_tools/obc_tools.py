@@ -460,11 +460,11 @@ def assign_west_south_obc(
         mesh = _rm(mesh, ~bad)
         #---> jsasaki 2026-11-16: with protected water, a dropped protected component fails
         if protect_polygons is not None:
-            from fvcom_mesh_tools.finishing import keep_components_protected, protected_node_mask
+            from fvcom_mesh_tools.finishing import keep_components_protected
 
-            # jsasaki 2026-11-16: review newregion r1 #1: boundary-inclusive protection
-            _tag = protected_node_mask(mesh.nodes, protect_polygons)
-            mesh, _kinfo, _ = keep_components_protected(mesh, _tag, policy="fail", log=log)
+            # jsasaki 2026-11-16: review newregion r2 #1: element-overlap protection
+            mesh, _kinfo, _ = keep_components_protected(
+                mesh, protect_polygons=protect_polygons, policy="fail", log=log)
             info.setdefault("components_dropped", []).extend(_kinfo["dropped"])
         else:
             mesh, _ = keep_components(mesh)

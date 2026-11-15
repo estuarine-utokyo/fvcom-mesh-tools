@@ -235,6 +235,9 @@ def generate_polygon_mesh(
     end_trim_nodes: int = 6,
     # jsasaki 2026-11-16: review newregion r1 #2: limit on ear deletions in protected water
     max_protected_ear_area_km2: float | None = None,
+    # jsasaki 2026-11-16: review newregion r2 #3: dropped protected water outside expected_drop
+    protected_drop_policy: str = "fail",
+    protected_drop_tol_m2: float = 1.0,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
     """Mesh the shapely (Multi)Polygon ``water`` (CRS metres).
@@ -356,21 +359,50 @@ def generate_polygon_mesh(
         for c in range(ncomp):
             sel = lab == c
             cxy = cen[sel].mean(axis=0) + [x0, y0]
-            in_keep = bool(keep_l is not None and shapely.contains_xy(
-                keep_l, cen[sel, 0], cen[sel, 1]).any())
             # jsasaki 2026-11-16: review newregion r1 #5: the AREA fraction inside expected_drop
             # (element counts let a finely meshed corner excuse a large coarse body)
+            # jsasaki 2026-11-16: review newregion r2 #3: protected water by overlap AREA, and the
+            # part of it outside expected_drop (the part a drop may not take); the main component
+            # (largest) is skipped: it is the one kept
             expected = False
-            if exp_l is not None:
+            prot_m2 = prot_out_m2 = 0.0
+            if sel.sum() < len(t) // 2:
                 tris = shapely.polygons(p[t[sel]])
-                a_in = shapely.area(shapely.intersection(tris, exp_l)).sum()
-                expected = bool(a_in > 0.5 * shapely.area(tris).sum())
+                if exp_l is not None:
+                    a_in = shapely.area(shapely.intersection(tris, exp_l)).sum()
+                    expected = bool(a_in > 0.5 * shapely.area(tris).sum())
+                if keep_l is not None:
+                    pw = shapely.intersection(tris, keep_l)
+                    prot_m2 = float(shapely.area(pw).sum())
+                    if prot_m2 > 0 and exp_l is not None:
+                        pw = shapely.difference(pw, exp_l)
+                    prot_out_m2 = float(shapely.area(pw).sum()) if prot_m2 > 0 else 0.0
             rows.append(dict(stage=stage, comp=c, n_elem=int(sel.sum()),
                              area_km2=float(ar[sel].sum() / 1e6),
-                             x=float(cxy[0]), y=float(cxy[1]), in_keep=in_keep,
+                             x=float(cxy[0]), y=float(cxy[1]), in_keep=prot_m2 > 0,
+                             protected_m2=prot_m2, protected_unexpected_m2=prot_out_m2,
                              expected_drop=expected,
                              kept=None if keep_c is None else bool(c in keep_c)))
         return ncomp, lab, rows
+
+    # jsasaki 2026-11-16: review newregion r2 #3: a dropped component may not take protected water
+    # outside expected_drop, whatever its size (policy "report" logs it instead)
+    if protected_drop_policy not in ("fail", "report"):
+        raise ValueError(f"protected_drop_policy must be 'fail' or 'report', "
+                         f"not {protected_drop_policy!r}")
+
+    def check_protected(rows_, keep_c_, stage):
+        bad = [r for r in rows_ if r["comp"] not in keep_c_
+               and r["protected_unexpected_m2"] > protected_drop_tol_m2]
+        if not bad:
+            return
+        msg = (f"{stage}: {len(bad)} component(s) without open boundary hold protected water "
+               "outside expected_drop: "
+               + "; ".join(f"{r['n_elem']} el / {r['protected_unexpected_m2']:.0f} m2 at "
+                           f"({r['x']:.0f}, {r['y']:.0f})" for r in bad[:10]))
+        if protected_drop_policy == "fail":
+            raise RuntimeError(msg)
+        log(f"[polygon] WARNING {msg}")
 
     def anchor_components(p, t, lab):
         if arc is None:
@@ -386,6 +418,8 @@ def generate_polygon_mesh(
                 and r["area_km2"] > max_dropped_component_km2:
             log(f"[polygon] expected drop: {r['n_elem']} el / {r['area_km2']:.2f} km2 at "
                 f"({r['x']:.0f}, {r['y']:.0f})")
+    # jsasaki 2026-11-16: review newregion r2 #3: protected-water check before the clean
+    check_protected(rows, keep_c, "generator")
     lost = [r for r in rows if r["comp"] not in keep_c and not r["expected_drop"]
             and r["area_km2"] > max_dropped_component_km2]
     if lost:
@@ -405,6 +439,8 @@ def generate_polygon_mesh(
     keep_c = anchor_components(p, t, lab)
     for r in rows2:
         r["kept"] = r["comp"] in keep_c
+    # jsasaki 2026-11-16: review newregion r2 #3: protected-water check after the clean
+    check_protected(rows2, keep_c, "OM2D clean")
     lost = [r for r in rows2 if not r["kept"] and not r["expected_drop"]
             and r["area_km2"] > max_dropped_component_km2]
     if lost:
@@ -418,7 +454,9 @@ def generate_polygon_mesh(
     if dropped:
         log(f"[polygon] dropped {len(dropped)} component(s) without open boundary, "
             f"{sum(r['area_km2'] for r in dropped):.2f} km2 "
-            f"({sum(r['in_keep'] for r in dropped)} holding keep_polygons water)")
+            f"({sum(r['in_keep'] for r in dropped)} holding keep_polygons water, "
+            # jsasaki 2026-11-16: review newregion r2 #3: protected area of the dropped components
+            f"{sum(r['protected_m2'] for r in dropped) / 1e6:.4f} km2)")
     t = t[np.isin(lab, list(keep_c))]
     used = np.unique(t)
     remap = -np.ones(len(p), int)
@@ -440,6 +478,7 @@ def generate_polygon_mesh(
         ends = [int(arc_idx[0]), int(arc_idx[-1])]
     n_ears = n_fake = n_trim = 0
     prot_area = 0.0  # jsasaki 2026-11-16: review newregion r1 #2: protected area deleted by repair
+    prot_area_out = 0.0  # jsasaki 2026-11-16: review newregion r2 #5: ... outside expected_drop
     for it in range(50):
         cnt = np.bincount(t.ravel(), minlength=len(p))
         loops = om.boundary_loops(t)
@@ -511,11 +550,14 @@ def generate_polygon_mesh(
         n_ears += int(ear.sum())
         n_fake += int((fake & ~ear).sum())
         # jsasaki 2026-11-16: review newregion r1 #2: account for deletions in protected water
-        if keep_l is not None:
-            gone = ear | fake
-            cg = p[t[gone]].mean(axis=1)
-            inp = shapely.contains_xy(keep_l, cg[:, 0], cg[:, 1])
-            prot_area += float(np.abs(_tri_area(p, t[gone][inp])).sum())
+        # jsasaki 2026-11-16: review newregion r2 #5: by intersection AREA (centroids missed
+        # overlapping triangles), and the part outside expected_drop
+        if keep_l is not None and (ear | fake).any():
+            pw = shapely.intersection(shapely.polygons(p[t[ear | fake]]), keep_l)
+            prot_area += float(shapely.area(pw).sum())
+            if exp_l is not None:
+                pw = shapely.difference(pw, exp_l)
+            prot_area_out += float(shapely.area(pw).sum())
         t = t[~(ear | fake)]
     else:
         raise RuntimeError("boundary repair did not converge in 50 passes")
@@ -523,13 +565,16 @@ def generate_polygon_mesh(
         f"{{1,2,1}} elements deleted; open-string ends moved inward {n_trim} time(s)")
     # jsasaki 2026-11-16: review newregion r1 #2: protected water lost by the repair is reported,
     # and fails above max_protected_ear_area_km2
+    # jsasaki 2026-11-16: review newregion r2 #5: the threshold applies to the loss outside
+    # expected_drop (water the region declared unresolvable may go)
     if keep_l is not None:
-        log(f"[polygon] boundary repair inside keep_polygons: {prot_area / 1e6:.4f} km2 deleted")
+        log(f"[polygon] boundary repair inside keep_polygons: {prot_area / 1e6:.4f} km2 deleted, "
+            f"{prot_area_out / 1e6:.4f} km2 of it outside expected_drop")
         if max_protected_ear_area_km2 is not None \
-                and prot_area / 1e6 > float(max_protected_ear_area_km2):
+                and prot_area_out / 1e6 > float(max_protected_ear_area_km2):
             raise RuntimeError(
-                f"boundary repair deleted {prot_area / 1e6:.4f} km2 of protected water "
-                f"(> max_protected_ear_area_km2 {max_protected_ear_area_km2})")
+                f"boundary repair deleted {prot_area_out / 1e6:.4f} km2 of protected water outside "
+                f"expected_drop (> max_protected_ear_area_km2 {max_protected_ear_area_km2})")
     used = np.unique(t)
     remap = -np.ones(len(p), int)
     remap[used] = np.arange(len(used))
@@ -566,4 +611,6 @@ def generate_polygon_mesh(
     return {"points": p + [x0, y0], "cells": t, "open_string": open_str,
             "land_string": land_str, "islands": islands, "components": rows,
             "n_ladder": int(n_inner), "open_cover": open_cover,
-            "protected_repair_area_m2": prot_area}
+            "protected_repair_area_m2": prot_area,
+            # jsasaki 2026-11-16: review newregion r2 #5: loss outside expected_drop
+            "protected_repair_unexpected_m2": prot_area_out}

@@ -178,6 +178,24 @@ def _git_describe(repo: Path) -> str:
         return "unknown"
 
 
+# jsasaki 2026-11-16: review newregion r2 #8: CRS prep must use when the recipe overrides its zone
+def _prep_crs_override(recipe):
+    """The recipe CRS when it is explicit (``crs``) or when the legacy
+    ``finish.utm_epsg`` differs from the UTM zone prep derives from its bbox;
+    else None (prep keeps its automatic zone, as before)."""
+    from fvcom_mesh_tools.prep.shoreline import auto_utm_epsg
+
+    if recipe.get("crs") is not None:
+        return _recipe_epsg(recipe)
+    legacy = (recipe.get("finish") or {}).get("utm_epsg")
+    bbox = (recipe.get("prep") or {}).get("bbox")
+    if legacy is not None and bbox:
+        auto = auto_utm_epsg(0.5 * (bbox[0] + bbox[2]), 0.5 * (bbox[1] + bbox[3]))
+        if int(legacy) != auto:
+            return int(legacy)
+    return None
+
+
 def _stage_prep(recipe, out_dir, log):
     from fvcom_mesh_tools.cli import prepshoreline
 
@@ -217,8 +235,10 @@ def _stage_prep(recipe, out_dir, log):
         argv += ["--water-shp", str(_path(w))]
     # jsasaki 2026-11-16: review newregion r1 #10: an explicit recipe crs reaches prep too (a
     # recipe without one keeps prep's own UTM zone, the measured Tokyo behaviour)
-    if recipe.get("crs") is not None:
-        argv += ["--utm-epsg", str(_recipe_epsg(recipe))]
+    # jsasaki 2026-11-16: review newregion r2 #8: also the legacy finish.utm_epsg when it differs
+    # from prep's automatic zone (equal for Tokyo: argv unchanged)
+    if _prep_crs_override(recipe) is not None:
+        argv += ["--utm-epsg", str(_prep_crs_override(recipe))]
     rc = prepshoreline.main(argv)
     if rc:
         raise SystemExit(f"prep stage failed (rc={rc})")
@@ -272,7 +292,8 @@ def _stage_prep(recipe, out_dir, log):
             # the line, as before)
             eff = extend_obc_ends_perpendicular(
                 [tuple(q) for q in cfg["obc_line"]], outer_gdf,
-                utm_epsg=_recipe_epsg(recipe) if recipe.get("crs") is not None else None,
+                # jsasaki 2026-11-16: review newregion r2 #8: legacy override too
+                utm_epsg=_prep_crs_override(recipe),
             )
             bbox = tuple(cfg["bbox"])
             land = cut_domain_at_obc_line(land, eff, bbox)
@@ -405,6 +426,34 @@ def _stage_domain(recipe, out_dir, artifacts, log):
     return out
 
 
+# jsasaki 2026-11-16: review newregion r2 #3: expected_drop = listed geometries + (optionally) the
+# water the mesh cannot resolve
+def _expected_drop_geometry(recipe, cfg, water, obc, epsg, log):
+    """``build.expected_drop`` items plus, with ``build.expected_drop_unresolved_m: w``,
+    the water not reached by the open-boundary component of the water opened
+    at width ``w`` (channels, necks and ponds narrower than the mesh can carry)."""
+    from shapely.ops import unary_union
+
+    geoms = []
+    listed = _protect_geometry({"protect_polygons": cfg.get("expected_drop")}, epsg)
+    if listed is not None:
+        geoms.append(listed)
+    w = cfg.get("expected_drop_unresolved_m")
+    if w:
+        w = float(w)
+        opened = water.buffer(-w / 2).buffer(w / 2)
+        parts = [g for g in getattr(opened, "geoms", [opened]) if not g.is_empty]
+        if obc is not None:
+            main = [g for g in parts if g.distance(obc) <= w]
+        else:
+            main = [max(parts, key=lambda g: g.area)] if parts else []
+        unresolved = water.difference(unary_union(main)) if main else water
+        log(f"[polygon] unresolved water at {w:g} m: {unresolved.area / 1e6:.2f} km2 "
+            "(expected drop)")
+        geoms.append(unresolved)
+    return unary_union(geoms) if geoms else None
+
+
 def _stage_build_polygon(recipe, out_dir, artifacts, log):
     """``build.engine: oceanmesh-polygon`` (mesh_engine.polygon)."""
     import numpy as np
@@ -452,7 +501,11 @@ def _stage_build_polygon(recipe, out_dir, artifacts, log):
         clean_dj_cutoff=float(cfg.get("clean_dj_cutoff", 0.25)),
         max_dropped_component_km2=float(cfg.get("max_dropped_component_km2", 0.5)),
         keep_polygons=_protect_geometry(recipe, epsg),
-        expected_drop=_protect_geometry({"protect_polygons": cfg.get("expected_drop")}, epsg),
+        expected_drop=_expected_drop_geometry(recipe, cfg, water, obc, epsg, log),
+        # jsasaki 2026-11-16: review newregion r2 #4: the threshold and drop policy reach the engine
+        max_protected_ear_area_km2=cfg.get("max_protected_ear_area_km2"),
+        protected_drop_policy=str(cfg.get("protected_drop_policy", "fail")),
+        protected_drop_tol_m2=float(cfg.get("protected_drop_tol_m2", 1.0)),
         log=log)
     pts, cls = res["points"], res["cells"]
     mesh = Fort14Mesh(
@@ -472,7 +525,9 @@ def _stage_build_polygon(recipe, out_dir, artifacts, log):
     # jsasaki 2026-11-16: review newregion r1 #3: record the open-line coverage of the raw mesh
     return {"raw_mesh": str(raw14), "raw_mesh_crs": f"EPSG:{epsg}",
             "raw_open_cover": res["open_cover"],
-            "raw_protected_repair_m2": res["protected_repair_area_m2"]}
+            "raw_protected_repair_m2": res["protected_repair_area_m2"],
+            # jsasaki 2026-11-16: review newregion r2 #5: repair loss outside expected_drop
+            "raw_protected_repair_unexpected_m2": res["protected_repair_unexpected_m2"]}
 #<--- jsasaki 2026-11-16
 
 
@@ -702,8 +757,10 @@ def _stage_siteops(recipe, out_dir, artifacts, log):
     if min_edge:
         from fvcom_mesh_tools.site_session import collapse_short_edges
 
+        # jsasaki 2026-11-16: review newregion r2 #2: protected water guarded in the sweep
         mesh, n_short = collapse_short_edges(
-            mesh, lines, min_len=float(min_edge), log=log,
+            mesh, lines, min_len=float(min_edge),
+            protect_polygons=_protect_geometry(recipe, utm), log=log,
         )
     # jsasaki 2026-11-16: protected water for the final component step
     mesh, edit_log = apply_site_operators(
@@ -1169,11 +1226,14 @@ def _stage_figures(recipe, out_dir, artifacts, log):
         if not path or not Path(path).exists():
             continue
         mesh = read_fort14(Path(path))
-        # jsasaki 2026-11-16: a metric raw mesh is recognised by its recorded CRS too
-        if np.abs(mesh.nodes[:, 0]).max() > 1000.0 or (
-                key == "raw_mesh" and artifacts.get("raw_mesh_crs")):
+        # jsasaki 2026-11-16: review newregion r2 #7: the raw mesh is transformed FROM its recorded
+        # CRS and not at all when that is EPSG:4326; later meshes are in the recipe CRS when metric
+        src_crs = (artifacts.get("raw_mesh_crs") if key == "raw_mesh" else None) \
+            or (f"EPSG:{_recipe_epsg(recipe)}" if np.abs(mesh.nodes[:, 0]).max() > 1000.0
+                else "EPSG:4326")
+        if src_crs != "EPSG:4326":
             # jsasaki 2026-11-16: recipe CRS (was a literal EPSG:32654)
-            tr = Transformer.from_crs(f"EPSG:{_recipe_epsg(recipe)}", "EPSG:4326",
+            tr = Transformer.from_crs(src_crs, "EPSG:4326",
                                       always_xy=True)
             lon, lat = tr.transform(mesh.nodes[:, 0], mesh.nodes[:, 1])
             mesh.nodes = np.column_stack([lon, lat])

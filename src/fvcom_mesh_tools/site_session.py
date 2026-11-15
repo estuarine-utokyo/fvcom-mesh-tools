@@ -46,18 +46,72 @@ def _find_element(mesh: Fort14Mesh, triple: frozenset):
     return None
 
 
+#---> jsasaki 2026-11-16: review newregion r2 #2: protection BEFORE every destructive operator
+def _protected_boundary_nodes(mesh: Fort14Mesh, protect_polygons) -> set[int]:
+    """Mesh-boundary nodes of elements overlapping the protected water: a
+    collapse of an edge with BOTH ends on the boundary moves the boundary
+    (it can pinch a channel or cut its bank); equalize keeps boundary apexes
+    and split works on interior edges, so they cannot change the coverage."""
+    from fvcom_mesh_tools.finishing import protected_element_mask
+
+    if protect_polygons is None:
+        return set()
+    pe = protected_element_mask(mesh.nodes, mesh.elements, protect_polygons)
+    bnd = np.zeros(mesh.n_nodes, bool)
+    bnd[list(_boundary_node_ids(mesh))] = True
+    nodes = np.unique(mesh.elements[pe])
+    return set(nodes[bnd[nodes]].tolist())
+
+
+def _boundary_node_ids(mesh: Fort14Mesh) -> set[int]:
+    codes = _boundary_codes(mesh)
+    n = mesh.n_nodes
+    return {int(c // n) for c in codes} | {int(c % n) for c in codes}
+
+
+def _collapse_guarded(mesh, u, v, *, prot_bnd, **kw):
+    """:func:`collapse_edge` refused when both ends are boundary nodes and
+    one of them borders protected water."""
+    if prot_bnd and (u in prot_bnd or v in prot_bnd):
+        b = _boundary_node_ids(mesh)
+        if u in b and v in b:
+            return None
+    return collapse_edge(mesh, u, v, **kw)
+
+
+def _check_coverage(mesh, protect_polygons, before_m2, what, log):
+    """Fail when ``what`` lost protected water (tolerance 1 m2 + 1e-9 rel)."""
+    from fvcom_mesh_tools.finishing import protected_overlap_m2
+
+    after = protected_overlap_m2(mesh.nodes, mesh.elements, protect_polygons)
+    if after < before_m2 - (1.0 + 1e-9 * before_m2):
+        raise RuntimeError(f"{what} removed {before_m2 - after:.1f} m2 of protected water")
+    log(f"[siteops] protected coverage {before_m2:.0f} -> {after:.0f} m2 ({what})")
+#<--- jsasaki 2026-11-16
+
+
 def collapse_short_edges(
     mesh: Fort14Mesh,
     lines,
     *,
     min_len: float,
+    # jsasaki 2026-11-16: review newregion r2 #2: protected water
+    protect_polygons=None,
     log=print,
 ) -> tuple[Fort14Mesh, int]:
     """Single ascending sweep collapsing edges shorter than
     ``min_len`` (gated collapse_edge; OBC nodes protected). Sub-scale
     edges are a SOLVER hazard, not just a QA item: the v5 M2 test
-    went NaN in T/S with a 24 m minimum edge at hmin=300."""
+    went NaN in T/S with a 24 m minimum edge at hmin=300. With
+    ``protect_polygons`` a boundary-to-boundary collapse next to protected
+    water is refused, and a protected-coverage loss fails."""
     protected = [int(v) for s in mesh.open_boundaries for v in s]
+    # jsasaki 2026-11-16: review newregion r2 #2: protected boundary nodes and coverage before
+    prot_bnd = _protected_boundary_nodes(mesh, protect_polygons)
+    if protect_polygons is not None:
+        from fvcom_mesh_tools.finishing import protected_overlap_m2
+
+        cov0 = protected_overlap_m2(mesh.nodes, mesh.elements, protect_polygons)
     els = mesh.elements
     raw = np.vstack([els[:, [0, 1]], els[:, [1, 2]], els[:, [2, 0]]])
     raw.sort(axis=1)
@@ -75,12 +129,16 @@ def collapse_short_edges(
         d = float(np.linalg.norm(mesh.nodes[u] - mesh.nodes[v]))
         if d >= min_len:
             continue
-        res = collapse_edge(mesh, u, v, lines=lines,
-                            protected=protected, gate_metric=True)
+        # jsasaki 2026-11-16: review newregion r2 #2: guarded collapse
+        res = _collapse_guarded(mesh, u, v, prot_bnd=prot_bnd, lines=lines,
+                                protected=protected, gate_metric=True)
         if res is not None:
             mesh, _ = res
             n_done += 1
     log(f"[siteops] short-edge collapse (<{min_len:g} m): {n_done}")
+    # jsasaki 2026-11-16: review newregion r2 #2: the sweep may not lose protected water
+    if protect_polygons is not None:
+        _check_coverage(mesh, protect_polygons, cov0, "short-edge collapse", log)
     return mesh, n_done
 
 
@@ -103,6 +161,12 @@ def apply_site_operators(
     largest component is kept and the boundaries are reset (legacy)."""
     protected = [int(v) for s in mesh.open_boundaries for v in s]
     edit_log: list[dict[str, Any]] = []
+    # jsasaki 2026-11-16: review newregion r2 #2: protected boundary nodes and coverage before
+    prot_bnd = _protected_boundary_nodes(mesh, protect_polygons)
+    if protect_polygons is not None:
+        from fvcom_mesh_tools.finishing import protected_overlap_m2
+
+        cov0 = protected_overlap_m2(mesh.nodes, mesh.elements, protect_polygons)
 
     for pass_no in range(1, passes + 1):
         report = run_qa(mesh, name=f"siteops-p{pass_no}", path=None,
@@ -153,9 +217,10 @@ def apply_site_operators(
             if applied == "unresolved" and n_bedges >= 1:
                 for k in np.argsort(lens):
                     x, y = pairs[int(k)]
-                    res = collapse_edge(mesh, x, y, lines=lines,
-                                        protected=protected,
-                                        gate_metric=True)
+                    # jsasaki 2026-11-16: review newregion r2 #2: guarded collapse
+                    res = _collapse_guarded(mesh, x, y, prot_bnd=prot_bnd, lines=lines,
+                                            protected=protected,
+                                            gate_metric=True)
                     if res is not None:
                         mesh, inf = res
                         applied = "collapse"
@@ -208,9 +273,10 @@ def apply_site_operators(
                     edit_log.append({"pass": pass_no, "target": [u, v],
                                      "op": "split", **inf})
             if applied == "unresolved":
-                res = collapse_edge(mesh, u, v, lines=lines,
-                                    protected=protected,
-                                    gate_metric=True)
+                # jsasaki 2026-11-16: review newregion r2 #2: guarded collapse
+                res = _collapse_guarded(mesh, u, v, prot_bnd=prot_bnd, lines=lines,
+                                        protected=protected,
+                                        gate_metric=True)
                 if res is not None:
                     mesh, inf = res
                     applied = "collapse"
@@ -225,13 +291,14 @@ def apply_site_operators(
     if protect_polygons is not None:
         from fvcom_mesh_tools.finishing import (
             keep_components_protected,
-            protected_node_mask,
             rebuild_land_boundaries,
         )
 
-        # jsasaki 2026-11-16: review newregion r1 #1: boundary-inclusive protection
-        tag = protected_node_mask(mesh.nodes, protect_polygons)
-        mesh, kinfo, _ = keep_components_protected(mesh, tag, policy="fail", log=log)
+        # jsasaki 2026-11-16: review newregion r2 #1: element-overlap protection
+        mesh, kinfo, _ = keep_components_protected(
+            mesh, protect_polygons=protect_polygons, policy="fail", log=log)
+        # jsasaki 2026-11-16: review newregion r2 #2: the operators may not lose protected water
+        _check_coverage(mesh, protect_polygons, cov0, "site operators", log)
         mesh = rebuild_land_boundaries(mesh)
         if kinfo["dropped"]:
             edit_log.append({"op": "keep_components", "dropped": kinfo["dropped"]})
