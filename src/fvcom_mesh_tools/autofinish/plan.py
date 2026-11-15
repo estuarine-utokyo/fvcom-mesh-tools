@@ -114,9 +114,24 @@ def plan_patches(points, cells, detections, kring=2,
     return patches
 
 
+# jsasaki 2026-11-16: JSON encoder for numpy scalars in ledger records
+def _json_default(o):
+    import numpy as np
+
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.floating):
+        return float(o)
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    raise TypeError(f"{type(o).__name__} is not JSON serializable")
+
+
 def write_ledger(patches, out_path):
     out_path = Path(out_path)
     slim = [{k: v for k, v in q.items() if k != "elements"}
             for q in patches]
-    out_path.write_text(json.dumps(slim, indent=2))
+    # jsasaki 2026-11-16: numpy integers in a patch record crashed the finishing stage
+    # (TypeError: int64 is not JSON serializable, Tokyo v6 regression job 7590563)
+    out_path.write_text(json.dumps(slim, indent=2, default=_json_default))
     return out_path
