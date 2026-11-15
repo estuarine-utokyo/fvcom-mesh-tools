@@ -994,6 +994,11 @@ build:
   max_dropped_component_km2: 0.5   # a larger component without open boundary stops the build ...
   expected_drop:                   # ... unless most of it lies here (water known to be unconnected)
     - {path: domain.gpkg, layer: creek_unreached, buffer_m: 500}
+  expected_drop_unresolved_m: 150  # + water the open-boundary component does not reach at this width
+  # protected water (protect_polygons) may be dropped only inside expected_drop: a dropped component
+  # with more than max(protected_drop_tol_m2 [1], protected_drop_tol_frac [0.01] x its protected area)
+  # outside it fails (protected_drop_policy: report logs it); the boundary repair reports the protected
+  # water it deletes and fails above max_protected_ear_area_km2 (outside expected_drop; unset = report)
 finish: {optimize_budget_s: 900, freeze_obc_band: true}   # keep the build's perpendicular ladder
 obc: {trim: 1, max_move_m: 600, snap: false}   # snap: false when the build put the nodes on the line
 siteops: {min_edge_m: 50}
