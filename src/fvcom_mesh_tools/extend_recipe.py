@@ -178,4 +178,3 @@ def check_expected(recipe: dict[str, Any]) -> None:
         if want and want != recipe[key]:
             raise ValueError(f"{key.removesuffix('_sha256')} changed since the driver "
                              f"recorded it ({recipe[key][:12]} != {want[:12]})")
-

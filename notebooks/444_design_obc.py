@@ -354,8 +354,10 @@ try:
     if out_csv.with_name(out_csv.name + ".RECOVER").exists():
         raise SystemExit(f"{out_csv.name}.RECOVER: an earlier publication failed half-way; "
                          "restore from its .prev files and remove the marker first")
+    # jsasaki 2026-11-15: end the report with a newline, as the end-of-file pre-commit
+    # hook requires of the published recipes/extend/*_obc.json
     for path, payload in ((out_csv.with_suffix(".json"),
-                           json.dumps(report, indent=1, default=float)),
+                           json.dumps(report, indent=1, default=float) + "\n"),
                           (out_csv.with_suffix(".png"), fig),
                           (out_csv, csv_text)):
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")

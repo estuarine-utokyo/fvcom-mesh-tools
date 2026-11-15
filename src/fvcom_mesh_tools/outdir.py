@@ -71,4 +71,3 @@ def claim(path, owner=None) -> Path:
         raise SystemExit(f"{path} is reserved by another run")
     path.mkdir(parents=True, exist_ok=True)
     return path
-

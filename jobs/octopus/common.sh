@@ -25,4 +25,3 @@ fi
 # would otherwise name another place inside the case (review round 9 F14).
 export FVCOM_LIBS
 FVCOM_LIBS=$(realpath -m -- "${FVCOM_LIBS:-$(dirname "$DATA_DIR")/local/fvcom/libs/install-oneapi-2025.3.1}")
-

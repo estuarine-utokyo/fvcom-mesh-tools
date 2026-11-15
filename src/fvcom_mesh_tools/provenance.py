@@ -294,4 +294,3 @@ def changed_inventory(prov: dict[str, Any], files: dict[str, Any]) -> list[str]:
         if now != was:
             out.append(k)
     return out
-

@@ -8603,7 +8603,7 @@ Historical statuses below use the recorded triage, retained corrections and targ
    **Locations:** [445_extend_mesh.py:133](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/445_extend_mesh.py:133), [445_extend_mesh.py:168](/octfs/work/G16445/v61021/Github/fvcom-mesh-tools/notebooks/445_extend_mesh.py:168).
 
    **Reproduction:** Executing the actual reporting block with in-memory paths, zero stage exits and both report files present:
-   
+
    - `merge.json = {}` writes `status: "ok"`, sets `STATE["done"] = True`, then raises `KeyError: 'qa'`.
    - A merge report containing one failed QA gate and nonempty `problems` prints `QA 22/23` and `done`, retaining `status: "ok"`. Missing case products also go unnoticed.
 
@@ -8881,7 +8881,7 @@ Eight findings: **1 major and 7 minor**. No files were changed.
    **Location:** [445_extend_mesh.py:144](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/445_extend_mesh.py:144).
 
    **Reproduction:** Executing the actual `_acceptance_problem()` with in-memory paths and nonempty products returned `None` for each of these:
-   
+
    - `generate.json` containing `null` or `{}`, alongside a plausible merge report.
    - `n_gate_failed: 0.5`, which `int()` truncates to zero.
    - `n_nodes: -1` and `n_elements: 0`.
@@ -8946,7 +8946,7 @@ Eight findings: **1 major and 7 minor**. No files were changed.
    **Location:** [genkai/extend_check.sh:45](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/jobs/genkai/extend_check.sh:45).
 
    **Reproduction:** Executing the embedded substitution loop in memory:
-   
+
    - Paths beneath `/review/work # copy` parse as `/review/work`, silently discarding the remaining path.
    - Paths beneath `/review/work: copy` raise YAML `ScannerError`.
 
@@ -8961,7 +8961,7 @@ Eight findings: **1 major and 7 minor**. No files were changed.
    **Location:** [io/fort14.py:216](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/io/fort14.py:216).
 
    **Reproduction:** Executing `write_fort14` on one synthetic triangle with all filesystem operations mocked:
-   
+
    - A masked coordinate writes `nan`; `read_fort14` accepts that nonfinite coordinate.
    - A masked depth writes `--`; read-back fails.
    - Masked connectivity also writes `--`; read-back fails.
@@ -9235,7 +9235,7 @@ Ranges are inclusive and cover every historical numbered finding. Older statuses
    **Location:** [notebooks/445_extend_mesh.py:155](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/notebooks/445_extend_mesh.py:155), particularly the product checks at line 173.
 
    **Reproduction:** Executing the actual `_acceptance_problem()` against in-memory paths returned `None` with:
-   
+
    - `generate.json` containing `inputs: {}`, `settings: {}` and positive counts;
    - a plausible merge report with zero failed gates;
    - all three case products represented by one-byte files containing `x`.
@@ -9318,7 +9318,7 @@ Ranges are inclusive and cover every historical numbered finding. Older statuses
    **Location:** [src/fvcom_mesh_tools/dem/m7001.py:96](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/dem/m7001.py:96).
 
    **Reproduction:** Executing the actual `interpolate_m7001_tp()` with mocked grids:
-   
+
    - fine grid: `[[-10, -20], [-30, NaN]]`;
    - fallback grid: constant elevation `−100`;
    - query: the valid fine-grid node `(lon=0, lat=0)`.
