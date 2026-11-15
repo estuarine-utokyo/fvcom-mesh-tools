@@ -991,13 +991,16 @@ build:
     dm_scale: 1.2                  # DistMesh returns edges ~1.2x its field
   obc_ladder_k: 1.0                # inner guide line for perpendicular open-boundary edges
   clean_dj_cutoff: 0.0005          # OM2D clean: keep small pools (Keta Lagoon is ~9 % of the area)
-  max_dropped_component_km2: 0.5   # a larger component without open boundary stops the build
-finish: {optimize_budget_s: 900}
-obc: {trim: 1, max_move_m: 600}
+  max_dropped_component_km2: 0.5   # a larger component without open boundary stops the build ...
+  expected_drop:                   # ... unless most of it lies here (water known to be unconnected)
+    - {path: domain.gpkg, layer: creek_unreached, buffer_m: 500}
+finish: {optimize_budget_s: 900, freeze_obc_band: true}   # keep the build's perpendicular ladder
+obc: {trim: 1, max_move_m: 600, snap: false}   # snap: false when the build put the nodes on the line
 siteops: {min_edge_m: 50}
-polish: {max_valence: 8, remove_lone_nodes: true}
+polish: {max_valence: 8, remove_lone_nodes: true, freeze_obc_band: true}
 obcfinal: {}
-finishing: {auto: {}}
+finishing: {auto: {obc_lock: none,     # work patches near the open boundary too (perpendicularity-guarded)
+                   site_fallback: true}}  # one site-operator pass for what the patches left, kept only if better
 depths: {product: none}            # or external_dep_file (+ path) or m7001_production
 qa: {lang: en}
 ```

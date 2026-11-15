@@ -16,7 +16,9 @@ will only ship with a major bump (Semantic Versioning).
   `build.engine: oceanmesh-polygon` with `build.size` (raster in metres, background, sizing regions,
   floor, cap, gradation); top-level `protect_polygons`; `finish`/`polish` `max_valence`,
   `remove_lone_nodes`, `on_dropped_protected`; `depths` stage (`m7001_production`,
-  `external_dep_file`, `none`); `--section KEY`. User guide section 16.
+  `external_dep_file`, `none`); `--section KEY`; `build.expected_drop`; `finish`/`polish`
+  `freeze_obc_band`; `obc.snap`; `finishing.auto.obc_lock` / `obc_perp_max_deg` / `site_fallback`. User guide
+  section 16.
 - `mesh_engine/polygon.py`: projected polygon engine (ported from VR-FVCOM `build_mesh.py`).
 - `finishing`: `keep_components_protected`, `remove_elements_keep_boundaries`, `remove_lone_nodes`,
   `rebuild_land_boundaries`; cap deletion inside protected water removes ears only.

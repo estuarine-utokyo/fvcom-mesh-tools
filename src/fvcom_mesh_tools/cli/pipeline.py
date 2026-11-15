@@ -855,19 +855,86 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
             mesh.nodes, mesh.elements, patches, obc_nodes=obc,
             log=log,
         )
+    #---> jsasaki 2026-11-16: one bounded site-operator fallback for what the patches left
+    if cfg.get("site_fallback"):
+        mesh, fb = _finishing_site_fallback(recipe, mesh, artifacts, log)
+        ledger = list(ledger) + [fb]
+    #<--- jsasaki 2026-11-16
     write_ledger(list(dledger) + list(ledger or patches),
                  out_dir / "finishing_ledger.json")
     out14 = Path(artifacts.get("final_mesh")
                  or out_dir / f"{recipe['name']}_finishing.14")
     write_fort14(mesh, out14)
+    # jsasaki 2026-11-16: the site-fallback record is not a patch
     unfixed = [q for q in ledger
-               if "outcome" in q
+               if "outcome" in q and q.get("op") != "site_fallback"
                and not q["outcome"].startswith("fixed")]
     if unfixed:
         log(f"[finishing] {len(unfixed)} patches NOT fixed "
             "(see ledger)")
     return {"finishing_mesh": str(out14),
             "final_mesh": str(out14)}
+
+
+#---> jsasaki 2026-11-16: site-operator fallback of the finishing stage
+def _gate_violations(mesh) -> tuple[int, dict[str, int]]:
+    """Total offender count over the failed QA gates (metric coordinates,
+    no channel check) and the per-check counts."""
+    from fvcom_mesh_tools.qa import run_qa
+
+    rep = run_qa(mesh, coords="metric", channel_check=False, max_offenders=1)
+    bad = {c.check_id: int(c.n_violations) for c in rep.checks
+           if c.gate and not c.skipped and not c.passed}
+    return sum(bad.values()) + 1000 * sum(1 for k in bad if k not in _SITE_FALLBACK_GATES), bad
+
+
+# gates the fallback may trade against each other; any other gate newly failing
+# counts 1000 (the fallback is then refused)
+_SITE_FALLBACK_GATES = ("c1_min_angle", "c2_max_angle", "c4_area_change")
+
+
+def _finishing_site_fallback(recipe, mesh, artifacts, log):
+    """``finishing.auto.site_fallback``: when C1/C2/C4 offenders remain after
+    the patches, run ONE pass of the site operators (equalize / split /
+    collapse; open-boundary nodes protected), then one more detect -> plan ->
+    execute round, and keep the result only if the failed-gate offender count
+    drops and no other gate starts failing. Single shot, no loop."""
+    import copy
+
+    from fvcom_mesh_tools.algorithms.boundary_snap import load_polylines
+    from fvcom_mesh_tools.autofinish import (
+        detect_violations,
+        execute_patches,
+        plan_patches,
+    )
+    from fvcom_mesh_tools.mesh_clean import compact_nodes
+    from fvcom_mesh_tools.site_session import apply_site_operators
+
+    s0, bad0 = _gate_violations(mesh)
+    if not any(k in bad0 for k in _SITE_FALLBACK_GATES):
+        return mesh, {"op": "site_fallback", "outcome": "not needed", "before": bad0}
+    utm = _recipe_epsg(recipe)
+    lines = load_polylines(_shoreline(recipe, artifacts), to_crs=utm)
+    trial = copy.deepcopy(mesh)
+    trial, elog = apply_site_operators(trial, lines, passes=1,
+                                       protect_polygons=_protect_geometry(recipe, utm),
+                                       log=log)
+    trial, _ = compact_nodes(trial)
+    obc = [int(v) for b in trial.open_boundaries for v in b]
+    det = detect_violations(trial.nodes, trial.elements)
+    pts = plan_patches(trial.nodes, trial.elements, det, obc_nodes=None)
+    if pts:
+        trial.nodes, _led = execute_patches(trial.nodes, trial.elements, pts,
+                                            obc_nodes=obc, log=lambda *a: None)
+    s1, bad1 = _gate_violations(trial)
+    ok = s1 < s0
+    log(f"[finishing] site fallback: {bad0} -> {bad1} "
+        f"({'kept' if ok else 'refused'})")
+    rec = {"op": "site_fallback", "outcome": "kept" if ok else "refused",
+           "before": bad0, "after": bad1,
+           "ops": sorted({r.get("op") for r in elog if isinstance(r, dict)})}
+    return (trial if ok else mesh), rec
+#<--- jsasaki 2026-11-16
 
 
 def _stage_obcfinal(recipe, out_dir, artifacts, log):

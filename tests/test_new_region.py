@@ -398,3 +398,12 @@ def test_obc_perpendicularity_and_obc_lock_key(tmp_path):
     out = pl._stage_finishing({"name": "x", "finishing": {"auto": {"obc_lock": "none"}}},
                               tmp_path, {"final_mesh": str(f14)}, lambda *a: None)
     assert np.allclose(read_fort14(out["final_mesh"]).nodes, P)  # clean lattice: no patch
+
+
+def test_site_fallback_not_needed_on_clean_mesh():
+    P, T = _lattice(5, 4)
+    m = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    out, rec = pl._finishing_site_fallback({"crs": EPSG}, m, {}, lambda *a: None)
+    assert out is m and rec["outcome"] == "not needed"
+    score, bad = pl._gate_violations(m)
+    assert not any(k in bad for k in pl._SITE_FALLBACK_GATES)
