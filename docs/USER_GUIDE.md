@@ -949,3 +949,72 @@ The tool's own guards make this safe to iterate:
 
 Keep the human decisions with the human: accepting a mesh, choosing
 thresholds, and pushing to the shared repository.
+
+## 16. New region
+
+`fmesh-pipeline` builds and finishes a mesh for a region other than Tokyo Bay from one recipe. Nothing in
+the generic path assumes Tokyo Bay: the CRS, the water polygons, the domain, the size field and the depth
+product are recipe parameters. The Tokyo recipes (`recipes/tokyo_bay_v6*.yaml`) keep working unchanged
+and give the same fort.14 as before (regression of 2026-11-16, every stage md5-identical).
+
+Two ways to define the domain:
+
+* **prep** (OSM land, as Tokyo Bay): `prep.bbox`, `prep.obc_line`, and `prep.water_shp`, a list of
+  the region's inland-water polygon files (for example the Geofabrik Ghana and Togo
+  `gis_osm_water_a_free_1.shp`; several files are merged). Without `water_shp` the Kanto file under
+  `$DATA_DIR` is used.
+* **domain** (the region supplies its own polygon): `domain.water` is the water polygon to mesh
+  (`{path, layer}`, any CRS, e.g. a GeoPackage layer) and `domain.obc_line` the open-boundary line
+  (`{path, layer}` of one line, a `lon,lat` csv, or a list of `[lon, lat]`). Its boundary is the
+  shoreline the finishing stages slide boundary nodes along.
+
+```yaml
+name: vr_v3
+out_dir: scratch/mesh/v3/pipeline
+crs: EPSG:32631                    # projected CRS of every stage (else finish.utm_epsg, else the
+                                   # UTM zone of prep.bbox / of the domain; never a Tokyo default)
+domain:
+  water: {path: domain.gpkg, layer: water}
+  obc_line: {path: domain.gpkg, layer: obc}
+protect_polygons:                  # water no stage may cut off (channels, lagoons, corridors)
+  - {path: domain.gpkg, layer: inland_channel}
+  - {path: domain.gpkg, layer: creek_corridors, buffer_m: 0}
+build:
+  engine: oceanmesh-polygon        # mesh the domain polygon in metres (mesh_engine/polygon.py)
+  size:
+    raster: size_utm.tif           # target edge length in metres, same CRS (optional)
+    background_m: 300              # where there is no raster / instead of it
+    regions_file: recipes/sizing/x.yaml   # and/or `regions:` in the sizing schema (sizing_regions.md)
+    hmin_m: 50
+    max_m: 4000
+    gradation: 0.15                # |grad h| limit (limgrad)
+    dm_scale: 1.2                  # DistMesh returns edges ~1.2x its field
+  obc_ladder_k: 1.0                # inner guide line for perpendicular open-boundary edges
+  clean_dj_cutoff: 0.0005          # OM2D clean: keep small pools (Keta Lagoon is ~9 % of the area)
+  max_dropped_component_km2: 0.5   # a larger component without open boundary stops the build
+finish: {optimize_budget_s: 900}
+obc: {trim: 1, max_move_m: 600}
+siteops: {min_edge_m: 50}
+polish: {max_valence: 8, remove_lone_nodes: true}
+obcfinal: {}
+finishing: {auto: {}}
+depths: {product: none}            # or external_dep_file (+ path) or m7001_production
+qa: {lang: en}
+```
+
+What protects narrow water: inside `protect_polygons` the finish/polish cap deletion removes only ears
+(elements with at most one neighbour), so a two-element-wide corridor is never cut; every component step
+(finish, polish, siteops, obc aftercare) keeps the components touching the open boundary and stops when one
+holding protected water would be dropped (`on_dropped_protected: report` logs it instead). The polygon
+engine stops too when a generator component inside the protected water would be dropped. A recipe with an
+open-boundary line and a finish/siteops/polish stage must also have `obc` and/or `obcfinal`, which rebuild
+the open boundary from the line.
+
+A region repository can keep this block inside its own recipe and run
+`fmesh-pipeline recipe.yaml --section pipeline` (VR-FVCOM `recipes/mesh/v3.yaml`). Paths may use
+`${DATA_DIR}`; an unset variable fails.
+
+Depth products (`depths.product`): `none` keeps the depths the mesh carries (a placeholder of the polygon
+engine, `build.placeholder_depth_m`); `external_dep_file` reads an FVCOM `_dep.dat` or a fort.14 whose nodes
+must be this mesh's nodes in order (`match_tol_m`, default 0.01 m); `m7001_production` is the Tokyo Bay
+M7001 recipe. The notebook base chain (`recipes/base`, notebook 440) still knows only `m7001_production`.

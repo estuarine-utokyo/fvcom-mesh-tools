@@ -8,6 +8,30 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Added -- new regions from one recipe (2026-11-16)
+
+- `fmesh-pipeline`: top-level `crs` threaded to every stage (legacy `finish.utm_epsg`, else the UTM
+  zone of `prep.bbox` / the domain; the literal 32654 of the prep tripwire and the figures is gone);
+  `prep.water_shp` (list of region water files); `domain` stage (`water` polygon + `obc_line`);
+  `build.engine: oceanmesh-polygon` with `build.size` (raster in metres, background, sizing regions,
+  floor, cap, gradation); top-level `protect_polygons`; `finish`/`polish` `max_valence`,
+  `remove_lone_nodes`, `on_dropped_protected`; `depths` stage (`m7001_production`,
+  `external_dep_file`, `none`); `--section KEY`. User guide section 16.
+- `mesh_engine/polygon.py`: projected polygon engine (ported from VR-FVCOM `build_mesh.py`).
+- `finishing`: `keep_components_protected`, `remove_elements_keep_boundaries`, `remove_lone_nodes`,
+  `rebuild_land_boundaries`; cap deletion inside protected water removes ears only.
+- `prep.shoreline.merge_water_files`; `fmesh-prep-shoreline --water-shp`.
+
+### Changed -- no silent Tokyo CRS (2026-11-16)
+
+- `finish_constrained_mesh`, `assign_west_south_obc`, `apply_directives` require `utm_epsg`;
+  `run_qa` requires it with `land_solid_shp`; `fmesh-plot-mesh` warns before assuming EPSG:32654.
+
+### Fixed (2026-11-16)
+
+- `autofinish.write_ledger` crashed on numpy integers, so the pipeline's `finishing` stage died
+  after executing its patches (Tokyo v6, job 7590563).
+
 ### Added -- GENKAI site layer (2026-10-04)
 
 - `jobs/common_core.sh`: the machine-independent job set-up (logging, conda,
