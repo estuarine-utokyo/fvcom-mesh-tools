@@ -20,9 +20,11 @@ engine meshes exactly that polygon, in metres, in the recipe CRS:
    there is no open boundary); a dropped component larger than
    ``max_dropped_component_km2`` stops the build instead of vanishing, unless
    most of it lies in ``expected_drop`` (water the region already knows is
-   not connected); every component is reported (``in_keep``: it holds water
-   of ``keep_polygons``). Small pools a mesh of this size cannot connect are
-   dropped; a region checks the coverage of its water bodies afterwards;
+   not connected). A dropped component of any size may not take protected
+   water (``keep_polygons``) outside ``expected_drop``: more than
+   max(``protected_drop_tol_m2``, ``protected_drop_tol_frac`` x its protected
+   area) fails (``protected_drop_policy: report`` logs it). Every component
+   is reported with its protected area;
 5. boundary repair until stable: single-element nodes off the open boundary
    (ears), FVCOM ``{1,2,1}`` elements, zero-area boundary slivers, and R4
    corners at the open-string ends (the end moves one node inward).
@@ -238,6 +240,9 @@ def generate_polygon_mesh(
     # jsasaki 2026-11-16: review newregion r2 #3: dropped protected water outside expected_drop
     protected_drop_policy: str = "fail",
     protected_drop_tol_m2: float = 1.0,
+    # jsasaki 2026-11-16: review newregion r2 #3: relative part of the tolerance (VR v3 job 7591568:
+    # a 4-element fragment in a neck with 20 m2 of its protected water just outside expected_drop)
+    protected_drop_tol_frac: float = 0.01,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
     """Mesh the shapely (Multi)Polygon ``water`` (CRS metres).
@@ -246,7 +251,10 @@ def generate_polygon_mesh(
     ``h / dm_scale`` (DistMesh returns edges ~``dm_scale`` x its field).
     ``obc_line`` (shapely LineString on the domain boundary, same CRS) gives
     the open boundary; without it the mesh has land boundaries only.
-    ``keep_polygons`` (shapely geometry) is reported per component;
+    ``keep_polygons`` (shapely geometry): protected water; a dropped
+    component may not take it outside ``expected_drop`` (see 4. above), and
+    the boundary repair reports what it deletes of it (and fails above
+    ``max_protected_ear_area_km2`` outside ``expected_drop``);
     ``expected_drop`` (shapely geometry): a large component lying mostly
     inside it is an expected drop (logged), not a failure.
 
@@ -393,7 +401,8 @@ def generate_polygon_mesh(
 
     def check_protected(rows_, keep_c_, stage):
         bad = [r for r in rows_ if r["comp"] not in keep_c_
-               and r["protected_unexpected_m2"] > protected_drop_tol_m2]
+               and r["protected_unexpected_m2"] > max(
+                   protected_drop_tol_m2, protected_drop_tol_frac * r["protected_m2"])]
         if not bad:
             return
         msg = (f"{stage}: {len(bad)} component(s) without open boundary hold protected water "

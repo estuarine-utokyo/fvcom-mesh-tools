@@ -506,6 +506,7 @@ def _stage_build_polygon(recipe, out_dir, artifacts, log):
         max_protected_ear_area_km2=cfg.get("max_protected_ear_area_km2"),
         protected_drop_policy=str(cfg.get("protected_drop_policy", "fail")),
         protected_drop_tol_m2=float(cfg.get("protected_drop_tol_m2", 1.0)),
+        protected_drop_tol_frac=float(cfg.get("protected_drop_tol_frac", 0.01)),
         log=log)
     pts, cls = res["points"], res["cells"]
     mesh = Fort14Mesh(
