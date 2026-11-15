@@ -1022,6 +1022,14 @@ outline; in VR v3 that is 0.29 km2 of 375 km2 per finish run, so a recipe that w
 there must say so with an explicit tolerance (VR v3: 400,000 m2 in finish/polish, 1,500 m2 per
 autofinish patch; with 0 m2 its QA stays at 20/23).
 
+Open-boundary checks of a region recipe (polygon build with a supplied line; review newregion
+round 4): the obc and obcfinal stages compare the open string with the wet extent of the supplied
+line (the part of it on the domain water outline): each end within `obc.end_tol_m` (default 250 m),
+every open node within `obc.max_move_m` of the line, and no retreat from the coverage an earlier OBC
+stage reached; the record is kept as the `open_cover` artifact (persisted, so `--only` runs check
+too). siteops of a region recipe keeps and validates the open boundary; the OBC aftercare refuses to
+delete protected water and the whole OBC assignment may not lose any (`obc.protected_loss_tol_m2`).
+
 What protects narrow water: inside `protect_polygons` the finish/polish cap deletion removes only ears
 (elements with at most one neighbour), so a two-element-wide corridor is never cut; every component step
 (finish, polish, siteops, obc aftercare) keeps the components touching the open boundary and stops when one

@@ -348,7 +348,6 @@ def validate_open_boundary(before: Fort14Mesh, after: Fort14Mesh, *,
     raw = np.sort(np.vstack([els[:, [0, 1]], els[:, [1, 2]], els[:, [2, 0]]]), axis=1)
     code = raw[:, 0].astype(np.int64) * after.n_nodes + raw[:, 1]
     u, c = np.unique(code, return_counts=True)
-    bnd = set(u[c == 1].tolist())
     # jsasaki 2026-11-16: review newregion r3 #2: a coincident (< 1 mm) repeat in the string is one
     # node (a weld of an exact duplicate repairs the string, it does not shorten it)
     def _dedup(nodes, seg):
@@ -381,8 +380,18 @@ def validate_open_boundary(before: Fort14Mesh, after: Fort14Mesh, *,
                                  f"(max {off.max():.3f} m)")
                 elif (np.diff(pos) <= 0).any():
                     probs.append(f"string {k}: node order changed")
-        ee = np.sort(np.column_stack([a[:-1], a[1:]]), axis=1)
-        nb = sum(int(x) * after.n_nodes + int(y) not in bnd for x, y in ee)
+        # jsasaki 2026-11-16: review newregion r4 #4: coincident (< 1 mm) nodes count as one node
+        # (the OBC assignment can leave such a pair; VR job 7592472): edges between their classes
+        from scipy.spatial import cKDTree
+
+        rep_ = np.arange(after.n_nodes)
+        for i, j in cKDTree(after.nodes).query_pairs(1e-3):
+            rep_[max(i, j)] = rep_[min(i, j)]
+        bu = np.sort(rep_[np.column_stack([u[c == 1] // after.n_nodes,
+                                           u[c == 1] % after.n_nodes])], axis=1)
+        bset = {(int(x), int(y)) for x, y in bu}
+        ee = np.sort(rep_[np.column_stack([a[:-1], a[1:]])], axis=1)
+        nb = sum((int(x), int(y)) not in bset for x, y in ee)
         if nb:
             probs.append(f"string {k}: {nb} consecutive pair(s) not on a boundary edge")
     return probs

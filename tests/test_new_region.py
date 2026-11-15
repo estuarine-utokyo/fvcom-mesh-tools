@@ -1158,3 +1158,16 @@ def test_r4_4_region_siteops_keeps_the_open_boundary(tmp_path):
     m2 = read_fort14(out["siteops_mesh"])
     assert len(m2.open_boundaries) == 1
     assert np.allclose(m2.nodes[m2.open_boundaries[0]], P[[0, 1, 2, 3, 4]])
+
+
+def test_r4_4_validation_accepts_a_coincident_open_boundary_pair():
+    """The OBC assignment can leave two coincident open-boundary nodes; the
+    string validation treats them as one node (VR job 7592472)."""
+    from fvcom_mesh_tools.finishing import validate_open_boundary
+
+    P, T = _rect_lattice(3, 3, 100.0, 100.0)
+    P = np.vstack([P, P[[1]]])                          # node 9 coincides with node 1
+    T = T.copy()
+    T[0] = [0, 9, 3]
+    m = _mesh(P, T, opens=[[0, 9, 1, 2]])
+    assert validate_open_boundary(m, m, same_positions=True) == []
