@@ -88,6 +88,7 @@ def finish_constrained_mesh(
     max_valence: int | None = None,
     valence_min_angle_deg: float = 0.0,
     remove_lone: bool = False,
+    freeze_obc_band: bool = False,
     #<--- jsasaki 2026-11-16
     log: Callable[[str], None] = print,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
@@ -107,8 +108,13 @@ def finish_constrained_mesh(
     (element removal keeps it; the components touching it are kept).
     ``max_valence`` adds a valence-reducing edge-swap pass after the
     optimizer; ``remove_lone`` deletes the elements of single-element
-    nodes off the open boundary (an FVCOM QA gate). With none of these
-    and no open boundary the function is the PoC #93 sequence unchanged.
+    nodes off the open boundary (an FVCOM QA gate). ``freeze_obc_band``
+    restores, after the optimizer, the open-boundary nodes and their
+    neighbours to their positions before it where that flips nothing and
+    worsens no angle below 30 deg (the optimizer otherwise undoes a
+    perpendicular open-boundary ladder: VR v3 job 7590960, 26 nodes over
+    20 deg). With none of these and no open boundary the function is the
+    PoC #93 sequence unchanged.
     """
     import geopandas as gpd
 
@@ -171,6 +177,8 @@ def finish_constrained_mesh(
         max_snap_distance_m=projector_snap_m / _DEG_PER_M,
         mean_latitude_deg=0.0,
     )
+    # jsasaki 2026-11-16: tag nodes so the open-boundary band can be restored
+    band_state = _tag_obc_band(mesh) if freeze_obc_band else None
     mesh, oinfo = phase_h_optimize(
         mesh,
         min_angle_target=min_angle,
@@ -183,6 +191,9 @@ def finish_constrained_mesh(
         time_budget_s=optimize_budget_s,
     )
     mesh, cinfo = compact_nodes(mesh)
+    # jsasaki 2026-11-16: restore the open-boundary band moved by the optimizer
+    if band_state is not None:
+        mesh, info["obc_band"] = _restore_obc_band(mesh, band_state, log=log)
     info["optimize"] = {
         "budget_exhausted": bool(oinfo.get("budget_exhausted")),
         "compact": cinfo,
@@ -211,9 +222,69 @@ def finish_constrained_mesh(
     return mesh, info
 
 
+#---> jsasaki 2026-11-16: new-region helpers (channel protection, boundary bookkeeping,
+# open-boundary band restore)
 # ---------------------------------------------------------------------------
 # Channel protection and boundary bookkeeping (2026-11-16, new region support)
 # ---------------------------------------------------------------------------
+
+
+def _tag_obc_band(mesh: Fort14Mesh):
+    """Replace the depths by random node tags (carried through the optimizer:
+    kept per node, averaged for split nodes) and record the open-boundary
+    band (open nodes and their element neighbours) before the optimizer."""
+    rng = np.random.default_rng(20261116)
+    tags = 10.0 + rng.random(mesh.n_nodes)
+    obc = np.zeros(mesh.n_nodes, bool)
+    for s in mesh.open_boundaries:
+        obc[np.asarray(s, int)] = True
+    band = np.zeros(mesh.n_nodes, bool)
+    band[np.unique(mesh.elements[obc[mesh.elements].any(axis=1)])] = True
+    state = {"tags": tags, "depths": mesh.depths.copy(), "xy": mesh.nodes.copy(),
+             "band": band}
+    mesh.depths = tags.copy()
+    return state
+
+
+def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
+                      log: Callable[[str], None] = print):
+    """Undo :func:`_tag_obc_band`: depths back (new nodes take the depth of
+    the nearest original node) and band nodes back to their positions where
+    no incident element flips and the incident minimum angle stays >= the
+    smaller of its current value and ``min_angle``."""
+    from scipy.spatial import cKDTree
+
+    idx = {float(t): i for i, t in enumerate(state["tags"])}
+    orig = np.array([idx.get(float(t), -1) for t in mesh.depths], int)
+    known = orig >= 0
+    dep = np.empty(mesh.n_nodes)
+    dep[known] = state["depths"][orig[known]]
+    if (~known).any():
+        _d, j = cKDTree(state["xy"]).query(mesh.nodes[~known])
+        dep[~known] = state["depths"][j]
+    mesh.depths = dep
+    n2e: dict[int, list[int]] = {}
+    for e, tri in enumerate(mesh.elements):
+        for v in tri:
+            n2e.setdefault(int(v), []).append(e)
+    restored = refused = 0
+    for v in np.nonzero(known)[0]:
+        o = orig[v]
+        if not state["band"][o] or np.array_equal(mesh.nodes[v], state["xy"][o]):
+            continue
+        els = mesh.elements[n2e.get(int(v), [])]
+        mn0, _mx0, _tw0 = _tri_quality(mesh.nodes[els])
+        old = mesh.nodes[v].copy()
+        mesh.nodes[v] = state["xy"][o]
+        mn1, _mx1, tw1 = _tri_quality(mesh.nodes[els])
+        if (tw1 <= 0).any() or mn1.min() < min(mn0.min(), min_angle):
+            mesh.nodes[v] = old
+            refused += 1
+        else:
+            restored += 1
+    info = {"restored": restored, "refused": refused}
+    log(f"[finish] open-boundary band restored: {info}")
+    return mesh, info
 
 
 def _protected_node_mask(mesh: Fort14Mesh, protect_polygons):
@@ -398,3 +469,4 @@ def rebuild_land_boundaries(mesh: Fort14Mesh, *, land_ibtype: int = 20,
     return Fort14Mesh(title=mesh.title, obc_type=mesh.obc_type, nodes=mesh.nodes,
                       depths=mesh.depths, elements=mesh.elements,
                       open_boundaries=mesh.open_boundaries, land_boundaries=land)
+#<--- jsasaki 2026-11-16

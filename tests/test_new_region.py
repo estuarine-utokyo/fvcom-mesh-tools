@@ -290,7 +290,10 @@ def test_finish_keeps_open_boundary_and_protected_channel(tmp_path):
     gpd.GeoDataFrame(geometry=rings, crs=EPSG).to_crs(4326).to_file(shp)
     out, info = finish_constrained_mesh(m, shp, tmp_path / "w", utm_epsg=EPSG,
                                         optimize_budget_s=20.0, protect_polygons=chan,
-                                        max_valence=8, remove_lone=True, log=lambda *a: None)
+                                        max_valence=8, remove_lone=True, freeze_obc_band=True,
+                                        log=lambda *a: None)
+    assert set(info["obc_band"]) == {"restored", "refused"}
+    assert np.isfinite(out.depths).all() and np.allclose(out.depths, 5.0)  # tags undone
     assert len(out.open_boundaries) == 1 and len(out.open_boundaries[0]) >= 3
     assert np.bincount(out.elements.ravel()).max() <= 8
     cen = out.nodes[out.elements].mean(axis=1)

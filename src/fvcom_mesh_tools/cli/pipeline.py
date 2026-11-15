@@ -604,6 +604,7 @@ def _stage_finish(recipe, out_dir, artifacts, log):
         max_valence=cfg.get("max_valence"),
         valence_min_angle_deg=float(cfg.get("valence_min_angle_deg", 0.0)),
         remove_lone=bool(cfg.get("remove_lone_nodes", False)),
+        freeze_obc_band=bool(cfg.get("freeze_obc_band", False)),
         #<--- jsasaki 2026-11-16
         log=log,
     )
@@ -652,6 +653,8 @@ def _stage_obc(recipe, out_dir, artifacts, log):
         max_move_m=float(cfg.get("max_move_m", 600.0)),
         min_depth_m=cfg.get("min_depth_m"),
         obc_line_lonlat=_obc_line_from(recipe, out_dir),
+        # jsasaki 2026-11-16: snap off when the build put the nodes on the line already
+        snap=bool(cfg.get("snap", True)),
         log=log,
     )
     out14 = out_dir / f"{recipe['name']}_obc.14"
@@ -763,6 +766,7 @@ def _stage_polish(recipe, out_dir, artifacts, log):
         max_valence=cfg.get("max_valence"),
         valence_min_angle_deg=float(cfg.get("valence_min_angle_deg", 0.0)),
         remove_lone=bool(cfg.get("remove_lone_nodes", False)),
+        freeze_obc_band=bool(cfg.get("freeze_obc_band", False)),
         #<--- jsasaki 2026-11-16
         log=log,
     )

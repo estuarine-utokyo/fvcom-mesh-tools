@@ -212,6 +212,7 @@ def generate_polygon_mesh(
     max_dropped_component_km2: float = 0.5,
     keep_polygons=None,
     expected_drop=None,
+    end_trim_nodes: int = 6,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
     """Mesh the shapely (Multi)Polygon ``water`` (CRS metres).
@@ -452,22 +453,38 @@ def generate_polygon_mesh(
         else:
             has_open = np.zeros(len(t), bool)
         fake = (sm == 4) & ~has_open
-        r4 = sm > 4
+        # sum(ISONB) > 4 WITHOUT an open edge (two non-consecutive open nodes and a
+        # boundary node): deleting it cannot break the open string (VR v3 job 7590918)
+        fake |= (sm > 4) & ~has_open
+        r4 = (sm > 4) & has_open
         flat = (np.abs(_tri_area(p, t)) < 1.0) & np.isin(code, bcode).any(axis=1)
         ear |= flat
         if not (ear.any() or fake.any() or r4.any()):
             break
         if r4.any():
-            bn = set(t[r4].ravel().tolist())
-            if open_str[0] in bn:
-                ends[0] = int(open_str[1])
+            # an R4 element near an end (land closing in on the line within
+            # ``end_trim_nodes`` nodes, VR v3 job 7590924): the open string ends
+            # beyond it, the trimmed nodes become land
+            pos = {int(v): i for i, v in enumerate(open_str)}
+            nlast = len(open_str) - 1
+            i0, i1 = 0, nlast
+            for el in np.nonzero(r4)[0]:
+                ip = [pos[int(v)] for v in t[el] if int(v) in pos]
+                if max(ip) < end_trim_nodes:
+                    i0 = max(i0, max(ip) + 1)
+                elif min(ip) > nlast - end_trim_nodes:
+                    i1 = min(i1, min(ip) - 1)
+            moved = (i0, i1) != (0, nlast)
+            if moved:
+                if i1 - i0 < 2:
+                    raise RuntimeError("open string trimmed to nothing at the R4 ends")
+                ends = [int(open_str[i0]), int(open_str[i1])]
                 n_trim += 1
-            if open_str[-1] in bn:
-                ends[1] = int(open_str[-2])
-                n_trim += 1
+            bn = set(t[r4].ravel().tolist()) if not moved else {int(open_str[0])}
             if not ({open_str[0], open_str[-1]} & bn):
-                raise RuntimeError("R4 violation away from the open-boundary ends: "
-                                   f"{np.nonzero(r4)[0][:5].tolist()}")
+                where = p[t[r4]].mean(axis=1)[:5] + [x0, y0]
+                raise RuntimeError("R4 violation away from the open-boundary ends at "
+                                   + "; ".join(f"({a:.0f}, {b:.0f})" for a, b in where))
         n_ears += int(ear.sum())
         n_fake += int((fake & ~ear).sum())
         t = t[~(ear | fake)]
