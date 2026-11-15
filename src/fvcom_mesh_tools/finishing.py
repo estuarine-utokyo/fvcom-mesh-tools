@@ -93,6 +93,8 @@ def finish_constrained_mesh(
     valence_min_angle_deg: float = 0.0,
     remove_lone: bool = False,
     freeze_obc_band: bool = False,
+    # jsasaki 2026-11-16: review newregion r3 #2: protected-water loss allowed per guarded step
+    protected_loss_tol_m2: float = 0.0,
     #<--- jsasaki 2026-11-16
     log: Callable[[str], None] = print,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
@@ -131,6 +133,8 @@ def finish_constrained_mesh(
     #---> jsasaki 2026-11-16: guarded path when an OBC or protected polygons are present
     has_obc = any(len(s) for s in mesh.open_boundaries)
     guarded = has_obc or protect_polygons is not None
+    # jsasaki 2026-11-16: review newregion r3 #2: the input, for the invariants checked at the end
+    mesh_in = _snapshot(mesh) if guarded else None
     #<--- jsasaki 2026-11-16
     # 1. cap-triangle deletion (bounded rounds, monotone).
     removed = 0
@@ -166,7 +170,20 @@ def finish_constrained_mesh(
     log(f"[finish] caps removed: {removed} quality={quality_counts(mesh)}")
 
     # 2. weld.
-    mesh, winfo = weld_close_nodes(mesh, tol=weld_tol_m)
+    #---> jsasaki 2026-11-16: review newregion r3 #2: guarded weld: open-boundary nodes are never
+    # welded, and a weld that loses protected water is refused
+    if guarded:
+        obc_ids = [int(v) for s_ in mesh.open_boundaries for v in s_]
+        pre = _snapshot(mesh)
+        mesh, winfo = weld_close_nodes(mesh, tol=weld_tol_m, exclude=obc_ids)
+        if protect_polygons is not None and winfo.get("n_welded"):
+            lost = protected_loss_m2(pre, mesh, protect_polygons)
+            if lost > protected_loss_tol_m2:
+                mesh = pre
+                winfo = {"n_welded": 0, "refused_loss_m2": lost}
+    else:
+        mesh, winfo = weld_close_nodes(mesh, tol=weld_tol_m)
+    #<--- jsasaki 2026-11-16
     info["weld"] = winfo
     log(f"[finish] weld: {winfo}")
 
@@ -183,7 +200,11 @@ def finish_constrained_mesh(
         mean_latitude_deg=0.0,
     )
     # jsasaki 2026-11-16: tag nodes so the open-boundary band can be restored
-    band_state = _tag_obc_band(mesh) if freeze_obc_band else None
+    # jsasaki 2026-11-16: review newregion r3 #2: also with protected water (its bank nodes are
+    # restored when the optimizer loses protected water)
+    pre_opt = _snapshot(mesh) if guarded else None     # before the depth tags
+    band_state = (_tag_obc_band(mesh) if freeze_obc_band or protect_polygons is not None
+                  else None)
     mesh, oinfo = phase_h_optimize(
         mesh,
         min_angle_target=min_angle,
@@ -198,7 +219,17 @@ def finish_constrained_mesh(
     mesh, cinfo = compact_nodes(mesh)
     # jsasaki 2026-11-16: restore the open-boundary band moved by the optimizer
     if band_state is not None:
+        if not freeze_obc_band:
+            band_state["band"][:] = False     # review newregion r3 #2: only the depth tags
         mesh, info["obc_band"] = _restore_obc_band(mesh, band_state, log=log)
+    #---> jsasaki 2026-11-16: review newregion r3 #2: the optimizer may not lose protected water
+    # or break the open boundary: bank nodes go back where it lost water; if that is not enough,
+    # the whole optimizer round is refused
+    if guarded:
+        mesh, info["optimizer_guard"] = _guard_optimizer(
+            pre_opt, mesh, band_state, protect_polygons, protected_loss_tol_m2,
+            freeze_obc_band, log)
+    #<--- jsasaki 2026-11-16
     info["optimize"] = {
         "budget_exhausted": bool(oinfo.get("budget_exhausted")),
         "compact": cinfo,
@@ -223,6 +254,17 @@ def finish_constrained_mesh(
     if guarded or remove_lone:
         mesh = rebuild_land_boundaries(mesh)
     #<--- jsasaki 2026-11-16
+    #---> jsasaki 2026-11-16: review newregion r3 #2: invariants before returning
+    if guarded:
+        bad = validate_open_boundary(mesh_in, mesh, same_positions=freeze_obc_band)
+        if bad:
+            raise RuntimeError(f"finish broke the open boundary: {bad}")
+        if protect_polygons is not None:
+            lost = protected_loss_m2(mesh_in, mesh, protect_polygons)
+            info["protected_loss_m2"] = lost
+            log(f"[finish] protected water lost: {lost:.1f} m2 (tolerance "
+                f"{protected_loss_tol_m2:g} m2 per step)")
+    #<--- jsasaki 2026-11-16
     info["output"] = quality_counts(mesh)
     log(f"[finish] done NP={mesh.n_nodes:,} quality={info['output']}")
     return mesh, info
@@ -233,6 +275,132 @@ def finish_constrained_mesh(
 # ---------------------------------------------------------------------------
 # Channel protection and boundary bookkeeping (2026-11-16, new region support)
 # ---------------------------------------------------------------------------
+
+
+#---> jsasaki 2026-11-16: review newregion r3 #2/#3/#4: invariants shared by finish, siteops and
+# the finishing stage
+def _snapshot(mesh: Fort14Mesh) -> Fort14Mesh:
+    return Fort14Mesh(title=mesh.title, obc_type=mesh.obc_type, nodes=mesh.nodes.copy(),
+                      depths=mesh.depths.copy(), elements=mesh.elements.copy(),
+                      open_boundaries=[np.asarray(s).copy() for s in mesh.open_boundaries],
+                      land_boundaries=[(ib, np.asarray(s).copy())
+                                       for ib, s in mesh.land_boundaries])
+
+
+def _tri_keys(nodes, elements) -> list:
+    pts = np.round(np.asarray(nodes, float)[np.asarray(elements, np.int64)], 6)
+    return [tuple(sorted(map(tuple, t))) for t in pts]
+
+
+# jsasaki 2026-11-16: review newregion r3 #3: numerical floor of the geometric loss (unions of
+# coinciding triangles leave slivers of ~1e-6 m2); NOT a tolerance
+LOSS_EPS_M2 = 1e-3
+
+
+def protected_loss_m2(before: Fort14Mesh, after: Fort14Mesh, protect_polygons) -> float:
+    """Protected water covered by ``before`` and not by ``after`` (m2): the
+    geometric loss, NOT netted against water gained elsewhere. Only the
+    triangles that differ between the two meshes are compared (identical
+    triangles cover the same water)."""
+    import shapely
+
+    kb = _tri_keys(before.nodes, before.elements)
+    ka = _tri_keys(after.nodes, after.elements)
+    sa, sb = set(ka), set(kb)
+    rm = np.array([k not in sa for k in kb])
+    add = np.array([k not in sb for k in ka])
+    if not rm.any():
+        return 0.0
+    pieces, tree = _protect_tiles(protect_polygons)
+    t_rm = shapely.polygons(before.nodes[before.elements[rm]])
+    hit = np.unique(tree.query(t_rm, predicate="intersects")[0])
+    if not hit.size:
+        return 0.0
+    gone = shapely.intersection(shapely.union_all(t_rm[hit]), protect_polygons)
+    if add.any():
+        t_add = shapely.polygons(after.nodes[after.elements[add]])
+        gone = shapely.difference(gone, shapely.union_all(t_add))
+    a = float(shapely.area(gone))
+    return 0.0 if a <= LOSS_EPS_M2 else a
+
+
+def validate_open_boundary(before: Fort14Mesh, after: Fort14Mesh, *,
+                           same_positions: bool = True) -> list[str]:
+    """Problems with the open boundary of ``after`` relative to ``before``:
+    lost strings, changed node count or order (identity by position when
+    ``same_positions``), consecutive nodes not joined by a boundary edge."""
+    probs: list[str] = []
+    ob = [np.asarray(s, np.int64) for s in before.open_boundaries if len(s)]
+    oa = [np.asarray(s, np.int64) for s in after.open_boundaries if len(s)]
+    if len(ob) != len(oa):
+        return [f"{len(ob)} open string(s) before, {len(oa)} after"]
+    els = after.elements
+    raw = np.sort(np.vstack([els[:, [0, 1]], els[:, [1, 2]], els[:, [2, 0]]]), axis=1)
+    code = raw[:, 0].astype(np.int64) * after.n_nodes + raw[:, 1]
+    u, c = np.unique(code, return_counts=True)
+    bnd = set(u[c == 1].tolist())
+    for k, (b, a) in enumerate(zip(ob, oa)):
+        if len(a) != len(b):
+            probs.append(f"string {k}: {len(b)} nodes before, {len(a)} after")
+            continue
+        if same_positions and not np.allclose(before.nodes[b], after.nodes[a], atol=1e-6):
+            probs.append(f"string {k}: node positions or order changed")
+        ee = np.sort(np.column_stack([a[:-1], a[1:]]), axis=1)
+        nb = sum(int(x) * after.n_nodes + int(y) not in bnd for x, y in ee)
+        if nb:
+            probs.append(f"string {k}: {nb} consecutive pair(s) not on a boundary edge")
+    return probs
+
+
+def _guard_optimizer(pre, mesh, band_state, protect_polygons, tol, freeze_obc_band, log):
+    """After the optimizer: where protected water was lost, the mesh-boundary
+    nodes of protected elements go back to their pre-optimizer positions
+    (flip-free moves only); a loss still above ``tol``, or a broken open
+    boundary, refuses the whole optimizer round (the pre-optimizer mesh)."""
+    info: dict[str, Any] = {}
+    if protect_polygons is not None:
+        lost = protected_loss_m2(pre, mesh, protect_polygons)
+        info["loss_m2"] = lost
+        orig = None if band_state is None else band_state.get("orig_of")
+        if lost > tol and orig is not None:
+            pe = protected_element_mask(mesh.nodes, mesh.elements, protect_polygons)
+            raw = np.sort(np.vstack([mesh.elements[:, [0, 1]], mesh.elements[:, [1, 2]],
+                                     mesh.elements[:, [2, 0]]]), axis=1)
+            u, c = np.unique(raw, axis=0, return_counts=True)
+            bnd = np.zeros(mesh.n_nodes, bool)
+            bnd[u[c == 1].ravel()] = True
+            cand = np.unique(mesh.elements[pe])
+            cand = cand[bnd[cand]]
+            n2e: dict[int, list[int]] = {}
+            for e, tri in enumerate(mesh.elements):
+                for v in tri:
+                    n2e.setdefault(int(v), []).append(e)
+            moved = 0
+            for v in cand:
+                o = int(orig[v])
+                if o < 0 or np.array_equal(mesh.nodes[v], pre.nodes[o]):
+                    continue
+                old = mesh.nodes[v].copy()
+                mesh.nodes[v] = pre.nodes[o]
+                _mn, _mx, tw = _tri_quality(mesh.nodes[mesh.elements[n2e.get(int(v), [])]])
+                if (tw <= 0).any():
+                    mesh.nodes[v] = old
+                else:
+                    moved += 1
+            lost = protected_loss_m2(pre, mesh, protect_polygons)
+            info.update(bank_nodes_restored=moved, loss_after_restore_m2=lost)
+        if lost > tol:
+            log(f"[finish] optimizer refused: it lost {lost:.1f} m2 of protected water")
+            info["refused"] = True
+            return pre, info
+    bad = validate_open_boundary(pre, mesh, same_positions=freeze_obc_band)
+    if bad:
+        log(f"[finish] optimizer refused: open boundary {bad}")
+        info.update(refused=True, obc=bad)
+        return pre, info
+    log(f"[finish] optimizer guard: {info}")
+    return mesh, info
+#<--- jsasaki 2026-11-16
 
 
 def obc_perpendicularity(mesh: Fort14Mesh) -> np.ndarray:
@@ -297,6 +465,8 @@ def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
     idx = {float(t): i for i, t in enumerate(state["tags"])}
     orig = np.array([idx.get(float(t), -1) for t in mesh.depths], int)
     known = orig >= 0
+    # jsasaki 2026-11-16: review newregion r3 #2: node -> pre-optimizer node, for the bank restore
+    state["orig_of"] = orig
     dep = np.empty(mesh.n_nodes)
     dep[known] = state["depths"][orig[known]]
     if (~known).any():
@@ -465,8 +635,8 @@ def _element_neighbour_count(elements: np.ndarray) -> np.ndarray:
 def _cap_deletion_allowed(mesh: Fort14Mesh, prot_elem) -> np.ndarray:
     """Per element: may a cap triangle be deleted here?
 
-    Never when it holds two or more open-boundary nodes (it would break
-    the open string). Never inside protected water: deleting a bridge can
+    Never when it holds an open-boundary node (it could break the open
+    string). Never inside protected water: deleting a bridge can
     disconnect the element graph (the two-element-wide channel corridor that
     VR v2 lost), and deleting ears round after round eats a channel from its
     end (review newregion r1 #2); the optimizer fixes the angles there.
@@ -475,7 +645,9 @@ def _cap_deletion_allowed(mesh: Fort14Mesh, prot_elem) -> np.ndarray:
     if any(len(s) for s in mesh.open_boundaries):
         obc = np.zeros(mesh.n_nodes, bool)
         obc[np.concatenate([np.asarray(s, int) for s in mesh.open_boundaries])] = True
-        ok &= obc[mesh.elements].sum(axis=1) < 2
+        # jsasaki 2026-11-16: review newregion r3 #2: no element with an open-boundary node (its
+        # deletion could take the node out of the string; finish validates the string at the end)
+        ok &= ~obc[mesh.elements].any(axis=1)
     if prot_elem is not None:
         # jsasaki 2026-11-16: review newregion r1 #2: no cap deletion at all in protected water
         # jsasaki 2026-11-16: review newregion r2 #1: per element (overlap), not per vertex

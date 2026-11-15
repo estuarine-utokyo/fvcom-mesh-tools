@@ -359,8 +359,11 @@ def generate_polygon_mesh(
     p, t = om.generate_mesh(fd, fh, **kw)
     log(f"[polygon] generated NP={len(p)} NE={len(t)}")
 
-    def comp_rows(stage, p, t, keep_c=None):
+    # jsasaki 2026-11-16: review newregion r3 #1: the retained components are decided FIRST
+    # (anchor_components); every other component is measured
+    def comp_rows(stage, p, t):
         ncomp, lab = _face_components(t)
+        keep_c = anchor_components(p, t, lab)
         ar = np.abs(_tri_area(p, t))
         cen = p[t].mean(axis=1)
         rows = []
@@ -374,7 +377,9 @@ def generate_polygon_mesh(
             # (largest) is skipped: it is the one kept
             expected = False
             prot_m2 = prot_out_m2 = 0.0
-            if sel.sum() < len(t) // 2:
+            # jsasaki 2026-11-16: review newregion r3 #1: measure every component not retained (the
+            # largest one need not be the retained one)
+            if c not in keep_c:
                 tris = shapely.polygons(p[t[sel]])
                 if exp_l is not None:
                     a_in = shapely.area(shapely.intersection(tris, exp_l)).sum()
@@ -390,8 +395,8 @@ def generate_polygon_mesh(
                              x=float(cxy[0]), y=float(cxy[1]), in_keep=prot_m2 > 0,
                              protected_m2=prot_m2, protected_unexpected_m2=prot_out_m2,
                              expected_drop=expected,
-                             kept=None if keep_c is None else bool(c in keep_c)))
-        return ncomp, lab, rows
+                             kept=bool(c in keep_c)))
+        return ncomp, lab, rows, keep_c
 
     # jsasaki 2026-11-16: review newregion r2 #3: a dropped component may not take protected water
     # outside expected_drop, whatever its size (policy "report" logs it instead)
@@ -420,8 +425,8 @@ def generate_polygon_mesh(
         on_arc = cKDTree(p).query(arc)[1]
         return set(lab[np.isin(t, on_arc).any(axis=1)].tolist())
 
-    _n, lab, rows = comp_rows("pre-clean", p, t)
-    keep_c = anchor_components(p, t, lab)
+    # jsasaki 2026-11-16: review newregion r3 #1: comp_rows returns the retained set
+    _n, lab, rows, keep_c = comp_rows("pre-clean", p, t)
     for r in rows:
         if r["comp"] not in keep_c and r["expected_drop"] \
                 and r["area_km2"] > max_dropped_component_km2:
@@ -444,8 +449,7 @@ def generate_polygon_mesh(
     else:
         p, t = om2d_default_clean(p, t, dj_cutoff=float(clean_dj_cutoff))
     log(f"[polygon] after OM2D default clean NP={len(p)} NE={len(t)}")
-    _n, lab, rows2 = comp_rows("post-clean", p, t)
-    keep_c = anchor_components(p, t, lab)
+    _n, lab, rows2, keep_c = comp_rows("post-clean", p, t)
     for r in rows2:
         r["kept"] = r["comp"] in keep_c
     # jsasaki 2026-11-16: review newregion r2 #3: protected-water check after the clean

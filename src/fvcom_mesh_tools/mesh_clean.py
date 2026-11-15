@@ -208,10 +208,13 @@ def compact_nodes(mesh: Fort14Mesh) -> tuple[Fort14Mesh, dict[str, Any]]:
 
 def weld_close_nodes(
     mesh: Fort14Mesh, tol: float,
+    # jsasaki 2026-11-16: review newregion r3 #2: nodes that may not be welded (e.g. the OBC)
+    exclude=None,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Merge node pairs closer than ``tol`` (coordinate units) into the
     lower-indexed node, drop the degenerate elements this creates, and
-    remap the boundary lists (consecutive repeats removed).
+    remap the boundary lists (consecutive repeats removed). Pairs with a
+    node in ``exclude`` are left alone.
 
     Needed after aggressive boundary snapping: neighbouring nodes can
     land on the same polyline point, which FVCOM never detects but the
@@ -220,6 +223,10 @@ def weld_close_nodes(
     from scipy.spatial import cKDTree
 
     pairs = sorted(cKDTree(mesh.nodes).query_pairs(r=float(tol)))
+    # jsasaki 2026-11-16: review newregion r3 #2: excluded nodes are never welded
+    if exclude is not None:
+        ex = {int(v) for v in exclude}
+        pairs = [(i, j) for i, j in pairs if i not in ex and j not in ex]
     if not pairs:
         return mesh, {"n_welded": 0, "n_elements_dropped": 0}
 

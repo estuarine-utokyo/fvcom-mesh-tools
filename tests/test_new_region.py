@@ -846,3 +846,132 @@ def test_r2_8_prep_receives_a_legacy_crs_override(tmp_path, monkeypatch):
                     "finish": {"utm_epsg": 32654}}, tmp_path, lambda *a: None)
     i = seen[0].index("--utm-epsg")
     assert seen[0][i + 1] == "32630" and "--utm-epsg" not in seen[1]
+
+
+# ------------------------------------------- review newregion r3 (regressions)
+def test_r3_1_finely_meshed_protected_pond_is_measured():
+    """#1: a separate protected pond holding MOST of the elements is still a
+    dropped component; it fails instead of vanishing (no OBC reaches it)."""
+    from pyproj import Transformer
+    from shapely.geometry import LineString, box
+
+    from fvcom_mesh_tools.mesh_engine.polygon import build_size_field, generate_polygon_mesh
+
+    sea = box(X0, Y0, X0 + 3000, Y0 + 1333.33)
+    obc = LineString([(X0, Y0), (X0 + 3000, Y0)])
+    pond = box(X0 + 4000, Y0, X0 + 4600, Y0 + 600)
+    w = sea.union(pond)
+    inv = Transformer.from_crs(f"EPSG:{EPSG}", "EPSG:4326", always_xy=True)
+    lo0, la0 = inv.transform(*pond.buffer(100).bounds[:2])
+    lo1, la1 = inv.transform(*pond.buffer(100).bounds[2:])
+    reg = [{"name": "pond", "geometry": {"bbox": [lo0, la0, lo1, la1]}, "target_h_m": 60.0}]
+    sz = build_size_field(w, crs_epsg=EPSG, background_m=333.0, raster_m=20.0, regions=reg,
+                          log=lambda *a: None)
+    with pytest.raises(RuntimeError, match="protected water"):
+        generate_polygon_mesh(w, sz, obc_line=obc, max_iter=30, ladder_k=1.0,
+                              clean_dj_cutoff=0.0005, keep_polygons=pond,
+                              log=lambda *a: None)
+
+
+def _fan_mesh():
+    P = np.array([[0.0, 0.0], [1.0, -1.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0],
+                  [50.0, 50.0]])
+    T = np.array([[0, 1, 5], [1, 2, 5], [2, 3, 5], [3, 4, 5], [4, 0, 5]])
+    return P, T
+
+
+def test_r3_2_weld_keeps_open_boundary_and_protected_water(tmp_path, monkeypatch):
+    """#2: the 2 m weld may not merge an open-boundary node or take protected
+    water; the reviewed code welded (1,-1) into (0,0)."""
+    import geopandas as gpd
+    from shapely.geometry import LineString, Polygon
+
+    import fvcom_mesh_tools.finishing as fin
+
+    P, T = _fan_mesh()
+    poly = Polygon(P[:5])
+    monkeypatch.setattr(fin, "build_coastline_projector", lambda *a, **k: None)
+    shp = tmp_path / "s.shp"
+    gpd.GeoDataFrame(geometry=[LineString(list(poly.exterior.coords))], crs=EPSG
+                     ).to_crs(4326).to_file(shp)
+    m = _mesh(P, T, opens=[[1, 2]])
+    out, info = fin.finish_constrained_mesh(m, shp, tmp_path / "w", utm_epsg=EPSG,
+                                            optimize_budget_s=5.0, protect_polygons=poly,
+                                            freeze_obc_band=True, log=lambda *a: None)
+    assert np.allclose(out.nodes[out.open_boundaries[0]], [[1.0, -1.0], [100.0, 0.0]])
+    assert fin.protected_overlap_m2(out.nodes, out.elements, poly) == pytest.approx(poly.area)
+
+
+def test_r3_3_patches_cannot_lose_protected_water(monkeypatch):
+    """#3: a patch that moves a protected bank node inward is reverted, even
+    when it gains water elsewhere (geometric loss, not netted)."""
+    from shapely.geometry import box
+
+    import fvcom_mesh_tools.autofinish as af
+
+    P, T = _rect_lattice(4, 4, 100.0, 100.0)
+    m = _mesh(P, T, opens=[[12, 13, 14, 15]])
+    water = box(0, 0, 300, 300)
+
+    def fake_execute(nodes, cells, patches, obc_nodes=None, log=print, **k):
+        n2 = np.asarray(nodes, float).copy()
+        n2[1] = (100.0, 20.0)      # bank node pulled in: protected water lost ...
+        n2[7] = (320.0, 100.0)     # ... while the east bank gains water
+        return n2, [{"id": 0, "outcome": "fixed [test]"}]
+
+    monkeypatch.setattr(af, "execute_patches", fake_execute)
+    out, led = pl._execute_patches_guarded(m, [{"id": 0}], [12, 13, 14, 15], 20.0,
+                                           lambda *a: None, protect=water, tol_m2=0.0)
+    assert np.allclose(out.nodes, P) and led[0]["outcome"].startswith("reverted")
+
+
+def _r3_lattice():
+    P, T = _rect_lattice(5, 5, 100.0, 100.0)
+    T = [list(t) for t in T]
+    T[0], T[1] = [0, 1, 6], [0, 6, 5]
+    T[-2], T[-1] = [18, 19, 24], [18, 24, 23]
+    return P + [X0, Y0], np.asarray(T, np.int64)
+
+
+def _fallback_setup(tmp_path, protect):
+    import geopandas as gpd
+    from shapely.geometry import LineString, box
+
+    rect = box(X0, Y0, X0 + 400, Y0 + 400)
+    shp = tmp_path / "shore.shp"
+    gpd.GeoDataFrame(geometry=[LineString(list(rect.exterior.coords))], crs=EPSG
+                     ).to_crs(4326).to_file(shp)
+    rec = {"crs": EPSG, "finishing": {"auto": {"obc_perp_max_deg": 10.0}}}
+    if protect:
+        gp = tmp_path / "p.gpkg"
+        gpd.GeoDataFrame(geometry=[rect], crs=EPSG).to_file(gp)
+        rec["protect_polygons"] = [{"path": str(gp)}]
+    return rec, {"domain_shoreline": str(shp)}
+
+
+def test_r3_4_fallback_keeps_the_open_boundary(tmp_path):
+    """#4: without protection the fallback may not return a mesh without its
+    open boundary (the reviewed code returned open_boundaries == [])."""
+    P, T = _r3_lattice()
+    P[8] = (X0 + 343.126008, Y0 + 41.208301)
+    P[7] = (X0 + 214.748498, Y0 + 22.858384)
+    m = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    rec, art = _fallback_setup(tmp_path, protect=False)
+    out, info = pl._finishing_site_fallback(rec, m, art, lambda *a: None)
+    assert len(out.open_boundaries) == 1
+    assert np.allclose(out.nodes[out.open_boundaries[0]], P[[0, 1, 2, 3, 4]])
+
+
+def test_r3_5_fallback_respects_the_configured_perpendicularity(tmp_path):
+    """#5: the whole fallback is held to obc_perp_max_deg (10 deg here), per
+    node against the original deviations (all 0 deg)."""
+    from fvcom_mesh_tools.finishing import obc_perpendicularity
+
+    P, T = _r3_lattice()
+    P[17] = (X0 + 232.394916693, Y0 + 262.252995411)
+    P[11] = (X0 + 79.252582251, Y0 + 161.262146908)
+    m = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    assert np.allclose(obc_perpendicularity(m), 0.0)
+    rec, art = _fallback_setup(tmp_path, protect=True)
+    out, info = pl._finishing_site_fallback(rec, m, art, lambda *a: None)
+    assert obc_perpendicularity(out).max() <= 10.0 + 1e-9

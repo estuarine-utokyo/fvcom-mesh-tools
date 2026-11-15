@@ -79,14 +79,17 @@ def _collapse_guarded(mesh, u, v, *, prot_bnd, **kw):
     return collapse_edge(mesh, u, v, **kw)
 
 
-def _check_coverage(mesh, protect_polygons, before_m2, what, log):
-    """Fail when ``what`` lost protected water (tolerance 1 m2 + 1e-9 rel)."""
-    from fvcom_mesh_tools.finishing import protected_overlap_m2
+def _check_coverage(mesh, protect_polygons, before, what, log, tol_m2: float = 0.0):
+    """Fail when ``what`` lost protected water: the GEOMETRIC loss against the
+    mesh ``before`` (review newregion r3 #3: a netted total let water gained
+    elsewhere hide erosion)."""
+    from fvcom_mesh_tools.finishing import protected_loss_m2
 
-    after = protected_overlap_m2(mesh.nodes, mesh.elements, protect_polygons)
-    if after < before_m2 - (1.0 + 1e-9 * before_m2):
-        raise RuntimeError(f"{what} removed {before_m2 - after:.1f} m2 of protected water")
-    log(f"[siteops] protected coverage {before_m2:.0f} -> {after:.0f} m2 ({what})")
+    # jsasaki 2026-11-16: review newregion r3 #3: geometric loss, no netting
+    lost = protected_loss_m2(before, mesh, protect_polygons)
+    if lost > tol_m2:
+        raise RuntimeError(f"{what} removed {lost:.1f} m2 of protected water")
+    log(f"[siteops] protected water lost: {lost:.1f} m2 ({what})")
 #<--- jsasaki 2026-11-16
 
 
@@ -109,9 +112,9 @@ def collapse_short_edges(
     # jsasaki 2026-11-16: review newregion r2 #2: protected boundary nodes and coverage before
     prot_bnd = _protected_boundary_nodes(mesh, protect_polygons)
     if protect_polygons is not None:
-        from fvcom_mesh_tools.finishing import protected_overlap_m2
+        from fvcom_mesh_tools.finishing import _snapshot
 
-        cov0 = protected_overlap_m2(mesh.nodes, mesh.elements, protect_polygons)
+        cov0 = _snapshot(mesh)  # jsasaki 2026-11-16: review newregion r3 #3: the mesh, not a total
     els = mesh.elements
     raw = np.vstack([els[:, [0, 1]], els[:, [1, 2]], els[:, [2, 0]]])
     raw.sort(axis=1)
@@ -149,6 +152,8 @@ def apply_site_operators(
     passes: int = 2,
     # jsasaki 2026-11-16: protected water (shapely, mesh coords) for the final component step
     protect_polygons=None,
+    # jsasaki 2026-11-16: review newregion r3 #4: keep the open boundary without protection too
+    keep_open_boundary: bool = False,
     log=print,
 ) -> tuple[Fort14Mesh, list[dict[str, Any]]]:
     """Run ``passes`` worst-first operator passes. ``lines`` are the
@@ -164,9 +169,9 @@ def apply_site_operators(
     # jsasaki 2026-11-16: review newregion r2 #2: protected boundary nodes and coverage before
     prot_bnd = _protected_boundary_nodes(mesh, protect_polygons)
     if protect_polygons is not None:
-        from fvcom_mesh_tools.finishing import protected_overlap_m2
+        from fvcom_mesh_tools.finishing import _snapshot
 
-        cov0 = protected_overlap_m2(mesh.nodes, mesh.elements, protect_polygons)
+        cov0 = _snapshot(mesh)  # jsasaki 2026-11-16: review newregion r3 #3: the mesh, not a total
 
     for pass_no in range(1, passes + 1):
         report = run_qa(mesh, name=f"siteops-p{pass_no}", path=None,
@@ -288,7 +293,8 @@ def apply_site_operators(
                                      "area_change":
                                          float(o["area_change"])})
     #---> jsasaki 2026-11-16: protected component step (new regions); legacy path unchanged
-    if protect_polygons is not None:
+    # jsasaki 2026-11-16: review newregion r3 #4: also when only the open boundary must survive
+    if protect_polygons is not None or keep_open_boundary:
         from fvcom_mesh_tools.finishing import (
             keep_components_protected,
             rebuild_land_boundaries,
@@ -298,7 +304,8 @@ def apply_site_operators(
         mesh, kinfo, _ = keep_components_protected(
             mesh, protect_polygons=protect_polygons, policy="fail", log=log)
         # jsasaki 2026-11-16: review newregion r2 #2: the operators may not lose protected water
-        _check_coverage(mesh, protect_polygons, cov0, "site operators", log)
+        if protect_polygons is not None:
+            _check_coverage(mesh, protect_polygons, cov0, "site operators", log)
         mesh = rebuild_land_boundaries(mesh)
         if kinfo["dropped"]:
             edit_log.append({"op": "keep_components", "dropped": kinfo["dropped"]})

@@ -681,6 +681,8 @@ def _stage_finish(recipe, out_dir, artifacts, log):
         valence_min_angle_deg=float(cfg.get("valence_min_angle_deg", 0.0)),
         remove_lone=bool(cfg.get("remove_lone_nodes", False)),
         freeze_obc_band=bool(cfg.get("freeze_obc_band", False)),
+        # jsasaki 2026-11-16: review newregion r3 #2: protected-loss tolerance (default 0 m2)
+        protected_loss_tol_m2=float(cfg.get("protected_loss_tol_m2", 0.0)),
         #<--- jsasaki 2026-11-16
         log=log,
     )
@@ -845,6 +847,8 @@ def _stage_polish(recipe, out_dir, artifacts, log):
         valence_min_angle_deg=float(cfg.get("valence_min_angle_deg", 0.0)),
         remove_lone=bool(cfg.get("remove_lone_nodes", False)),
         freeze_obc_band=bool(cfg.get("freeze_obc_band", False)),
+        # jsasaki 2026-11-16: review newregion r3 #2: protected-loss tolerance (default 0 m2)
+        protected_loss_tol_m2=float(cfg.get("protected_loss_tol_m2", 0.0)),
         #<--- jsasaki 2026-11-16
         log=log,
     )
@@ -889,6 +893,9 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
                                          utm_epsg=utm, log=log)
     obc = [int(v) for b in mesh.open_boundaries for v in b]
     det = detect_violations(mesh.nodes, mesh.elements)
+    # jsasaki 2026-11-16: review newregion r3 #3: the mesh before the stage, for its water balance
+    from fvcom_mesh_tools.finishing import _snapshot
+    stage_in = _snapshot(mesh)
     #---> jsasaki 2026-11-16: obc_lock "none": patches near the open boundary are
     # worked too (open-boundary nodes never move); a patch that pushes an open-boundary
     # node over obc_perp_max_deg (or a violating one further) is reverted
@@ -903,10 +910,14 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
     )
     log(f"[finishing] {len(patches)} patches planned")
     ledger = []
-    if patches and obc_lock == "none":
+    # jsasaki 2026-11-16: review newregion r3 #3: with protected water every patch is guarded
+    protect = _protect_geometry(recipe, _recipe_epsg(recipe)) \
+        if recipe.get("protect_polygons") else None
+    if patches and (obc_lock == "none" or protect is not None):
         # jsasaki 2026-11-16: review newregion r1 #7: shared with the site fallback
         mesh, ledger = _execute_patches_guarded(
-            mesh, patches, obc, float(cfg.get("obc_perp_max_deg", 20.0)), log)
+            mesh, patches, obc, float(cfg.get("obc_perp_max_deg", 20.0)), log,
+            protect=protect, tol_m2=float(cfg.get("protected_loss_tol_m2", 0.0)))
     elif patches:
     #<--- jsasaki 2026-11-16
         mesh.nodes, ledger = execute_patches(
@@ -918,6 +929,16 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
         mesh, fb = _finishing_site_fallback(recipe, mesh, artifacts, log)
         ledger = list(ledger) + [fb]
     #<--- jsasaki 2026-11-16
+    #---> jsasaki 2026-11-16: review newregion r3 #3: protected water lost / gained by the stage
+    if protect is not None:
+        from fvcom_mesh_tools.finishing import protected_loss_m2
+
+        lost = protected_loss_m2(stage_in, mesh, protect)
+        gained = protected_loss_m2(mesh, stage_in, protect)
+        log(f"[finishing] protected water: {lost:.1f} m2 lost, {gained:.1f} m2 gained")
+        ledger = list(ledger) + [{"op": "protected_water", "outcome": "measured",
+                                  "lost_m2": lost, "gained_m2": gained}]
+    #<--- jsasaki 2026-11-16
     write_ledger(list(dledger) + list(ledger or patches),
                  out_dir / "finishing_ledger.json")
     out14 = Path(artifacts.get("final_mesh")
@@ -925,7 +946,7 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
     write_fort14(mesh, out14)
     # jsasaki 2026-11-16: the site-fallback record is not a patch
     unfixed = [q for q in ledger
-               if "outcome" in q and q.get("op") != "site_fallback"
+               if "outcome" in q and q.get("op") not in ("site_fallback", "protected_water")
                and not q["outcome"].startswith("fixed")]
     if unfixed:
         log(f"[finishing] {len(unfixed)} patches NOT fixed "
@@ -936,30 +957,39 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
 
 #---> jsasaki 2026-11-16: site-operator fallback of the finishing stage
 # jsasaki 2026-11-16: review newregion r1 #7: guarded patch execution, shared with the fallback
-def _execute_patches_guarded(mesh, patches, obc, pmax, log):
+# jsasaki 2026-11-16: review newregion r3 #3: protected water guarded per patch as well
+def _execute_patches_guarded(mesh, patches, obc, pmax, log, protect=None, tol_m2=0.0):
     """Execute autofinish patches one at a time; a patch that pushes an
-    open-boundary node over ``pmax`` deg (or a violating one further) is
-    reverted. Returns ``(mesh, ledger)``."""
+    open-boundary node over ``pmax`` deg (or a violating one further), or
+    that loses protected water (``protect``; geometric loss over ``tol_m2``,
+    not netted against gains), is reverted. Returns ``(mesh, ledger)``."""
     import numpy as np
 
     from fvcom_mesh_tools.autofinish import execute_patches
-    from fvcom_mesh_tools.finishing import obc_perpendicularity
+    from fvcom_mesh_tools.finishing import _snapshot, obc_perpendicularity, protected_loss_m2
 
     ledger = []
     dev0 = obc_perpendicularity(mesh)
     for q in patches:
         nodes_try, led = execute_patches(mesh.nodes, mesh.elements, [q], obc_nodes=obc,
                                          log=log)
+        before = _snapshot(mesh) if protect is not None else None
         keep_nodes = mesh.nodes
         mesh.nodes = nodes_try
         dev1 = obc_perpendicularity(mesh)
+        why = None
         if (dev1 > np.maximum(dev0, pmax) + 1e-9).any():
+            why = f"open-boundary perpendicularity over {pmax:g} deg"
+        elif protect is not None:
+            lost = protected_loss_m2(before, mesh, protect)
+            if lost > tol_m2:
+                why = f"{lost:.1f} m2 of protected water lost"
+        if why:
             mesh.nodes = keep_nodes
             for r in led:
                 if "outcome" in r and r["outcome"].startswith("fixed"):
-                    r["outcome"] = "reverted (open-boundary perpendicularity)"
-            log(f"[finishing] patch {q.get('id')} reverted: open-boundary "
-                f"perpendicularity over {pmax:g} deg")
+                    r["outcome"] = f"reverted ({why})"
+            log(f"[finishing] patch {q.get('id')} reverted: {why}")
         else:
             dev0 = dev1
         ledger.extend(led)
@@ -1005,9 +1035,25 @@ def _finishing_site_fallback(recipe, mesh, artifacts, log):
         return mesh, {"op": "site_fallback", "outcome": "not needed", "before": bad0}
     utm = _recipe_epsg(recipe)
     lines = load_polylines(_shoreline(recipe, artifacts), to_crs=utm)
+    #---> jsasaki 2026-11-16: review newregion r3 #3/#4/#5: references taken BEFORE any edit
+    from fvcom_mesh_tools.finishing import (
+        _snapshot,
+        obc_perpendicularity,
+        protected_loss_m2,
+        validate_open_boundary,
+    )
+
+    acfg = (recipe.get("finishing") or {}).get("auto", {}) or {}
+    pmax = float(acfg.get("obc_perp_max_deg", 20.0))
+    tol = float(acfg.get("protected_loss_tol_m2", 0.0))
+    protect = _protect_geometry(recipe, utm)
+    ref = _snapshot(mesh)
+    dev_ref = obc_perpendicularity(mesh)
+    #<--- jsasaki 2026-11-16
     trial = copy.deepcopy(mesh)
+    # jsasaki 2026-11-16: review newregion r3 #4: the open boundary survives without protection too
     trial, elog = apply_site_operators(trial, lines, passes=1,
-                                       protect_polygons=_protect_geometry(recipe, utm),
+                                       protect_polygons=protect, keep_open_boundary=True,
                                        log=log)
     trial, _ = compact_nodes(trial)
     obc = [int(v) for b in trial.open_boundaries for v in b]
@@ -1015,14 +1061,31 @@ def _finishing_site_fallback(recipe, mesh, artifacts, log):
     pts = plan_patches(trial.nodes, trial.elements, det, obc_nodes=None)
     # jsasaki 2026-11-16: review newregion r1 #7: fallback patches get the perpendicularity guard
     if pts:
-        trial, _led = _execute_patches_guarded(
-            trial, pts, obc, float((recipe.get("finishing") or {}).get("auto", {})
-                                   .get("obc_perp_max_deg", 20.0)), lambda *a: None)
+        # jsasaki 2026-11-16: review newregion r3 #3: protected water guarded per patch
+        trial, _led = _execute_patches_guarded(trial, pts, obc, pmax, lambda *a: None,
+                                               protect=protect, tol_m2=tol)
     s1, bad1 = _gate_violations(trial)
     # jsasaki 2026-11-16: review newregion r1 #7: no gate outside C1/C2/C4 may start failing or get
     # worse; only then the offender totals are compared
     other_worse = [k for k in bad1 if k not in _SITE_FALLBACK_GATES
                    and bad1[k] > bad0.get(k, 0)]
+    #---> jsasaki 2026-11-16: review newregion r3 #4/#5/#3: the WHOLE trial against the original:
+    # open boundary intact (same nodes, order, boundary edges), every node's perpendicularity
+    # within max(original, obc_perp_max_deg), no protected water lost
+    import numpy as np
+
+    obc_bad = validate_open_boundary(ref, trial, same_positions=True)
+    if obc_bad:
+        other_worse.append(f"open boundary {obc_bad}")
+    elif len(dev_ref):
+        dev1 = obc_perpendicularity(trial)
+        if (dev1 > np.maximum(dev_ref, pmax) + 1e-9).any():
+            other_worse.append(f"open-boundary perpendicularity over {pmax:g} deg")
+    if protect is not None:
+        lost = protected_loss_m2(ref, trial, protect)
+        if lost > tol:
+            other_worse.append(f"{lost:.1f} m2 of protected water lost")
+    #<--- jsasaki 2026-11-16
     ok = not other_worse and s1 < s0
     # jsasaki 2026-11-16: review newregion r1 #7: name the gates that got worse
     log(f"[finishing] site fallback: {bad0} -> {bad1} "
