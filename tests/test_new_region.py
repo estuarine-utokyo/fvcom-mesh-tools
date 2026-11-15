@@ -721,6 +721,11 @@ def test_r2_3_small_protected_component_is_not_dropped_silently():
     res = generate_polygon_mesh(w2, sz, obc_line=obc, max_iter=15, keep_polygons=pond,
                                 expected_drop=pond.buffer(50.0), log=lambda *a: None)
     assert res["points"][:, 0].max() < X0 + 7000
+    # the relative tolerance: all of its protected water may go only with frac >= 1
+    res = generate_polygon_mesh(w2, sz, obc_line=obc, max_iter=15, keep_polygons=pond,
+                                protected_drop_tol_frac=1.0, log=lambda *a: None)
+    assert res["points"][:, 0].max() < X0 + 7000                  # dropped, with consent
+    assert any(r["in_keep"] for r in res["components"] if r["stage"] == "pre-clean")
 
 
 def _mock_generator(monkeypatch, P, T, water_bounds=(-150.0, 0.0)):
