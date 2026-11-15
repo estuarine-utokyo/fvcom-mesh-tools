@@ -11,11 +11,14 @@ import numpy as np
 from .detect import detect_violations
 
 
-def apply_directives(mesh, directives, utm_epsg=32654, log=print):
+# jsasaki 2026-11-16: utm_epsg has no Tokyo default any more (was 32654); it is required
+def apply_directives(mesh, directives, utm_epsg=None, log=print):
     """Apply recipe ``finishing.directives`` to a Fort14Mesh whose
-    nodes are in EPSG:``utm_epsg``. Polygons are lon/lat. Returns
+    nodes are in EPSG:``utm_epsg`` (required). Polygons are lon/lat. Returns
     (mesh, ledger). Topology changes; open-boundary node ids are
     remapped by exact coordinates (merge keeps them verbatim)."""
+    if utm_epsg is None:
+        raise ValueError("apply_directives: utm_epsg is required (EPSG of the mesh)")
     import shapely
     from oceanmesh import remesh_patch
     from pyproj import Transformer

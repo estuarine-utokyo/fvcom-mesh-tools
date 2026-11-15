@@ -552,7 +552,8 @@ def run_qa(
     duplicate_tol_m: float = 1e-3,
     max_offenders: int = 5,
     land_solid_shp: Path | None = None,
-    utm_epsg: int = 32654,
+    # jsasaki 2026-11-16: no Tokyo default (was 32654); required with land_solid_shp
+    utm_epsg: int | None = None,
     land_interior_m: float = 200.0,
     land_strict_polygon: list | None = None,
     allowed_duplicate_pairs=None,
@@ -578,6 +579,9 @@ def run_qa(
         raise ValueError(f"coords must be 'auto', 'metric' or 'lonlat', not {coords!r}")
     if land_solid_shp is not None and not Path(land_solid_shp).exists():
         raise FileNotFoundError(f"land_solid_shp {land_solid_shp} does not exist")
+    # jsasaki 2026-11-16: the land check projects with utm_epsg; no silent Tokyo default
+    if land_solid_shp is not None and utm_epsg is None:
+        raise ValueError("run_qa: utm_epsg is required with land_solid_shp")
     n_nodes = mesh.n_nodes
     ne = mesh.n_elements
     # Validated, then normalised: whole floats and unsigned ids in range are

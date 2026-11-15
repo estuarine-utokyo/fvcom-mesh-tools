@@ -21,6 +21,7 @@ __all__ = [
     "projector_lines",
     "simplify_outside_region",
     "default_water_shp",
+    "merge_water_files",
     "cut_domain_at_obc_line",
     "extend_obc_ends_perpendicular",
     "default_land_shp",
@@ -51,6 +52,32 @@ def default_water_shp() -> Path | None:
     return cand if cand.exists() else None
 
 
+# jsasaki 2026-11-16: several region water files (e.g. Ghana + Togo) -> one file for xcoast
+def merge_water_files(paths, bbox, out_path: Path) -> Path:
+    """Read every water-polygon file in ``paths`` within the lon/lat
+    ``bbox``, concatenate them (EPSG:4326, columns fclass/name/osm_id
+    when present) and write ``out_path`` (GeoPackage). Returns it."""
+    import geopandas as gpd
+    import pandas as pd
+
+    parts = []
+    for p in paths:
+        p = Path(p)
+        if not p.exists():
+            raise FileNotFoundError(f"water file {p} does not exist")
+        g = gpd.read_file(p, bbox=tuple(bbox))
+        g = (g.set_crs(4326) if g.crs is None else g).to_crs(4326)
+        keep = [c for c in ("osm_id", "fclass", "name") if c in g.columns]
+        parts.append(g[keep + ["geometry"]])
+    if not parts:
+        raise ValueError("merge_water_files: no files")
+    out = gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), crs=4326)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_file(out_path, driver="GPKG")
+    return out_path
+
+
 def default_land_shp() -> Path | None:
     """OSM land-polygons source under ``$DATA_DIR`` (GENKAI layout),
     or None when DATA_DIR is unset / the file is absent."""
@@ -72,9 +99,15 @@ def fetch_true_land(
     water_fclasses: tuple = ("water", "dock"),
     cache_dir: Path | None = None,
     force: bool = False,
+    # jsasaki 2026-11-16: region water polygons (Geofabrik etc.) instead of the Kanto default
+    water_shp_path: Path | None = None,
 ):
     """OSM true-land polygons (land minus rivers/lakes/docks) for
     ``bbox`` = (lon_min, lat_min, lon_max, lat_max), via xcoast.
+
+    ``water_shp_path``: inland-water polygons of the region (one file;
+    see :func:`merge_water_files` for several); default
+    :func:`default_water_shp` (the Kanto Geofabrik file).
 
     Returns a GeoDataFrame in EPSG:4326. Downloads and caching are
     handled by xcoast; pass ``cache_dir`` to relocate its cache
@@ -104,7 +137,8 @@ def fetch_true_land(
         land_shp_path = default_land_shp()
     if land_shp_path is not None:
         kwargs["land_shp_path"] = Path(land_shp_path)
-    water_shp = default_water_shp()
+    # jsasaki 2026-11-16: an explicit region water file wins over the Kanto default
+    water_shp = Path(water_shp_path) if water_shp_path is not None else default_water_shp()
     if water_shp is not None:
         kwargs["water_shp_path"] = water_shp
     if cache_dir is not None:
@@ -427,8 +461,9 @@ def simplify_outside_region(
     ).to_crs(4326)
 
 
+# jsasaki 2026-11-16: utm_epsg default None = UTM zone of the data (was the Tokyo 32654)
 def smooth_land_per_polygon(land_gdf, r_m=1000.0,
-                            min_area_m2=1.0e6, utm_epsg=32654):
+                            min_area_m2=1.0e6, utm_epsg=None):
     """Outer-nest coastline source: closing+opening each polygon
     SEPARATELY at ``r_m`` (features thinner than ``2*r_m`` vanish).
     Per-polygon is mandatory: a global union turns land+wall into a
@@ -440,6 +475,10 @@ def smooth_land_per_polygon(land_gdf, r_m=1000.0,
     g = land_gdf
     if g.crs is None:
         g = g.set_crs(4326)
+    # jsasaki 2026-11-16: derive the UTM zone from the data when not given
+    if utm_epsg is None:
+        c = g.to_crs(4326).union_all().centroid
+        utm_epsg = auto_utm_epsg(c.x, c.y)
     utm = g.to_crs(utm_epsg)
     parts = []
     for geom in utm.geometry:
@@ -457,8 +496,9 @@ def smooth_land_per_polygon(land_gdf, r_m=1000.0,
     return gpd.GeoDataFrame(geometry=parts, crs=utm_epsg).to_crs(4326)
 
 
+# jsasaki 2026-11-16: utm_epsg is unused here; default None instead of the Tokyo 32654
 def projector_lines(land_inner_gdf, land_outer_gdf, inner_polygon,
-                    utm_epsg=32654):
+                    utm_epsg=None):
     """Finishing-projector target polylines: detailed coastline
     INSIDE the inner-nest polygon + smoothed coastline OUTSIDE it.
     Pure 1-D clipping — the polygon seam-gap class cannot occur."""
@@ -487,8 +527,9 @@ def projector_lines(land_inner_gdf, land_outer_gdf, inner_polygon,
     return gpd.GeoDataFrame(geometry=lines, crs=4326)
 
 
+# jsasaki 2026-11-16: utm_epsg default None = UTM zone of the line (was the Tokyo 32654)
 def junction_tail_constraints(eff_line_lonlat, land_sm_gdf,
-                              tail_len_m=1500.0, utm_epsg=32654):
+                              tail_len_m=1500.0, utm_epsg=None):
     """Perpendicular-junction constraints for constrained meshing:
     for each end of the effective OBC line, the TOUCHDOWN (first
     crossing of the smoothed coastline walking in from that end)
@@ -500,6 +541,11 @@ def junction_tail_constraints(eff_line_lonlat, land_sm_gdf,
     from shapely.geometry import LineString
     from shapely.ops import unary_union
 
+    # jsasaki 2026-11-16: derive the UTM zone from the line when not given
+    if utm_epsg is None:
+        utm_epsg = auto_utm_epsg(
+            sum(float(q[0]) for q in eff_line_lonlat) / len(eff_line_lonlat),
+            sum(float(q[1]) for q in eff_line_lonlat) / len(eff_line_lonlat))
     tr = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}",
                               always_xy=True)
     tri = Transformer.from_crs(f"EPSG:{utm_epsg}", "EPSG:4326",

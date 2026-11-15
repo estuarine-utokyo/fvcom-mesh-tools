@@ -107,6 +107,13 @@ def main(argv: list[str] | None = None) -> int:
         "--utm-epsg", type=int, default=None,
         help="Metric CRS override (default: auto UTM zone).",
     )
+    # jsasaki 2026-11-16: region water polygons (repeatable) instead of the Kanto default
+    p.add_argument(
+        "--water-shp", type=Path, action="append", default=None,
+        help="Inland-water polygon file of the region (repeatable, e.g. "
+             "Geofabrik Ghana and Togo; several are merged into "
+             "<out-dir>/water_merged.gpkg). Default: $DATA_DIR Geofabrik Kanto.",
+    )
     args = p.parse_args(argv)
 
     from fvcom_mesh_tools.prep import (
@@ -120,13 +127,24 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[prep] fetching OSM true-land for bbox {args.bbox} ...",
           flush=True)
+    #---> jsasaki 2026-11-16: explicit region water file(s)
+    water = None
+    if args.water_shp:
+        from fvcom_mesh_tools.prep.shoreline import merge_water_files
+
+        water = (args.water_shp[0] if len(args.water_shp) == 1 else
+                 merge_water_files(args.water_shp, args.bbox,
+                                   out_dir / "water_merged.gpkg"))
+        print(f"[prep] water polygons: {water}", flush=True)
     land = fetch_true_land(
         tuple(args.bbox),
         land_shp_path=args.land_shp,
         min_water_area_deg2=args.min_water_area,
         cache_dir=args.cache_dir,
         force=args.force_fetch,
+        water_shp_path=water,
     )
+    #<--- jsasaki 2026-11-16
     print(f"[prep] true-land polygons: {len(land)}", flush=True)
 
     # solid true land BEFORE opening/wall: the QA land-overlap

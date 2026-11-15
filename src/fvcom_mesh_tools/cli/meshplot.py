@@ -35,8 +35,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("input", type=Path, help="fort.14 mesh to plot.")
     p.add_argument("--out", type=Path, default=None,
                    help="Overview PNG path (default <input>_overview.png).")
-    p.add_argument("--crs", default="EPSG:32654",
-                   help="Projected CRS of the mesh nodes (default EPSG:32654).")
+    # jsasaki 2026-11-16: the Tokyo default is no longer silent (a warning names it)
+    p.add_argument("--crs", default=None,
+                   help="Projected CRS of the mesh nodes. Without it EPSG:32654 "
+                        "(Tokyo Bay, legacy default) is assumed with a warning.")
     p.add_argument("--cell-km", type=float, default=5.0,
                    help="Reference-grid cell size in km (default 5).")
     p.add_argument("--no-grid", action="store_true",
@@ -62,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     os.environ.setdefault("MPLBACKEND", "Agg")
     args = build_parser().parse_args(argv)
+    # jsasaki 2026-11-16: name the legacy CRS assumption instead of applying it silently
+    if args.crs is None:
+        print("[plot-mesh] WARNING: no --crs given: assuming EPSG:32654 (Tokyo Bay legacy "
+              "default); pass --crs for any other region", file=sys.stderr)
+        args.crs = "EPSG:32654"
 
     if not args.input.exists():
         print(f"input not found: {args.input}", file=sys.stderr)
