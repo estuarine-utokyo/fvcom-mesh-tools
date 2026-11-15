@@ -707,6 +707,37 @@ def _obc_line_from(recipe, out_dir):
     return line if line else _domain_obc_lonlat(recipe)
 
 
+#---> jsasaki 2026-11-16: review newregion r3 #2: the obc stages must give back the open line
+def _check_open_cover(recipe, out_dir, artifacts, mesh, cfg, log):
+    """For a region-built mesh (``raw_open_cover`` recorded by the polygon
+    build): the open string must cover the supplied line at least as far as
+    the raw mesh did (+1 m) and every open node lie within ``max_move_m`` of
+    it; else the stage fails (QA does not see a shortened open boundary)."""
+    import shapely
+    from pyproj import Transformer
+
+    raw = artifacts.get("raw_open_cover")
+    line_ll = _obc_line_from(recipe, out_dir)
+    if not raw or not line_ll or not mesh.open_boundaries:
+        return None
+    fwd = Transformer.from_crs("EPSG:4326", f"EPSG:{_recipe_epsg(recipe)}", always_xy=True)
+    x, y = fwd.transform([q[0] for q in line_ll], [q[1] for q in line_ll])
+    line = shapely.LineString(list(zip(x, y)))
+    o = mesh.open_boundaries[0]
+    pts = shapely.points(mesh.nodes[o])
+    pos = sorted(line.project(q) for q in (pts[0], pts[-1]))
+    unc = float(line.length - (pos[1] - pos[0]))
+    off = float(shapely.distance(pts, line).max())
+    rec = {"uncovered_m": unc, "max_offset_m": off, "raw_uncovered_m": raw["uncovered_m"]}
+    log(f"[obc] open line covered {pos[0]:.0f}-{pos[1]:.0f} of {line.length:.0f} m, "
+        f"max offset {off:.1f} m")
+    lim = float(cfg.get("max_move_m", 600.0))
+    if unc > raw["uncovered_m"] + 1.0 or off > lim:
+        raise SystemExit(f"open boundary no longer matches the line: {rec} (max_move_m {lim:g})")
+    return rec
+#<--- jsasaki 2026-11-16
+
+
 def _stage_obc(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io import read_fort14, write_fort14
     from fvcom_mesh_tools.obc_tools import assign_west_south_obc
@@ -735,6 +766,8 @@ def _stage_obc(recipe, out_dir, artifacts, log):
         snap=bool(cfg.get("snap", True)),
         log=log,
     )
+    # jsasaki 2026-11-16: review newregion r3 #2: the open boundary must still cover the line
+    _check_open_cover(recipe, out_dir, artifacts, mesh, cfg, log)
     out14 = out_dir / f"{recipe['name']}_obc.14"
     write_fort14(mesh, out14)
     return {"obc_mesh": str(out14), "obc_info": info}
@@ -1152,6 +1185,8 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
             log=log,
         )
         info["junction_realized"] = jinfo
+    # jsasaki 2026-11-16: review newregion r3 #2: the open boundary must still cover the line
+    _check_open_cover(recipe, out_dir, artifacts, mesh, cfg, log)
     out14 = out_dir / f"{recipe['name']}_final.14"
     write_fort14(mesh, out14)
     return {"final_mesh": str(out14), "obcfinal_info": info}

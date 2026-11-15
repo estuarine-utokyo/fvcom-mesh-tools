@@ -263,7 +263,9 @@ def finish_constrained_mesh(
     #<--- jsasaki 2026-11-16
     #---> jsasaki 2026-11-16: review newregion r3 #2: invariants before returning
     if guarded:
-        bad = validate_open_boundary(mesh_in, mesh, same_positions=freeze_obc_band)
+        # jsasaki 2026-11-16: review newregion r3 #2: string intact here; its GEOMETRY is re-derived
+        # and validated against the line by the obc/obcfinal stages the recipe must have (r1 #3)
+        bad = validate_open_boundary(mesh_in, mesh, same_positions=False)
         if bad:
             raise RuntimeError(f"finish broke the open boundary: {bad}")
         if protect_polygons is not None:
@@ -427,7 +429,8 @@ def _guard_optimizer(pre, mesh, band_state, protect_polygons, tol, freeze_obc_ba
             log(f"[finish] optimizer refused: it lost {lost:.1f} m2 of protected water")
             info["refused"] = True
             return pre, info
-    bad = validate_open_boundary(pre, mesh, same_positions=freeze_obc_band)
+    # jsasaki 2026-11-16: review newregion r3 #2: string intact (geometry: obc/obcfinal stages)
+    bad = validate_open_boundary(pre, mesh, same_positions=False)
     if bad:
         log(f"[finish] optimizer refused: open boundary {bad}")
         info.update(refused=True, obc=bad)
@@ -563,9 +566,10 @@ def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
         mesh.nodes[v] = state["xy"][o]
         mn1, _mx1, tw1 = _tri_quality(mesh.nodes[els])
         c41 = area_change(pk) if pk else np.zeros(0)
-        if (tw1 <= 0).any() or (not is_obc and (
-                mn1.min() < min(mn0.min(), min_angle)
-                or (c41 > np.maximum(c40, max_area_change) + 1e-12).any())):
+        # jsasaki 2026-11-16: review newregion r3 #2: OBC nodes get the same quality gate (a forced
+        # restore kept the west junction at 25.9 deg, VR job 7592228); the obc stages re-derive them
+        if (tw1 <= 0).any() or mn1.min() < min(mn0.min(), min_angle) \
+                or (c41 > np.maximum(c40, max_area_change) + 1e-12).any():
             mesh.nodes[v] = old
             refused += 1
         else:

@@ -19,7 +19,8 @@ will only ship with a major bump (Semantic Versioning).
   `external_dep_file`, `none`); `--section KEY`; `build.expected_drop`; `finish`/`polish`
   `freeze_obc_band`; `obc.snap`; `finishing.auto.obc_lock` / `obc_perp_max_deg` / `site_fallback`;
   `build.expected_drop_unresolved_m`, `protected_drop_policy`, `protected_drop_tol_m2` / `_frac`,
-  `max_protected_ear_area_km2` (review newregion rounds 1-2, docs/newregion-review-20261116.md). User guide
+  `max_protected_ear_area_km2`; `protected_loss_tol_m2` (finish, polish, finishing.auto; geometric loss,
+  default 0) (review newregion rounds 1-3, docs/newregion-review-20261116.md). User guide
   section 16.
 - `mesh_engine/polygon.py`: projected polygon engine (ported from VR-FVCOM `build_mesh.py`).
 - `finishing`: `keep_components_protected`, `remove_elements_keep_boundaries`, `remove_lone_nodes`,

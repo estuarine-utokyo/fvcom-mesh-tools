@@ -1010,6 +1010,18 @@ depths: {product: none}            # or external_dep_file (+ path) or m7001_prod
 qa: {lang: en}
 ```
 
+Protected-water invariants (review newregion round 3): every guarded step of finish/polish (weld,
+optimizer), every autofinish patch, the site operators and the site fallback is measured by the
+GEOMETRIC loss of protected water (water covered before and not after, not netted against water gained
+elsewhere). A step that loses more than `protected_loss_tol_m2` (finish, polish, finishing.auto;
+default 0 m2) is refused (weld, patch, fallback) or the optimizer's protected bank nodes are restored
+and, if that is not enough, the optimizer round is refused. The open boundary is validated too: no
+string lost, nodes on the original open line in order, consecutive nodes on a boundary edge. Note:
+the optimizer slides boundary nodes along the shoreline, which moves water across the protected
+outline; in VR v3 that is 0.29 km2 of 375 km2 per finish run, so a recipe that wants the optimizer
+there must say so with an explicit tolerance (VR v3: 400,000 m2 in finish/polish, 1,500 m2 per
+autofinish patch; with 0 m2 its QA stays at 20/23).
+
 What protects narrow water: inside `protect_polygons` the finish/polish cap deletion removes only ears
 (elements with at most one neighbour), so a two-element-wide corridor is never cut; every component step
 (finish, polish, siteops, obc aftercare) keeps the components touching the open boundary and stops when one

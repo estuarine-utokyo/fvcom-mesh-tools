@@ -1038,3 +1038,23 @@ def test_r3_2_lone_node_fixed_by_split_when_flip_would_make_another():
     cnt = np.bincount(out.elements.ravel(), minlength=out.n_nodes)
     assert (cnt >= 2).all() and info["elements_deleted"] == 0
     assert protected_overlap_m2(out.nodes, out.elements, water) == pytest.approx(1e4)
+
+
+def test_r3_2_obc_stages_check_the_open_line_coverage(tmp_path):
+    """#2: finish/polish may move open-boundary nodes (the obc stages re-derive
+    them), so the obc stages check that the open string still covers the
+    supplied line (VR: a run whose east 26.7 km became land passed QA)."""
+    P, T = _rect_lattice(5, 3, 100.0, 100.0)
+    P = P + [X0, Y0]
+    from pyproj import Transformer
+
+    inv = Transformer.from_crs(f"EPSG:{EPSG}", "EPSG:4326", always_xy=True)
+    line = [inv.transform(X0, Y0), inv.transform(X0 + 400, Y0)]
+    rec = {"crs": EPSG, "domain": {"obc_line": [list(q) for q in line]}}
+    art = {"raw_open_cover": {"uncovered_m": 0.0}}
+    full = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    assert pl._check_open_cover(rec, tmp_path, art, full, {}, lambda *a: None)["uncovered_m"] < 1
+    short = _mesh(P, T, opens=[[0, 1, 2]])
+    with pytest.raises(SystemExit, match="no longer matches"):
+        pl._check_open_cover(rec, tmp_path, art, short, {}, lambda *a: None)
+    assert pl._check_open_cover(rec, tmp_path, {}, short, {}, lambda *a: None) is None  # legacy
