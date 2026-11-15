@@ -1040,21 +1040,121 @@ def test_r3_2_lone_node_fixed_by_split_when_flip_would_make_another():
     assert protected_overlap_m2(out.nodes, out.elements, water) == pytest.approx(1e4)
 
 
-def test_r3_2_obc_stages_check_the_open_line_coverage(tmp_path):
-    """#2: finish/polish may move open-boundary nodes (the obc stages re-derive
-    them), so the obc stages check that the open string still covers the
-    supplied line (VR: a run whose east 26.7 km became land passed QA)."""
+def _region_line_case(tmp_path):
+    """A region recipe (polygon build + domain line) whose water is a 400 x 200 m
+    rectangle with the open line along its south edge, and a matching mesh."""
+    import geopandas as gpd
+    from pyproj import Transformer
+    from shapely.geometry import box
+
     P, T = _rect_lattice(5, 3, 100.0, 100.0)
     P = P + [X0, Y0]
-    from pyproj import Transformer
-
     inv = Transformer.from_crs(f"EPSG:{EPSG}", "EPSG:4326", always_xy=True)
-    line = [inv.transform(X0, Y0), inv.transform(X0 + 400, Y0)]
-    rec = {"crs": EPSG, "domain": {"obc_line": [list(q) for q in line]}}
-    art = {"raw_open_cover": {"uncovered_m": 0.0}}
+    line = [list(inv.transform(X0, Y0)), list(inv.transform(X0 + 400, Y0))]
+    wp = tmp_path / "water.gpkg"
+    gpd.GeoDataFrame(geometry=[box(X0, Y0, X0 + 400, Y0 + 200)], crs=EPSG).to_file(wp)
+    rec = {"crs": EPSG, "domain": {"obc_line": line},
+           "build": {"engine": "oceanmesh-polygon"}}
+    return rec, {"domain_water": str(wp)}, P, T
+
+
+def test_r3_2_obc_stages_check_the_open_line_coverage(tmp_path):
+    """#2 (r3) / r4 #3: the obc stages check the open string against the wet
+    extent of the supplied line (finish/polish may move open nodes)."""
+    rec, art, P, T = _region_line_case(tmp_path)
     full = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
     assert pl._check_open_cover(rec, tmp_path, art, full, {}, lambda *a: None)["uncovered_m"] < 1
-    short = _mesh(P, T, opens=[[0, 1, 2]])
+    short = _mesh(P, T, opens=[[0, 1]])                          # 300 m short > 250 m default
     with pytest.raises(SystemExit, match="no longer matches"):
         pl._check_open_cover(rec, tmp_path, art, short, {}, lambda *a: None)
-    assert pl._check_open_cover(rec, tmp_path, {}, short, {}, lambda *a: None) is None  # legacy
+    legacy = {"crs": EPSG, "prep": {"obc_line": rec["domain"]["obc_line"]}}
+    assert pl._check_open_cover(legacy, tmp_path, {}, short, {}, lambda *a: None) is None
+
+
+
+# ------------------------------------------- review newregion r4 (regressions)
+def test_r4_1_obc_aftercare_may_not_delete_protected_water():
+    """#1: the reviewer's 10 x 3 lattice: aftercare deleted 4 protected
+    elements (20,000 m2) and returned; now the repair is refused."""
+    from pyproj import Transformer
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.obc_tools import assign_west_south_obc
+
+    P, T = _rect_lattice(10, 3, 100.0, 100.0)
+    P = P + [300000.0, 640000.0]
+    m = _mesh(P, T)
+    inv = Transformer.from_crs("EPSG:32631", "EPSG:4326", always_xy=True)
+    line = [inv.transform(300000.0, 640000.0), inv.transform(300900.0, 640000.0)]
+    water = box(300000, 640000, 300900, 640200)
+    with pytest.raises(RuntimeError, match="protected water"):
+        assign_west_south_obc(m, utm_epsg=32631, snap=False, max_move_m=60.0,
+                              obc_line_lonlat=line, protect_polygons=water,
+                              log=lambda *a: None)
+
+
+def test_r4_2_coverage_guard_needs_no_runtime_metadata(tmp_path):
+    """#2: a resumed obc/obcfinal run has only persisted artifacts: the guard
+    uses the domain (a path artifact), fails loudly without it, and the
+    coverage record is persisted (dict artifacts survive provenance)."""
+    rec, art, P, T = _region_line_case(tmp_path)
+    full = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    with pytest.raises(SystemExit, match="domain water"):
+        pl._check_open_cover(rec, tmp_path, {}, full, {}, lambda *a: None)
+    assert "open_cover" in pl._STRUCTURED_ARTIFACTS and "raw_open_cover" in pl._STRUCTURED_ARTIFACTS
+
+
+def test_r4_2_open_cover_survives_a_resumed_run(tmp_path):
+    """#2: run domain+build+obc, then --only obc: the coverage record is in the
+    persisted artifacts both times."""
+    import geopandas as gpd
+    import yaml
+
+    water, obc, chan = _domain()
+    gp = tmp_path / "dom.gpkg"
+    gpd.GeoDataFrame(geometry=[water], crs=EPSG).to_file(gp, layer="water")
+    gpd.GeoDataFrame(geometry=[obc], crs=EPSG).to_file(gp, layer="obc")
+    rec = {"name": "t", "out_dir": str(tmp_path / "out"), "crs": f"EPSG:{EPSG}",
+           "domain": {"water": {"path": str(gp), "layer": "water"},
+                      "obc_line": {"path": str(gp), "layer": "obc"}},
+           "build": {"engine": "oceanmesh-polygon", "max_iter": 30,
+                     "size": {"background_m": 400.0, "raster_m": 50.0}},
+           "obc": {"trim": 1, "snap": False}}
+    f = tmp_path / "r.yaml"
+    f.write_text(yaml.safe_dump({"pipeline": rec}))
+    assert pl.main([str(f), "--section", "pipeline"]) == 0
+    prov = json.loads((tmp_path / "out" / "pipeline_provenance.json").read_text())
+    assert prov["artifacts"]["open_cover"]["stage"] == "obc"
+    assert pl.main([str(f), "--section", "pipeline", "--only", "obc"]) == 0
+    prov = json.loads((tmp_path / "out" / "pipeline_provenance.json").read_text())
+    assert prov["artifacts"]["open_cover"]["stage"] == "obc"
+
+
+def test_r4_3_a_shortened_open_string_fails_and_coverage_may_not_retreat(tmp_path):
+    """#3: the allowance is the wet extent with an explicit end tolerance, not
+    the trimmed raw mesh; a later stage may not retreat from earlier coverage."""
+    rec, art, P, T = _region_line_case(tmp_path)
+    short = _mesh(P, T, opens=[[0, 1, 2, 3]])                    # 100 m short at the east
+    with pytest.raises(SystemExit, match="end_tol_m"):
+        pl._check_open_cover(rec, tmp_path, art, short, {"end_tol_m": 50.0}, lambda *a: None)
+    ok = pl._check_open_cover(rec, tmp_path, art, short, {"end_tol_m": 150.0}, lambda *a: None)
+    assert ok["uncovered_m"] == pytest.approx(100.0)
+    art2 = dict(art, open_cover={"stage": "obc", "uncovered_m": 0.0})
+    with pytest.raises(SystemExit, match="retreated"):
+        pl._check_open_cover(rec, tmp_path, art2, short, {"end_tol_m": 150.0}, lambda *a: None)
+
+
+def test_r4_4_region_siteops_keeps_the_open_boundary(tmp_path):
+    """#4: standalone siteops of a region recipe without protection keeps (and
+    validates) the open boundary; the reviewed code cleared it."""
+    P, T = _r3_lattice()
+    m = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    f = tmp_path / "obc.14"
+    write_fort14(m, f)
+    rec, art = _fallback_setup(tmp_path, protect=False)
+    rec.update(name="x", build={"engine": "oceanmesh-polygon"},
+               domain={"obc_line": [[0.1, 5.7], [0.2, 5.7]]}, siteops={"passes": 1})
+    out = pl._stage_siteops(rec, tmp_path, dict(art, obc_mesh=str(f)), lambda *a: None)
+    m2 = read_fort14(out["siteops_mesh"])
+    assert len(m2.open_boundaries) == 1
+    assert np.allclose(m2.nodes[m2.open_boundaries[0]], P[[0, 1, 2, 3, 4]])

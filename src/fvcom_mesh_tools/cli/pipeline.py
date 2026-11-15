@@ -708,32 +708,72 @@ def _obc_line_from(recipe, out_dir):
 
 
 #---> jsasaki 2026-11-16: review newregion r3 #2: the obc stages must give back the open line
-def _check_open_cover(recipe, out_dir, artifacts, mesh, cfg, log):
-    """For a region-built mesh (``raw_open_cover`` recorded by the polygon
-    build): the open string must cover the supplied line at least as far as
-    the raw mesh did (+1 m) and every open node lie within ``max_move_m`` of
-    it; else the stage fails (QA does not see a shortened open boundary)."""
+def _region_obc(recipe) -> bool:
+    """A region recipe whose open boundary comes from a supplied line through
+    the polygon build (the path the open-line checks apply to)."""
+    return bool((recipe.get("build") or {}).get("engine") == "oceanmesh-polygon"
+                and _obc_line_from(recipe, Path("/nonexistent")))
+
+
+# jsasaki 2026-11-16: review newregion r4 #2/#3: the guard measures against the INTENDED wet extent
+# of the supplied line (the part of it on the domain water outline), with an explicit endpoint
+# tolerance; it needs only the domain (persisted as a path), never runtime-only metadata; the
+# coverage each stage reaches is persisted and later stages may not retreat from it
+def _check_open_cover(recipe, out_dir, artifacts, mesh, cfg, log, stage="obc"):
+    """For a region recipe (:func:`_region_obc`): each end of the open string
+    must lie within ``end_tol_m`` (``obc.end_tol_m``, default 250 m) of the
+    end of the line's wet extent, every open node within ``max_move_m`` of the
+    line, and the uncovered length may not exceed that of an earlier OBC stage
+    (+1 m). Missing domain metadata fails loudly. Returns the coverage record
+    (persisted as the artifact ``open_cover``)."""
+    import geopandas as gpd
     import shapely
     from pyproj import Transformer
+    from shapely.ops import unary_union
 
-    raw = artifacts.get("raw_open_cover")
-    line_ll = _obc_line_from(recipe, out_dir)
-    if not raw or not line_ll or not mesh.open_boundaries:
+    if not _region_obc(recipe):
         return None
+    if not mesh.open_boundaries:
+        raise SystemExit(f"{stage}: the mesh has no open boundary")
+    wpath = artifacts.get("domain_water")
+    if not wpath or not Path(wpath).exists():
+        raise SystemExit(f"{stage}: the domain water polygon (artifact domain_water) is missing: "
+                         "rerun the domain stage")
+    line_ll = _obc_line_from(recipe, out_dir)
     fwd = Transformer.from_crs("EPSG:4326", f"EPSG:{_recipe_epsg(recipe)}", always_xy=True)
     x, y = fwd.transform([q[0] for q in line_ll], [q[1] for q in line_ll])
     line = shapely.LineString(list(zip(x, y)))
+    water = unary_union(list(gpd.read_file(wpath).geometry))
+    wet = line.intersection(water.boundary.buffer(1.0))
+    parts = [g for g in getattr(wet, "geoms", [wet]) if not g.is_empty and g.length > 0]
+    if not parts:
+        raise SystemExit(f"{stage}: the open-boundary line does not lie on the domain outline")
+    ends = [line.project(shapely.Point(c)) for g in parts for c in (g.coords[0], g.coords[-1])]
+    w0, w1 = min(ends), max(ends)
     o = mesh.open_boundaries[0]
     pts = shapely.points(mesh.nodes[o])
     pos = sorted(line.project(q) for q in (pts[0], pts[-1]))
-    unc = float(line.length - (pos[1] - pos[0]))
+    gap0, gap1 = max(0.0, pos[0] - w0), max(0.0, w1 - pos[1])
     off = float(shapely.distance(pts, line).max())
-    rec = {"uncovered_m": unc, "max_offset_m": off, "raw_uncovered_m": raw["uncovered_m"]}
-    log(f"[obc] open line covered {pos[0]:.0f}-{pos[1]:.0f} of {line.length:.0f} m, "
-        f"max offset {off:.1f} m")
+    rec = {"stage": stage, "wet_from_m": float(w0), "wet_to_m": float(w1),
+           "from_m": float(pos[0]), "to_m": float(pos[1]), "uncovered_m": float(gap0 + gap1),
+           "end_gaps_m": [float(gap0), float(gap1)], "max_offset_m": off}
+    log(f"[obc] open line covered {pos[0]:.0f}-{pos[1]:.0f} of the wet {w0:.0f}-{w1:.0f} m "
+        f"(end gaps {gap0:.0f} / {gap1:.0f} m), max offset {off:.1f} m")
+    tol = float(cfg.get("end_tol_m", 250.0))
     lim = float(cfg.get("max_move_m", 600.0))
-    if unc > raw["uncovered_m"] + 1.0 or off > lim:
-        raise SystemExit(f"open boundary no longer matches the line: {rec} (max_move_m {lim:g})")
+    prev = artifacts.get("open_cover")
+    bad = []
+    if max(gap0, gap1) > tol:
+        bad.append(f"an end of the open string is {max(gap0, gap1):.0f} m short of the wet line "
+                   f"(end_tol_m {tol:g})")
+    if off > lim:
+        bad.append(f"an open node is {off:.0f} m off the line (max_move_m {lim:g})")
+    if isinstance(prev, dict) and rec["uncovered_m"] > float(prev.get("uncovered_m", 0)) + 1.0:
+        bad.append(f"coverage retreated from {prev['uncovered_m']:.0f} m uncovered "
+                   f"({prev.get('stage')}) to {rec['uncovered_m']:.0f} m")
+    if bad:
+        raise SystemExit(f"{stage}: open boundary no longer matches the line: " + "; ".join(bad))
     return rec
 #<--- jsasaki 2026-11-16
 
@@ -755,6 +795,8 @@ def _stage_obc(recipe, out_dir, artifacts, log):
         mesh,
         utm_epsg=utm,
         protect_polygons=_protect_geometry(recipe, utm),
+        # jsasaki 2026-11-16: review newregion r4 #1: tolerance for the whole OBC operation
+        protected_loss_tol_m2=float(cfg.get("protected_loss_tol_m2", 0.0)),
         band_deg=float(cfg.get("band_deg", 0.012)),
         shoreline_shp=shoreline,
         coast_tol_m=float(cfg.get("coast_tol_m", 500.0)),
@@ -767,10 +809,13 @@ def _stage_obc(recipe, out_dir, artifacts, log):
         log=log,
     )
     # jsasaki 2026-11-16: review newregion r3 #2: the open boundary must still cover the line
-    _check_open_cover(recipe, out_dir, artifacts, mesh, cfg, log)
+    # jsasaki 2026-11-16: review newregion r4 #2: its coverage is persisted (artifact open_cover)
+    cover = _check_open_cover(recipe, out_dir, artifacts, mesh, cfg, log, stage="obc")
     out14 = out_dir / f"{recipe['name']}_obc.14"
     write_fort14(mesh, out14)
-    return {"obc_mesh": str(out14), "obc_info": info}
+    # jsasaki 2026-11-16: review newregion r4 #2: structured coverage persisted with the artifacts
+    return {"obc_mesh": str(out14), "obc_info": info,
+            **({"open_cover": cover} if cover else {})}
 
 
 def _stage_siteops(recipe, out_dir, artifacts, log):
@@ -799,10 +844,21 @@ def _stage_siteops(recipe, out_dir, artifacts, log):
             protect_polygons=_protect_geometry(recipe, utm), log=log,
         )
     # jsasaki 2026-11-16: protected water for the final component step
+    # jsasaki 2026-11-16: review newregion r4 #4: a region recipe keeps (and validates) its open
+    # boundary through siteops with or without protection; Tokyo-style recipes (no polygon build,
+    # no protect_polygons) keep the legacy component step
+    region = _region_obc(recipe) or bool(recipe.get("protect_polygons"))
+    from fvcom_mesh_tools.finishing import _snapshot, validate_open_boundary
+
+    before = _snapshot(mesh) if region else None
     mesh, edit_log = apply_site_operators(
         mesh, lines, passes=int(cfg.get("passes", 2)),
-        protect_polygons=_protect_geometry(recipe, utm), log=log,
+        protect_polygons=_protect_geometry(recipe, utm), keep_open_boundary=region, log=log,
     )
+    if region:
+        bad = validate_open_boundary(before, mesh, same_positions=True)
+        if bad:
+            raise SystemExit(f"siteops broke the open boundary: {bad}")
     from fvcom_mesh_tools.mesh_clean import compact_nodes
 
     mesh, _ = compact_nodes(mesh)
@@ -1147,6 +1203,8 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
         mesh,
         utm_epsg=_recipe_epsg(recipe),
         protect_polygons=_protect_geometry(recipe, _recipe_epsg(recipe)),
+        # jsasaki 2026-11-16: review newregion r4 #1: tolerance for the whole OBC operation
+        protected_loss_tol_m2=float(cfg.get("protected_loss_tol_m2", 0.0)),
         shoreline_shp=shoreline,
         coast_tol_m=float(cfg.get("coast_tol_m", 500.0)),
         trim=int(cfg.get("trim", 1)),
@@ -1186,14 +1244,19 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
         )
         info["junction_realized"] = jinfo
     # jsasaki 2026-11-16: review newregion r3 #2: the open boundary must still cover the line
-    _check_open_cover(recipe, out_dir, artifacts, mesh, cfg, log)
+    # jsasaki 2026-11-16: review newregion r4 #2: its coverage is persisted (artifact open_cover)
+    cover = _check_open_cover(recipe, out_dir, artifacts, mesh, cfg, log, stage="obcfinal")
     out14 = out_dir / f"{recipe['name']}_final.14"
     write_fort14(mesh, out14)
-    return {"final_mesh": str(out14), "obcfinal_info": info}
+    # jsasaki 2026-11-16: review newregion r4 #2: structured coverage persisted with the artifacts
+    return {"final_mesh": str(out14), "obcfinal_info": info,
+            **({"open_cover": cover} if cover else {})}
 
 
 #---> jsasaki 2026-11-16: pluggable depth products (new regions bring their own)
 DEPTH_PRODUCTS = ("m7001_production", "external_dep_file", "none")
+# jsasaki 2026-11-16: review newregion r4 #2: dict-valued artifacts that are persisted and reloaded
+_STRUCTURED_ARTIFACTS = ("open_cover", "raw_open_cover")
 # jsasaki 2026-11-16: review newregion r1 #8: artifact keys of the meshes a stage writes
 _MESH_KEYS = ("depths_mesh", "finishing_mesh", "final_mesh", "polish_mesh", "siteops_mesh",
               "obc_mesh", "finished_mesh", "raw_mesh")
@@ -1428,8 +1491,9 @@ def main(argv: list[str] | None = None) -> int:
         "recipe_file": str(args.recipe.resolve()),
         "recipe": recipe,
         "git": _git_describe(Path(__file__).resolve().parents[3]),
+        # jsasaki 2026-11-16: review newregion r4 #2: structured validation metadata persists too
         "artifacts": {k: v for k, v in artifacts.items()
-                      if isinstance(v, str)},
+                      if isinstance(v, str) or k in _STRUCTURED_ARTIFACTS},
         "results": results,
         "total_wall_s": round(time.perf_counter() - t0, 1),
     }, indent=2, ensure_ascii=False, default=str), encoding="utf-8")

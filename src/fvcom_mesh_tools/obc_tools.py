@@ -46,6 +46,8 @@ def assign_west_south_obc(
     obc_line_lonlat=None,
     # jsasaki 2026-11-16: protected water (shapely, mesh coords): aftercare never drops it silently
     protect_polygons=None,
+    # jsasaki 2026-11-16: review newregion r4 #1: protected-water loss allowed over the operation
+    protected_loss_tol_m2: float = 0.0,
     log=print,
 ) -> tuple[Fort14Mesh, dict[str, Any]]:
     """Detect the west+south open-sea edges of the outer ring, snap
@@ -64,6 +66,11 @@ def assign_west_south_obc(
     # jsasaki 2026-11-16: a silent Tokyo CRS default is a wrong answer elsewhere
     if utm_epsg is None:
         raise ValueError("assign_west_south_obc: utm_epsg is required (EPSG of the mesh)")
+    # jsasaki 2026-11-16: review newregion r4 #1: the input, for the protected-water balance
+    if protect_polygons is not None:
+        from fvcom_mesh_tools.finishing import _snapshot
+
+        _mesh_in = _snapshot(mesh)
     to_ll = Transformer.from_crs(f"EPSG:{utm_epsg}", "EPSG:4326",
                                  always_xy=True)
     lon, lat = to_ll.transform(mesh.nodes[:, 0], mesh.nodes[:, 1])
@@ -456,6 +463,18 @@ def assign_west_south_obc(
             | _pinch_elements(mesh)
         if not bad.any():
             break
+        #---> jsasaki 2026-11-16: review newregion r4 #1: an FVCOM-fatal element holding protected
+        # water may not be deleted silently: the repair is refused (the run fails, naming it)
+        if protect_polygons is not None:
+            from fvcom_mesh_tools.finishing import protected_element_mask
+
+            pe = protected_element_mask(mesh.nodes, mesh.elements, protect_polygons)
+            if (bad & pe).any():
+                where = mesh.nodes[mesh.elements[bad & pe]].mean(axis=1)[:5]
+                raise RuntimeError(
+                    "OBC aftercare would delete protected water (R4 / {1,2,1} / pinch elements) at "
+                    + "; ".join(f"({x:.0f}, {y:.0f})" for x, y in where))
+        #<--- jsasaki 2026-11-16
         n_deleted += int(bad.sum())
         mesh = _rm(mesh, ~bad)
         #---> jsasaki 2026-11-16: with protected water, a dropped protected component fails
@@ -542,6 +561,15 @@ def assign_west_south_obc(
         mesh.depths[:] = np.maximum(mesh.depths, min_depth_m)
         info["depth_clipped"] = n_clip
         log(f"[obc] depth clip @{min_depth_m:g} m: {n_clip} nodes")
+    # jsasaki 2026-11-16: review newregion r4 #1: the whole OBC operation may not lose protected
+    # water (geometric loss, not netted)
+    if protect_polygons is not None:
+        from fvcom_mesh_tools.finishing import protected_loss_m2
+
+        _lost = protected_loss_m2(_mesh_in, mesh, protect_polygons)
+        info["protected_loss_m2"] = _lost
+        if _lost > protected_loss_tol_m2:
+            raise RuntimeError(f"the OBC assignment lost {_lost:.1f} m2 of protected water")
     return mesh, info
 
 
