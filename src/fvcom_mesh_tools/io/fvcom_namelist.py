@@ -2,9 +2,9 @@
 
 FVCOM keeps ``INPUT_DIR`` and ``OUTPUT_DIR`` (``mod_main.F``) and the paths
 joined from them in ``CHARACTER(LEN=1024)``; an older build used 80, and a
-longer path was cut without a word, so the run read or wrote elsewhere. Strings are Fortran list-directed values: an apostrophe
-inside one is doubled, and a path is kept to printable ASCII (review of the
-extend tools, rounds 4-6).
+longer path was cut without a word, so the run read or wrote elsewhere.
+Strings are Fortran list-directed values: an apostrophe inside one is doubled,
+and a path is kept to printable ASCII (review of the extend tools, rounds 4-6).
 """
 
 from __future__ import annotations
