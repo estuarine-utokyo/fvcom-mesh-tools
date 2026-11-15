@@ -354,3 +354,24 @@ def test_pipeline_domain_build_qa(tmp_path):
     assert len(m.open_boundaries) == 1 and m.nodes[:, 0].min() > 1e5      # metres
     line = json.loads((tmp_path / "out" / "domain" / "obc_line_lonlat.json").read_text())
     assert len(line) == 2 and 0.0 < line[0][0] < 3.0                       # lon/lat
+
+
+def test_polygon_engine_lost_component_and_expected_drop():
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.mesh_engine.polygon import (
+        build_size_field,
+        generate_polygon_mesh,
+    )
+
+    water, obc, _chan = _domain()
+    pond = box(X0 + 8000, Y0, X0 + 9500, Y0 + 1500)          # 2.25 km2, not connected
+    w2 = water.union(pond)
+    sz = build_size_field(w2, crs_epsg=EPSG, background_m=400.0, raster_m=50.0,
+                          log=lambda *a: None)
+    with pytest.raises(RuntimeError, match="dropped"):
+        generate_polygon_mesh(w2, sz, obc_line=obc, max_iter=20, log=lambda *a: None)
+    res = generate_polygon_mesh(w2, sz, obc_line=obc, max_iter=20,
+                                expected_drop=pond.buffer(100.0), log=lambda *a: None)
+    assert any(r["expected_drop"] and not r["kept"] for r in res["components"])
+    assert res["points"][:, 0].max() < X0 + 7000                  # the pond is not meshed

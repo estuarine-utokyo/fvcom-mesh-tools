@@ -439,7 +439,9 @@ def _stage_build_polygon(recipe, out_dir, artifacts, log):
         max_iter=int(cfg.get("max_iter", 60)), seed=int(cfg.get("seed", 0)),
         clean_dj_cutoff=float(cfg.get("clean_dj_cutoff", 0.25)),
         max_dropped_component_km2=float(cfg.get("max_dropped_component_km2", 0.5)),
-        keep_polygons=_protect_geometry(recipe, epsg), log=log)
+        keep_polygons=_protect_geometry(recipe, epsg),
+        expected_drop=_protect_geometry({"protect_polygons": cfg.get("expected_drop")}, epsg),
+        log=log)
     pts, cls = res["points"], res["cells"]
     mesh = Fort14Mesh(
         title=f"{recipe['name']} polygon raw (EPSG:{epsg})",

@@ -18,8 +18,11 @@ engine meshes exactly that polygon, in metres, in the recipe CRS:
    then the OM2D default clean with the constraints pinned;
 4. components: those touching the open boundary are kept (the largest when
    there is no open boundary); a dropped component larger than
-   ``max_dropped_component_km2`` or inside a ``keep_polygons`` polygon stops
-   the build instead of vanishing;
+   ``max_dropped_component_km2`` stops the build instead of vanishing, unless
+   most of it lies in ``expected_drop`` (water the region already knows is
+   not connected); every component is reported (``in_keep``: it holds water
+   of ``keep_polygons``). Small pools a mesh of this size cannot connect are
+   dropped; a region checks the coverage of its water bodies afterwards;
 5. boundary repair until stable: single-element nodes off the open boundary
    (ears), FVCOM ``{1,2,1}`` elements, zero-area boundary slivers, and R4
    corners at the open-string ends (the end moves one node inward).
@@ -208,6 +211,7 @@ def generate_polygon_mesh(
     clean_dj_cutoff: float = 0.25,
     max_dropped_component_km2: float = 0.5,
     keep_polygons=None,
+    expected_drop=None,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
     """Mesh the shapely (Multi)Polygon ``water`` (CRS metres).
@@ -216,8 +220,9 @@ def generate_polygon_mesh(
     ``h / dm_scale`` (DistMesh returns edges ~``dm_scale`` x its field).
     ``obc_line`` (shapely LineString on the domain boundary, same CRS) gives
     the open boundary; without it the mesh has land boundaries only.
-    ``keep_polygons`` (shapely geometry): a generator component that holds
-    water inside it is never dropped silently (the build fails instead).
+    ``keep_polygons`` (shapely geometry) is reported per component;
+    ``expected_drop`` (shapely geometry): a large component lying mostly
+    inside it is an expected drop (logged), not a failure.
 
     Returns ``{"points", "cells", "open_string", "land_string", "islands",
     "components", "n_ladder"}`` (points in the CRS, 0-based ids).
@@ -238,6 +243,8 @@ def generate_polygon_mesh(
     water_l = sh(water)
     obc_l = sh(obc_line) if obc_line is not None else None
     keep_l = sh(keep_polygons) if keep_polygons is not None and not keep_polygons.is_empty \
+        else None
+    exp_l = sh(expected_drop) if expected_drop is not None and not expected_drop.is_empty \
         else None
     hmax = float(h.max())
     hreal = RegularGridInterpolator((ys - y0, xs - x0), h, bounds_error=False,
@@ -333,9 +340,12 @@ def generate_polygon_mesh(
             cxy = cen[sel].mean(axis=0) + [x0, y0]
             in_keep = bool(keep_l is not None and shapely.contains_xy(
                 keep_l, cen[sel, 0], cen[sel, 1]).any())
+            expected = bool(exp_l is not None and shapely.contains_xy(
+                exp_l, cen[sel, 0], cen[sel, 1]).mean() > 0.5)
             rows.append(dict(stage=stage, comp=c, n_elem=int(sel.sum()),
                              area_km2=float(ar[sel].sum() / 1e6),
                              x=float(cxy[0]), y=float(cxy[1]), in_keep=in_keep,
+                             expected_drop=expected,
                              kept=None if keep_c is None else bool(c in keep_c)))
         return ncomp, lab, rows
 
@@ -348,12 +358,17 @@ def generate_polygon_mesh(
 
     _n, lab, rows = comp_rows("pre-clean", p, t)
     keep_c = anchor_components(p, t, lab)
-    lost = [r for r in rows if r["comp"] not in keep_c
-            and (r["area_km2"] > max_dropped_component_km2 or r["in_keep"])]
+    for r in rows:
+        if r["comp"] not in keep_c and r["expected_drop"] \
+                and r["area_km2"] > max_dropped_component_km2:
+            log(f"[polygon] expected drop: {r['n_elem']} el / {r['area_km2']:.2f} km2 at "
+                f"({r['x']:.0f}, {r['y']:.0f})")
+    lost = [r for r in rows if r["comp"] not in keep_c and not r["expected_drop"]
+            and r["area_km2"] > max_dropped_component_km2]
     if lost:
         raise RuntimeError(
             "generator components that would be dropped (no open boundary) larger than "
-            f"{max_dropped_component_km2} km2 or inside keep_polygons: "
+            f"{max_dropped_component_km2} km2: "
             + "; ".join(f"{r['n_elem']} el / {r['area_km2']:.2f} km2 at "
                         f"({r['x']:.0f}, {r['y']:.0f})" for r in lost))
     if PFIX is not None:
@@ -367,15 +382,20 @@ def generate_polygon_mesh(
     keep_c = anchor_components(p, t, lab)
     for r in rows2:
         r["kept"] = r["comp"] in keep_c
-    lost = [r for r in rows2 if not r["kept"]
-            and (r["area_km2"] > max_dropped_component_km2 or r["in_keep"])]
+    lost = [r for r in rows2 if not r["kept"] and not r["expected_drop"]
+            and r["area_km2"] > max_dropped_component_km2]
     if lost:
         raise RuntimeError(
             "components lost in the OM2D clean (no open boundary) larger than "
-            f"{max_dropped_component_km2} km2 or inside keep_polygons: "
+            f"{max_dropped_component_km2} km2: "
             + "; ".join(f"{r['n_elem']} el / {r['area_km2']:.2f} km2 at "
                         f"({r['x']:.0f}, {r['y']:.0f})" for r in lost))
     rows += rows2
+    dropped = [r for r in rows2 if not r["kept"]]
+    if dropped:
+        log(f"[polygon] dropped {len(dropped)} component(s) without open boundary, "
+            f"{sum(r['area_km2'] for r in dropped):.2f} km2 "
+            f"({sum(r['in_keep'] for r in dropped)} holding keep_polygons water)")
     t = t[np.isin(lab, list(keep_c))]
     used = np.unique(t)
     remap = -np.ones(len(p), int)
