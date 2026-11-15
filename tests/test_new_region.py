@@ -257,7 +257,7 @@ def test_remove_lone_nodes_and_land_rebuild():
     cnt = np.bincount(m2.elements.ravel(), minlength=m2.n_nodes)
     o = set(m2.open_boundaries[0].tolist())
     assert all(cnt[v] > 1 for v in range(m2.n_nodes) if v not in o)
-    assert info["elements_deleted"] >= 1
+    assert info["elements_deleted"] + info["flipped"] >= 1   # r3 #2: a flip comes first
     m3 = rebuild_land_boundaries(m2)
     ob = m3.open_boundaries[0]
     (ib, land), = m3.land_boundaries
@@ -460,10 +460,13 @@ def test_r1_2_lone_nodes_respect_protection_and_obc():
     prot = box(0, 0, 900, 100)
     out, info = remove_lone_nodes(m, protect_polygons=prot, policy="report",
                                   log=lambda *a: None)
-    assert info["elements_deleted"] == 0 and info["lone_kept"] == 1
-    assert out.n_elements == m.n_elements
+    # r3 #2: the far-end lone node is now fixed by a split, never by deleting water
+    assert info["elements_deleted"] == 0 and info["lone_kept"] == 0
+    assert out.n_elements >= m.n_elements
+    one = _mesh(np.array([[0.0, 0.0], [100.0, 0.0], [0.0, 100.0]]), np.array([[0, 1, 2]]))
     with pytest.raises(RuntimeError, match="single-element"):
-        remove_lone_nodes(m, protect_polygons=prot, policy="fail", log=lambda *a: None)
+        remove_lone_nodes(one, protect_polygons=box(0, 0, 100, 100), policy="fail",
+                          log=lambda *a: None)
     # unprotected: elements holding open-boundary nodes are never deleted
     P3, T3 = _strip_mesh(4)                          # 300 x 100 m, OBC on the west column
     m3 = _mesh(P3, T3, opens=[[0, 4]])
@@ -975,3 +978,63 @@ def test_r3_5_fallback_respects_the_configured_perpendicularity(tmp_path):
     rec, art = _fallback_setup(tmp_path, protect=True)
     out, info = pl._finishing_site_fallback(rec, m, art, lambda *a: None)
     assert obc_perpendicularity(out).max() <= 10.0 + 1e-9
+
+
+def test_r3_2_weld_merges_coincident_open_boundary_nodes(tmp_path, monkeypatch):
+    """#2 (consequence): the OBC assignment can leave two COINCIDENT open-
+    boundary nodes (VR v3 job 7591832); the guarded weld merges such a pair
+    (a repair, the geometry is unchanged) but never a distinct OBC node."""
+    import geopandas as gpd
+    from scipy.spatial import cKDTree
+    from shapely.geometry import LineString, box
+
+    import fvcom_mesh_tools.finishing as fin
+
+    P, T = _rect_lattice(3, 3, 100.0, 100.0)
+    P = np.vstack([P, P[[1]]])                          # node 9 coincides with node 1
+    T = T.copy()
+    T[0] = [0, 9, 3]                                    # the first element uses the duplicate
+    m = _mesh(P, T, opens=[[0, 9, 1, 2]])
+    monkeypatch.setattr(fin, "phase_h_optimize", lambda m, **k: (m, {}))
+    monkeypatch.setattr(fin, "build_coastline_projector", lambda *a, **k: None)
+    shp = tmp_path / "s.shp"
+    gpd.GeoDataFrame(geometry=[LineString(box(0, 0, 200, 200).exterior.coords)], crs=EPSG
+                     ).to_crs(4326).to_file(shp)
+    out, info = fin.finish_constrained_mesh(m, shp, tmp_path / "w", utm_epsg=EPSG,
+                                            protect_polygons=box(0, 0, 200, 200),
+                                            freeze_obc_band=True, log=lambda *a: None)
+    assert not cKDTree(out.nodes).query_pairs(1e-3)
+    assert np.allclose(out.nodes[out.open_boundaries[0]], [[0, 0], [100, 0], [200, 0]])
+
+
+def test_r3_2_lone_node_fixed_by_flip_without_losing_water():
+    """#2 (consequence): a single-element node in protected water is fixed by
+    flipping the opposite edge; coverage and element count are unchanged."""
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.finishing import protected_overlap_m2, remove_lone_nodes
+
+    P, T = _rect_lattice(3, 3, 100.0, 100.0)         # nodes 0 and 8 are single-element nodes
+    m = _mesh(P, T)
+    water = box(0, 0, 200, 200)
+    out, info = remove_lone_nodes(m, protect_polygons=water, policy="fail", log=lambda *a: None)
+    assert info["flipped"] == 2 and info["elements_deleted"] == 0 and info["lone_kept"] == 0
+    assert out.n_elements == len(T)
+    assert protected_overlap_m2(out.nodes, out.elements, water) == pytest.approx(4e4)
+
+
+def test_r3_2_lone_node_fixed_by_split_when_flip_would_make_another():
+    """A flip that would leave a or b in one element is replaced by a split of
+    the opposite edge (VR job 7592080: the lone node at (279934, 658992))."""
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.finishing import protected_overlap_m2, remove_lone_nodes
+
+    P = np.array([[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]])
+    T = np.array([[0, 1, 3], [1, 2, 3]])
+    water = box(0, 0, 100, 100)
+    out, info = remove_lone_nodes(_mesh(P, T), protect_polygons=water, policy="fail",
+                                  log=lambda *a: None)
+    cnt = np.bincount(out.elements.ravel(), minlength=out.n_nodes)
+    assert (cnt >= 2).all() and info["elements_deleted"] == 0
+    assert protected_overlap_m2(out.nodes, out.elements, water) == pytest.approx(1e4)

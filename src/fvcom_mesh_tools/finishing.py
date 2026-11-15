@@ -173,7 +173,13 @@ def finish_constrained_mesh(
     #---> jsasaki 2026-11-16: review newregion r3 #2: guarded weld: open-boundary nodes are never
     # welded, and a weld that loses protected water is refused
     if guarded:
-        obc_ids = [int(v) for s_ in mesh.open_boundaries for v in s_]
+        # jsasaki 2026-11-16: review newregion r3 #2: an open-boundary node is welded only onto a
+        # COINCIDENT node (< 1 mm; the OBC assignment can leave such a pair, VR job 7591832): that
+        # repairs the string without moving its geometry
+        from scipy.spatial import cKDTree
+
+        coinc = {int(v) for pr in cKDTree(mesh.nodes).query_pairs(1e-3) for v in pr}
+        obc_ids = [int(v) for s_ in mesh.open_boundaries for v in s_ if int(v) not in coinc]
         pre = _snapshot(mesh)
         mesh, winfo = weld_close_nodes(mesh, tol=weld_tol_m, exclude=obc_ids)
         if protect_polygons is not None and winfo.get("n_welded"):
@@ -221,6 +227,7 @@ def finish_constrained_mesh(
     if band_state is not None:
         if not freeze_obc_band:
             band_state["band"][:] = False     # review newregion r3 #2: only the depth tags
+            band_state["obc"][:] = False      # review newregion r3 #2: OBC restored if frozen
         mesh, info["obc_band"] = _restore_obc_band(mesh, band_state, log=log)
     #---> jsasaki 2026-11-16: review newregion r3 #2: the optimizer may not lose protected water
     # or break the open boundary: bank nodes go back where it lost water; if that is not enough,
@@ -327,8 +334,9 @@ def protected_loss_m2(before: Fort14Mesh, after: Fort14Mesh, protect_polygons) -
 def validate_open_boundary(before: Fort14Mesh, after: Fort14Mesh, *,
                            same_positions: bool = True) -> list[str]:
     """Problems with the open boundary of ``after`` relative to ``before``:
-    lost strings, changed node count or order (identity by position when
-    ``same_positions``), consecutive nodes not joined by a boundary edge."""
+    lost strings, changed node count, nodes off the original open line or out
+    of order (``same_positions``), consecutive nodes not joined by a boundary
+    edge."""
     probs: list[str] = []
     ob = [np.asarray(s, np.int64) for s in before.open_boundaries if len(s)]
     oa = [np.asarray(s, np.int64) for s in after.open_boundaries if len(s)]
@@ -339,12 +347,38 @@ def validate_open_boundary(before: Fort14Mesh, after: Fort14Mesh, *,
     code = raw[:, 0].astype(np.int64) * after.n_nodes + raw[:, 1]
     u, c = np.unique(code, return_counts=True)
     bnd = set(u[c == 1].tolist())
+    # jsasaki 2026-11-16: review newregion r3 #2: a coincident (< 1 mm) repeat in the string is one
+    # node (a weld of an exact duplicate repairs the string, it does not shorten it)
+    def _dedup(nodes, seg):
+        keep = np.ones(len(seg), bool)
+        keep[1:] = np.hypot(*(nodes[seg[1:]] - nodes[seg[:-1]]).T) > 1e-3
+        return seg[keep]
+
+    ob = [_dedup(before.nodes, b) for b in ob]
+    oa = [_dedup(after.nodes, a) for a in oa]
     for k, (b, a) in enumerate(zip(ob, oa)):
         if len(a) != len(b):
             probs.append(f"string {k}: {len(b)} nodes before, {len(a)} after")
             continue
-        if same_positions and not np.allclose(before.nodes[b], after.nodes[a], atol=1e-6):
-            probs.append(f"string {k}: node positions or order changed")
+        # jsasaki 2026-11-16: review newregion r3 #2: the open-boundary GEOMETRY must stay: every
+        # node on the original string's polyline (1 mm), in the original order (sliding along the
+        # line is allowed; a weld that moved (1,-1) to (0,0) is not)
+        if same_positions:
+            import shapely
+
+            line = shapely.LineString(before.nodes[b]) if len(b) >= 2 else None
+            if line is None:
+                if not np.allclose(before.nodes[b], after.nodes[a], atol=1e-3):
+                    probs.append(f"string {k}: node moved")
+            else:
+                pts = shapely.points(after.nodes[a])
+                off = shapely.distance(pts, line)
+                pos = np.array([line.project(q) for q in pts])
+                if (off > 1e-3).any():
+                    probs.append(f"string {k}: {int((off > 1e-3).sum())} node(s) off the open line "
+                                 f"(max {off.max():.3f} m)")
+                elif (np.diff(pos) <= 0).any():
+                    probs.append(f"string {k}: node order changed")
         ee = np.sort(np.column_stack([a[:-1], a[1:]]), axis=1)
         nb = sum(int(x) * after.n_nodes + int(y) not in bnd for x, y in ee)
         if nb:
@@ -444,8 +478,10 @@ def _tag_obc_band(mesh: Fort14Mesh):
     band = np.zeros(mesh.n_nodes, bool)
     band[np.unique(mesh.elements[obc[mesh.elements].any(axis=1)])] = True
     # jsasaki 2026-11-16: review newregion r1 #4: triangulation kept for new-node depths
+    # jsasaki 2026-11-16: review newregion r3 #2: the open-boundary nodes (restored first, flip
+    # test only: the optimizer slid an end node 295 m round the junction, VR job 7591939)
     state = {"tags": tags, "depths": mesh.depths.copy(), "xy": mesh.nodes.copy(),
-             "elements": mesh.elements.copy(), "band": band}
+             "elements": mesh.elements.copy(), "band": band, "obc": obc}
     mesh.depths = tags.copy()
     return state
 
@@ -509,9 +545,14 @@ def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
         return (ar.max(axis=1) - ar.min(axis=1)) / ar.max(axis=1)
 
     restored = refused = 0
-    for v in np.nonzero(known)[0]:
+    # jsasaki 2026-11-16: review newregion r3 #2: open-boundary nodes first, flip test only
+    obc_o = state.get("obc", np.zeros(len(state["xy"]), bool))
+    cand = np.nonzero(known)[0]
+    cand = np.concatenate([cand[obc_o[orig[cand]]], cand[~obc_o[orig[cand]]]])
+    for v in cand:
         o = orig[v]
-        if not state["band"][o] or np.array_equal(mesh.nodes[v], state["xy"][o]):
+        is_obc = bool(obc_o[o])
+        if not (state["band"][o] or is_obc) or np.array_equal(mesh.nodes[v], state["xy"][o]):
             continue
         inc = n2e.get(int(v), [])
         els = mesh.elements[inc]
@@ -522,8 +563,9 @@ def _restore_obc_band(mesh: Fort14Mesh, state, *, min_angle: float = 30.0,
         mesh.nodes[v] = state["xy"][o]
         mn1, _mx1, tw1 = _tri_quality(mesh.nodes[els])
         c41 = area_change(pk) if pk else np.zeros(0)
-        if (tw1 <= 0).any() or mn1.min() < min(mn0.min(), min_angle) \
-                or (c41 > np.maximum(c40, max_area_change) + 1e-12).any():
+        if (tw1 <= 0).any() or (not is_obc and (
+                mn1.min() < min(mn0.min(), min_angle)
+                or (c41 > np.maximum(c40, max_area_change) + 1e-12).any())):
             mesh.nodes[v] = old
             refused += 1
         else:
@@ -740,6 +782,71 @@ def keep_components_protected(mesh: Fort14Mesh, node_tag=None, *, protect_polygo
     return out, info, tag
 
 
+# jsasaki 2026-11-16: review newregion r3 #2: lone node by edge flip or split (coverage unchanged)
+def _flip_lone_nodes(mesh: Fort14Mesh) -> tuple[Fort14Mesh, int]:
+    """A single-element node v of element (v, a, b) whose edge a-b is shared
+    with (a, b, c): flip a-b to v-c, giving (v, a, c) and (v, c, b), when the
+    quad is convex and a and b keep two elements each; otherwise split a-b at
+    its midpoint m into (v, a, m), (v, m, b), (c, m, a), (c, b, m). Either way
+    the covered water is unchanged and no single-element node is created.
+    Returns ``(mesh, n_fixed)``."""
+    els = [list(map(int, t)) for t in mesh.elements]
+    nodes = [tuple(map(float, q)) for q in mesh.nodes]
+    depths = list(map(float, mesh.depths))
+
+    def area2(t):
+        (x0, y0), (x1, y1), (x2, y2) = (nodes[t[0]], nodes[t[1]], nodes[t[2]])
+        return (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0)
+
+    def oriented(t, sign):
+        return t if np.sign(area2(t)) == sign else [t[0], t[2], t[1]]
+
+    n_fix = 0
+    n0 = int((np.bincount(mesh.elements.ravel(), minlength=mesh.n_nodes) == 1).sum())
+    for _ in range(2 * n0 + 1):
+        arr = np.asarray(els, np.int64)
+        cnt = np.bincount(arr.ravel(), minlength=len(nodes))
+        lone = [int(v) for v in np.nonzero(cnt == 1)[0]]
+        fixed = False
+        for v in lone:
+            e0 = int(np.nonzero((arr == v).any(axis=1))[0][0])
+            a, b = [x for x in els[e0] if x != v]
+            nb = [e for e in np.nonzero((arr == a).any(axis=1) & (arr == b).any(axis=1))[0]
+                  if e != e0]
+            if len(nb) != 1:
+                continue
+            e1 = int(nb[0])
+            c = next(x for x in els[e1] if x not in (a, b))
+            s0 = np.sign(area2(els[e0]))
+            t1, t2 = oriented([v, a, c], s0), oriented([v, c, b], s0)
+            convex = (np.sign(area2([v, a, c])) == np.sign(area2([v, a, b]))
+                      == np.sign(area2([v, c, b])))
+            if convex and cnt[a] >= 3 and cnt[b] >= 3 and abs(area2(t1)) > 1e-9 \
+                    and abs(area2(t2)) > 1e-9:
+                els[e0], els[e1] = t1, t2
+            else:
+                m = len(nodes)
+                nodes.append(tuple(0.5 * (np.asarray(nodes[a]) + np.asarray(nodes[b]))))
+                depths.append(0.5 * (depths[a] + depths[b]))
+                s1 = np.sign(area2(els[e1]))
+                els[e0] = oriented([v, a, m], s0)
+                els.append(oriented([v, m, b], s0))
+                els[e1] = oriented([c, m, a], s1)
+                els.append(oriented([c, b, m], s1))
+            n_fix += 1
+            fixed = True
+            break       # topology changed: recount
+        if not fixed:
+            break
+    if not n_fix:
+        return mesh, 0
+    out = _snapshot(mesh)
+    out.nodes = np.asarray(nodes, float)
+    out.depths = np.asarray(depths, float)
+    out.elements = np.asarray(els, mesh.elements.dtype)
+    return out, n_fix
+
+
 #---> jsasaki 2026-11-16: review newregion r1 #2: protected water and open-boundary elements are
 # never deleted; lone nodes left there fail (policy "fail") or are reported
 def remove_lone_nodes(mesh: Fort14Mesh, *, protect_polygons=None, max_rounds: int = 10,
@@ -753,6 +860,9 @@ def remove_lone_nodes(mesh: Fort14Mesh, *, protect_polygons=None, max_rounds: in
     ``(mesh, info)`` with the deleted count and area and the nodes kept."""
     if policy not in ("fail", "report"):
         raise ValueError(f"policy must be 'fail' or 'report', not {policy!r}")
+    # jsasaki 2026-11-16: review newregion r3 #2: an edge flip first (no water lost; VR job 7592034
+    # left two single-element nodes in protected water that deletion may not touch)
+    mesh, n_flip = _flip_lone_nodes(mesh)
     n_del, area = 0, 0.0
     for _ in range(max_rounds):
         cnt = np.bincount(mesh.elements.ravel(), minlength=mesh.n_nodes)
@@ -775,8 +885,10 @@ def remove_lone_nodes(mesh: Fort14Mesh, *, protect_polygons=None, max_rounds: in
     left = cnt == 1
     for s in mesh.open_boundaries:
         left[np.asarray(s, int)] = False
-    info = {"elements_deleted": n_del, "area_m2": area, "lone_kept": int(left.sum())}
-    log(f"[finish] single-element nodes: {n_del} elements deleted ({area:.0f} m2), "
+    info = {"elements_deleted": n_del, "area_m2": area, "lone_kept": int(left.sum()),
+            "flipped": n_flip}  # jsasaki 2026-11-16: review newregion r3 #2
+    log(f"[finish] single-element nodes: {n_flip} fixed by an edge flip / split, "
+        f"{n_del} elements deleted ({area:.0f} m2), "
         f"{int(left.sum())} kept (protected water / open boundary)")
     if left.any():
         where = "; ".join(f"({x:.0f}, {y:.0f})" for x, y in mesh.nodes[left][:5])
