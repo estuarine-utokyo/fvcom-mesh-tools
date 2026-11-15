@@ -25,12 +25,12 @@ from scipy.sparse.csgraph import dijkstra
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.io.fvcom_namelist import (  # noqa: E402
     check_fvcom_dirs,
     fortran_string,
     set_value,
 )
+from fvcom_mesh_tools.io.fvcom_native import read_fvcom_case  # noqa: E402
 from fvcom_mesh_tools.walls import split_along_walls, wall_edges_from_path  # noqa: E402
 
 CENTRE = np.array([393010.0, 3909480.0])      # the port region, UTM 54N
