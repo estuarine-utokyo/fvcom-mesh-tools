@@ -1673,6 +1673,22 @@ def wall_pairs(out):
             for i, a in enumerate(g) for b in g[i + 1:]]
 
 
+def allowed_pairs(out, node_map):
+    """The coincident pairs QA excuses: the wall copies, and the pairs the
+    BASE already had (split pinch vertices in the frozen zone), renumbered
+    through the node map.  The Futtsu 50 m base carries seven; QA counted
+    them as introduced by the patch because their ids had changed (job
+    138065)."""
+    from scipy.spatial import cKDTree
+
+    pairs = list(wall_pairs(out) or [])
+    nm = np.asarray(node_map, dtype=np.int64)
+    for a, b in cKDTree(base.nodes[:, :2]).query_pairs(1e-3):
+        if nm[a] >= 0 and nm[b] >= 0:
+            pairs.append((int(nm[a]), int(nm[b])))
+    return pairs or None
+
+
 def patch_violations(qa_checks, written):
     """The QA failures this patch is answerable for, and the one exception.
 
@@ -2239,7 +2255,7 @@ def seed_search(seed_list, search_pass=1):
             save_report()
             continue
         qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000,
-                    allowed_duplicate_pairs=wall_pairs(out))
+                    allowed_duplicate_pairs=allowed_pairs(out, candidate[3]))
         # What the patch is answerable for. A refinement may not be held to a
         # standard its base does not meet: the goto2023 production mesh fails C1
         # at one element 18 km from Futtsu, the contract freezes that element,
@@ -2362,7 +2378,7 @@ reports["mesh"] = str(out14)
 # node map and QA is worse than no artefact (second review, finding 4).
 written, mesh = serialise(candidate, out, out14)
 qa = run_qa(written, name=out14.stem, path=out14, max_offenders=10_000,
-            allowed_duplicate_pairs=wall_pairs(out))
+            allowed_duplicate_pairs=allowed_pairs(out, node_map))
 say(f"selected seed {seed} (search pass {reports['search_pass']}); the gates follow")
 # The wall pairs travel with the mesh, bound to it by hash, so the delivered
 # file can be checked again by `fmesh-mesh-qa` and get the same verdict.
