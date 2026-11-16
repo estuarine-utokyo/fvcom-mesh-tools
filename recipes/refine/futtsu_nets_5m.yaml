@@ -7,7 +7,7 @@ base_depth: ../../../TB-FVCOM/input/goto2023_futtsu50/grid/futtsu_nori_right_50m
 base_obc: ../../../TB-FVCOM/input/goto2023_futtsu50/grid/futtsu_nori_right_50m_obc.dat
 
 dt_expected_s: 0.5        # advisory: an alert, not a veto
-gradation: 0.165
+gradation: 0.12
 coastline: preserve
 
 refine:
