@@ -165,6 +165,13 @@ def _check_recipe(recipe):
         raise SystemExit(f"the recipe has an open-boundary line and {edits}, which may "
                          "drop, move or trim open-boundary nodes: add the obc and/or obcfinal "
                          "stage")
+    # jsasaki 2026-11-16: review newregion r7 #1: siteops/polish run after obc and are not
+    # validated against the open line themselves; obcfinal must follow them (it re-checks the
+    # coverage); every shipped recipe already has it
+    later = [k for k in ("siteops", "polish") if k in recipe]
+    if has_line and "obc" in recipe and later and "obcfinal" not in recipe:
+        raise SystemExit(f"the recipe has an open-boundary line and {later} after the obc stage: "
+                         "add the obcfinal stage, which re-checks the open-line coverage")
 #<--- jsasaki 2026-11-16
 
 
@@ -946,7 +953,10 @@ def _stage_polish(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io import read_fort14, write_fort14
 
     cfg = recipe.get("polish", {}) or {}
+    # jsasaki 2026-11-16: review newregion r7 #1: without siteops, polish starts from the obc mesh
+    # (the restored open boundary), not from the earlier finished mesh
     src = Path(artifacts.get("siteops_mesh")
+               or artifacts.get("obc_mesh")
                or artifacts["finished_mesh"])
     mesh = read_fort14(src)
     # jsasaki 2026-11-16: recipe CRS and shoreline lookup (no 32654 fallback)
@@ -1503,6 +1513,10 @@ def main(argv: list[str] | None = None) -> int:
         if only is not None and name not in only:
             continue
         log(f"[pipeline] === stage {name} ===")
+        # jsasaki 2026-11-16: review newregion r7 #2: a new domain/build is a new mesh generation;
+        # the open-line coverage persisted for the previous one must not constrain it
+        if name in ("domain", "build"):
+            artifacts.pop("open_cover", None)
         t1 = time.perf_counter()
         out = fn(recipe, out_dir, artifacts, log) if name != "prep" \
             else fn(recipe, out_dir, log)

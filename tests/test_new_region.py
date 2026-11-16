@@ -1292,3 +1292,74 @@ def test_r6_1_same_zone_new_region_keeps_its_open_boundary(tmp_path):
     m2 = read_fort14(out["siteops_mesh"])
     assert len(m2.open_boundaries) == 1
     assert np.allclose(m2.nodes[m2.open_boundaries[0]], P[[0, 1, 2, 3, 4]])
+
+
+def test_r7_1_polish_after_obc_needs_obcfinal_and_starts_from_the_obc_mesh(tmp_path, monkeypatch):
+    """r7 #1: finish -> obc -> polish without obcfinal is refused, and polish
+    without siteops starts from the obc mesh (the restored open boundary), not
+    from the earlier finished mesh."""
+    import fvcom_mesh_tools.finishing as fin
+
+    line = {"prep": {"bbox": [0.0, 5.0, 1.0, 6.0], "obc_line": [[0.1, 5.1], [0.9, 5.1]]}}
+    with pytest.raises(SystemExit, match="obcfinal"):
+        pl._check_recipe(dict(line, finish={}, obc={}, polish={}))
+    with pytest.raises(SystemExit, match="obcfinal"):
+        pl._check_recipe(dict(line, finish={}, obc={}, siteops={}))
+    pl._check_recipe(dict(line, finish={}, obc={}, polish={}, obcfinal={}))
+    P, T = _r3_lattice()
+    fin_f, obc_f = tmp_path / "finished.14", tmp_path / "obc.14"
+    write_fort14(_mesh(P, T, opens=[[1, 2, 3]]), fin_f)
+    write_fort14(_mesh(P, T, opens=[[0, 1, 2, 3, 4]]), obc_f)
+    seen = {}
+
+    def fake(mesh, *a, **k):
+        seen["opens"] = [list(o) for o in mesh.open_boundaries]
+        return mesh, {}
+
+    monkeypatch.setattr(fin, "finish_constrained_mesh", fake)
+    monkeypatch.setattr(pl, "_shoreline", lambda *a: None)
+    monkeypatch.setattr(pl, "_protect_geometry", lambda *a: None)
+    rec = {"name": "t", "crs": "EPSG:32631", "polish": {}}
+    pl._stage_polish(rec, tmp_path, {"finished_mesh": str(fin_f), "obc_mesh": str(obc_f)},
+                     lambda *a: None)
+    assert seen["opens"] == [[0, 1, 2, 3, 4]]
+
+
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
+def test_r7_2_a_rebuild_is_not_held_to_the_previous_generation_coverage(tmp_path):
+    """r7 #2: the open-line coverage persisted for a previous mesh generation
+    does not constrain a full rerun (domain/build); a resumed --only obc still
+    compares with it."""
+    import geopandas as gpd
+    import yaml
+
+    water, obc, chan = _domain()
+    gp = tmp_path / "dom.gpkg"
+    gpd.GeoDataFrame(geometry=[water], crs=EPSG).to_file(gp, layer="water")
+    gpd.GeoDataFrame(geometry=[obc], crs=EPSG).to_file(gp, layer="obc")
+    rec = {"name": "t", "out_dir": str(tmp_path / "out"), "crs": f"EPSG:{EPSG}",
+           "domain": {"water": {"path": str(gp), "layer": "water"},
+                      "obc_line": {"path": str(gp), "layer": "obc"}},
+           "build": {"engine": "oceanmesh-polygon", "max_iter": 30,
+                     "size": {"background_m": 400.0, "raster_m": 50.0}},
+           "obc": {"trim": 1, "snap": False}}
+    f = tmp_path / "r.yaml"
+    f.write_text(yaml.safe_dump({"pipeline": rec}))
+    assert pl.main([str(f), "--section", "pipeline"]) == 0
+    pp = tmp_path / "out" / "pipeline_provenance.json"
+    prov = json.loads(pp.read_text())
+    real = prov["artifacts"]["open_cover"]
+    # a previous generation that reached further at both ends
+    prov["artifacts"]["open_cover"] = dict(real, from_m=real["from_m"] - 100.0,
+                                           to_m=real["to_m"] + 100.0)
+    pp.write_text(json.dumps(prov))
+    with pytest.raises(SystemExit, match="retreated"):
+        pl.main([str(f), "--section", "pipeline", "--only", "obc"])
+    prov = json.loads(pp.read_text())
+    prov["artifacts"]["open_cover"] = dict(real, from_m=real["from_m"] - 100.0,
+                                           to_m=real["to_m"] + 100.0)
+    pp.write_text(json.dumps(prov))
+    assert pl.main([str(f), "--section", "pipeline"]) == 0
+    assert json.loads(pp.read_text())["artifacts"]["open_cover"]["to_m"] == pytest.approx(
+        real["to_m"])
