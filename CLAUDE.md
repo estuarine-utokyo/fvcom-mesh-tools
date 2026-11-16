@@ -45,6 +45,11 @@ passed locally (1360 passed) and failed on GitHub (CI run 43778047151) because t
    pipeline build stage, ...) carries `@pytest.mark.needs_oceanmesh`; CI mode is what proves it.
 4. When `.github/workflows/ci.yml` gains a step, add it to `run_ci_local.sh` in the same commit.
 5. After a push (owner only), check the run with `gh run list --limit 3`; a red run is reported.
+6. **Every other commit, docs-only included**, passes `pre-commit run --all-files` first (seconds;
+   the login node is fine). CI runs the hooks over the whole tree, so one trailing space in a
+   Markdown file turns the run red (CI run 43794673145, 2026-11-16: a docs-only commit skipped
+   step 1 and failed `trailing-whitespace`). The git hook installed by `pre-commit install`
+   enforces this on every `git commit` in this checkout; run `pre-commit install` once in a new clone.
 
 ## License policy (do not violate)
 
