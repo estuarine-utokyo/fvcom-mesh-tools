@@ -4577,6 +4577,12 @@ def improve_patch(
                 [inc[lo[v]:hi[v]] for v in (a, b, c, d)]))
             before = _scores(xy, tri, faces, adj, min_angle_deg, max_angle_deg,
                              max_area_change)
+            # the wider neighbourhood a smoothing retry may move and is
+            # scored on: every face around the quad's nodes and their rings
+            ring = np.unique(tri[faces])
+            region = np.unique(np.concatenate([inc[lo[v]:hi[v]] for v in ring]))
+            before_r = _scores(xy, tri, region, adj, min_angle_deg, max_angle_deg,
+                               max_area_change)
             undo = _flip_in_place(tri, adj, f0, f1, _ccw(xy, np.array([c, d, b])),
                                   _ccw(xy, np.array([d, c, a])))
             after = _scores(xy, tri, faces, adj, min_angle_deg,
@@ -4587,7 +4593,37 @@ def improve_patch(
             # comfortable neighbourhood from 1.5 to 1.2 still passes
             # everything. Refusing it only to keep the margin is how a C5
             # violation survived every seed.
-            if after >= min(before[0], 1.0) - 1e-12:
+            ok = after >= min(before[0], 1.0) - 1e-12
+            m = 0
+            if not ok:
+                # The flip alone bends the quad below a gate; let the movable
+                # nodes around it relax, as _thin_corner_fans does, and keep
+                # the pair only if the whole neighbourhood then passes.  On
+                # the Futtsu 5 m patch every surviving C5 node was a valence-9
+                # node ringed by valence-5 ones (2026-11-16): one flip fixes
+                # the count, and a bare flip always cost C1.
+                near = [int(x) for x in ring if is_movable[x]]
+                if near:
+                    keep_near = xy[near].copy()
+
+                    def fan_of(x, f0=f0, f1=f1, inc=inc, lo=lo, hi=hi):
+                        s = {int(f) for f in inc[lo[x]:hi[x]]} | {f0, f1}
+                        return np.array(sorted(f for f in s if x in tri[f]),
+                                        dtype=np.int64)
+
+                    for _ in range(5):
+                        k = _sweep(near, only=np.inf, tables=(fan_of, adj))
+                        m += k
+                        if not k:
+                            break
+                    after_r = _scores(xy, tri, region, adj, min_angle_deg,
+                                      max_angle_deg, max_area_change)[0]
+                    ok = after_r >= min(before_r[0], 1.0) - 1e-12
+                    if not ok:
+                        xy[near] = keep_near
+                        m = 0
+            if ok:
+                n_move += m
                 n_valence_fixed += 1
                 n_flip += 1
                 fixed_any = True
