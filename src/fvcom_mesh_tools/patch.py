@@ -3929,12 +3929,26 @@ def verify_patch(
             obc_ok = False
 
     dup = 0
+    dup_inherited = 0
     if len(new_xy):
         from scipy.spatial import cKDTree
         pairs = cKDTree(new_xy).query_pairs(1e-3, output_type="ndarray")
         if copy_of is not None and len(pairs):
             co = np.asarray(copy_of, dtype=np.int64)
             pairs = pairs[co[pairs[:, 0]] != co[pairs[:, 1]]]
+        # A coincident pair the BASE already had (a split pinch vertex where
+        # two land pieces touch, kept frozen) is the base's, not the patch's:
+        # the Futtsu 50 m mesh carries seven, and counting them rejected every
+        # seed of its 5 m refinement (job 137984).
+        if len(pairs):
+            bp = cKDTree(xy).query_pairs(1e-3, output_type="ndarray")
+            bp = bp[(nm[bp] >= 0).all(axis=1)] if len(bp) else bp
+            if len(bp):
+                inherited = {tuple(sorted(p)) for p in nm[bp].tolist()}
+                is_inh = np.array([tuple(sorted(p)) in inherited
+                                   for p in pairs.tolist()])
+                dup_inherited = int(is_inh.sum())
+                pairs = pairs[~is_inh]
         dup = int(len(pairs))
     orphan = int(len(new_xy) - np.unique(tri).size)
 
@@ -3991,6 +4005,7 @@ def verify_patch(
         "n_retained_faces_missing": int(len(missing)),
         "n_inverted_elements": int((area2 <= 0).sum()),
         "n_duplicate_nodes": dup,
+        "n_duplicate_nodes_inherited": dup_inherited,
         "n_orphan_nodes": orphan,
         "n_interface_segments_split": int(len(split)),
         "boundary_checked": bool(expected_boundary is not None),
