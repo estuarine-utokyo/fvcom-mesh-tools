@@ -2467,3 +2467,46 @@ VERDICT: PASS
 ### Triage
 
 No findings. The loop closed with PASS at round 10 (32 findings over rounds 1-9, all verified correct and fixed; no rebuttals).
+
+## Tokyo regression evidence (scratch/regress_20261116, deleted 2026-11-16 at the owner's request)
+
+Tokyo `tokyo_bay_v6` was run by `run_v6.sh` (pjsub, 8 cores; `python -m fvcom_mesh_tools.cli.pipeline` on a copy of the recipe with `out_dir` changed). Baseline `base1b` = 1988f22 + the ledger fix e557279 (the unpatched baseline crashed in `finishing`). Every later run (head1-head14 at the commits of each round, new1/new2) was md5-identical to it at all six stages:
+
+```text
+4b528c9034ad55f1002d747cba883caa  tokyo_bay_v6_final.14
+ba3b91369efa0b7a958112e861f6eb2c  tokyo_bay_v6_finished.14
+8a7d85a99397b399276aa678267533ab  tokyo_bay_v6_obc.14
+e05f6e596731cfde954da67e0d404026  tokyo_bay_v6_polished.14
+6e98388505d57eb2a586f1f631a7f154  tokyo_bay_v6_raw.14
+ef9c66815f71f0063a22873cac39d600  tokyo_bay_v6_siteops.14
+```
+
+Runs (job ids): base1 7590563, base2 7590564, base1b 7590839, new1 7590840, new2 7590841, head1..head14: head1.7590992 head2.7591112 head3.7591382 head4.7591567 head5.7591693 head6.7591831 head7.7592309 head8.7592397 head9.7592471 head10.7592486 head11.7592600 head12.7592967 head13.7593237 head14.7593270 
+
+Job script, for a future rerun:
+
+```bash
+#!/bin/bash
+#PJM -L rscgrp=a-batch
+#PJM -L vnode=1
+#PJM -L vnode-core=8
+#PJM -L elapse=02:00:00
+#PJM -j
+#PJM -X
+#PJM -N v6regress
+# Tokyo Bay v6 pipeline regression: TAG (recipe v6_${TAG}.yaml) run with SRC (base_src = pre-change
+# snapshot, or "repo" = the working tree). Submit from the fvcom-mesh-tools root.
+set -uo pipefail
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+: "${DATA_DIR:?DATA_DIR is not set}"
+cd "${HOME}/Github/fvcom-mesh-tools"
+ENV="${HOME}/mambaforge/envs/fvcom-mesh-tools"
+export PATH="${ENV}/bin:${PATH}" PROJ_DATA="${ENV}/share/proj"
+R=scratch/regress_20261116
+if [[ ${SRC} != repo ]]; then export PYTHONPATH="${PWD}/${R}/${SRC}/src"; fi
+python -c "import fvcom_mesh_tools; print('package', fvcom_mesh_tools.__file__)"
+rm -rf "${R}/${TAG}"
+python -m fvcom_mesh_tools.cli.pipeline "${R}/v6_${TAG}.yaml"
+echo "pipeline exit $?"
+md5sum "${R}/${TAG}"/*.14
+```
