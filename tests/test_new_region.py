@@ -1363,3 +1363,92 @@ def test_r7_2_a_rebuild_is_not_held_to_the_previous_generation_coverage(tmp_path
     assert pl.main([str(f), "--section", "pipeline"]) == 0
     assert json.loads(pp.read_text())["artifacts"]["open_cover"]["to_m"] == pytest.approx(
         real["to_m"])
+
+
+def test_r8_1_a_rebuild_drops_the_previous_generation_meshes(tmp_path, monkeypatch):
+    """r8 #1: rerunning build in the same out_dir must not let a later stage
+    pick up the previous generation's final_mesh (finishing preferred it)."""
+    import yaml
+
+    out = tmp_path / "out"
+    out.mkdir()
+    old_final = tmp_path / "old_final.14"
+    old_final.write_text("old")
+    (out / "pipeline_provenance.json").write_text(json.dumps(
+        {"artifacts": {"final_mesh": str(old_final), "latest_mesh": str(old_final),
+                       "obc_mesh": str(old_final),
+                       "open_cover": {"stage": "obc", "from_m": 0.0, "to_m": 1.0}}}))
+    seen = {}
+
+    def fake_build(recipe, out_dir, artifacts, log):
+        return {"raw_mesh": str(tmp_path / "new_raw.14")}
+
+    def fake_finishing(recipe, out_dir, artifacts, log):
+        seen.update({k: artifacts.get(k) for k in ("final_mesh", "obc_mesh", "latest_mesh",
+                                                   "open_cover", "raw_mesh")})
+        return {}
+
+    monkeypatch.setattr(pl, "STAGES", [("build", fake_build), ("finishing", fake_finishing)])
+    f = tmp_path / "r.yaml"
+    f.write_text(yaml.safe_dump({"name": "t", "out_dir": str(out), "crs": "EPSG:32631",
+                                 "build": {}, "finishing": {}}))
+    assert pl.main([str(f)]) == 0
+    assert seen["raw_mesh"] == str(tmp_path / "new_raw.14")
+    assert seen["final_mesh"] is None and seen["obc_mesh"] is None
+    assert seen["open_cover"] is None
+    assert seen["latest_mesh"] == str(tmp_path / "new_raw.14")
+
+
+def test_r8_2_obcfinal_without_obc_starts_from_the_finished_mesh(tmp_path, monkeypatch):
+    """r8 #2: a recipe with finish and obcfinal but no obc (allowed) runs: the
+    stage starts from finished_mesh (or a projected raw mesh)."""
+    import fvcom_mesh_tools.obc_tools as ot
+
+    P, T = _r3_lattice()
+    fin_f = tmp_path / "finished.14"
+    write_fort14(_mesh(P, T, opens=[[0, 1, 2, 3, 4]]), fin_f)
+    seen = {}
+
+    def fake(mesh, **k):
+        seen["n"] = len(mesh.nodes)
+        return mesh, {}
+
+    monkeypatch.setattr(ot, "assign_west_south_obc", fake)
+    monkeypatch.setattr(pl, "_protect_geometry", lambda *a: None)
+    monkeypatch.setattr(pl, "_check_open_cover", lambda *a, **k: None)
+    rec = {"name": "t", "crs": "EPSG:32631", "build": {}, "obcfinal": {}}
+    pl._stage_obcfinal(rec, tmp_path, {"finished_mesh": str(fin_f)}, lambda *a: None)
+    assert seen["n"] == len(P)
+    seen.clear()
+    pl._stage_obcfinal(rec, tmp_path, {"raw_mesh": str(fin_f), "raw_mesh_crs": "EPSG:32631"},
+                       lambda *a: None)
+    assert seen["n"] == len(P)
+    with pytest.raises(SystemExit, match="no metric mesh"):
+        pl._stage_obcfinal(rec, tmp_path, {"raw_mesh": str(fin_f), "raw_mesh_crs": "EPSG:4326"},
+                           lambda *a: None)
+
+
+def test_r8_3_polygon_directives_need_no_prep(tmp_path, monkeypatch):
+    """r8 #3: finishing directives with an explicit polygon run in a domain
+    recipe without prep; a `cell` directive without prep.bbox fails loudly."""
+    import fvcom_mesh_tools.autofinish as af
+
+    P, T = _r3_lattice()
+    f = tmp_path / "obc.14"
+    write_fort14(_mesh(P, T, opens=[[0, 1, 2, 3, 4]]), f)
+    seen = {}
+
+    def fake_apply(mesh, dcfg, **k):
+        seen["dcfg"] = dcfg
+        raise RuntimeError("stop after directives")
+
+    monkeypatch.setattr(af, "apply_directives", fake_apply)
+    poly = [[0.5, 5.5], [0.6, 5.5], [0.6, 5.6], [0.5, 5.5]]
+    rec = {"name": "t", "crs": "EPSG:32631",
+           "finishing": {"directives": [{"polygon": poly, "target_h_m": 50}]}}
+    with pytest.raises(RuntimeError, match="stop after directives"):
+        pl._stage_finishing(rec, tmp_path, {"obc_mesh": str(f)}, lambda *a: None)
+    assert seen["dcfg"][0]["polygon"] == poly
+    rec["finishing"]["directives"] = [{"cell": "A1", "target_h_m": 50}]
+    with pytest.raises(SystemExit, match="prep.bbox"):
+        pl._stage_finishing(rec, tmp_path, {"obc_mesh": str(f)}, lambda *a: None)
