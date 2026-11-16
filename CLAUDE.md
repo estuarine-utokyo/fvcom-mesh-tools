@@ -26,6 +26,26 @@ ruff check .
 
 A `Makefile` exposes `install`, `test`, `lint`, `format`, `clean` targets.
 
+## Before every commit: reproduce GitHub CI locally (owner rule, 2026-11-16)
+
+A plain `pytest -q` in the laboratory environment is NOT enough. GitHub's CI has no oceanmesh fork
+and no `WORK_DIR`/`DATA_DIR`; on 2026-11-16 twelve new tests that generate meshes with oceanmesh
+passed locally (1360 passed) and failed on GitHub (CI run 43778047151) because they lacked
+`@pytest.mark.needs_oceanmesh`. So, before committing any change under `src/`, `tests/`,
+`notebooks/`, `tools/`, `pyproject.toml` or `environment.yml`:
+
+1. Run `tools/ci_local/run_ci_local.sh` -- on GENKAI as a batch job, `pjsub jobs/genkai/ci_local.sh`
+   from the repository root (~2 min; log in `logs/ci_local.<jobid>.log`). It runs every CI step:
+   ruff (repository and notebooks 42*/43*), pytest in **CI mode** (oceanmesh hidden by
+   `tools/ci_local/hide_oceanmesh/`, `WORK_DIR`/`DATA_DIR` unset), pytest in lab mode (full
+   environment), `pre-commit run --all-files`, and the CLI `--help` smoke checks of `ci.yml`.
+2. Commit only when the log ends with `=== ci_local: PASS`, and quote the job id in the commit
+   message or the report. A failing step is fixed first, never committed "to fix later".
+3. A new test that imports or runs oceanmesh (directly or through `mesh_engine.polygon`, the
+   pipeline build stage, ...) carries `@pytest.mark.needs_oceanmesh`; CI mode is what proves it.
+4. When `.github/workflows/ci.yml` gains a step, add it to `run_ci_local.sh` in the same commit.
+5. After a push (owner only), check the run with `gh run list --limit 3`; a red run is reported.
+
 ## License policy (do not violate)
 
 - The project is **GPL-3.0-or-later** (relicensed from Apache-2.0 on

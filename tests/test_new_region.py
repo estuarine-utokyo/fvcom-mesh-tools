@@ -183,6 +183,8 @@ def _domain():
     return sea, obc, chan
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_polygon_engine_open_string_and_components():
     from fvcom_mesh_tools.mesh_engine.polygon import (
         build_size_field,
@@ -267,6 +269,8 @@ def test_remove_lone_nodes_and_land_rebuild():
     assert ib == 20 and land[0] == ob[-1] and land[-1] == ob[0]
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_finish_keeps_open_boundary_and_protected_channel(tmp_path):
     import geopandas as gpd
     from pyproj import Transformer
@@ -335,6 +339,8 @@ def test_depths_stage_products(tmp_path):
 
 
 # --------------------------------------------- pipeline: domain + polygon build
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_pipeline_domain_build_qa(tmp_path):
     import geopandas as gpd
     import yaml
@@ -365,6 +371,8 @@ def test_pipeline_domain_build_qa(tmp_path):
     assert len(line) == 2 and 0.0 < line[0][0] < 3.0                       # lon/lat
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_polygon_engine_lost_component_and_expected_drop():
     from shapely.geometry import box
 
@@ -488,6 +496,8 @@ def test_r1_3_polygon_build_requires_obc_restoration():
     pl._check_recipe(dict(rec, obc={}))
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r1_3_polygon_engine_reports_open_cover():
     from fvcom_mesh_tools.mesh_engine.polygon import build_size_field, generate_polygon_mesh
 
@@ -521,6 +531,8 @@ def test_r1_4_band_restore_interpolates_new_node_depths():
     assert np.allclose(out.depths[:4], [1.0, 101.0, 101.0, 1.0])
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r1_5_expected_drop_is_an_area_fraction():
     """#5: a 2.25 km2 pond finely meshed in a small corner is NOT an expected
     drop when expected_drop covers only that corner (4 % of its area)."""
@@ -710,6 +722,8 @@ def test_r2_2_siteops_cannot_erode_protected_water():
     assert protected_overlap_m2(out.nodes, out.elements, water) >= before - 1.0
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r2_3_small_protected_component_is_not_dropped_silently():
     """#3: a protected pond below max_dropped_component_km2 fails unless it is
     an expected drop."""
@@ -758,6 +772,8 @@ def _ear_lattice():
     return P, T
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r2_5_repair_loss_by_intersection_area(monkeypatch):
     """#5: the ear's overlap with the protected strip counts although its
     centroid is outside; with a zero threshold the build fails."""
@@ -779,6 +795,8 @@ def test_r2_5_repair_loss_by_intersection_area(monkeypatch):
                               protected_coverage_policy="report", log=lambda *a: None)
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r2_4_pipeline_forwards_build_guards(tmp_path, monkeypatch):
     """#4: build.max_protected_ear_area_km2 (and the drop policy) reach the
     engine; an excessive repair loss fails the pipeline build."""
@@ -860,6 +878,8 @@ def test_r2_8_prep_receives_a_legacy_crs_override(tmp_path, monkeypatch):
 
 
 # ------------------------------------------- review newregion r3 (regressions)
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r3_1_finely_meshed_protected_pond_is_measured():
     """#1: a separate protected pond holding MOST of the elements is still a
     dropped component; it fails instead of vanishing (no OBC reaches it)."""
@@ -1112,6 +1132,8 @@ def test_r4_2_coverage_guard_needs_no_runtime_metadata(tmp_path):
     assert "open_cover" in pl._STRUCTURED_ARTIFACTS and "raw_open_cover" in pl._STRUCTURED_ARTIFACTS
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r4_2_open_cover_survives_a_resumed_run(tmp_path):
     """#2: run domain+build+obc, then --only obc: the coverage record is in the
     persisted artifacts both times."""
@@ -1182,6 +1204,8 @@ def test_r4_4_validation_accepts_a_coincident_open_boundary_pair():
 
 
 # ------------------------------------------- review newregion r5 (regressions)
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r5_1_unrepresented_protected_water_fails():
     """#1: a 60 m channel at a 100 m background is barely represented (the
     reviewer measured 2,979 of 60,000 m2); the build now fails (strict
@@ -1237,6 +1261,32 @@ def test_r5_3_only_legacy_recipes_take_the_legacy_siteops_path(tmp_path):
     rec.update(name="x", crs=32631, prep={"bbox": [-0.15, 5.0, 1.45, 6.5],
                                          "obc_line": [[0.1, 5.7], [1.2, 5.9]]},
                build={"engine": "oceanmesh"}, obc={}, siteops={"passes": 1})
+    assert not pl._legacy_siteops(rec)
+    out = pl._stage_siteops(rec, tmp_path, dict(art, obc_mesh=str(f)), lambda *a: None)
+    m2 = read_fort14(out["siteops_mesh"])
+    assert len(m2.open_boundaries) == 1
+    assert np.allclose(m2.nodes[m2.open_boundaries[0]], P[[0, 1, 2, 3, 4]])
+
+
+def test_r6_1_same_zone_new_region_keeps_its_open_boundary(tmp_path):
+    """r6 #1: a prep recipe in UTM zone 54 (Sendai, inferred CRS, no protection)
+    is not legacy: siteops keeps its open boundary; only the explicit key
+    (set by the shipped Tokyo recipes) selects the legacy path."""
+    import yaml
+
+    root = Path(__file__).resolve().parents[1] / "recipes"
+    for name in ("tokyo_bay_v5", "tokyo_bay_v5s", "tokyo_bay_v5u", "tokyo_bay_v6", "tokyo_bay_v6s"):
+        assert pl._legacy_siteops(yaml.safe_load((root / f"{name}.yaml").read_text())), name
+    P, T = _r3_lattice()
+    m = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    f = tmp_path / "obc.14"
+    write_fort14(m, f)
+    rec, art = _fallback_setup(tmp_path, protect=False)
+    rec.pop("crs", None)
+    rec.update(name="sendai", prep={"bbox": [141.0, 38.2, 141.6, 38.8],
+                                    "obc_line": [[141.1, 38.3], [141.5, 38.3]]},
+               build={"engine": "oceanmesh"}, obc={}, siteops={"passes": 1})
+    assert pl._recipe_epsg(rec) == 32654
     assert not pl._legacy_siteops(rec)
     out = pl._stage_siteops(rec, tmp_path, dict(art, obc_mesh=str(f)), lambda *a: None)
     m2 = read_fort14(out["siteops_mesh"])

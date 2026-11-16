@@ -1029,9 +1029,10 @@ strict (`protected_coverage_tol_m2` / `protected_coverage_tol_frac` 0, `protecte
 0, `protected_coverage_policy: fail`). A mesh discretises a curved outline, so a real region needs
 explicit tolerances: VR v3 represents 373.64 of 377.11 km2 (0.92 % missing) and its clean removes
 0.544 km2, and sets `protected_coverage_tol_frac: 0.01`, `protected_clean_loss_tol_m2: 600000`.
-siteops keeps the legacy component step (largest component, boundary lists reset) only for legacy
-Tokyo recipes (no `crs`, EPSG 32654, no polygon build, no protection) or with
-`siteops.legacy_component_path: true`.
+siteops keeps the legacy component step (largest component, boundary lists reset) only with
+`siteops.legacy_component_path: true`, which the shipped Tokyo recipes (`tokyo_bay_v5*`, `v6*`) set;
+every other recipe keeps and validates its open boundary (review newregion round 6: a CRS-based
+guess took new regions in UTM zone 54 for Tokyo).
 
 Open-boundary checks of a region recipe (polygon build with a supplied line; review newregion
 round 4): the obc and obcfinal stages compare the open string with the wet extent of the supplied

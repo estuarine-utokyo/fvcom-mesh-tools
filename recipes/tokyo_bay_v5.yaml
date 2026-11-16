@@ -41,6 +41,9 @@ obc:
   #                      # field is attached later
 
 siteops:
+  # jsasaki 2026-11-16: review newregion r6 #1: keep the measured Tokyo siteops (largest component,
+  # boundary lists reset); new-region recipes keep and validate their open boundary
+  legacy_component_path: true
   passes: 2
   min_edge_m: 75   # solver hazard: sub-scale edges NaN'd the M2 test
 

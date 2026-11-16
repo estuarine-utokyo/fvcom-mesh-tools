@@ -717,23 +717,15 @@ def _obc_line_from(recipe, out_dir):
 
 #---> jsasaki 2026-11-16: review newregion r3 #2: the obc stages must give back the open line
 # jsasaki 2026-11-16: review newregion r5 #3: which recipes keep the legacy siteops component step
+# jsasaki 2026-11-16: review newregion r6 #1: no CRS heuristic (a new region in UTM zone 54
+# was taken for Tokyo and lost its open boundary); only the explicit key selects the legacy
+# path, and the shipped Tokyo recipes (recipes/tokyo_bay_v5*.yaml, v6*.yaml) set it
 def _legacy_siteops(recipe) -> bool:
-    """``siteops.legacy_component_path`` when given; otherwise a recipe is
-    legacy (Tokyo) when it names no ``crs``, resolves to EPSG:32654 through the
-    legacy ``finish.utm_epsg`` or its bbox, uses no polygon build and no
-    protected water. Legacy siteops keep the largest component and reset the
-    boundary lists (the measured Tokyo behaviour); all others keep and
-    validate the open boundary."""
-    flag = (recipe.get("siteops") or {}).get("legacy_component_path")
-    if flag is not None:
-        return bool(flag)
-    try:
-        epsg = _recipe_epsg(recipe)
-    except SystemExit:
-        return False
-    return (recipe.get("crs") is None and epsg == 32654
-            and (recipe.get("build") or {}).get("engine") != "oceanmesh-polygon"
-            and not recipe.get("protect_polygons"))
+    """True only when ``siteops.legacy_component_path`` is true: legacy siteops
+    keep the largest component and reset the boundary lists (the measured
+    Tokyo behaviour; the shipped Tokyo recipes set the key). Every other
+    recipe keeps and validates its open boundary."""
+    return bool((recipe.get("siteops") or {}).get("legacy_component_path", False))
 
 
 def _region_obc(recipe) -> bool:

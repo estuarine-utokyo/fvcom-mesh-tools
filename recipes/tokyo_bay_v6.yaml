@@ -62,6 +62,9 @@ obc:
   max_move_m: 900.0
 
 siteops:
+  # jsasaki 2026-11-16: review newregion r6 #1: keep the measured Tokyo siteops (largest component,
+  # boundary lists reset); new-region recipes keep and validate their open boundary
+  legacy_component_path: true
   passes: 2
   min_edge_m: 100.0        # inner hmin 400 -> sweep <100 m only
 
