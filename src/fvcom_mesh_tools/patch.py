@@ -4153,6 +4153,53 @@ def _incidence(tri, n_nodes):
     return faces, np.searchsorted(who, idx), np.searchsorted(who, idx, side="right")
 
 
+def _edge_key(p, q):
+    return (p, q) if p < q else (q, p)
+
+
+def _flip_in_place(tri, adj, f0, f1, new0, new1):
+    """Replace faces ``f0``/``f1`` by ``new0``/``new1`` (an edge flip) and
+    update ``adj`` locally; returns the record :func:`_unflip` restores.
+
+    ``adj`` stays exactly what :func:`_face_adjacency` would rebuild from the
+    new ``tri`` -- slot k is the edge (k, k+1) -- but at O(1) cost.  Rebuilding
+    the whole table for every candidate flip made the seam repair quadratic in
+    the mesh size: 83 min per seed on the 147k-element Futtsu 5 m patch.
+    """
+    outer = {}
+    for f in (f0, f1):
+        t = tri[f]
+        for k in range(3):
+            n = int(adj[f, k])
+            if n != f0 and n != f1:
+                outer[_edge_key(int(t[k]), int(t[(k + 1) % 3]))] = n
+    undo = (f0, f1, tri[f0].copy(), tri[f1].copy(), adj[f0].copy(), adj[f1].copy(),
+            {n: adj[n].copy() for n in set(outer.values()) if n >= 0})
+    tri[f0] = new0
+    tri[f1] = new1
+    for f, other in ((f0, f1), (f1, f0)):
+        t = tri[f]
+        for k in range(3):
+            e = _edge_key(int(t[k]), int(t[(k + 1) % 3]))
+            n = outer.get(e, other)
+            adj[f, k] = n
+            if n >= 0 and n != other:
+                tn = tri[n]
+                for j in range(3):
+                    if _edge_key(int(tn[j]), int(tn[(j + 1) % 3])) == e:
+                        adj[n, j] = f
+                        break
+    return undo
+
+
+def _unflip(tri, adj, undo):
+    f0, f1, t0, t1, a0, a1, rows = undo
+    tri[f0], tri[f1] = t0, t1
+    adj[f0], adj[f1] = a0, a1
+    for n, row in rows.items():
+        adj[n] = row
+
+
 def _interior_edges(tri):
     """Every edge with two faces, as (a, b, face0, face1)."""
     e = np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]), axis=1)
@@ -4284,15 +4331,26 @@ def improve_patch(
     is_movable = np.zeros(len(xy), dtype=bool)
     is_movable[movable] = True
 
-    def _sweep(nodes_, only=only_below):
-        """One pass of node moves over ``nodes_``; returns how many moved."""
+    def _sweep(nodes_, only=only_below, tables=None):
+        """One pass of node moves over ``nodes_``; returns how many moved.
+
+        ``tables`` = ``(fan_of, adj)`` when the caller keeps them current;
+        ``fan_of(v)`` must return v's incident faces in ascending order, as
+        the incidence table does (the soft score is a sum, so order counts).
+        """
         # Connectivity is unchanged by a move, so one incidence table serves
         # the whole sweep.
-        inc, lo, hi = _incidence(tri, len(xy))
-        adj = _face_adjacency(tri)
+        if tables is None:
+            inc, lo, hi = _incidence(tri, len(xy))
+            adj = _face_adjacency(tri)
+
+            def fan_of(v):
+                return inc[lo[v]:hi[v]]
+        else:
+            fan_of, adj = tables
         n = 0
         for v in nodes_:
-            faces = inc[lo[v]:hi[v]]
+            faces = fan_of(v)
             if not len(faces):
                 continue
             before = _scores(xy, tri, faces, adj, min_angle_deg, max_angle_deg,
@@ -4335,6 +4393,7 @@ def improve_patch(
         bnd[u[cnt == 1] % len(xy)] = True
         ang = _angles_deg(xy, tri)
         inc, lo, hi = _incidence(tri, len(xy))
+        adj = _face_adjacency(tri)   # kept current by _flip_in_place/_unflip
         for v in np.flatnonzero(bnd):
             fan = inc[lo[v]:hi[v]]
             if len(fan) < 3 or not mutable[fan].all():
@@ -4349,7 +4408,7 @@ def improve_patch(
                 ring |= {int(x) for f in inc[lo[w]:hi[w]] for x in tri[f]}
             region = np.unique(np.concatenate(
                 [inc[lo[x]:hi[x]] for x in ring]))
-            before = _scores(xy, tri, region, _face_adjacency(tri),
+            before = _scores(xy, tri, region, adj,
                              min_angle_deg, max_angle_deg, max_area_change)
             val = np.bincount(tri.ravel(), minlength=len(xy))
             for w in sorted(spokes):
@@ -4361,23 +4420,32 @@ def improve_patch(
                 if not _convex_quad(xy, v, w, c, d) or val[w] <= 3 \
                         or val[c] + 1 > max_valence or val[d] + 1 > max_valence:
                     continue
-                keep_xy, keep_tri = xy.copy(), tri.copy()
-                tri[f0] = _ccw(xy, np.array([c, d, w]))
-                tri[f1] = _ccw(xy, np.array([d, c, v]))
                 near = [x for x in sorted(ring) if is_movable[x]]
+                keep_near = xy[near].copy()
+                undo = _flip_in_place(tri, adj, f0, f1, _ccw(xy, np.array([c, d, w])),
+                                      _ccw(xy, np.array([d, c, v])))
+
+                # the incidence table is stale only at f0/f1, which this flip
+                # rewrote; a fan is the table's plus those two, re-checked
+                def fan_of(x, f0=f0, f1=f1):
+                    s = {int(f) for f in inc[lo[x]:hi[x]]} | {f0, f1}
+                    return np.array(sorted(f for f in s if x in tri[f]),
+                                    dtype=np.int64)
+
                 m = 0
                 for _ in range(5):
-                    k = _sweep(near, only=np.inf)
+                    k = _sweep(near, only=np.inf, tables=(fan_of, adj))
                     m += k
                     if not k:
                         break
-                after = _scores(xy, tri, region, _face_adjacency(tri),
+                after = _scores(xy, tri, region, adj,
                                 min_angle_deg, max_angle_deg, max_area_change)
                 if after[0] > before[0] + 1e-9:
                     flips += 1
                     moves += m
                     break
-                xy[:], tri[:] = keep_xy, keep_tri
+                xy[near] = keep_near
+                _unflip(tri, adj, undo)
             else:
                 continue
             # the tables are stale after an accepted trial
@@ -4432,26 +4500,25 @@ def improve_patch(
                              max_area_change)
             if before[0] >= only_below:
                 continue
-            keep0, keep1 = tri[f0].copy(), tri[f1].copy()
-            tri[f0] = _ccw(xy, np.array([c, d, b]))
-            tri[f1] = _ccw(xy, np.array([d, c, a]))
-            after = _scores(xy, tri, faces, _face_adjacency(tri),
+            undo = _flip_in_place(tri, adj, f0, f1, _ccw(xy, np.array([c, d, b])),
+                                  _ccw(xy, np.array([d, c, a])))
+            after = _scores(xy, tri, faces, adj,
                             min_angle_deg, max_angle_deg, max_area_change)
             if _better(after, before, soft):
                 n_flip += 1
                 changed = True
                 # Accepted: every precomputed table is now stale for the
-                # vertices this touched, so they are rebuilt.  Flips are few
-                # (6-71 on the Futtsu patch) and a stale fan is how the
-                # "strictly improving" claim stopped being true.
+                # vertices this touched, so they are rebuilt (adj is kept
+                # current by _flip_in_place).  Flips are few (6-71 on the
+                # Futtsu patch) and a stale fan is how the "strictly
+                # improving" claim stopped being true.
                 val[a] -= 1
                 val[b] -= 1
                 val[c] += 1
                 val[d] += 1
                 inc, lo, hi = _incidence(tri, len(xy))
-                adj = _face_adjacency(tri)
             else:
-                tri[f0], tri[f1] = keep0, keep1
+                _unflip(tri, adj, undo)
 
         # --- moves -------------------------------------------------------
         moved = _sweep(movable)
@@ -4510,10 +4577,9 @@ def improve_patch(
                 [inc[lo[v]:hi[v]] for v in (a, b, c, d)]))
             before = _scores(xy, tri, faces, adj, min_angle_deg, max_angle_deg,
                              max_area_change)
-            keep0, keep1 = tri[f0].copy(), tri[f1].copy()
-            tri[f0] = _ccw(xy, np.array([c, d, b]))
-            tri[f1] = _ccw(xy, np.array([d, c, a]))
-            after = _scores(xy, tri, faces, _face_adjacency(tri), min_angle_deg,
+            undo = _flip_in_place(tri, adj, f0, f1, _ccw(xy, np.array([c, d, b])),
+                                  _ccw(xy, np.array([d, c, a])))
+            after = _scores(xy, tri, faces, adj, min_angle_deg,
                             max_angle_deg, max_area_change)[0]
             # Spending margin is allowed here, failing a gate is not. The main
             # pass may not lose ground anywhere; this one has a gate to
@@ -4530,9 +4596,8 @@ def improve_patch(
                 val[c] += 1
                 val[d] += 1
                 inc, lo, hi = _incidence(tri, len(xy))
-                adj = _face_adjacency(tri)
             else:
-                tri[f0], tri[f1] = keep0, keep1
+                _unflip(tri, adj, undo)
         if not fixed_any:
             break
 
