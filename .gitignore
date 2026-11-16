@@ -31,6 +31,9 @@ htmlcov/
 
 # Generated outputs
 outputs/
+# figures a recipe tool writes beside its tracked products, e.g. the
+# <csv>.png of notebooks/444_design_obc.py; regenerate, do not track
+recipes/**/*.png
 figures/
 *.html
 
