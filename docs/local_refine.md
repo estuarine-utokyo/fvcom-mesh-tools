@@ -1018,6 +1018,36 @@ Why the policy holds, and what it does not buy:
   (TB-FVCOM `dye/docs/dye_run_configuration.md` §6q); 5 m needs roughly an
   eighth of it, on several times the nodes.
 
+**What it took to build (2026-11-16).** Accepted mesh: seed 3 of
+`outputs/refine_futtsu_nets_5m_g165_s3` (gradation 0.165, transition ~260 m
+at the measured 48 m ambient): 73,905 nodes, 146,891 elements, every region
+at a median 4.8-4.9 m with 99.6-100 % of its water within 1.25x, depths
+3-300 m and new edges at r <= 0.055, 0 QA violations introduced (the one
+failed gate is a frozen 28.99 deg goto2023 element), achieved dt 0.38 s. Four
+defects had to be fixed first, all generic:
+
+1. **Coincident nodes in the base.** The 50 m mesh carries seven split pinch
+   vertices; matplotlib's triangulation refused them (`tri_interp`), the
+   frozen-zone check counted them (`verify_patch`, now
+   `n_duplicate_nodes_inherited`), and the final QA, after renumbering, did
+   too (`allowed_pairs` in notebook 420).
+2. **A quadratic seam repair.** `improve_patch` rebuilt the whole face
+   adjacency for every candidate flip; `_flip_in_place` / `_unflip` keep it
+   exact locally. Same output bit for bit, 83 -> 23 min per seed; seeds then
+   run as parallel jobs (`LR_SEEDS=<s>`, `LR_OUT=..._s<s>`).
+3. **Valence 9 left by the fill.** Every surviving C5 node was ringed by
+   valence-5 nodes; one flip fixes it but a bare flip always cost C1. The
+   valence cleanup now retries a refused flip with local smoothing.
+4. A gentler ramp (gradation 0.12, 375 m) was tried and did **not** help --
+   the defects were local fill artefacts, not ramp steepness -- so the recipe
+   keeps 0.165.
+
+The 5 m mesh is a refinement of the 50 m bundle; TB-FVCOM bundles it as a
+refinement of goto2023 through the composed node map
+(`build_refined_bundle.py --via-bundle`, bundle `input/goto2023_futtsu5`).
+A 3 h FVCOM smoke run at EXTSTEP 0.375 s x ISPLIT 4 was stable (surface
+speed <= 0.97 m/s, 0.80 m/s in the fine area) and took 36 min on 64 cores.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as

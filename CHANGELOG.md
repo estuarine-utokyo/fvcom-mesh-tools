@@ -18,6 +18,18 @@ will only ship with a major bump (Semantic Versioning).
   `recipes/refine/futtsu_nets_5m.yaml`: the Futtsu net blocks at 5 m on the 50 m licence mesh.
   `docs/local_refine.md` §6.10.
 
+### Fixed -- local refinement of a mesh with coincident nodes, and of a large patch (2026-11-16)
+
+- `tri_interp.linear_interpolator`: interpolation over a mesh with split pinch vertices
+  (coincident nodes), used by `refine.depths_from_base`, `patch` and notebook 420.
+- `verify_patch` and notebook 420's final QA excuse coincident pairs inherited from the base
+  (`n_duplicate_nodes_inherited`, `allowed_pairs`).
+- `improve_patch`: face adjacency updated locally per flip (`_flip_in_place`/`_unflip`) instead of
+  rebuilt; identical output, the 147k-element Futtsu 5 m seam repair 83 -> 23 min.
+- `improve_patch` valence cleanup retries a refused flip with local smoothing; it removed every
+  valence-9 node left on the Futtsu 5 m patch.
+- `jobs/octopus/ci_local.sh`: the OCTOPUS header for `tools/ci_local/run_ci_local.sh`.
+
 ### Added -- new regions from one recipe (2026-11-16)
 
 - `fmesh-pipeline`: top-level `crs` threaded to every stage (legacy `finish.utm_epsg`, else the UTM
