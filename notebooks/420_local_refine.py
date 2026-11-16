@@ -243,10 +243,11 @@ for geom, region in regions_m:
 # ------------------------------------------------------------- pre-flight
 land_ll = (unary_union(list(gpd.read_file(LAND).to_crs(4326).geometry))
            if land_m is not None else None)
-from matplotlib.tri import LinearTriInterpolator, Triangulation  # noqa: E402
+from fvcom_mesh_tools.tri_interp import linear_interpolator  # noqa: E402
 
-_mt = Triangulation(base.nodes[:, 0], base.nodes[:, 1], base.elements)
-_di = LinearTriInterpolator(_mt, base.depths)
+# coincident (split pinch) nodes of a finished base are merged for the
+# trifinder, which refuses them (tri_interp; job 137981)
+_di = linear_interpolator(base.nodes, base.elements, base.depths)
 
 
 def base_depth_of(lon, lat):

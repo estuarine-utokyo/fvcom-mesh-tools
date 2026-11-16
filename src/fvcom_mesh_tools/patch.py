@@ -3022,14 +3022,15 @@ def base_size_field(nodes, elements, *, outside: str = "max"):
                  step resolves it with slivers, and that is where the
                  7.30-degree elements at Kimitsu port came from.
     """
-    from matplotlib.tri import LinearTriInterpolator, Triangulation
+    from fvcom_mesh_tools.tri_interp import linear_interpolator
 
     if outside not in ("max", "nearest"):
         raise ValueError(f"outside must be 'max' or 'nearest', got {outside!r}")
     xy = np.asarray(nodes, dtype=float)[:, :2]
     tri = np.asarray(elements, dtype=np.int64)
     amb = ambient_size_field(xy, tri)
-    interp = LinearTriInterpolator(Triangulation(xy[:, 0], xy[:, 1], tri), amb)
+    # coincident (split pinch) nodes merged for the trifinder (tri_interp)
+    interp = linear_interpolator(xy, tri, amb)
     amb_max = float(np.nanmax(amb))
     tree = None
     if outside == "nearest":

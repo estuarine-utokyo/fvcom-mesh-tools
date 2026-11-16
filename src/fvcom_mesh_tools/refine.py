@@ -571,10 +571,10 @@ def depths_from_base(base_nodes, base_elements, base_depths, new_nodes):
         raise ValueError("base depths must be finite")
     new = np.asarray(new_nodes, dtype=float)[:, :2]
 
-    from matplotlib.tri import LinearTriInterpolator, Triangulation
+    from fvcom_mesh_tools.tri_interp import linear_interpolator
 
-    mtri = Triangulation(xy[:, 0], xy[:, 1], tri)
-    out = np.asarray(LinearTriInterpolator(mtri, dep)(new[:, 0], new[:, 1]))
+    # coincident (split pinch) nodes merged for the trifinder (tri_interp)
+    out = np.asarray(linear_interpolator(xy, tri, dep)(new[:, 0], new[:, 1]))
     outside = ~np.isfinite(out)
     if outside.any():
         out = np.array(out, dtype=float)
