@@ -149,6 +149,10 @@ def build_size_field(
         fwd = Transformer.from_crs("EPSG:4326", f"EPSG:{crs_epsg}", always_xy=True)
         ordered = sorted(regions, key=lambda r: (r.get("priority", 0), -r["target_h_m"],
                                                  r["name"]))
+        # jsasaki 2026-11-16: review newregion r9 #1: as in fvcom_mesh_tools.sizing, every region
+        # blends against the ORIGINAL ambient field and the stronger region (applied later) replaces
+        # the weaker one where both act; blending into the already modified field compounded them
+        ambient = h.copy()
         for r in ordered:
             poly = shp_transform(fwd.transform, _geometry(r["geometry"]))
             tr = float(r.get("transition_m", 0) or 0)
@@ -165,7 +169,8 @@ def build_size_field(
             else:
                 w = shapely.covers(poly, pts).astype(float)
             sub = h[np.ix_(iy, ix)]
-            h[np.ix_(iy, ix)] = np.where(w > 0, sub * (1 - w) + r["target_h_m"] * w, sub)
+            amb = ambient[np.ix_(iy, ix)]
+            h[np.ix_(iy, ix)] = np.where(w > 0, amb * (1 - w) + r["target_h_m"] * w, sub)
             report["regions"].append({"name": r["name"], "cells": int((w >= 1).sum()),
                                       "target_h_m": float(r["target_h_m"])})
     if hmin_m is not None:

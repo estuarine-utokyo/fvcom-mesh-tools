@@ -1452,3 +1452,34 @@ def test_r8_3_polygon_directives_need_no_prep(tmp_path, monkeypatch):
     rec["finishing"]["directives"] = [{"cell": "A1", "target_h_m": 50}]
     with pytest.raises(SystemExit, match="prep.bbox"):
         pl._stage_finishing(rec, tmp_path, {"obc_mesh": str(f)}, lambda *a: None)
+
+
+def test_r9_1_overlapping_transitions_blend_against_the_ambient_field():
+    """r9 #1: two equal-priority regions whose transitions overlap: each blends
+    against the original ambient field and the stronger one wins (as in
+    fvcom_mesh_tools.sizing); the reviewed code compounded the blends."""
+    from pyproj import Transformer
+    from scipy.interpolate import RegularGridInterpolator
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.mesh_engine.polygon import build_size_field
+
+    inv = Transformer.from_crs(f"EPSG:{EPSG}", "EPSG:4326", always_xy=True)
+
+    def ll_box(x0, y0, x1, y1):
+        a, b = inv.transform(X0 + x0, Y0 + y0)
+        c, d = inv.transform(X0 + x1, Y0 + y1)
+        return {"bbox": [a, b, c, d]}
+
+    dom = box(X0, Y0, X0 + 2000, Y0 + 2000)
+    for amb, left, right, want in ((1000.0, 100.0, 200.0, 550.0),
+                                   (300.0, 100.0, 1000.0, 200.0)):
+        reg = [{"name": "left", "geometry": ll_box(300, 500, 500, 1500), "target_h_m": left,
+                "transition_m": 1000.0},
+               {"name": "right", "geometry": ll_box(1500, 500, 1700, 1500), "target_h_m": right,
+                "transition_m": 1000.0}]
+        for order in (reg, reg[::-1]):
+            sz = build_size_field(dom, crs_epsg=EPSG, background_m=amb, raster_m=50.0,
+                                  regions=order, log=lambda *a: None)
+            f = RegularGridInterpolator((sz["ys"], sz["xs"]), sz["h"])
+            assert f([[Y0 + 1000.0, X0 + 1000.0]])[0] == pytest.approx(want, rel=0.02)
