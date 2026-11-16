@@ -1022,11 +1022,22 @@ outline; in VR v3 that is 0.29 km2 of 375 km2 per finish run, so a recipe that w
 there must say so with an explicit tolerance (VR v3: 400,000 m2 in finish/polish, 1,500 m2 per
 autofinish patch; with 0 m2 its QA stays at 20/23).
 
+Represented protected water (review newregion round 5): the polygon build compares the protected
+water it should carry (domain water and `protect_polygons`, minus `expected_drop`) with what the
+final raw mesh represents, and measures the protected water the OM2D clean removes; both default to
+strict (`protected_coverage_tol_m2` / `protected_coverage_tol_frac` 0, `protected_clean_loss_tol_m2`
+0, `protected_coverage_policy: fail`). A mesh discretises a curved outline, so a real region needs
+explicit tolerances: VR v3 represents 373.64 of 377.11 km2 (0.92 % missing) and its clean removes
+0.544 km2, and sets `protected_coverage_tol_frac: 0.01`, `protected_clean_loss_tol_m2: 600000`.
+siteops keeps the legacy component step (largest component, boundary lists reset) only for legacy
+Tokyo recipes (no `crs`, EPSG 32654, no polygon build, no protection) or with
+`siteops.legacy_component_path: true`.
+
 Open-boundary checks of a region recipe (polygon build with a supplied line; review newregion
 round 4): the obc and obcfinal stages compare the open string with the wet extent of the supplied
 line (the part of it on the domain water outline): each end within `obc.end_tol_m` (default 250 m),
-every open node within `obc.max_move_m` of the line, and no retreat from the coverage an earlier OBC
-stage reached; the record is kept as the `open_cover` artifact (persisted, so `--only` runs check
+every open node within `obc.max_move_m` of the line, and neither end of the string may retreat from where an earlier OBC
+stage had it; the record is kept as the `open_cover` artifact (persisted, so `--only` runs check
 too). siteops of a region recipe keeps and validates the open boundary; the OBC aftercare refuses to
 delete protected water and the whole OBC assignment may not lose any (`obc.protected_loss_tol_m2`).
 
