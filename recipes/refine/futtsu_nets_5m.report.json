@@ -91,10 +91,10 @@
    ]
   }
  ],
- "transition_width_m": 375.0,
- "hole_area_km2": 5.004648447814386,
+ "transition_width_m": 272.7272727272727,
+ "hole_area_km2": 3.997898671390839,
  "core_outside_within_frac": 0.03285001525805347,
- "hole_outside_within_frac": 0.13995058131710916,
+ "hole_outside_within_frac": 0.10608373476010352,
  "inputs": {
   "tool": "fmesh-facility-regions",
   "argv": [
@@ -105,7 +105,7 @@
    "--ambient-h-m",
    "50",
    "--gradation",
-   "0.12",
+   "0.165",
    "--dt-expected-s",
    "0.5",
    "--within",
