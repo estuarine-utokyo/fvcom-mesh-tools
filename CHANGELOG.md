@@ -31,7 +31,9 @@ will only ship with a major bump (Semantic Versioning).
   `build.expected_drop_unresolved_m`, `protected_drop_policy`, `protected_drop_tol_m2` / `_frac`,
   `max_protected_ear_area_km2`; `protected_loss_tol_m2` (finish, polish, finishing.auto; geometric loss,
   default 0); `obc.end_tol_m` (open-line coverage, default 250 m), `obc.protected_loss_tol_m2`
-  (review newregion rounds 1-4, docs/newregion-review-20261116.md). User guide
+  (review newregion rounds 1-4); `build.protected_coverage_tol_m2` / `_tol_frac`,
+  `protected_clean_loss_tol_m2`, `protected_coverage_policy`, `siteops.legacy_component_path`
+  (round 5; docs/newregion-review-20261116.md). User guide
   section 16.
 - `mesh_engine/polygon.py`: projected polygon engine (ported from VR-FVCOM `build_mesh.py`).
 - `finishing`: `keep_components_protected`, `remove_elements_keep_boundaries`, `remove_lone_nodes`,

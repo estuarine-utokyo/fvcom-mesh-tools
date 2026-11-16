@@ -183,6 +183,8 @@ def _domain():
     return sea, obc, chan
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_polygon_engine_open_string_and_components():
     from fvcom_mesh_tools.mesh_engine.polygon import (
         build_size_field,
@@ -267,6 +269,8 @@ def test_remove_lone_nodes_and_land_rebuild():
     assert ib == 20 and land[0] == ob[-1] and land[-1] == ob[0]
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_finish_keeps_open_boundary_and_protected_channel(tmp_path):
     import geopandas as gpd
     from pyproj import Transformer
@@ -335,6 +339,8 @@ def test_depths_stage_products(tmp_path):
 
 
 # --------------------------------------------- pipeline: domain + polygon build
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_pipeline_domain_build_qa(tmp_path):
     import geopandas as gpd
     import yaml
@@ -365,6 +371,8 @@ def test_pipeline_domain_build_qa(tmp_path):
     assert len(line) == 2 and 0.0 < line[0][0] < 3.0                       # lon/lat
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_polygon_engine_lost_component_and_expected_drop():
     from shapely.geometry import box
 
@@ -488,6 +496,8 @@ def test_r1_3_polygon_build_requires_obc_restoration():
     pl._check_recipe(dict(rec, obc={}))
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r1_3_polygon_engine_reports_open_cover():
     from fvcom_mesh_tools.mesh_engine.polygon import build_size_field, generate_polygon_mesh
 
@@ -521,6 +531,8 @@ def test_r1_4_band_restore_interpolates_new_node_depths():
     assert np.allclose(out.depths[:4], [1.0, 101.0, 101.0, 1.0])
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r1_5_expected_drop_is_an_area_fraction():
     """#5: a 2.25 km2 pond finely meshed in a small corner is NOT an expected
     drop when expected_drop covers only that corner (4 % of its area)."""
@@ -710,6 +722,8 @@ def test_r2_2_siteops_cannot_erode_protected_water():
     assert protected_overlap_m2(out.nodes, out.elements, water) >= before - 1.0
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r2_3_small_protected_component_is_not_dropped_silently():
     """#3: a protected pond below max_dropped_component_km2 fails unless it is
     an expected drop."""
@@ -758,6 +772,8 @@ def _ear_lattice():
     return P, T
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r2_5_repair_loss_by_intersection_area(monkeypatch):
     """#5: the ear's overlap with the protected strip counts although its
     centroid is outside; with a zero threshold the build fails."""
@@ -779,6 +795,8 @@ def test_r2_5_repair_loss_by_intersection_area(monkeypatch):
                               protected_coverage_policy="report", log=lambda *a: None)
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r2_4_pipeline_forwards_build_guards(tmp_path, monkeypatch):
     """#4: build.max_protected_ear_area_km2 (and the drop policy) reach the
     engine; an excessive repair loss fails the pipeline build."""
@@ -860,6 +878,8 @@ def test_r2_8_prep_receives_a_legacy_crs_override(tmp_path, monkeypatch):
 
 
 # ------------------------------------------- review newregion r3 (regressions)
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r3_1_finely_meshed_protected_pond_is_measured():
     """#1: a separate protected pond holding MOST of the elements is still a
     dropped component; it fails instead of vanishing (no OBC reaches it)."""
@@ -1112,6 +1132,8 @@ def test_r4_2_coverage_guard_needs_no_runtime_metadata(tmp_path):
     assert "open_cover" in pl._STRUCTURED_ARTIFACTS and "raw_open_cover" in pl._STRUCTURED_ARTIFACTS
 
 
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r4_2_open_cover_survives_a_resumed_run(tmp_path):
     """#2: run domain+build+obc, then --only obc: the coverage record is in the
     persisted artifacts both times."""
@@ -1182,6 +1204,8 @@ def test_r4_4_validation_accepts_a_coincident_open_boundary_pair():
 
 
 # ------------------------------------------- review newregion r5 (regressions)
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
 def test_r5_1_unrepresented_protected_water_fails():
     """#1: a 60 m channel at a 100 m background is barely represented (the
     reviewer measured 2,979 of 60,000 m2); the build now fails (strict
@@ -1242,3 +1266,220 @@ def test_r5_3_only_legacy_recipes_take_the_legacy_siteops_path(tmp_path):
     m2 = read_fort14(out["siteops_mesh"])
     assert len(m2.open_boundaries) == 1
     assert np.allclose(m2.nodes[m2.open_boundaries[0]], P[[0, 1, 2, 3, 4]])
+
+
+def test_r6_1_same_zone_new_region_keeps_its_open_boundary(tmp_path):
+    """r6 #1: a prep recipe in UTM zone 54 (Sendai, inferred CRS, no protection)
+    is not legacy: siteops keeps its open boundary; only the explicit key
+    (set by the shipped Tokyo recipes) selects the legacy path."""
+    import yaml
+
+    root = Path(__file__).resolve().parents[1] / "recipes"
+    for name in ("tokyo_bay_v5", "tokyo_bay_v5s", "tokyo_bay_v5u", "tokyo_bay_v6", "tokyo_bay_v6s"):
+        assert pl._legacy_siteops(yaml.safe_load((root / f"{name}.yaml").read_text())), name
+    P, T = _r3_lattice()
+    m = _mesh(P, T, opens=[[0, 1, 2, 3, 4]])
+    f = tmp_path / "obc.14"
+    write_fort14(m, f)
+    rec, art = _fallback_setup(tmp_path, protect=False)
+    rec.pop("crs", None)
+    rec.update(name="sendai", prep={"bbox": [141.0, 38.2, 141.6, 38.8],
+                                    "obc_line": [[141.1, 38.3], [141.5, 38.3]]},
+               build={"engine": "oceanmesh"}, obc={}, siteops={"passes": 1})
+    assert pl._recipe_epsg(rec) == 32654
+    assert not pl._legacy_siteops(rec)
+    out = pl._stage_siteops(rec, tmp_path, dict(art, obc_mesh=str(f)), lambda *a: None)
+    m2 = read_fort14(out["siteops_mesh"])
+    assert len(m2.open_boundaries) == 1
+    assert np.allclose(m2.nodes[m2.open_boundaries[0]], P[[0, 1, 2, 3, 4]])
+
+
+def test_r7_1_polish_after_obc_needs_obcfinal_and_starts_from_the_obc_mesh(tmp_path, monkeypatch):
+    """r7 #1: finish -> obc -> polish without obcfinal is refused, and polish
+    without siteops starts from the obc mesh (the restored open boundary), not
+    from the earlier finished mesh."""
+    import fvcom_mesh_tools.finishing as fin
+
+    line = {"prep": {"bbox": [0.0, 5.0, 1.0, 6.0], "obc_line": [[0.1, 5.1], [0.9, 5.1]]}}
+    with pytest.raises(SystemExit, match="obcfinal"):
+        pl._check_recipe(dict(line, finish={}, obc={}, polish={}))
+    with pytest.raises(SystemExit, match="obcfinal"):
+        pl._check_recipe(dict(line, finish={}, obc={}, siteops={}))
+    pl._check_recipe(dict(line, finish={}, obc={}, polish={}, obcfinal={}))
+    P, T = _r3_lattice()
+    fin_f, obc_f = tmp_path / "finished.14", tmp_path / "obc.14"
+    write_fort14(_mesh(P, T, opens=[[1, 2, 3]]), fin_f)
+    write_fort14(_mesh(P, T, opens=[[0, 1, 2, 3, 4]]), obc_f)
+    seen = {}
+
+    def fake(mesh, *a, **k):
+        seen["opens"] = [list(o) for o in mesh.open_boundaries]
+        return mesh, {}
+
+    monkeypatch.setattr(fin, "finish_constrained_mesh", fake)
+    monkeypatch.setattr(pl, "_shoreline", lambda *a: None)
+    monkeypatch.setattr(pl, "_protect_geometry", lambda *a: None)
+    rec = {"name": "t", "crs": "EPSG:32631", "polish": {}}
+    pl._stage_polish(rec, tmp_path, {"finished_mesh": str(fin_f), "obc_mesh": str(obc_f)},
+                     lambda *a: None)
+    assert seen["opens"] == [[0, 1, 2, 3, 4]]
+
+
+# jsasaki 2026-11-16: needs oceanmesh, absent on GitHub CI (run 43778047151 failed)
+@pytest.mark.needs_oceanmesh
+def test_r7_2_a_rebuild_is_not_held_to_the_previous_generation_coverage(tmp_path):
+    """r7 #2: the open-line coverage persisted for a previous mesh generation
+    does not constrain a full rerun (domain/build); a resumed --only obc still
+    compares with it."""
+    import geopandas as gpd
+    import yaml
+
+    water, obc, chan = _domain()
+    gp = tmp_path / "dom.gpkg"
+    gpd.GeoDataFrame(geometry=[water], crs=EPSG).to_file(gp, layer="water")
+    gpd.GeoDataFrame(geometry=[obc], crs=EPSG).to_file(gp, layer="obc")
+    rec = {"name": "t", "out_dir": str(tmp_path / "out"), "crs": f"EPSG:{EPSG}",
+           "domain": {"water": {"path": str(gp), "layer": "water"},
+                      "obc_line": {"path": str(gp), "layer": "obc"}},
+           "build": {"engine": "oceanmesh-polygon", "max_iter": 30,
+                     "size": {"background_m": 400.0, "raster_m": 50.0}},
+           "obc": {"trim": 1, "snap": False}}
+    f = tmp_path / "r.yaml"
+    f.write_text(yaml.safe_dump({"pipeline": rec}))
+    assert pl.main([str(f), "--section", "pipeline"]) == 0
+    pp = tmp_path / "out" / "pipeline_provenance.json"
+    prov = json.loads(pp.read_text())
+    real = prov["artifacts"]["open_cover"]
+    # a previous generation that reached further at both ends
+    prov["artifacts"]["open_cover"] = dict(real, from_m=real["from_m"] - 100.0,
+                                           to_m=real["to_m"] + 100.0)
+    pp.write_text(json.dumps(prov))
+    with pytest.raises(SystemExit, match="retreated"):
+        pl.main([str(f), "--section", "pipeline", "--only", "obc"])
+    prov = json.loads(pp.read_text())
+    prov["artifacts"]["open_cover"] = dict(real, from_m=real["from_m"] - 100.0,
+                                           to_m=real["to_m"] + 100.0)
+    pp.write_text(json.dumps(prov))
+    assert pl.main([str(f), "--section", "pipeline"]) == 0
+    assert json.loads(pp.read_text())["artifacts"]["open_cover"]["to_m"] == pytest.approx(
+        real["to_m"])
+
+
+def test_r8_1_a_rebuild_drops_the_previous_generation_meshes(tmp_path, monkeypatch):
+    """r8 #1: rerunning build in the same out_dir must not let a later stage
+    pick up the previous generation's final_mesh (finishing preferred it)."""
+    import yaml
+
+    out = tmp_path / "out"
+    out.mkdir()
+    old_final = tmp_path / "old_final.14"
+    old_final.write_text("old")
+    (out / "pipeline_provenance.json").write_text(json.dumps(
+        {"artifacts": {"final_mesh": str(old_final), "latest_mesh": str(old_final),
+                       "obc_mesh": str(old_final),
+                       "open_cover": {"stage": "obc", "from_m": 0.0, "to_m": 1.0}}}))
+    seen = {}
+
+    def fake_build(recipe, out_dir, artifacts, log):
+        return {"raw_mesh": str(tmp_path / "new_raw.14")}
+
+    def fake_finishing(recipe, out_dir, artifacts, log):
+        seen.update({k: artifacts.get(k) for k in ("final_mesh", "obc_mesh", "latest_mesh",
+                                                   "open_cover", "raw_mesh")})
+        return {}
+
+    monkeypatch.setattr(pl, "STAGES", [("build", fake_build), ("finishing", fake_finishing)])
+    f = tmp_path / "r.yaml"
+    f.write_text(yaml.safe_dump({"name": "t", "out_dir": str(out), "crs": "EPSG:32631",
+                                 "build": {}, "finishing": {}}))
+    assert pl.main([str(f)]) == 0
+    assert seen["raw_mesh"] == str(tmp_path / "new_raw.14")
+    assert seen["final_mesh"] is None and seen["obc_mesh"] is None
+    assert seen["open_cover"] is None
+    assert seen["latest_mesh"] == str(tmp_path / "new_raw.14")
+
+
+def test_r8_2_obcfinal_without_obc_starts_from_the_finished_mesh(tmp_path, monkeypatch):
+    """r8 #2: a recipe with finish and obcfinal but no obc (allowed) runs: the
+    stage starts from finished_mesh (or a projected raw mesh)."""
+    import fvcom_mesh_tools.obc_tools as ot
+
+    P, T = _r3_lattice()
+    fin_f = tmp_path / "finished.14"
+    write_fort14(_mesh(P, T, opens=[[0, 1, 2, 3, 4]]), fin_f)
+    seen = {}
+
+    def fake(mesh, **k):
+        seen["n"] = len(mesh.nodes)
+        return mesh, {}
+
+    monkeypatch.setattr(ot, "assign_west_south_obc", fake)
+    monkeypatch.setattr(pl, "_protect_geometry", lambda *a: None)
+    monkeypatch.setattr(pl, "_check_open_cover", lambda *a, **k: None)
+    rec = {"name": "t", "crs": "EPSG:32631", "build": {}, "obcfinal": {}}
+    pl._stage_obcfinal(rec, tmp_path, {"finished_mesh": str(fin_f)}, lambda *a: None)
+    assert seen["n"] == len(P)
+    seen.clear()
+    pl._stage_obcfinal(rec, tmp_path, {"raw_mesh": str(fin_f), "raw_mesh_crs": "EPSG:32631"},
+                       lambda *a: None)
+    assert seen["n"] == len(P)
+    with pytest.raises(SystemExit, match="no metric mesh"):
+        pl._stage_obcfinal(rec, tmp_path, {"raw_mesh": str(fin_f), "raw_mesh_crs": "EPSG:4326"},
+                           lambda *a: None)
+
+
+def test_r8_3_polygon_directives_need_no_prep(tmp_path, monkeypatch):
+    """r8 #3: finishing directives with an explicit polygon run in a domain
+    recipe without prep; a `cell` directive without prep.bbox fails loudly."""
+    import fvcom_mesh_tools.autofinish as af
+
+    P, T = _r3_lattice()
+    f = tmp_path / "obc.14"
+    write_fort14(_mesh(P, T, opens=[[0, 1, 2, 3, 4]]), f)
+    seen = {}
+
+    def fake_apply(mesh, dcfg, **k):
+        seen["dcfg"] = dcfg
+        raise RuntimeError("stop after directives")
+
+    monkeypatch.setattr(af, "apply_directives", fake_apply)
+    poly = [[0.5, 5.5], [0.6, 5.5], [0.6, 5.6], [0.5, 5.5]]
+    rec = {"name": "t", "crs": "EPSG:32631",
+           "finishing": {"directives": [{"polygon": poly, "target_h_m": 50}]}}
+    with pytest.raises(RuntimeError, match="stop after directives"):
+        pl._stage_finishing(rec, tmp_path, {"obc_mesh": str(f)}, lambda *a: None)
+    assert seen["dcfg"][0]["polygon"] == poly
+    rec["finishing"]["directives"] = [{"cell": "A1", "target_h_m": 50}]
+    with pytest.raises(SystemExit, match="prep.bbox"):
+        pl._stage_finishing(rec, tmp_path, {"obc_mesh": str(f)}, lambda *a: None)
+
+
+def test_r9_1_overlapping_transitions_blend_against_the_ambient_field():
+    """r9 #1: two equal-priority regions whose transitions overlap: each blends
+    against the original ambient field and the stronger one wins (as in
+    fvcom_mesh_tools.sizing); the reviewed code compounded the blends."""
+    from pyproj import Transformer
+    from scipy.interpolate import RegularGridInterpolator
+    from shapely.geometry import box
+
+    from fvcom_mesh_tools.mesh_engine.polygon import build_size_field
+
+    inv = Transformer.from_crs(f"EPSG:{EPSG}", "EPSG:4326", always_xy=True)
+
+    def ll_box(x0, y0, x1, y1):
+        a, b = inv.transform(X0 + x0, Y0 + y0)
+        c, d = inv.transform(X0 + x1, Y0 + y1)
+        return {"bbox": [a, b, c, d]}
+
+    dom = box(X0, Y0, X0 + 2000, Y0 + 2000)
+    for amb, left, right, want in ((1000.0, 100.0, 200.0, 550.0),
+                                   (300.0, 100.0, 1000.0, 200.0)):
+        reg = [{"name": "left", "geometry": ll_box(300, 500, 500, 1500), "target_h_m": left,
+                "transition_m": 1000.0},
+               {"name": "right", "geometry": ll_box(1500, 500, 1700, 1500), "target_h_m": right,
+                "transition_m": 1000.0}]
+        for order in (reg, reg[::-1]):
+            sz = build_size_field(dom, crs_epsg=EPSG, background_m=amb, raster_m=50.0,
+                                  regions=order, log=lambda *a: None)
+            f = RegularGridInterpolator((sz["ys"], sz["xs"]), sz["h"])
+            assert f([[Y0 + 1000.0, X0 + 1000.0]])[0] == pytest.approx(want, rel=0.02)

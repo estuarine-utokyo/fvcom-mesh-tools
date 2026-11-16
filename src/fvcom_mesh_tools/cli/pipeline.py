@@ -165,6 +165,13 @@ def _check_recipe(recipe):
         raise SystemExit(f"the recipe has an open-boundary line and {edits}, which may "
                          "drop, move or trim open-boundary nodes: add the obc and/or obcfinal "
                          "stage")
+    # jsasaki 2026-11-16: review newregion r7 #1: siteops/polish run after obc and are not
+    # validated against the open line themselves; obcfinal must follow them (it re-checks the
+    # coverage); every shipped recipe already has it
+    later = [k for k in ("siteops", "polish") if k in recipe]
+    if has_line and "obc" in recipe and later and "obcfinal" not in recipe:
+        raise SystemExit(f"the recipe has an open-boundary line and {later} after the obc stage: "
+                         "add the obcfinal stage, which re-checks the open-line coverage")
 #<--- jsasaki 2026-11-16
 
 
@@ -717,23 +724,15 @@ def _obc_line_from(recipe, out_dir):
 
 #---> jsasaki 2026-11-16: review newregion r3 #2: the obc stages must give back the open line
 # jsasaki 2026-11-16: review newregion r5 #3: which recipes keep the legacy siteops component step
+# jsasaki 2026-11-16: review newregion r6 #1: no CRS heuristic (a new region in UTM zone 54
+# was taken for Tokyo and lost its open boundary); only the explicit key selects the legacy
+# path, and the shipped Tokyo recipes (recipes/tokyo_bay_v5*.yaml, v6*.yaml) set it
 def _legacy_siteops(recipe) -> bool:
-    """``siteops.legacy_component_path`` when given; otherwise a recipe is
-    legacy (Tokyo) when it names no ``crs``, resolves to EPSG:32654 through the
-    legacy ``finish.utm_epsg`` or its bbox, uses no polygon build and no
-    protected water. Legacy siteops keep the largest component and reset the
-    boundary lists (the measured Tokyo behaviour); all others keep and
-    validate the open boundary."""
-    flag = (recipe.get("siteops") or {}).get("legacy_component_path")
-    if flag is not None:
-        return bool(flag)
-    try:
-        epsg = _recipe_epsg(recipe)
-    except SystemExit:
-        return False
-    return (recipe.get("crs") is None and epsg == 32654
-            and (recipe.get("build") or {}).get("engine") != "oceanmesh-polygon"
-            and not recipe.get("protect_polygons"))
+    """True only when ``siteops.legacy_component_path`` is true: legacy siteops
+    keep the largest component and reset the boundary lists (the measured
+    Tokyo behaviour; the shipped Tokyo recipes set the key). Every other
+    recipe keeps and validates its open boundary."""
+    return bool((recipe.get("siteops") or {}).get("legacy_component_path", False))
 
 
 def _region_obc(recipe) -> bool:
@@ -954,7 +953,10 @@ def _stage_polish(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.io import read_fort14, write_fort14
 
     cfg = recipe.get("polish", {}) or {}
+    # jsasaki 2026-11-16: review newregion r7 #1: without siteops, polish starts from the obc mesh
+    # (the restored open boundary), not from the earlier finished mesh
     src = Path(artifacts.get("siteops_mesh")
+               or artifacts.get("obc_mesh")
                or artifacts["finished_mesh"])
     mesh = read_fort14(src)
     # jsasaki 2026-11-16: recipe CRS and shoreline lookup (no 32654 fallback)
@@ -1004,10 +1006,17 @@ def _stage_finishing(recipe, out_dir, artifacts, log):
         from fvcom_mesh_tools.autofinish import apply_directives
         from fvcom_mesh_tools.gridref import GridRef
 
-        bbox = recipe["prep"]["bbox"]
-        grid = GridRef(bbox[0], bbox[1], bbox[2], bbox[3])
+        # jsasaki 2026-11-16: review newregion r8 #3: the prep bbox grid is needed only to turn a
+        # `cell` into a polygon; directives with an explicit polygon need no prep section
+        grid = None
         for d in dcfg:
             if "cell" in d and "polygon" not in d:
+                if grid is None:
+                    bbox = (recipe.get("prep") or {}).get("bbox")
+                    if not bbox:
+                        raise SystemExit("finishing directive with a `cell` needs prep.bbox "
+                                         "(or give the directive a `polygon`)")
+                    grid = GridRef(bbox[0], bbox[1], bbox[2], bbox[3])
                 d["polygon"] = grid.cell_polygon(d["cell"])
                 log(f"[finishing] directive cell {d['cell']} -> "
                     "polygon")
@@ -1227,9 +1236,16 @@ def _stage_obcfinal(recipe, out_dir, artifacts, log):
     from fvcom_mesh_tools.obc_tools import assign_west_south_obc
 
     cfg = recipe.get("obcfinal", recipe.get("obc", {})) or {}
-    src = Path(artifacts.get("polish_mesh")
-               or artifacts.get("siteops_mesh")
-               or artifacts["obc_mesh"])
+    # jsasaki 2026-11-16: review newregion r8 #2: obcfinal without obc (allowed by _check_recipe)
+    # starts from the latest preceding metric mesh: finished, or a projected raw mesh
+    src = (artifacts.get("polish_mesh") or artifacts.get("siteops_mesh")
+           or artifacts.get("obc_mesh") or artifacts.get("finished_mesh"))
+    if src is None and artifacts.get("raw_mesh") \
+            and str(artifacts.get("raw_mesh_crs") or "EPSG:4326").upper() != "EPSG:4326":
+        src = artifacts["raw_mesh"]
+    if src is None:
+        raise SystemExit("obcfinal: no metric mesh to start from (run finish or obc first)")
+    src = Path(src)
     mesh = read_fort14(src)
     # jsasaki 2026-11-16: region-supplied shoreline; recipe CRS (no 32654 fallback)
     shoreline = artifacts.get("land_opened") \
@@ -1511,6 +1527,13 @@ def main(argv: list[str] | None = None) -> int:
         if only is not None and name not in only:
             continue
         log(f"[pipeline] === stage {name} ===")
+        # jsasaki 2026-11-16: review newregion r7 #2: a new domain/build is a new mesh generation;
+        # the open-line coverage persisted for the previous one must not constrain it
+        # jsasaki 2026-11-16: review newregion r8 #1: nor may its meshes be picked up downstream
+        # (finishing preferred a persisted final_mesh of the previous generation)
+        if name in ("prep", "domain", "build"):
+            for key in (*_MESH_KEYS, "latest_mesh", "open_cover"):
+                artifacts.pop(key, None)
         t1 = time.perf_counter()
         out = fn(recipe, out_dir, artifacts, log) if name != "prep" \
             else fn(recipe, out_dir, log)
