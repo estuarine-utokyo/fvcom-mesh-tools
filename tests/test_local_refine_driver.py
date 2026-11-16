@@ -150,6 +150,8 @@ def with_patch_violations(env: dict) -> dict:
     """
     driver_function("patch_violations", env)
     driver_function("wall_pairs", env)
+    driver_function("allowed_pairs", env)
+    env.setdefault("base", SimpleNamespace(nodes=np.zeros((1, 2))))
     return env
 
 
@@ -312,6 +314,16 @@ def test_wall_pairs_are_every_pair_a_split_made_coincident():
     co = np.array([0, 1, 2, 3, 1, 3, 3])   # node 1 has one copy, node 3 two
     assert sorted(wall_pairs({"copy_of": co})) == [(1, 4), (3, 5), (3, 6), (5, 6)]
 
+
+def test_allowed_pairs_add_the_base_coincident_pairs_through_the_map():
+    """job 138065: the base's split pinch pairs, renumbered, are not new."""
+    base_xy = np.array([[0.0, 0.0], [5.0, 5.0], [1.0, 0.0], [5.0, 5.0], [9.0, 9.0], [9.0, 9.0]])
+    env = {"np": np, "base": SimpleNamespace(nodes=base_xy)}
+    driver_function("wall_pairs", env)
+    allowed_pairs = driver_function("allowed_pairs", env)
+    nm = np.array([10, 11, 12, 13, 14, -1])   # the (4, 5) pair was cut away
+    assert allowed_pairs({}, nm) == [(11, 13)]
+    assert sorted(allowed_pairs({"copy_of": np.array([0, 1, 0])}, nm)) == [(0, 2), (11, 13)]
 
 def test_a_wall_that_closes_water_off_is_found_by_its_piece():
     """Two walls that cross into a small triangle strand the water inside it."""
