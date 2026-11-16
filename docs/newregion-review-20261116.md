@@ -1297,3 +1297,218 @@ Checks after the fixes:
   - Open line covered 73-183,697 m of the wet 0-183,697 m at obc and obcfinal.
   - Coverage guard passed; depth check passed.
   - Min edge channel / lagoon 62.0 / 66.0 m; dt_E 9.72 s.
+
+## Round 6
+
+### Prompt
+
+```markdown
+# Review request, round 6: new-region generalisation of fmesh-pipeline (fvcom-mesh-tools)
+
+Read-only review of the git repository at the current directory. Do NOT modify files. You may run read-only
+commands, python in memory, mocks and small synthetic meshes (keep each computation under a few minutes). Answer
+in English as Markdown.
+
+## Goal
+Correctness and robustness of the target below under realistic use. Report every defect you can substantiate in
+the target, of any severity.
+
+## Target (concrete)
+Commit range `1988f22..8f936bb` (32d211b round-1 fixes; 670172c, 5c78274, 448dbe5 round-2 fixes; ef1e8b3, 60201fa, 9a3ec4d round-3 fixes; f076102, c292eff round-4 fixes; 2ebabd7, 8f936bb round-5 fixes). Files:
+`src/fvcom_mesh_tools/cli/pipeline.py`, `finishing.py`, `mesh_engine/polygon.py`, `obc_tools.py`,
+`prep/shoreline.py`, `site_session.py`, `qa.py`, `autofinish/directives.py`, `autofinish/plan.py`,
+`cli/meshplot.py`, `cli/prepshoreline.py`, `tests/test_new_region.py`, USER_GUIDE section 16, CHANGELOG.
+
+The ONE question: can a user build a mesh for a NEW region (any UTM zone, a supplied domain polygon, a size
+raster/regions, protected narrow channels, an open-boundary line) from one recipe with these changes, getting
+either a correct mesh or a loud failure -- never a silently wrong mesh (wrong CRS, dropped protected water,
+lost/altered open boundary, valence/lone-node passes that break conformity or the boundary) -- while the existing
+Tokyo recipe (`tokyo_bay_v6`, no new keys) behaves exactly as before?
+
+Specific points to check:
+- CRS resolution order (`crs` > legacy `finish.utm_epsg` > UTM zone of prep.bbox/domain); no remaining silent
+  EPSG:32654 default on any path the pipeline uses with a non-Tokyo recipe.
+- Channel protection (`protect_polygons`, `on_dropped_protected`) really prevents finishing/siteops/polish from
+  deleting elements inside protected water, and failure is loud.
+- OBC carried through finish / obcfinal; `freeze_obc_band`, `obc.snap`, `finishing.auto.obc_lock: none` with
+  `obc_perp_max_deg` guard; band restore checking C4.
+- `max_valence` / `remove_lone_nodes` passes keep a valid conforming triangulation and do not move/remove OBC or
+  protected nodes.
+- `mesh_engine/polygon.py`: size field units (metres), `expected_drop` / `max_dropped_component_km2` logic,
+  reproducibility with `seed`.
+- `depths.product` = `external_dep_file` matching (`match_tol_m`) and `none`.
+- Defaults: with none of the new keys, every code path is identical to 1988f22 (evidence of the author's md5
+  regression: `scratch/regress_20261116/` -- base1b vs head*/new*; read, do not rerun the full Tokyo chain).
+
+Real inputs: the VR-FVCOM recipe `$HOME/Github/VR-FVCOM/recipes/mesh/v3.yaml` (its `pipeline:` block, read with
+`--section pipeline`), its outputs in `$HOME/Github/VR-FVCOM/scratch/mesh/v3/` (pipeline/ subdir, QA json), and
+the Tokyo recipe `tokyo_bay_v6` in this repository.
+
+## Out of scope -- do NOT report or investigate
+- code the target only calls, and code that was not modified in the range;
+- malformed or contrived input files, other platforms, injected faults, rare corner cases the real inputs do not
+  produce (e.g. self-intersecting domain polygons, CRS strings that are not EPSG codes, empty recipes);
+- performance, style and naming (unless it makes a realistic misuse likely);
+- the Tokyo notebooks (`plotting.py` 32654 default kept deliberately for them; `fmesh-plot-mesh` now warns).
+
+## What was done
+Read `git log -p 1988f22..14a7dd8`. Intent: generalise the Tokyo-specific pipeline so a new region (first user:
+Volta River mouth, Ghana, EPSG:32631, ~60-100 m channels in a 87 km river, lagoons, shelf to ~shelf edge) is
+built fully automatically. VR v3 result (job 7591109): fmesh-mesh-qa 23/23 gates pass, NP 27,521 / NE 48,989,
+1 component, 82 OBC nodes, min channel edge 59.9 m. Tokyo: md5-identical fort.14 at raw/finished/obc/siteops/
+polished/final versus the old code plus the ledger fix (e557279), because the unpatched baseline crashes in
+`finishing` on numpy int64.
+
+## Previous rounds
+Round 1 (10 major, 1 minor): fixed in 32d211b; round 2 judged 8 RESOLVED and 3 PARTIAL (#1, #2, #10), which are
+covered by round-2 findings below.
+Round 2 (6 major, 2 minor): all verified correct (tests `test_r2_1`..`test_r2_8` fail on 32d211b, pass on 448dbe5)
+and fixed in 670172c (+ 5c78274, 448dbe5). Triage in `docs/newregion-review-20261116.md`, "Round 2":
+1 `protected_element_mask`: protected if a protected vertex or positive overlap area (tiled geometry), used for cap
+deletion, component drops and lone-node removal; 2 collapses with both ends on the boundary next to protected water
+are refused before each collapse (short-edge sweep and site operators), and any protected-coverage loss > 1 m2 fails
+the stage; 3 a dropped component of any size may not take protected water outside `expected_drop` beyond
+max(1 m2, `protected_drop_tol_frac` (default 1 %) of its protected area) unless `protected_drop_policy: report`;
+new `build.expected_drop_unresolved_m: w` adds water not reached by the open-boundary component of the water opened
+at width w (VR v3 uses 150 m, VR-FVCOM commit 36ff15f); 4 `max_protected_ear_area_km2` and the drop policy and
+tolerances are forwarded by the pipeline; 5 repair loss counted by intersection area (total and outside
+expected_drop; the threshold applies to the latter); 6 C4 compared pair by pair in band restore; 7 raw mesh
+transformed from its recorded CRS, none for EPSG:4326; 8 legacy `finish.utm_epsg` forwarded to prep when it differs
+from prep's own zone.
+Round 3 (5 major): all verified correct (tests `test_r3_1`..`test_r3_5` fail on 448dbe5, pass on 9a3ec4d), fixed in
+ef1e8b3 (+ 60201fa, 9a3ec4d). Triage and a trade-off table in `docs/newregion-review-20261116.md`, "Round 3":
+1 retained components decided first, every dropped component measured; 2 weld guard (OBC nodes only onto coincident
+< 1 mm nodes, refused when protected water is lost), optimizer guard (protected bank nodes restored, round refused
+above `protected_loss_tol_m2`), OBC string and protected loss validated before finish returns; lone nodes fixed by
+flip/split before any deletion; obc/obcfinal check that the open string still covers the supplied line;
+3 `protected_loss_m2` = geometric loss without netting; every autofinish patch (both branches and fallback round)
+reverted above `finishing.auto.protected_loss_tol_m2`; 4 fallback keeps and validates the OBC; 5 whole fallback
+trial compared per node against max(original deviation, `obc_perp_max_deg`).
+Library defaults of all protected-loss tolerances are 0 m2. The VR v3 recipe (VR-FVCOM 7fb58cf) sets explicit
+tolerances (finish/polish 400,000 m2 per step, autofinish 1,500 m2 per patch) because the optimizer slides bank nodes
+along the shoreline; with 0 everywhere VR reaches 20/23. The tolerance VALUES are an owner decision pending, not a
+defect; whether the code applies them correctly is in scope.
+Round 4 (4 major): all verified correct (tests `test_r4_1`..`test_r4_4` fail on 9a3ec4d, pass on c292eff), fixed in
+f076102 (+ c292eff). Triage in `docs/newregion-review-20261116.md`, "Round 4": 1 OBC aftercare refuses to delete an
+R4 / {1,2,1} / pinch element holding protected water (stage fails naming the location), and the whole OBC assignment
+may not lose protected water (`obc.protected_loss_tol_m2`, default 0); 2 the open-line guard needs only the domain
+water polygon (persisted as a path; missing -> loud failure); `open_cover` / `raw_open_cover` persisted in provenance
+and reloaded; 3 reference is the wet extent of the supplied line (its part on the domain water outline); each string
+end within `obc.end_tol_m` (default 250 m) of it, every node within `max_move_m` of the line; each stage persists its
+coverage and later stages may not retreat by more than 1 m; 4 for a region recipe (polygon build with a line, or
+protected water) siteops keeps and validates the OBC; Tokyo-style recipes take the legacy path. Follow-up (c292eff):
+coincident (< 1 mm) OBC nodes, which polish later welds, count as one node in the string validation.
+Round 5 (3 major): all verified correct (tests `test_r5_1`..`test_r5_3` fail on c292eff, pass on 2ebabd7), fixed in
+2ebabd7. Triage in `docs/newregion-review-20261116.md`, "Round 5": 1 the polygon build compares the protected water it
+should carry (domain water ∩ protect_polygons minus expected_drop) with what the final raw mesh covers, and measures
+the protected water removed by the OM2D clean; strict defaults (`protected_coverage_tol_m2`,
+`protected_coverage_tol_frac`, `protected_clean_loss_tol_m2` = 0, `protected_coverage_policy: fail`); result persisted
+as `raw_protected_coverage`; 2 each end of the open string compared separately against the earlier stage (1 m);
+3 legacy siteops path only when `siteops.legacy_component_path` says so, or no `crs`, resolves to EPSG 32654, no
+polygon build and no protection; every other recipe keeps and validates its OBC.
+VR v3 (VR-FVCOM da4e566) sets `protected_coverage_tol_frac: 0.01` and `protected_clean_loss_tol_m2: 600000` after a
+measurement (377.11 km2 protected, 373.64 km2 represented, 0.92 % missing, 0.544 km2 removed by clean). As before, the
+tolerance VALUES are an owner decision pending, not a defect; whether the code applies them correctly is in scope.
+Evidence: Tokyo job 7592600 (with figures) md5-identical to base1b at all stages; VR v3 job 7592660 QA 23/23, open
+line covered 73-183,697 m of the wet 0-183,697 m at obc and obcfinal, coverage guard pass.
+
+## Please
+1. Status of every previous finding: RESOLVED / PARTIAL / NOT RESOLVED / WITHDRAWN, with reasons.
+2. Defects introduced by the fixes.
+3. A fresh audit of the Target above (not of code outside it).
+
+## Severity
+- blocker: produces wrong scientific results or loses data in normal use
+- major: a failure or wrong result that can be accepted as success, in a realistic path
+- minor: a clear robustness/clarity defect on a realistic path (an unusual or injected input does NOT qualify)
+- nit: style, wording, dead code
+
+## Required output
+Numbered findings, each with severity, file:line, a reproduction or evidence, and a concrete fix. Then
+`## Verdict` with exactly one line:
+`VERDICT: PASS` (no finding of any severity) or
+`VERDICT: FAIL (<n> blocker, <n> major, <n> minor, <n> nit)`.
+```
+
+### Answer (verbatim)
+
+One major finding remains. No files were modified by this review.
+
+**Previous findings**
+
+| Finding | Status | Reason |
+|---|---|---|
+| R1 #1: Shoreline nodes unprotected | RESOLVED | Boundary-inclusive masks and triangle overlap protect them. |
+| R1 #2: Lone-node removal loses protection/OBC | RESOLVED | Flip/split repair preserves coverage; deletion guards retain protected/OBC carriers. |
+| R1 #3: Unrestored polygon OBC trimming | RESOLVED | Restoration is required, and OBC stages validate the intended wet extent. |
+| R1 #4: Band restoration corrupts depths | RESOLVED | New-node depths interpolate over the original triangulation. |
+| R1 #5: Expected drops count elements | RESOLVED | Classification uses intersection area. |
+| R1 #6: Coarse raster-edge strip | RESOLVED | Interpolation clamps to cell centres. |
+| R1 #7: Fallback accepts newly failing gates | RESOLVED | Explicit gate rejection and whole-trial perpendicularity checks apply. |
+| R1 #8: Depths discard later stages | RESOLVED | Both depth products consume `latest_mesh`. |
+| R1 #9: Projected water receives geographic filtering | RESOLVED | Filtering transforms the bbox into the source CRS. |
+| R1 #10: Prep ignores resolved CRS | RESOLVED | Explicit and differing legacy overrides reach prep. |
+| R1 #11: Stale raw CRS | RESOLVED | Every build records its source CRS; finish uses it. |
+| R2 #1: Vertex-only protection misses overlap | RESOLVED | Cap, component and lone-node checks include triangle overlap. |
+| R2 #2: Siteops erodes protected water | RESOLVED | Boundary collapses are guarded and geometric loss is checked. |
+| R2 #3: Filtering drops protected components | RESOLVED | Every component outside the actual retained set is measured. |
+| R2 #4: Repair threshold not forwarded | RESOLVED | Threshold, policy and tolerances reach the engine. |
+| R2 #5: Repair accounting misses overlap | RESOLVED | Intersection areas measure total and unexpected loss. |
+| R2 #6: Band restore hides C4 failures | RESOLVED | Affected adjacent-element pairs are checked separately. |
+| R2 #7: Geographic raw figures reprojected | RESOLVED | Figures honour the recorded source CRS. |
+| R2 #8: Legacy CRS override omitted | RESOLVED | A differing override reaches prep and endpoint extension. |
+| R3 #1: Fine protected component skipped | RESOLVED | Measurement follows retained-component selection. |
+| R3 #2: Welding/optimization loses protection or OBC | RESOLVED | Weld/optimizer guards, structural validation and subsequent line checks address the reported cases. |
+| R3 #3: Autofinish bypasses protection | RESOLVED | Both patch branches and fallback enforce geometric loss tolerances. |
+| R3 #4: Fallback loses unprotected OBC | RESOLVED | Fallback independently preserves and validates it. |
+| R3 #5: Perpendicularity misses whole fallback | RESOLVED | The complete trial is compared against the original per-node deviations. |
+| R4 #1: OBC aftercare deletes protected elements | RESOLVED | Direct deletions are guarded; whole-assignment loss is bounded. |
+| R4 #2: Resume disables coverage guard | RESOLVED | Structured coverage persists; missing domain metadata fails loudly. |
+| R4 #3: Coverage authorizes artificial walls | RESOLVED | Validation uses the intended wet extent and independently checks endpoint retreat. |
+| R4 #4: Standalone siteops clears OBC | PARTIAL | Preservation still excludes some new-region recipes; finding 1 below. |
+| R5 #1: Protected water missing inside retained components | RESOLVED | Final represented coverage and cleaning loss are measured and enforced. |
+| R5 #2: Endpoint retreat cancelled by opposite extension | RESOLVED | Each endpoint is compared separately. |
+| R5 #3: New-region prep recipes lose OBC | PARTIAL | CRS inference into UTM zone 54 still selects the destructive compatibility branch. |
+
+1. **Major — UTM zone 54 is still treated as proof that a recipe is Tokyo.**
+
+   **Location:** [cli/pipeline.py:734](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/cli/pipeline.py:734), [pipeline.py:886](/home/pj24001722/ku40000343/Github/fvcom-mesh-tools/src/fvcom_mesh_tools/cli/pipeline.py:886).
+
+   `_legacy_siteops()` returns true whenever a recipe has no explicit `crs`, resolves to EPSG:32654, uses a non-polygon engine and has no protection. That includes ordinary new-region prep recipes elsewhere in zone 54. Siteops then clears their boundary lists without validation.
+
+   **Reproduction:** Use a prep/oceanmesh recipe for Sendai with `prep.bbox: [141.0, 38.2, 141.6, 38.8]`, a supplied OBC line, inferred CRS, no `protect_polygons`, and the stages `obc → siteops → depths: {product: none} → qa`, without `obcfinal`.
+
+   I exercised `_stage_siteops()` using the existing `_r3_lattice()` fixture translated into EPSG:32654 near 141.2°E, 38.4°N, with southern OBC `[0,1,2,3,4]`. File I/O was mocked; site operators and QA were real:
+
+   ```text
+   _check_recipe:       accepted
+   resolved CRS:        EPSG:32654
+   _legacy_siteops:     True
+   siteops edits:       none
+   elements:            32 → 32
+   open strings:        [[0,1,2,3,4]] → []
+   QA failed gates:     []
+   depths.product none: propagates the siteops mesh as final_mesh
+   ```
+
+   Thus a realistic new-region recipe silently produces an accepted mesh with its open boundary removed. This is an incomplete round-5 fix.
+
+   **Fix:** Restrict automatic compatibility behaviour to identifiable shipped legacy Tokyo recipes, retaining explicit `siteops.legacy_component_path` as an override. Default other recipes to OBC preservation, including recipes that infer EPSG:32654. Add a same-zone, non-Tokyo regression test.
+
+**Verification**
+
+Executed **36 selected test functions from committed `8f936bb`** using Python `-B` and in-memory I/O where necessary; all passed. Repeated small polygon generation with the same seed produced identical points, elements and OBC strings. Initial Matplotlib cache imports failed under the read-only sandbox; an in-memory bootstrap allowed the checks to proceed. GDAL emitted a PROJ diagnostic during otherwise successful runs.
+
+All six stored Tokyo stage meshes in **`head1`–`head11`, `new1`, and `new2`** are md5-identical to `base1b`. Saved VR artifacts confirm **NP 27,521 / NE 48,989 / 82 OBC nodes**, zero QA gate failures, and the reported coverage measurements. Full Tokyo and VR generation were not rerun. No additional regression introduced by the fixes was substantiated.
+
+## Verdict
+
+VERDICT: FAIL (0 blocker, 1 major, 0 minor, 0 nit)
+
+### Triage
+
+| id | severity | verified? (how) | correct? | action |
+|---|---|---|---|---|
+| 1 | major | yes: `_legacy_siteops` returned True for any recipe without `crs` resolving to EPSG:32654 with a non-polygon engine and no protection, including a Sendai bbox; test_r6_1 reproduces it (OBC cleared) | yes | 3a49832: only `siteops.legacy_component_path: true` selects the legacy path; the five shipped Tokyo recipes set it; test_r6_1. Tokyo v6 job 7592967 md5-identical to base1b at all six stages; ci_local job 7592971 PASS |
+
+Note (not a review finding): GitHub CI run 43778047151 (pushed by the owner at 2ebabd7) failed 12 tests that need the oceanmesh fork; fixed in 3a49832 with `needs_oceanmesh` marks, and `tools/ci_local/run_ci_local.sh` now reproduces CI before every commit (CLAUDE.md).
