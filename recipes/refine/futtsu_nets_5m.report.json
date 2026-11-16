@@ -1,0 +1,272 @@
+{
+ "facilities": 27,
+ "length_m": {
+  "min": 23.49846167745502,
+  "median": 63.85614100449068,
+  "max": 141.3839791346787
+ },
+ "regions": 9,
+ "core_area_km2": 1.0312494538349855,
+ "core_elements_estimate": 95263,
+ "per_region": [
+  {
+   "name": "futtsu_nets_c01",
+   "area_km2": 0.6664842580807835,
+   "facilities": [
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "12",
+    "13",
+    "14",
+    "15"
+   ]
+  },
+  {
+   "name": "futtsu_nets_c02",
+   "area_km2": 0.08027159055434067,
+   "facilities": [
+    "36"
+   ]
+  },
+  {
+   "name": "futtsu_nets_c03",
+   "area_km2": 0.07673291237884247,
+   "facilities": [
+    "27",
+    "29",
+    "30",
+    "32"
+   ]
+  },
+  {
+   "name": "futtsu_nets_c04",
+   "area_km2": 0.07248201677809736,
+   "facilities": [
+    "17",
+    "20",
+    "21",
+    "22"
+   ]
+  },
+  {
+   "name": "futtsu_nets_c05",
+   "area_km2": 0.05505062318424985,
+   "facilities": [
+    "1",
+    "2",
+    "3"
+   ]
+  },
+  {
+   "name": "futtsu_nets_c06",
+   "area_km2": 0.03892186108324204,
+   "facilities": [
+    "19"
+   ]
+  },
+  {
+   "name": "futtsu_nets_c07",
+   "area_km2": 0.02184026121738661,
+   "facilities": [
+    "11"
+   ]
+  },
+  {
+   "name": "futtsu_nets_c08",
+   "area_km2": 0.01499620410581364,
+   "facilities": [
+    "26"
+   ]
+  },
+  {
+   "name": "futtsu_nets_c09",
+   "area_km2": 0.004469726452228853,
+   "facilities": [
+    "16"
+   ]
+  }
+ ],
+ "transition_width_m": 272.7272727272727,
+ "hole_area_km2": 3.997898671390839,
+ "core_outside_within_frac": 0.03285001525805347,
+ "hole_outside_within_frac": 0.10608373476010352,
+ "inputs": {
+  "tool": "fmesh-facility-regions",
+  "argv": [
+   "--facilities",
+   "/octfs/work/G16445/v61021/Github/xfrc/xfrc/chiba/nori_grounds/futtsu_nori_nets_nendophoto2024.geojson",
+   "--target-h-m",
+   "5",
+   "--ambient-h-m",
+   "50",
+   "--gradation",
+   "0.165",
+   "--dt-expected-s",
+   "0.5",
+   "--within",
+   "/octfs/work/G16445/v61021/Github/xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson",
+   "--within-where",
+   "ground=futtsu",
+   "--prefix",
+   "futtsu_nets",
+   "--base-mesh",
+   "/octfs/work/G16445/v61021/Github/TB-FVCOM/input/goto2023_futtsu50/grid/futtsu_nori_right_50m_grd.dat",
+   "--base-depth",
+   "/octfs/work/G16445/v61021/Github/TB-FVCOM/input/goto2023_futtsu50/grid/futtsu_nori_right_50m_dep_min3m_rfac0p2_cap300.dat",
+   "--base-obc",
+   "/octfs/work/G16445/v61021/Github/TB-FVCOM/input/goto2023_futtsu50/grid/futtsu_nori_right_50m_obc.dat",
+   "--out-geojson",
+   "recipes/refine/futtsu_nets_5m_regions.geojson",
+   "--out-recipe",
+   "recipes/refine/futtsu_nets_5m.yaml"
+  ],
+  "facilities": "/octfs/work/G16445/v61021/Github/xfrc/xfrc/chiba/nori_grounds/futtsu_nori_nets_nendophoto2024.geojson",
+  "where": {},
+  "rule": "long_side",
+  "factor": 1.0,
+  "min_buffer_m": 0.0,
+  "metric_crs": "EPSG:32654"
+ },
+ "per_facility": [
+  {
+   "id": "1",
+   "length_m": 45.83,
+   "buffer_m": 45.83
+  },
+  {
+   "id": "2",
+   "length_m": 59.22,
+   "buffer_m": 59.22
+  },
+  {
+   "id": "3",
+   "length_m": 61.92,
+   "buffer_m": 61.92
+  },
+  {
+   "id": "4",
+   "length_m": 104.91,
+   "buffer_m": 104.91
+  },
+  {
+   "id": "5",
+   "length_m": 126.09,
+   "buffer_m": 126.09
+  },
+  {
+   "id": "6",
+   "length_m": 58.33,
+   "buffer_m": 58.33
+  },
+  {
+   "id": "7",
+   "length_m": 76.8,
+   "buffer_m": 76.8
+  },
+  {
+   "id": "8",
+   "length_m": 121.9,
+   "buffer_m": 121.9
+  },
+  {
+   "id": "9",
+   "length_m": 132.39,
+   "buffer_m": 132.39
+  },
+  {
+   "id": "10",
+   "length_m": 123.69,
+   "buffer_m": 123.69
+  },
+  {
+   "id": "11",
+   "length_m": 54.15,
+   "buffer_m": 54.15
+  },
+  {
+   "id": "12",
+   "length_m": 138.18,
+   "buffer_m": 138.18
+  },
+  {
+   "id": "13",
+   "length_m": 137.72,
+   "buffer_m": 137.72
+  },
+  {
+   "id": "14",
+   "length_m": 141.38,
+   "buffer_m": 141.38
+  },
+  {
+   "id": "15",
+   "length_m": 57.56,
+   "buffer_m": 57.56
+  },
+  {
+   "id": "16",
+   "length_m": 23.5,
+   "buffer_m": 23.5
+  },
+  {
+   "id": "17",
+   "length_m": 63.86,
+   "buffer_m": 63.86
+  },
+  {
+   "id": "19",
+   "length_m": 71.57,
+   "buffer_m": 71.57
+  },
+  {
+   "id": "20",
+   "length_m": 58.51,
+   "buffer_m": 58.51
+  },
+  {
+   "id": "21",
+   "length_m": 43.68,
+   "buffer_m": 43.68
+  },
+  {
+   "id": "22",
+   "length_m": 62.3,
+   "buffer_m": 62.3
+  },
+  {
+   "id": "26",
+   "length_m": 48.05,
+   "buffer_m": 48.05
+  },
+  {
+   "id": "27",
+   "length_m": 69.86,
+   "buffer_m": 69.86
+  },
+  {
+   "id": "29",
+   "length_m": 51.83,
+   "buffer_m": 51.83
+  },
+  {
+   "id": "30",
+   "length_m": 72.09,
+   "buffer_m": 72.09
+  },
+  {
+   "id": "32",
+   "length_m": 41.75,
+   "buffer_m": 41.75
+  },
+  {
+   "id": "36",
+   "length_m": 109.34,
+   "buffer_m": 109.34
+  }
+ ]
+}

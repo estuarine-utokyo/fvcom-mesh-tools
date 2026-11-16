@@ -950,6 +950,74 @@ predecessor **terminates**, not when it succeeds, and this build has no
 `afterok`. A failed prep therefore launched two 64-core integrations that
 had nothing to integrate. Each dependent checks its own input now.
 
+## 6.10 Facility-scale refinement on a refined mesh (2026-11-16)
+
+**The policy (owner, 2026-11-16), general for every fishery.** A ground
+already refined to an intermediate size (Futtsu: the 50 m licence mesh,
+`futtsu_nori_right_50m.yaml`) is refined again to a fine size (5 m) **only at
+each facility and its near field**; the rest of the licence keeps the
+intermediate size. The near field of a facility is as wide as the facility is
+long: a net block of length `L` is buffered by `L`. The base of this second
+step is the first step's finished FVCOM case, so the frozen guarantee of §2
+holds against the 50 m mesh, and through it against the production mesh.
+
+**The tool.** `fmesh-facility-regions` (`src/fvcom_mesh_tools/facility_regions.py`)
+turns a GeoJSON of facility polygons into a refinement recipe:
+
+1. each facility's length scale `L` (`--rule long_side`, the long side of the
+   minimum rotated rectangle; `sqrt_area` and `diameter` exist), measured in
+   the UTM zone of the facilities;
+2. a buffer of `max(factor * L, min_buffer_m)` (`--factor 1`);
+3. the union; touching near fields merge, because two cores closer than their
+   transitions cannot be meshed apart anyway; water enclosed by a cluster is
+   filled (`--keep-holes` to keep it);
+4. one region per connected cluster, written to a GeoJSON (property
+   `region`) and named in a recipe with `file:` + `where:`, as §4 requires one
+   polygon per region; `coastline: preserve`, since the base already carries
+   the coastline its own refinement chose;
+5. a report before any meshing: facility lengths, regions, core area and
+   element estimate, the transition width `(ambient - target) / gradation`,
+   and with `--within` (the licence) the share of core and of core +
+   transition outside it.
+
+Nothing in it is nori-specific: fish cages, rafts, diffusers or piers go in
+the same way.
+
+**Futtsu at 5 m** (`recipes/refine/futtsu_nets_5m.yaml`, generated, with its
+`.report.json` and `_regions.geojson`; regenerate rather than edit). Input:
+the 27 net blocks of `xfrc/chiba/nori_grounds/futtsu_nori_nets_nendophoto2024.geojson`
+(photo of the 2024 season, Oct-Nov layout).
+
+| | |
+|---|---|
+| block length `L` | 23-141 m, median 64 m |
+| regions (merged clusters) | 9 |
+| core area | 1.03 km² (9.7 % of the 10.6 km² licence), ~95,000 elements at 5 m |
+| transition 5 -> 50 m at g = 0.165 | 273 m wide; core + transition 4.0 km² |
+| outside the licence | 3.3 % of the core, 10.6 % of core + transition (blocks at its edge) |
+| depth in the core (50 m depths) | 3.0-5.8 m, median 5.0 m |
+| dt by minimum altitude (equilateral, 5 m) | 0.80 s at 3 m, 0.62 s at 5 m |
+
+Why the policy holds, and what it does not buy:
+
+- **The intermediate mesh stays the intermediate mesh.** Only ~10 % of the
+  licence is fine, so the cost of 5 m is paid where the sources are; the
+  licence-scale circulation is the 50 m solution it was.
+- **A near field of one facility length** keeps a block's own plume and its
+  neighbours' at the fine size, which is where concentration gradients are
+  steepest; beyond it the plume is wider than 50 m and the intermediate mesh
+  resolves it.
+- **The transition is not free**: 273 m at the certified gradation, i.e.
+  four times the median block length. It is part of the cost, and it is why
+  close blocks merge.
+- **The seabed is not refined** (§2): 5 m cells sit on the 50 m depths. And
+  the facilities themselves are not represented: without a drag term for the
+  nets, 5 m resolves where dissolved material goes, not how the nets slow the
+  flow. Both are separate steps.
+- **The step**: the 50 m Futtsu mesh runs at an external step of 1.875 s
+  (TB-FVCOM `dye/docs/dye_run_configuration.md` §6q); 5 m needs roughly an
+  eighth of it, on several times the nodes.
+
 ## 7. What the review asked for, and where it stands
 
 The review of revision 1 listed five things that would otherwise surface as

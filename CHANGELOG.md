@@ -8,6 +8,16 @@ will only ship with a major bump (Semantic Versioning).
 
 ## Unreleased
 
+### Added -- facility-scale refinement regions (2026-11-16)
+
+- `fmesh-facility-regions` (`fvcom_mesh_tools.facility_regions`): facility polygons (nori net
+  blocks, cages, ...) -> near fields of one facility length (`--factor`, `--rule
+  long_side|sqrt_area|diameter`, `--min-buffer-m`) -> merged clusters -> a regions GeoJSON and a
+  local-refinement recipe on an existing (already refined) mesh, with a pre-meshing report
+  (core area, element estimate, transition width, share outside a `--within` polygon).
+  `recipes/refine/futtsu_nets_5m.yaml`: the Futtsu net blocks at 5 m on the 50 m licence mesh.
+  `docs/local_refine.md` §6.10.
+
 ### Added -- new regions from one recipe (2026-11-16)
 
 - `fmesh-pipeline`: top-level `crs` threaded to every stage (legacy `finish.utm_epsg`, else the UTM
