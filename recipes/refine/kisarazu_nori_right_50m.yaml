@@ -37,9 +37,29 @@ hires:
   blend: ramp
 
 refine:
-  - name: kisarazu_nori_right
+  # One region per licence polygon (the refiner takes one feature per region);
+  # objectid is the stable key of the xfrc file.
+  - name: kisarazu_ku7        # 区第7号 58.6 ha
     geometry:
       file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
-      where: {ground: kisarazu}
+      where: {objectid: 675}
+    target_h_m: 50
+    priority: 0
+  - name: kisarazu_ku5        # 区第5号 1818.2 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 678}
+    target_h_m: 50
+    priority: 0
+  - name: kisarazu_ku3        # 区第3号 425.3 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 684}
+    target_h_m: 50
+    priority: 0
+  - name: kisarazu_ku6        # 区第6号 1001.1 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 694}
     target_h_m: 50
     priority: 0

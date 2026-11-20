@@ -38,9 +38,71 @@ hires:
   blend: ramp
 
 refine:
-  - name: sanbanze_nori_right
+  # One region per licence polygon (the refiner takes one feature per region);
+  # objectid is the stable key of the xfrc file.
+  - name: sanbanze_tanku6        # 短区第6号 1.7 ha
     geometry:
       file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
-      where: {ground: sanbanze}
+      where: {objectid: 598}
+    target_h_m: 50
+    priority: 0
+  - name: sanbanze_tanku4        # 短区第4号 3.6 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 599}
+    target_h_m: 50
+    priority: 0
+  - name: sanbanze_tanku3        # 短区第3号 5.4 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 600}
+    target_h_m: 50
+    priority: 0
+  - name: sanbanze_tanku2        # 短区第2号 65.6 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 677}
+    target_h_m: 50
+    priority: 0
+  - name: sanbanze_tanku9        # 短区第9号 99.1 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 682}
+    target_h_m: 50
+    priority: 0
+  - name: sanbanze_ku1        # 区第1号 80.1 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 683}
+    target_h_m: 50
+    priority: 0
+  - name: sanbanze_ku2        # 区第2号 119.7 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 685}
+    target_h_m: 50
+    priority: 0
+  - name: sanbanze_tanku1        # 短区第1号 105.4 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 686}
+    target_h_m: 50
+    priority: 0
+  - name: sanbanze_tanku8        # 短区第8号 341.6 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 689}
+    target_h_m: 50
+    priority: 0
+  - name: sanbanze_tanku7        # 短区第7号 443.5 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 690}
+    target_h_m: 50
+    priority: 0
+  - name: sanbanze_tanku5        # 短区第5号 5.1 ha
+    geometry:
+      file: ../../../xfrc/xfrc/chiba/nori_grounds/chiba_nori_fishery_rights.geojson
+      where: {objectid: 691}
     target_h_m: 50
     priority: 0
